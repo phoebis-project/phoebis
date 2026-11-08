@@ -543,14 +543,14 @@ never retried. The router's lease covers whatever it misses, a crash or a killed
 
 ## The companion routes
 
-The companion mod reads one route beside the keepalive route, `GET /v0/companion/allowance?session_id=<id>` on the
-proxy listener, with `Authorization: Bearer <router key>`. The key is resolved exactly as `/v1/messages` and the
-keepalive route resolve it, with the generation it was created under. `session_id` is the route's one query parameter,
-the session's id as the client's session header carries it, taken as sent and never percent-decoded, and it has to be a
-valid id. The answer is the key's pool as the router reads it at that instant, each active account under a pseudonym
-and the asking session's pins, as JSON under `Cache-Control: no-store`, which every answer of the route carries. The
-route writes no ledger row and counts in no request figure, so a read shows in no statistic and no view. The mod reads
-it once at session start and then at the model's call, from a cache of ten seconds ([The allowance
+The companion mod reads one route beside the keepalive route, `GET /v0/companion/allowance?session_id=<id>` on the proxy
+listener, with `Authorization: Bearer <router key>`. The key is resolved exactly as `/v1/messages` and the keepalive
+route resolve it, with the generation it was created under. `session_id` is the route's one query parameter, the
+session's id as the client's session header carries it, taken as sent and never percent-decoded, and it has to be a
+valid id. The answer is the key's pool as the router reads it at that instant, each active account under a pseudonym and
+the asking session's pins, as JSON under `Cache-Control: no-store`, which every answer of the route carries. The route
+writes no ledger row and counts in no request figure, so a read shows in no statistic and no view. The mod reads it once
+at session start and then at the model's call, from a cache of ten seconds ([The allowance
 tool](companion-mod.md#the-allowance-tool)), and the router holds no limiter of its own on the route.
 
 A refusal takes the two shapes of the keepalive route. A missing, malformed, ambiguous or refused key is answered the
@@ -592,7 +592,7 @@ overage stay in, with the hold as their obstacle. Each entry:
 | `pace_score` | The score Pace ranks the account by, its spare rate on the 7-day window, or the room left in its worst bucket for an API-key account ([Pools](routing.md#pools)) |
 | `slow_down` | `null` without an entry in force, else `factor`, the target, `speed`, the realized speed the holds reached, and `since`, when the span the factor reads under 1 for began, or `null` outside a span ([Slow-down](routing.md#slow-down)) |
 | `windows` | A map from the window id (`five_hour`, `seven_day`, a model's own week) to the window's figures, one entry per plan window the account has a reading of, empty for an account with no plan window |
-| `spend` | One row per spend budget the member carries in the pool, empty without one ([Pools](routing.md#pools)) |
+| `spend` | One row per spend budget the ledger has reported for the member, empty without one ([Pools](routing.md#pools)) |
 
 Each window:
 
@@ -624,7 +624,7 @@ Each spend row:
 | `placed_at` | When the pin was placed |
 | `last_used_at` | When a request last used it |
 | `warm` | Whether the pin's cache entry is alive at `now`, by the selector's own reading |
-| `warm_until` | The first instant `warm` reads false: the last refresh plus the cache TTL, or the last use for a pin only auxiliary requests have used since its placement |
+| `warm_until` | The first instant `warm` reads false: the last refresh, or the last use for a pin only auxiliary requests have used since its placement, plus the cache TTL |
 | `runway_minutes` | The whole minutes until the account's projection reaches the ceiling on the window that binds among those the pin's model draws, `null` where no window bounds it |
 | `binding_window` | The window the runway reads, `null` unless the runway is bounded |
 | `slow_down` | `null` without an entry in force on the account, else `factor` and `speed` |

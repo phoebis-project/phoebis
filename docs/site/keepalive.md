@@ -88,11 +88,11 @@ its first request.
 Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 300 seconds, refused otherwise with
 `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter
 than the shortest cache TTL cannot keep the session on the account it warmed`. A probe follows the session's pin to a
-subscription account as to an API-key one. A key without the `keepalive` companion permission is never retained, and
-taking the permission away reaches a session that is already idle: its held prompt is dropped under `key_opted_out`
-rather than kept, since nothing on that key may be probed again until the permission is back. A new key holds the
-permission, and the key dialog edits it as "Cache warming" ([The key's
-permissions](companion-mod.md#the-keys-permissions)).
+subscription account as to an API-key one. A key without the `keepalive` companion permission is never retained, and the
+Sessions view names the cause for such a session as `key <name> permits no cache warming`. Taking the permission away
+reaches a session that is already idle: its held prompt is dropped under `key_opted_out` rather than kept, since nothing
+on that key may be probed again until the permission is back. A new key holds the permission, and the key dialog edits
+it as "Cache warming" ([The key's permissions](companion-mod.md#the-keys-permissions)).
 
 In the console the switch is in the pool dialog: Pools, Edit, the Keepalive group under Caching, "Keep prompt caches
 warm", with the policy's three numbers under it (see [Pools](console.md#pools)).

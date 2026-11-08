@@ -362,7 +362,7 @@ and "Reload" where the row changed under the editor. Beside the saved end the ro
 profile read found the account's organization holding no plan, which the router reads as an end that has passed until a
 profile read or a pairing finds a plan again, and the Quota view leaves the account out while the flag stands ([Account
 states](pairing.md#account-states)). The card closes on "Renewal date is not reported by the provider." For an API-key
-account it lists Type ("API key") and Windows ("None reported, billed per token"). On either kind the card ends on
+account it lists Type ("API key") and Windows ("None reported, billed per token"). On either kind the rows end on
 Companion id, the pseudonym the companion mod's `allowance` tool names the account by ([The companion
 routes](relay.md#the-companion-routes)). "Usage" ("Remaining share of each window") draws the three windows as the Quota
 view does, or a usage-based seat's spend bar, "Spend limit" with `{used} of {limit}` over its meter and its reset line,

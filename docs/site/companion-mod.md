@@ -1,14 +1,13 @@
 # The companion mod
 
-This page is for the operator installing and configuring the companion mod on a client machine. The mod is a Claude
-Code plugin that runs inside the Claude Code process. It reports session liveness and agent state to the router, which
-the router's keepalive engine reads to decide which sessions' prompt caches to keep warm, checks the router at session
-start and names a misconfiguration in the session, and gives the model one tool, `allowance`, which reads what the key's
-pool has left so the model can pace its own work. The mod reports facts and holds no policy: every ceiling and switch
-belongs to the router ([Keepalive](keepalive.md)), and what a key's companion may do is a permission set on the key
-([The key's permissions](#the-keys-permissions)). The page covers installing the mod, its four settings and the
-variables they fall back to, the start check, the tool, what the mod reports, where it runs and how to verify a
-checkout.
+This page is for the operator installing and configuring the companion mod on a client machine. The mod is a Claude Code
+plugin that runs inside the Claude Code process. It reports session liveness and agent state to the router, which the
+router's keepalive engine reads to decide which sessions' prompt caches to keep warm, checks the router at session start
+and names a misconfiguration in the session, and gives the model one tool, `allowance`, which reads what the key's pool
+has left so the model can pace its own work. The mod reports facts and holds no policy: every ceiling and switch belongs
+to the router ([Keepalive](keepalive.md)), and what a key's companion may do is a permission set on the key ([The key's
+permissions](#the-keys-permissions)). The page covers installing the mod, its four settings and the variables they fall
+back to, the start check, the tool, what the mod reports, where it runs and how to verify a checkout.
 
 ## Install
 
@@ -64,9 +63,9 @@ TLS.
 
 With `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` set, Claude Code checks the organization's policy for plugin network
 access before a mod's first fetch, against `api.anthropic.com` with the credential it holds. A router key fails that
-check, and every report and read is then refused inside the process. `CLAUDE_CODE_SUBSCRIPTION_TYPE=max` beside a
-router key in `CLAUDE_CODE_OAUTH_TOKEN` marks the session a consumer subscription, which no organization policy
-governs, so the check is skipped and the requests go out. Claude Code documents that variable nowhere. [The environment
+check, and every report and read is then refused inside the process. `CLAUDE_CODE_SUBSCRIPTION_TYPE=max` beside a router
+key in `CLAUDE_CODE_OAUTH_TOKEN` marks the session a consumer subscription, which no organization policy governs, so the
+check is skipped and the requests go out. Claude Code documents that variable nowhere. [The environment
 block](client.md#the-environment-block) on The client carries it, and
 [`CLAUDE_CODE_SUBSCRIPTION_TYPE`](client.md#claude_code_subscription_type) there says what the client does with it.
 
@@ -98,11 +97,12 @@ the prompt's cached prefix: a tool that appears later in the session rewrites th
 session pays for its whole conversation. While the router stays unreachable, a call of the tool answers the failure's
 text. The keepalive part retries along its backoff as [The relay](relay.md#the-keepalive-protocol) states.
 
-With Start check toasts on, each transcript line of the start check also raises a toast with the same text. A failure
-text, the URL included, has its secrets redacted before it reaches a transcript line, a toast or a tool result, since a
-fetch error can carry the bearer. A reload of the plugin runs the start check again, with the tool's cache cleared
-first, so a reload under a changed URL or key never answers the earlier configuration's body, and registers the same
-tool under the same name, which replaces the registration without a second entry in the tool list.
+With Start check toasts on, each transcript line the mod writes at session start, the three lines
+[Configure](#configure) names for an unset setting included, also raises a toast with the same text. A failure text, the
+URL included, has its secrets redacted before it reaches a transcript line, a toast or a tool result, since a fetch
+error can carry the bearer. A reload of the plugin runs the start check again, with the tool's cache cleared first, so a
+reload under a changed URL or key never answers the earlier configuration's body, and registers the same tool under the
+same name, which replaces the registration without a second entry in the tool list.
 
 ## The allowance tool
 
@@ -129,8 +129,8 @@ spent, the budget and the period's end.
 `seven_day`, or a model's own week, as [The windows the router works from](routing.md#the-windows-the-router-works-from)
 names them), and is empty for an API-key account. `utilization` is the share used now, from 0 to 1 of the window.
 `burn_per_hour` is the share the account's sessions burn in an hour, and `demand_per_hour` what they would burn with no
-slow-down holding them. `horizon_at` is the window's reset, or the account's subscription end when that comes first,
-and `null` where neither is known. `projected_at_horizon` is the predicted share at the earlier of `horizon_at` and five
+slow-down holding them. `horizon_at` is the window's reset, or the account's subscription end when that comes first, and
+`null` where neither is known. `projected_at_horizon` is the predicted share at the earlier of `horizon_at` and five
 hours from now. `runway_minutes` is the whole minutes until the share reaches the pool's ceiling at the current burn:
 `0` at or above the ceiling, a number while the burn would reach the ceiling before the window resets, and `null` where
 nothing bounds the runway, because nothing burns or because the window resets first.
@@ -200,8 +200,8 @@ carries over. At each heartbeat the mod also releases the subagents the client's
 or `killed` or no longer lists, and closes the background commands past their deadline. The agent list describes the
 agents the mod held when it asked for it, so a subagent spawned while the answer was out is judged at the next
 heartbeat, and an answer that arrives after a `/clear` or a `/resume` replaced the session is dropped. A tool result or
-a spawn answer that lands after such a replacement is dropped the same way: the work belongs to the session that
-started it.
+a spawn answer that lands after such a replacement is dropped the same way: the work belongs to the session that started
+it.
 
 The mod writes its tracked work, each agent's open set, the session's crons, the subagents it released and those the
 router last named released, to the plugin's host state whenever it changes. A hot reload of the module in the same
@@ -341,8 +341,8 @@ claude plugin validate --strict .
 claude plugin test .
 ```
 
-The validation passes with no warning. Its listing of the hooks module is the statement of what the mod does: the
-events it hooks, the engine calls it makes, the variables it reads and writes (it writes `ANTHROPIC_CUSTOM_HEADERS` and
+The validation passes with no warning. Its listing of the hooks module is the statement of what the mod does: the events
+it hooks, the engine calls it makes, the variables it reads and writes (it writes `ANTHROPIC_CUSTOM_HEADERS` and
 `PHOEBIS_KEEPALIVE_INSTANCE` and no other), and the state values `types/index.d.ts` declares. The gating hooks sit where
 a hook could refuse what was asked, on `agent.spawn`, `classic.Stop`, `classic.SubagentStop`, `prompt.submit` and
 `tool.call`. Each passes its event on unchanged, and its `.catch` passes the event on when the mod fails, so the mod
