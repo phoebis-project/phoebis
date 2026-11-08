@@ -13,7 +13,7 @@ import { positionOf, UNIT_LABEL, UNIT_POSITIONS } from '@/lib/unit';
 const ENV_TERMS: { body: string; term: string }[] = [
   {
     term: 'ANTHROPIC_BASE_URL',
-    body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
+    body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the companion mod's reports go here.",
   },
   {
     term: 'CLAUDE_CODE_OAUTH_TOKEN',
@@ -21,7 +21,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
   {
     term: 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max',
-    body: "Marks the session a consumer subscription, which no organization policy governs, so the client skips the policy check that under the first-party variable goes to api.anthropic.com with the router key, fails, and refuses the keepalive mod's reports. The client documents it nowhere, and a future build may drop it.",
+    body: "Marks the session a consumer subscription, which no organization policy governs, so the client skips the policy check that under the first-party variable goes to api.anthropic.com with the router key, fails, and refuses the companion mod's reports. The client documents it nowhere, and a future build may drop it.",
   },
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',

@@ -1215,7 +1215,7 @@ pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone,
 where the runway would pass the binding window's next reset, and a dash for an unpinned row or a pinned row with no
 projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the session's
 requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with "A session
-appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the
+appears here on its first request, or as soon as the companion mod registers it, and drops off once it passes the
 session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
 with `{h} sessions hidden by the filters.`
 

@@ -51,7 +51,7 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
 
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
 // out and `jobs` keeps no caches warm.
-// `companion` is independent of that: it says whether the keepalive mod ever
+// `companion` is independent of that: it says whether the companion mod ever
 // registered for the session and is still reporting, and a session the mod
 // ended reads none. A silent companion changes neither, because the retained prompts stay and are probed
 // under the idle window. `subagents` pins the agents below main, which may run another

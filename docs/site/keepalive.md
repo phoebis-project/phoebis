@@ -508,13 +508,13 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | invalid probe usage | `invalid_probe_usage` |
 | invalid request | `invalid_request` |
 | keepalive off | `keepalive_off` |
-| key opted out | `key_opted_out` |
+| key permits no cache warming | `key_opted_out` |
 | lease expired | `lease_expired` |
 | ledger behind | `ledger_behind` |
 | missing account | `missing_account` |
 | no cache evidence | `no_cache_evidence` |
 | no probe cache evidence | `no_probe_cache_evidence` |
-| opted out | `opted_out` |
+| cache warming not permitted | `opted_out` |
 | overage | `overage` |
 | owner mismatch | `owner_mismatch` |
 | parked limit | `parked_limit` |

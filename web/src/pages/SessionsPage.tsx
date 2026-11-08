@@ -72,7 +72,7 @@ const LIFECYCLE_HINT: Record<StatusWord, string> = {
   registered: 'The mod registered this session and no real request has reached the router from it yet',
   released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
-  unreported: 'No keepalive mod reports this agent, so the router holds no lifecycle word for it.',
+  unreported: 'No companion mod reports this agent, so the router holds no lifecycle word for it.',
 };
 const STATE_TONE: Record<RecipeState, BadgeTone> = { ended: 'neutral', held: 'neutral', not_retained: 'neutral', paused: 'warning', retained: 'good' };
 const STATE_LABEL: Record<RecipeState, string> = { ended: 'ended', held: 'held', not_retained: 'not retained', paused: 'paused', retained: 'retained' };
@@ -91,8 +91,8 @@ const KIND_HINT: Record<Account['kind'], string> = {
   oauth: 'Subscription account: quota windows apply',
 };
 const COMPANION_HINT: Record<CompanionState, string> = {
-  none: 'No keepalive mod has registered this session. The router still pins it and still sees its requests.',
-  reporting: "The keepalive mod reports this session's agents, their parks and the person's presence.",
+  none: 'No companion mod has registered this session. The router still pins it and still sees its requests.',
+  reporting: "The companion mod reports this session's agents, their parks and the person's presence.",
   silent: 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.',
 };
 const COUNTS_HINT = 'Probes sent and requests they kept warm since midnight UTC';
@@ -468,7 +468,7 @@ export function SessionsPage() {
               </button>
             </p>
             <p id={howId} className="page-head__meta" hidden={!howOpen}>
-              Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one
+              Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a companion mod registered it. A pin binds each model a session uses to one
               account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its
               cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
             </p>
@@ -559,7 +559,7 @@ export function SessionsPage() {
               ) : rows === null ? (
                 <Skeleton height={14} />
               ) : hiddenTitle === undefined ? (
-                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
+                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the companion mod registers it, and drops off once it passes the session expiry." />
               ) : (
                 <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
               )}

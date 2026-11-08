@@ -25066,7 +25066,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
   const para = () => document.getElementById(how()?.getAttribute('aria-controls') ?? '');
-  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
+  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a companion mod registered it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
   results.push({ name: '/sessions the head reads the lead sentence and the closed disclosure', ok: (lead?.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '').startsWith('Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.') && how()?.getAttribute('aria-expanded') === 'false', missing: [lead?.textContent?.slice(0, 160) ?? 'no lead'] });
   // The page text keeps hidden words, so only a count of the head's paragraphs catches a leftover copy of the old one.
   const copies = [...m.container.querySelectorAll('.page-head p')].filter((p) => p.textContent?.includes('Every Claude Code session the router has seen'));
@@ -25138,9 +25138,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // milliseconds after the harness clock's origin. The registration-only row reads registered, the fleet session no
     // mod reports unreported, and the auxiliary-only session, whose main the engine holds no record of, unreported
     // under its presence.
-    const REPORTING = "The keepalive mod reports this session's agents, their parks and the person's presence.";
+    const REPORTING = "The companion mod reports this session's agents, their parks and the person's presence.";
     const SILENT = 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.';
-    const UNREPORTED = 'No keepalive mod reports this agent, so the router holds no lifecycle word for it.';
+    const UNREPORTED = 'No companion mod reports this agent, so the router holds no lifecycle word for it.';
     const statusOf = (s) => {
       const td = cellOf(s, 'Status');
       const presence = td?.querySelector('.srow__presence') ?? null;
@@ -25440,7 +25440,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   const FINISHED_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
   const NOTEBOOK_ID = '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61';
   const SLOWED_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
-  const UNREPORTED = 'No keepalive mod reports this agent, so the router holds no lifecycle word for it.';
+  const UNREPORTED = 'No companion mod reports this agent, so the router holds no lifecycle word for it.';
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const live = (id) => listed.find((s) => !s.historical && s.sessionId === id);
@@ -26078,8 +26078,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         ages.length > 0 &&
         ages.some((a) => /^seen \d+s ago$/.test(a)) &&
         ages.every((a) => a === '' || /^seen \d+[smh]( \d+[smh])? ago$/.test(a)) &&
-        hint === "The keepalive mod reports this session's agents, their parks and the person's presence." &&
-        none?.querySelector('[title]')?.getAttribute('title') === 'No keepalive mod has registered this session. The router still pins it and still sees its requests.',
+        hint === "The companion mod reports this session's agents, their parks and the person's presence." &&
+        none?.querySelector('[title]')?.getAttribute('title') === 'No companion mod has registered this session. The router still pins it and still sees its requests.',
       missing: [...new Set(ages), hint, none?.querySelector('[title]')?.getAttribute('title') ?? 'no none cell'],
     });
   }
@@ -28296,7 +28296,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   expect('/settings variable definitions', m.text(), [
-    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
+    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the companion mod's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
     'the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
     'Marks the session a consumer subscription, which no organization policy governs',

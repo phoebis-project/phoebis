@@ -1796,14 +1796,14 @@ export interface UnusedAllowanceAnswer {
 }
 
 export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked', 'released', 'unknown'] as const;
-/** The keepalive mod's lifecycle word for an agent. */
+/** The companion mod's lifecycle word for an agent. */
 export type KeepaliveState = (typeof AGENT_STATE_VALUES)[number];
 
 export const PARK_KIND_VALUES = ['background', 'both', 'scheduled'] as const;
 /** What a parked agent waits on: a background command or a subagent, a scheduled wakeup, or both. */
 export type ParkKind = (typeof PARK_KIND_VALUES)[number];
 
-/** Whether the keepalive mod registered the session and is still reporting. */
+/** Whether the companion mod registered the session and is still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
 export const BURN_UNIT_VALUES = ['usd', 'window_share'] as const;
