@@ -89,8 +89,11 @@ export function windingDownBadge(end: number, now: number): StandingBadge {
  */
 export const speedWord = (factor: number): string => `${factor < 1 ? Math.min(Number(factor.toFixed(2)), 0.99) : Number(factor.toFixed(2))}x`;
 
-/** The ramp's word: how far the span has ramped toward its factor, or that it has. */
-const rampWords = (ramp: number, factor: number): string => (ramp < 1 ? `Ramping, ${fmtPct(ramp)} of the way to ${speedWord(factor)}` : `Ramped to ${speedWord(factor)}`);
+/**
+ * The ramp's word: how far the span has ramped toward its factor, or that it has. A ramp under 1 reads 99% at most,
+ * since a rounded `100%` would read as a ramp that is over.
+ */
+const rampWords = (ramp: number, factor: number): string => (ramp < 1 ? `Ramping, ${fmtPct(Math.min(ramp, 0.99))} of the way to ${speedWord(factor)}` : `Ramped to ${speedWord(factor)}`);
 
 /**
  * `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min

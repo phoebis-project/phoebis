@@ -345,6 +345,13 @@ test('a serving member reads the chip from its account\'s slow-down, from its ow
     { factor: null, hover: null },
     'the chip and its hover read the speed the holds realized, which reads 1 until a pin there has a cycle, so an account slowed with no cycle draws none',
   );
+  const apart = { ...read, factor: 0.35, speed: 0.5 };
+  const since = new Date(NOW - 42 * MINUTE).toISOString();
+  assert.deepEqual(
+    d.memberSpeed({ speed: 0.5 }, account('studio', { slowDown: apart, windows: window5h(hoursFromNow(1)) }), NOW),
+    { factor: 0.5, hover: `slowed since ${fmtShortTime(since)}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold. The pool computed 0.35x. The holds realized 0.5x` },
+    'the chip draws the speed the holds realized, and its hover names the factor the pool computed beside it',
+  );
   assert.deepEqual(d.memberSpeed({ speed: 0.4 }, studio, NOW), { factor: 0.5, hover: d.speedHover(read, NOW) }, "on a pool with the switch on, the account's entry wins over the member's figure");
   assert.deepEqual(d.memberSpeed({ speed: 0.5 }, account('plain', { slowDown: null }), NOW), { factor: null, hover: null }, 'a loaded account with no slow-down draws none');
   assert.deepEqual(d.memberSpeed({ speed: null }, account('full', { slowDown: slowDown(1, 0), windows: window5h(hoursFromNow(1)) }), NOW), { factor: null, hover: null }, 'an account at full speed draws none');

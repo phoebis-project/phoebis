@@ -2853,7 +2853,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [2, true, ['slow_down_stretch_seconds'], { slow_down_stretch_seconds: s.pools.find((p) => p.id === 'work').slowDownStretchSeconds }],
       "studio's two spans in work, the open one standing, and the pool's stretch",
     );
-    assert.deepEqual([item.detail.held_ms, item.detail.bar_ms, item.detail.held], [7_700_000, 3_600_000, 72], "the closed span of 86 min 20 s and the open one since 13:48, past twice work's 30 minutes");
+    assert.deepEqual([item.detail.held_ms, item.detail.bar_ms, item.detail.held], [7_700_000, 3_600_000, 72], "studio's held time and held count as the day's seed reads them, past the bar of twice work's 30 minutes");
   });
 
   test(`the mock's reconciliations name the story's accounts, and of each account's newest windows nightly's 5-hour one alone reads off, at ${at}`, async () => {

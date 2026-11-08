@@ -318,7 +318,7 @@ const studioSpeed = async () => {
   const slowDown = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown ?? null;
   const since = slowDown?.since ? new Date(slowDown.since).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' }) : 'no since';
   return {
-    factor: slowDown?.factor ?? null,
+    speed: slowDown?.speed ?? null,
     hover: `slowed since ${since}: the sessions on this account would pass the ceiling 42 min before the reset, over the 30 min threshold. The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`,
   };
 };
@@ -1161,8 +1161,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     const chips = speedChips(m.container, (chip) => (chip.closest('a.account-mini') ? idOf(chip.closest('a.account-mini')) : 'elsewhere'));
     results.push({
       name: "/ studio's card draws its speed chip in its head before the status badge with its slow-down in the hover, and no other card draws one",
-      ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', 'status', '0.5x', 'badge--warning', want.hover]]),
-      missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+      ok: want.speed === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', 'status', '0.5x', 'badge--warning', want.hover]]),
+      missing: [String(want.speed), ...chips.map((c) => c.join(' | '))],
     });
   }
   await emailLines('/ each account card reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-mini')].map((c) => [idOf(c), c.querySelector('.account-mini__sub')?.textContent ?? null]));
@@ -1852,8 +1852,8 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   });
   results.push({
     name: "/quota the studio card's 5-hour line carries the chip on the realized speed with the factor, the ramp and the speed on its hover, and no other window draws one",
-    ok: want.factor === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', '5h', true, '0.5x', 'badge--warning', want.hover]]),
-    missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+    ok: want.speed === 0.5 && JSON.stringify(chips) === JSON.stringify([['studio', '5h', true, '0.5x', 'badge--warning', want.hover]]),
+    missing: [String(want.speed), ...chips.map((c) => c.join(' | '))],
   });
 }
 {
@@ -3294,13 +3294,13 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   results.push({
     name: "/accounts studio's row draws the speed chip before its status badge and its Usage card right after the 5-hour bar's label, with its slow-down in the hover, and no other row or bar draws one",
     ok:
-      want.factor === 0.5 &&
+      want.speed === 0.5 &&
       JSON.stringify(chips) ===
         JSON.stringify([
           ['row studio', 'status', '0.5x', 'badge--warning', want.hover],
           ['detail', '5-hour', '0.5x', 'badge--warning', want.hover],
         ]),
-    missing: [String(want.factor), ...chips.map((c) => c.join(' | '))],
+    missing: [String(want.speed), ...chips.map((c) => c.join(' | '))],
   });
 }
 {
@@ -4326,6 +4326,33 @@ await m.navigate('/accounts/spare');
   });
 }
 m.unmount();
+});
+await forView(['/', '/accounts', '/quota'], async () => {
+  // studio's seed reads the pool's factor and the realized speed both at 0.5, so the chip cases read one figure under
+  // either key. Served apart, every chip draws the realized speed and the hover names the factor beside it.
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'studio' && a.slowDown !== null ? { ...a, slowDown: { ...a.slowDown, factor: 0.35, speed: 0.5 } } : a));
+  const chipsAt = async (path, whereOf) => {
+    const page = await mount(path);
+    const chips = speedChips(page.container, whereOf);
+    page.unmount();
+    return chips;
+  };
+  const read = [
+    ...(await chipsAt('/', (chip) => `dashboard ${chip.closest('a.account-mini') ? idOf(chip.closest('a.account-mini')) : 'elsewhere'}`)),
+    ...(await chipsAt('/quota', (chip) => `quota ${chip.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? 'elsewhere'}`)),
+    ...(await chipsAt('/accounts/studio', (chip) => (chip.closest('a.account-row') ? 'accounts row' : chip.closest('.detail') ? 'accounts detail' : 'accounts elsewhere'))),
+  ];
+  api.listAccounts = listAccounts;
+  const hover = read[0]?.[4] ?? '';
+  results.push({
+    name: "a speed chip draws the speed the holds realized where it differs from the pool's factor",
+    ok:
+      JSON.stringify(read.map(([where, , text]) => [where, text])) === JSON.stringify([['dashboard studio', '0.5x'], ['quota studio', '0.5x'], ['accounts row', '0.5x'], ['accounts detail', '0.5x']]) &&
+      hover.includes('The pool computed 0.35x') &&
+      hover.includes('The holds realized 0.5x'),
+    missing: read.map((c) => c.join(' | ')),
+  });
 });
 await forView('/accounts', async () => {
   // A mount of its own on the frozen clock: a toast there stays until a tick takes it down, so a toast one check raised
@@ -5494,7 +5521,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({
       name: "/pools a slowed member's Standing cell draws its speed chip with the slow-down in its hover, and an unslowed one none",
       ok:
-        studio?.factor === 0.5 &&
+        studio?.speed === 0.5 &&
         JSON.stringify(chipsOf('studio')) === JSON.stringify([['0.5x', 'badge--warning', hover]]) &&
         JSON.stringify(standingOf('studio')) === '["next","0.5x"]' &&
         chipsOf('Studio annex').length === 0 &&
@@ -5512,7 +5539,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const workCard = [...off.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
     const studioRow = [...(workCard?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
     const read = [studioRow ? 'studio row' : 'no studio row', workCard?.querySelectorAll('.speed-chip').length ?? null];
-    const slowed = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown?.factor ?? null;
+    const slowed = (await api.listAccounts()).find((a) => a.id === 'studio')?.slowDown?.speed ?? null;
     off.unmount();
     results.push({
       name: "/pools a card whose pool has the slow-down off draws no speed chip, though its member's account still reads slowed",
@@ -25081,8 +25108,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const off = read.filter((r) => JSON.stringify(r.got) !== JSON.stringify(r.want));
     results.push({
       name: '/sessions a slowed session draws the speed chip in its Account cell with the slow-down in its hover, and a pinned row with a cycle names it on its Runway hover',
-      ok: want.factor === 0.5 && off.length === 0 && read.filter((r) => r.want.chip !== null).length === 4 && read.filter((r) => r.want.runway === 'cycle 42 s').length === 1,
-      missing: [String(want.factor), ...off.slice(0, 6).map((r) => JSON.stringify(r)), `${read.filter((r) => r.want.chip !== null).length} slowed rows`],
+      ok: want.speed === 0.5 && off.length === 0 && read.filter((r) => r.want.chip !== null).length === 4 && read.filter((r) => r.want.runway === 'cycle 42 s').length === 1,
+      missing: [String(want.speed), ...off.slice(0, 6).map((r) => JSON.stringify(r)), `${read.filter((r) => r.want.chip !== null).length} slowed rows`],
     });
   }
   {
