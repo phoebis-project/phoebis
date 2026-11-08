@@ -44,7 +44,9 @@ credential, so the key the mod reports under is the key the client sends. When C
 through `ANTHROPIC_BASE_URL` with a router key in `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or
 `CLAUDE_CODE_OAUTH_TOKEN`, both fields can stay empty. Without a URL or without a key from any source the mod writes one
 transcript line, `phoebis-companion: no management URL from the option or ANTHROPIC_BASE_URL` or `phoebis-companion: no
-router key from the option or the environment`, and does nothing else.
+router key from the option or the environment`, and does nothing else. A URL from either source that fails the check
+below writes `phoebis-companion: the management URL from the option or ANTHROPIC_BASE_URL is not usable (<reason>)`
+instead, and the mod does nothing else either.
 
 A key set in Router key goes to the Management URL alone and never to the host `ANTHROPIC_BASE_URL` names. The settings
 are user-level: Claude Code reads a plugin's configuration from the user's settings file, a `--settings` file or managed
@@ -57,7 +59,9 @@ The URL may carry a path prefix, such as `https://gateway.example/router`. The m
 the route to what is left. It accepts plain HTTP on any host, as the model traffic to the same base URL does. A save of
 the Management URL is refused with `an http or https URL with a host` for a value that is not one (an empty value is
 accepted, since empty means the environment), with `a URL with a username or password` for a credential inside the URL,
-and with `a URL with a query` for a `?`. The Router key is trimmed when it is saved. The mod's requests go through
+and with `a URL with a query` for a `?`. The session start runs the same check on the URL it resolves, from the option
+or from `ANTHROPIC_BASE_URL`, so a value edited by hand into a settings file or a base URL with a query reaches no
+request, and the start line names the reason. The Router key is trimmed when it is saved. The mod's requests go through
 Claude Code's fetch, so the plugin network access policy described below applies to them and Claude Code handles their
 TLS.
 
