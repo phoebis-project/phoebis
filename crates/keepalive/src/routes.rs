@@ -38,7 +38,7 @@ fn authenticate(engine: &Engine, request: &Request<Body>) -> Result<(String, i64
         .map(|key| (key.id.clone(), key.created_at))
 }
 
-fn json(status: StatusCode, body: String) -> Response {
+pub(crate) fn json(status: StatusCode, body: String) -> Response {
     (status, [(CONTENT_TYPE, "application/json")], body).into_response()
 }
 

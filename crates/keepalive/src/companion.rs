@@ -6,22 +6,23 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::{RawQuery, State};
-use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::map_response;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
 use jiff::Timestamp;
+use phoebis_ledger::{funding_of, Speed};
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_relay::{authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{
     ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot,
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, CompanionKey, PoolRow};
+use phoebis_store::{AccountRow, AccountState, CompanionKey, PoolRow};
 use serde::Serialize;
 
 use crate::engine::Engine;
+use crate::routes::json;
 
 const ALLOWANCE_PATH: &str = "/v0/companion/allowance";
 
@@ -160,12 +161,10 @@ async fn allowance(
         accounts: accounts(&companion_key, &snapshot, pool, projections, now),
         pins: session_pins(&companion_key, pins, now),
     };
-    (
+    json(
         StatusCode::OK,
-        [(CONTENT_TYPE, "application/json")],
         serde_json::to_string(&body).unwrap_or_default(),
     )
-        .into_response()
 }
 
 /// The query is the one `session_id=<value>` pair. The value is taken as sent, never percent-decoded, and passes the
@@ -178,12 +177,7 @@ fn session_id(query: &str) -> Option<&str> {
 
 fn refusal(status: StatusCode, code: &'static str) -> Response {
     tracing::debug!(code, "the companion's allowance read was refused");
-    (
-        status,
-        [(CONTENT_TYPE, "application/json")],
-        serde_json::json!({ "code": code }).to_string(),
-    )
-        .into_response()
+    json(status, serde_json::json!({ "code": code }).to_string())
 }
 
 /// The pool's active members, each under its pseudonym and ordered by it.
@@ -220,13 +214,13 @@ fn account_view(
     projection: AccountProjection,
     now: i64,
 ) -> AccountView {
-    let funding = if row.kind == AccountKind::ApiKey {
-        "api_key"
-    } else if snapshot.usage_based(&row.id) {
-        "usage_based"
-    } else {
-        "plan"
-    };
+    let funding = funding_of(
+        Some(row.kind),
+        snapshot.usage_based(&row.id),
+        Some(false),
+        Speed::Standard,
+    )
+    .as_str();
     let windows = projection
         .windows
         .into_iter()
