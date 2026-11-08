@@ -1464,23 +1464,23 @@ draw chose among more than one. Verdict carries the one chip that decided it (`4
 `spend cap reached until 00:00`), whose hover says why the member was passed over, on a spent member with the reset it
 waits for (`its 5h window spent until 15:42`, `at its spend cap until 00:00`), and beside it a badge for a destination
 the gate read that did not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. A cooldown chip
-names the scope its words leave out after the reset, the model a 404 cooled or `fast mode credits`, and the walk's
-exhausted line reads a spent member's chip as its row does. Three folds, "Request facts", "Pin and warmth" (a record
-that pins nothing reads why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
-`Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence
-re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account
-it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The
-settings fold lists the pool's twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or
-`off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key
-and its pool had left the registry". A refused record, which no pool setting entered, draws no settings fold, a
-guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as
-a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling
-on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record, and a version 1
-record lists after the twenty-four, each marked `(then)`, the three settings it carried that a later record does not.
-"Outcome" lists the pin written, the reservation (the account, the share per window and the expiry), the cache-map
-entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold,
-reading `for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the
-chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
+names the scope its words leave out after the reset, the model a 404 cooled, and the walk's exhausted line reads a spent
+member's chip as its row does. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why: not
+looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and `Settings in force since {time}`
+(which a guardrail's attach to or detach from the pool moves too, since the fence re-reads the pool's settings), stay
+closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account it left, `shed from` after a
+shedding round and `failed over from` after a failover's landing, with the instant. The settings fold lists the pool's
+twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or `off`, Stretch and Hold as
+spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key and its pool had left the
+registry". A refused record, which no pool setting entered, draws no settings fold, a guardrail block's among them,
+whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as a second chip. A record
+written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and
+the five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
+twenty-four, each marked `(then)`, the three settings it carried that a later record does not. "Outcome" lists the pin
+written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
+(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading
+`for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips
+`speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
 `for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a
 Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
 `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against
@@ -1498,27 +1498,27 @@ account's last row reads `deleted`. A pin moved panel names the account the pin 
 and what moved it, where a rule's gate read the destination, Destination fit (`fits`, `rewrite only` or `least bad`) and
 Runway (a span, `none` or `unbounded`), and on a failover's move its Cause, `429 on 5h` or `fast lane 429` for a
 cooldown and `re-auth required by credential refused` for a mark, in the account state panel's words. A shedding round's
-panel reads Started by, Trigger (`5h projection 99% at 18:20 over the ceiling 95%`,
-`7d projection 96% in 5 h over the ceiling 95%`, `5h projection 104% at 18:20 over the wall` for a round that tested the
-wall, a ceiling of 100%, or `5h stretch 42 min over the threshold 30 min` for a round the stretch fired, followed by
-Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or `the slow-down`), Excess (`9.5 %/h`), Cap with
-the target and the burn removed, Mark share (`10%`, the share of the burn left to shed that a pin's own burn must cover
-before the round marks it), Unit, Burn average, Warm sessions, the Pins table (Session, Agent, Warmth, Burn, Last
-prompt, Rewrite as the share of the chosen week the pin's rewrite takes, `0.111% Ultra week`, with
-`compared on the 7-day window` on hover naming the window the pick compared on, or on an earlier build's round, which
-names no unit, the figure as stored under its old label, Destination, Mark), Skipped (one chip per pin, its session and
-its reason, `off window` for a pin whose model does not draw the window that fired, `ended` for a pin whose agent ended
-before the round read it, `no burn` for a pin with no priced burn on the fired window, and `sliver` for a pin the round
-left warm under its Mark share), Planned destinations, Outcome (`marked 2`, `nothing to mark: no runway`,
-`nothing to mark: sliver`, or, for a round that walked no pin, the word of the pin it left out, such as
-`nothing to mark: off window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin,
-Reason (`healed: the 5h projection read 91% under the ceiling`, `under the wall` in its place where the round tested the
-wall, `healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made, `moved` or `released`),
-Marked (when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt, Cause,
-Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down
-started panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset
-and the Effect `requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down
-ended panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
+panel reads Started by, Trigger (`5h projection 104% at 18:20 over the wall` on the 5-hour window, which the round tests
+against the wall at its reset, `7d projection 96% in 5 h over the ceiling 95%` on a weekly window whose reset is more
+than five hours away, which it tests against the pool's ceiling, or `5h stretch 42 min over the threshold 30 min` for a
+round the stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection` or
+`the slow-down`), Excess (`9.5 %/h`), Cap with the target and the burn removed, Mark share (`10%`, the share of the burn
+left to shed that a pin's own burn must cover before the round marks it), Unit, Burn average, Warm sessions, the Pins
+table (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the share of the chosen week the pin's rewrite takes,
+`0.111% Ultra week`, with `compared on the 7-day window` on hover naming the window the pick compared on, or on an
+earlier build's round, which names no unit, the figure as stored under its old label, Destination, Mark), Skipped (one
+chip per pin, its session and its reason, `off window` for a pin whose model does not draw the window that fired,
+`ended` for a pin whose agent ended before the round read it, `no burn` for a pin with no priced burn on the fired
+window, and `sliver` for a pin the round left warm under its Mark share), Planned destinations, Outcome (`marked 2`,
+`nothing to mark: no runway`, `nothing to mark: sliver`, or, for a round that walked no pin, the word of the pin it left
+out, such as `nothing to mark: off window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads
+the pin, Reason (`healed: the 5h projection read 91% under the ceiling`,
+`healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made, `moved` or `released`), Marked
+(when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt, Cause, Reserved
+(`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down started
+panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the
+Effect `requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended
+panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
 `requests of the account's sessions pass unheld again`. The kinds and what each row records:
 
 | Event | What it records |

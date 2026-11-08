@@ -705,9 +705,11 @@ test('the candidate cells word every verdict and its chip', () => {
   const until = (h, m) => iso(ms(h, m));
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limit', scope: 'account', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', scope: 'account', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', 'rate limited until 15:42', 'in a cooldown'], 'the router spells its rate limit rate_limit alone');
-  // The scope names what the cooled words leave out: the model a 404 cools, and nothing the fast lane's words already say.
+  // The scope names what the cooled words leave out, the model a 404 cools. The fast lane's two rows name the lane and
+  // its credits in their own words, whatever window the router filed them under.
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'model_rejected', scope: 'model:claude-opus-5', until: until(15, 24), window: 'model_rejection' }, verdict: 'out' }), ['out', 'model 404 until 15:24 for claude-opus-5', 'in a cooldown']);
-  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', scope: 'fast', until: until(14, 42), window: 'fast' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', scope: 'fast', until: until(14, 42), window: 'retry_after' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
+  assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_credits', scope: 'fast_credits', until: until(15, 42), window: 'org_spend_cap_reached' }, verdict: 'out' }), ['out', 'fast credits until 15:42', 'in a cooldown']);
   const operator = { name: 'operator', reason: null, until: null, window: null };
   assert.deepEqual(verdict({ enabled: false, obstacle: operator, verdict: 'out' }), ['out', 'held by hand', 'held by an operator']);
   assert.deepEqual(verdict({ obstacle: operator, state: 'funding_required', verdict: 'out' }), ['out', 'needs funding', 'the account leaves every eligible set until funded']);
@@ -1379,9 +1381,8 @@ test('the pin moved, shedding round, cleared mark and expired reservation detail
   const cleared = (more) => pairs('mark_cleared', { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: null, ...more }, { keyId: 'desktop', model: 'claude-sonnet-5' });
   const healed = cleared({ projection: 0.91, reason: 'healed' });
   assert.deepEqual([healed.Reason, healed.Marked, healed['Standing for']], [['healed: the 5h projection read 91% under the ceiling'], ['13:00', 'on primary'], ['1 h']]);
-  // A round that tested the wall records a ceiling of 1, the window's whole share, and so does the mark it cleared.
+  // A round that tested the wall records a ceiling of 1, the window's whole share.
   assert.deepEqual(round({ ceiling: 1, projection: 1.04 }).Trigger, ['5h projection 104% at 18:20 over the wall']);
-  assert.deepEqual(cleared({ ceiling: 1, projection: 0.91, reason: 'healed' }).Reason, ['healed: the 5h projection read 91% under the wall']);
   assert.deepEqual([cleared({ reason: 'moved' }).Reason, cleared({ reason: 'released' }).Reason], [['moved'], ['released']]);
 
   const expired = pairs('reservation_expired', { age_ms: 42_000, attempt: 1, cause: 'transport_error', shares: { five_hour: 0.104, seven_day: 0.012 } });

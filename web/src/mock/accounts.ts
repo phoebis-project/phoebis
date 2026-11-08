@@ -392,13 +392,13 @@ const SEEDS = [
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-  // The story's plan-ended account, a Pro login in no pool whose operator canceled it. Its saved end passed three days
-  // ago and a profile read four hours ago found its organization holding no plan, so the router answers no window for
-  // it, its poll has asked it nothing since the flag, and its 7-day trend ends at its last clean poll. The router
-  // stores the document that read found, a free organization on Pro's tier word billed as none, before it flags the
-  // account, so the subscription block reads Free. The windows are that poll's reading, which the final map empties as
-  // the route does: the end lies inside both, the 5-hour one three hours old at the end and resetting two hours after
-  // it, the 7-day one three days old at the end and resetting four days after it.
+  // The story's plan-ended account, a Pro login in the sidelined pool, which no key routes to, whose operator canceled
+  // it. Its saved end passed three days ago and a profile read four hours ago found its organization holding no plan,
+  // so the router answers no window for it, its poll has asked it nothing since the flag, and its 7-day trend ends at
+  // its last clean poll. The router stores the document that read found, a free organization on Pro's tier word billed
+  // as none, before it flags the account, so the subscription block reads Free. The windows are that poll's reading,
+  // which the final map empties as the route does: the end lies inside both, the 5-hour one three hours old at the end
+  // and resetting two hours after it, the 7-day one three days old at the end and resetting four days after it.
   {
     ...ACCOUNT_SAMPLE,
     id: 'sunset',
@@ -506,9 +506,9 @@ const SEEDS = [
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-  // A second Enterprise contract seat, at its spend cap: the poll read its amounts at the limit ten minutes ago, and with
-  // no head naming the reset the router estimates it. Its id sorts last, so it takes the API-key research's slot, which
-  // no ring and no Quota lane draws, for the spend lane it draws.
+  // A second Enterprise contract seat, at its spend cap: the poll read its amounts at the limit ten minutes ago, and
+  // with no head naming the reset the router estimates it. Its id sorts last, so it takes the API-key research's slot,
+  // which no ring and no Quota lane draws, for the spend lane it draws.
   {
     ...ACCOUNT_SAMPLE,
     id: 'zenith',

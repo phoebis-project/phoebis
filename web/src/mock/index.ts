@@ -401,9 +401,9 @@ const termEnded = (a: Account, now: number): boolean => {
 /**
  * The pool route's reading of a member, in the selector's order: an account the registry lacks is unavailable, a member
  * the router has not loaded is unknown, since it answers no projection before it reads any obstacle, then paused or not
- * ready is unavailable, then past its term is subscription ended, then an account-wide cooldown, then a spend at or past
- * either of the member's budgets inside the period it was reported for, then a usage-based seat whose spend window reads
- * at or past its limit, then overage the router observed under a policy that admits none.
+ * ready is unavailable, then past its term is subscription ended, then an account-wide cooldown, then a spend at or
+ * past either of the member's budgets inside the period it was reported for, then a usage-based seat whose spend window
+ * reads at or past its limit, then overage the router observed under a policy that admits none.
  */
 const eligibilityOf = (a: Account | undefined, policy: PoolInput['overagePolicy'], member: BudgetedSeed): MemberEligibility => {
   if (!a) return 'unavailable';

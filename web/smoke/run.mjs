@@ -1687,10 +1687,10 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 {
   // The bar's sort control on a bare /quota. The recovery orders are written from the story's accounts (`SEEDS` in
   // `web/src/mock/accounts.ts`) at the mount's frozen clock: their resets still ahead of it, reserve's 5-hour window
-  // run out, no Fable window on secondary or reserve, no 5-hour window on workshop, and contract and zenith
-  // usage-based seats with no plan window. An account without the key's reset reads after every one with it under
-  // either direction, by label, the seats among them. Default order has no direction, so its button draws no arrow and both direction rows
-  // stand disabled and unchecked.
+  // run out, no Fable window on secondary or reserve, no 5-hour window on workshop, and contract and zenith usage-based
+  // seats with no plan window. An account without the key's reset reads after every one with it under either direction,
+  // by label, the seats among them. Default order has no direction, so its button draws no arrow and both direction
+  // rows stand disabled and unchecked.
   const name = "/quota the sort control reads Default order with no direction, and each recovery order files the cards by that window's reset, the soonest first, its address read back on a reload";
   const page = await mount('/quota', { now: CLOCK_ORIGIN });
   const button = () => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -16660,8 +16660,9 @@ await forView('/routing-log', async () => {
   {
     // The Fable-week round on nightly at 08:30: the 5-hour window opened 19 minutes before, under all's hold of an
     // hour, so the shed rule's Round group reads the window's age and hold with each burning window's wall, and the
-    // 7-day Fable window fires in its place. The round walks the Fable pin with its burn on the 7-day Fable window, the one pin walked and so the last
-    // pin, and lists the Opus pin off the window, left out before the walk, so it marks nothing for the last pin.
+    // 7-day Fable window fires in its place. The round walks the Fable pin with its burn on the 7-day Fable window, the
+    // one pin walked and so the last pin, and lists the Opus pin off the window, left out before the walk, so it marks
+    // nothing for the last pin.
     const name = "/routing-log the Fable-week round's card walks the Fable pin as the last pin, lists the Opus pin off the window and marks nothing for the last pin";
     const id = 'req_3e7a5c19-f84';
     if ((await api.getDecision(id, 1)) === null) results.push({ name, ok: false, missing: ['no decision of the story at 08:30 on nightly'] });

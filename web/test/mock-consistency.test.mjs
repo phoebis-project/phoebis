@@ -2767,7 +2767,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The profile read found the free organization the canceled plan left, and no read since found a plan.
     assert.deepEqual(own.map((e) => [e.kind, e.at, e.detail]), [['plan_ended', a.planEndedAt, { organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'profile', subscription_status: 'canceled' }]]);
     const decided = log.filter((row) => row.type === 'decision' && (row.accountId === a.id || row.fromAccountId === a.id));
-    assert.deepEqual(decided.map((row) => `${row.kind} ${row.at}`), [], 'no decision touches an account in no pool');
+    assert.deepEqual(decided.map((row) => `${row.kind} ${row.at}`), [], 'no decision touches an account in a pool no key routes to');
   });
 
   test(`a booking a request ended without usage expires once at the request's end, with the cause its end carries, at ${at}`, async () => {
@@ -2878,8 +2878,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`the mock's reconciliations read as each priced account's windows over the trailing 30 days, at ${at}`, async () => {
     const s = await story;
     const { reconciliations: rows } = await s.api.getAnalyticsReconciliations();
-    // The ledger reconciles a window the router priced a request in: legacy stopped a week back, while reserve, spare and
-    // the seat priced nothing, sunset is in no pool and an API key reports no plan window.
+    // The ledger reconciles a window the router priced a request in: legacy stopped a week back, while reserve, spare
+    // and the seats priced nothing, sunset sits in a pool no key routes to and an API key reports no plan window.
     const current = ['nightly', 'primary', 'secondary', 'studio'];
     assert.deepEqual([...new Set(rows.map((r) => r.accountId))].sort(), ['legacy', ...current], 'the accounts with rows');
     const order = (x, y) => Date.parse(y.windowEnd) - Date.parse(x.windowEnd) || (x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0) || (x.window < y.window ? -1 : x.window > y.window ? 1 : 0);
