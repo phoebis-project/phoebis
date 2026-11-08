@@ -227,20 +227,8 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
         .unwrap()
         .unwrap()
         .companion_permissions;
-    assert_eq!(
-        plain,
-        CompanionPermissions {
-            allowance: true,
-            keepalive: true
-        }
-    );
-    assert_eq!(
-        quiet,
-        CompanionPermissions {
-            allowance: true,
-            keepalive: false
-        }
-    );
+    assert_eq!(plain.words(), ["allowance", "keepalive"]);
+    assert_eq!(quiet.words(), ["allowance"]);
 }
 
 #[test]

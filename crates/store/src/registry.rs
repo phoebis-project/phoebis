@@ -353,7 +353,7 @@ pub struct MemberWrite {
 }
 
 /// The companion routes a key may use. A new key holds every permission, so a companion works with no setup.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub struct CompanionPermissions {
     pub allowance: bool,
     pub keepalive: bool,
@@ -371,7 +371,7 @@ impl Default for CompanionPermissions {
 impl CompanionPermissions {
     pub const WORDS: [&'static str; 2] = ["allowance", "keepalive"];
 
-    /// The set the words name; `Err` carries the first word outside `WORDS`. A repeated word is read once.
+    /// The set the words name. `Err` carries the first word outside `WORDS`, and a repeated word is read once.
     pub fn from_words(words: &[String]) -> Result<CompanionPermissions, String> {
         let mut set = CompanionPermissions {
             allowance: false,
