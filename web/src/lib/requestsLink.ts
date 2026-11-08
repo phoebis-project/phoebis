@@ -133,13 +133,13 @@ export function requestsLink({ count, filters, group, reason, refusalCategory, w
   return { href: requestsHref(address), title: filters.includeProbes && !probes ? LISTED_WITHOUT_PROBES : LISTED };
 }
 
-/** A count of the refusals card: its category's refused answers over the exact window the route counted, since the
- *  route reads the attempts at the request rather than the rollups' whole hours, with no session and no agent, neither
- *  of which the route reads. The two patterns pass through as the route reads them, so the count reads plain under a
- *  user agent pattern or a client pattern the request log cannot list, as the reasons panel's counts do, and its link
- *  never lists more rows than the bar counts. */
-export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number): RequestsLinkTarget {
-  return requestsLink({ ...input, count, filters: { ...input.filters, agentId: '', sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
+/** A count of the refusals card: its model's and category's refused answers over the exact window the route counted,
+ *  since the route reads the attempts at the request rather than the rollups' whole hours, with no session and no
+ *  agent, neither of which the route reads. The two patterns pass through as the route reads them, so the count reads
+ *  plain under a user agent pattern or a client pattern the request log cannot list, as the reasons panel's counts do,
+ *  and its link never lists more rows than the bar counts. */
+export function refusalLink(input: Omit<RequestsLinkInput, 'count' | 'group' | 'reason' | 'refusalCategory'>, category: string, count: number, model: string): RequestsLinkTarget {
+  return requestsLink({ ...input, count, filters: { ...input.filters, agentId: '', models: [model], sessionId: null }, refusalCategory: category, window: { ...input.window, exact: true } });
 }
 
 /** One link of the drawer's "Widen to" line. */

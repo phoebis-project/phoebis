@@ -377,41 +377,44 @@ it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The
 print the date before the time on every row, and the Routing log's columns fit their content
 ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views filter on
 an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
-([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests table orders by Time, Attempts,
-Duration or TTFB through the Sort control and offers a Duration column ([Requests](console.md#requests)). The Requests,
-Sessions and Routing log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a
-set wider than the card scrolling inside it, so the Requests table fits 1280 px with its default columns
-([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests
-view's empty state reads "Widen the range or clear a filter.", as the Routing log's does, and a request the router
-refused before it resolved a model reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all
-in a filter's list clears every check, the inverse of checking it, and an empty list keeps its meaning
-([Requests](console.md#requests), [Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted,
-created <time>)`, its creation instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts cards
-offer the three windows the router reads, and the Accounts in range table reads the Fable week's peak as Peak Fable
-([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
-accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week, with the
-fleet's figures ([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent
-filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
-links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session
-([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session
-filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
-Burn tab draws one Plan per hour card, the subscription traffic per hour in the chosen week, a bucket the cost model
-could not price staying a gap under a "model unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's
-Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab does
-([Analytics](console.md#analytics)). The Analytics view's group tables order through the bar's Sort control by Name or
-the open tab's columns ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused
-before it resolved a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member
-budgets, its reconciliation rows listed on the Meter view ([Analytics](console.md#analytics),
-[Meter](console.md#meter)). The Cache warming tab shows what the probes saved and the net saving after their cost, as
-tiles, a chart and a Saved column per pool ([Analytics](console.md#analytics)). The Client and User agent filters list
-the range's values and take a typed pattern, each value a chip ([Analytics](console.md#analytics)). The Cost by chart's
-note names the unpriced groups it draws as gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring
-and the Plan per hour legend read their figures in the chosen week ([Analytics](console.md#analytics)). The ledger
-records a null diagnostics member on a request that named a message as `none` and a comparison the upstream was still
-running as `pending`, which Misses by reason and its per-group table read as No divergence and Pending
-([Analytics](console.md#analytics)). The Refusals by category card narrows under the Client and User agent filters and
-its links carry the client pattern ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card
-counts the answers the upstream refused by category, each bar opening the Requests view on them
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests rows mark a request that
+presented a fallback token, the Fallback filter lists them, and the Classifier filter offers `client_off`
+([Requests](console.md#requests)). The Requests table orders by Time, Attempts, Duration or TTFB through the Sort
+control and offers a Duration column ([Requests](console.md#requests)). The Requests, Sessions and Routing log tables
+lay their columns out by one rule, with a minimum per column kind, one fill column and a set wider than the card
+scrolling inside it, so the Requests table fits 1280 px with its default columns ([Requests](console.md#requests),
+[Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests view's empty state reads "Widen
+the range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model
+reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every
+check, the inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing
+log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the
+viewer's zone ([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router reads, and the
+Accounts in range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)). The Accounts
+section's card "Unused allowance by account" ranks the subscription accounts by the figure of their weekly windows left
+unused over the last four weeks, in the chosen week, with the fleet's figures ([Analytics](console.md#analytics)). The
+Analytics session view narrows to one agent under the Agent filter of the Subject group, carried in the address as
+`agent_id` and written by the Sessions view's agent menu, its links to the request log carrying the agent, the filter
+disabled until a session is picked and leaving with the session ([Analytics](console.md#analytics)). The Analytics
+session view reads the session's rows through the route's session filter, and each auto reload re-reads the first page
+alone ([Analytics](console.md#analytics)). The Analytics view's Burn tab draws one Plan per hour card, the subscription
+traffic per hour in the chosen week, a bucket the cost model could not price staying a gap under a "model unlisted"
+entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across the row
+where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's group
+tables order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)). The
+Analytics view's model grouping lists a request refused before it resolved a model under "no model"
+([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
+Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
+saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
+([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
+each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
+gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their
+figures in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
+request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
+reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
+category card narrows under the Client and User agent filters and its links carry the client pattern
+([Analytics](console.md#analytics)). The Refusals by category card splits its bars by model and counts the requests that
+presented a fallback token ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts
+the answers the upstream refused by category, each bar opening the Requests view on them
 ([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
 ([Analytics](console.md#analytics)). The unused allowance card and the Accounts detail's allowance block read their
 figures in the chosen week under every position and wait on the cost model, so a failed settings read draws their error

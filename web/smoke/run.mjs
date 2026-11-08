@@ -13632,7 +13632,7 @@ await forView('/requests', async () => {
   const freeCalls = requests.filter((r) => r.classifier === 'client');
   const contractRow = requests.find((r) => r.errorCode === 'client_contract');
   results.push({ name: 'fixture: two classifier calls and one contract refusal', ok: freeCalls.length === 2 && contractRow !== undefined, missing: [`${freeCalls.length} classifier calls`, String(contractRow?.id)] });
-  const classifierCheck = '/requests the Classifier filter stands in the Request group, offers client classifier and none, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% with the free sentence ahead of the estimate';
+  const classifierCheck = '/requests the Classifier filter stands in the Request group, offers client classifier, client classifier off and none, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% with the free sentence ahead of the estimate';
   const facet = await mount('/requests', { now: CLOCK_ORIGIN });
   const facetGroup = await groupOf(facet, 'Classifier');
   const facetOptions = (await openOptions(facet, 'Classifier')).map((o) => o.textContent?.trim() ?? '');
@@ -13648,7 +13648,7 @@ await forView('/requests', async () => {
     name: classifierCheck,
     ok:
       facetGroup === 'Request' &&
-      JSON.stringify(facetOptions) === JSON.stringify(['client classifier', 'none']) &&
+      JSON.stringify(facetOptions) === JSON.stringify(['client classifier', 'client classifier off', 'none']) &&
       chosenCalls.param === 'client' &&
       chosenCalls.chip === 'classifier: client' &&
       chosenCalls.rows.length === 2 &&
@@ -13826,6 +13826,93 @@ await forView('/requests', async () => {
       sent.paged !== null &&
       JSON.stringify(lists(sent.paged)) === JSON.stringify([['end_turn'], ['-']]),
     missing: [`read ${JSON.stringify(lists(sent.read))}`, `polls ${JSON.stringify(sent.polled.map(lists))}`, `next page ${sent.paged === null ? 'none' : JSON.stringify(lists(sent.paged))}`],
+  });
+});
+
+// The fallback mark on the Requests view, read off the mock's `REQUESTS`: the story's one fallback credit token, which
+// the laptop session's oldest refused turn of the default day, `req_3bd3ceda-9d3`, issued on secondary, and which the
+// session's next inference turn, `req_0f92cbbe-ddb`, presented and another account served. The bare list's first page
+// holds neither, while the session's address lists both, so the checks mount the session to read the issuer's account
+// on the hover and the Fallback filter alone to read the generic words.
+await forView('/requests', async () => {
+  const presenter = requests.find((r) => r.fallbackDigest !== null) ?? null;
+  const issuer = presenter === null ? null : (requests.find((r) => r.attempts.some((a) => a.issuedDigest === presenter.fallbackDigest)) ?? null);
+  const issuedOn = issuer?.attempts.find((a) => a.issuedDigest === presenter.fallbackDigest)?.accountId ?? null;
+  results.push({
+    name: 'fixture: one request presented a fallback token, which a refused attempt on secondary issued in the same session, and another account served it',
+    ok: requests.filter((r) => r.fallbackDigest !== null).length === 1 && issuedOn === 'secondary' && presenter.accountId !== 'secondary' && presenter.sessionId === issuer.sessionId,
+    missing: [String(presenter?.id), String(issuer?.id), `issued on ${issuedOn}`, `served by ${presenter?.accountId}`],
+  });
+  if (presenter === null || issuer === null) return;
+  const rowsOf = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')];
+  // The time cell carries the whole id on its title, the one place a row names its request.
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const badgesOf = (tr) => [...(tr?.querySelector('.requests__status')?.children ?? [])].filter((el) => el.classList.contains('badge'));
+  const infoOf = (tr) => badgesOf(tr).find((b) => b.classList.contains('badge--info')) ?? null;
+  const param = (page, name) => new URLSearchParams(page.location().search).get(name);
+  /** The list read's `fallback` member, as the page handed it to the mock. */
+  const sentOf = (log) => {
+    const query = log.calls.at(-1)?.args?.[0] ?? null;
+    return query === null ? 'no list read' : (query.fallback ?? 'no fallback member');
+  };
+
+  const issuedCheck =
+    "/requests a request that presented a fallback token draws an info badge reading fallback after its code, its hover naming the account whose refused attempt issued the token while the issuing request is listed, and no other row draws one";
+  const session = await mount(`/requests?session=${presenter.sessionId}`, { now: CLOCK_ORIGIN });
+  const presenting = rowsOf(session).find((tr) => idOf(tr) === presenter.id);
+  const mark = badgesOf(presenting)[1];
+  const drawn = { badges: badgesOf(presenting).map((b) => b.textContent?.trim() ?? ''), classes: mark?.className ?? null, title: mark?.getAttribute('title') ?? null };
+  const others = rowsOf(session).filter((tr) => tr !== presenting && infoOf(tr) !== null).map(idOf);
+  results.push({
+    name: issuedCheck,
+    ok: rowsOf(session).some((tr) => idOf(tr) === issuer.id) && JSON.stringify(drawn) === JSON.stringify({ badges: ['200', 'fallback'], classes: 'badge badge--info', title: 'A fallback token issued by secondary' }) && others.length === 0,
+    missing: [`${rowsOf(session).length} rows`, JSON.stringify(drawn), ...others],
+  });
+  session.unmount();
+
+  const yesCheck =
+    "/requests the Fallback filter's yes lists the request that presented the token alone under the chip fallback: yes, its hover the generic words since the issuing request is filtered out, and the list read sends fallback true";
+  const yesLog = recordedCalls('listRequests');
+  const yes = await mount('/requests?fallback=true', { now: CLOCK_ORIGIN });
+  yesLog.restore();
+  const yesRead = { chip: chipRead(yes, 'fallback'), ids: rowsOf(yes).map(idOf), param: param(yes, 'fallback'), sent: sentOf(yesLog), title: infoOf(rowsOf(yes)[0])?.getAttribute('title') ?? null };
+  yes.unmount();
+  results.push({ name: yesCheck, ok: JSON.stringify(yesRead) === JSON.stringify({ chip: 'fallback: yes', ids: [presenter.id], param: 'true', sent: true, title: 'A fallback token presented with this request' }), missing: [JSON.stringify(yesRead)] });
+
+  const noCheck =
+    "/requests the Fallback filter's no lists the session's other fifteen requests, the issuing one among them and the presenting one left out, under the chip fallback: no, and the list read sends fallback false";
+  const noLog = recordedCalls('listRequests');
+  const no = await mount(`/requests?session=${presenter.sessionId}&fallback=false`, { now: CLOCK_ORIGIN });
+  noLog.restore();
+  const noIds = rowsOf(no).map(idOf);
+  const noRead = { chip: chipRead(no, 'fallback'), issuer: noIds.includes(issuer.id), presenter: noIds.includes(presenter.id), rows: noIds.length, sent: sentOf(noLog) };
+  no.unmount();
+  results.push({ name: noCheck, ok: JSON.stringify(noRead) === JSON.stringify({ chip: 'fallback: no', issuer: true, presenter: false, rows: 15, sent: false }), missing: [JSON.stringify(noRead)] });
+
+  const offerCheck = '/requests Add filter offers Fallback in the Outcome group after Cache miss reason, its choices Either, yes and no, choosing yes writes fallback=true, and the bare list read sends no fallback';
+  const bareLog = recordedCalls('listRequests');
+  const bar = await mount('/requests', { now: CLOCK_ORIGIN });
+  bareLog.restore();
+  addFilterButton(bar)?.click();
+  await bar.settle(100);
+  let heading = null;
+  const offered = [];
+  for (const el of filterBox()?.querySelectorAll('.mselect__group, .add-filter__row') ?? []) {
+    if (el.classList.contains('mselect__group')) heading = el.textContent?.trim() ?? null;
+    else offered.push({ group: heading, label: el.firstElementChild?.textContent?.trim() ?? '' });
+  }
+  const at = offered.findIndex((r) => r.label === 'Fallback');
+  await addFilter(bar, 'Fallback');
+  const choices = boxOptions().map((o) => o.textContent?.trim() ?? '');
+  boxOptions().find((o) => o.textContent?.trim() === 'yes')?.click();
+  await bar.settle();
+  const chosen = param(bar, 'fallback');
+  await closeBoxes(bar);
+  bar.unmount();
+  results.push({
+    name: offerCheck,
+    ok: offered[at]?.group === 'Outcome' && offered[at - 1]?.label === 'Cache miss reason' && JSON.stringify(choices) === JSON.stringify(['Either', 'yes', 'no']) && chosen === 'true' && sentOf(bareLog) === 'no fallback member',
+    missing: [JSON.stringify(offered[at] ?? 'no Fallback row'), `after ${offered[at - 1]?.label ?? 'nothing'}`, JSON.stringify(choices), String(chosen), String(sentOf(bareLog))],
   });
 });
 
@@ -14839,7 +14926,7 @@ await forView('/requests', async () => {
     results.push({
       name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
       ok:
-        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 23, subject: ['Agent', 'Request', 'Session'] }) &&
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 24, subject: ['Agent', 'Request', 'Session'] }) &&
         JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
         JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
         back &&
@@ -18638,13 +18725,15 @@ await forView('/analytics', async () => {
 });
 
 // The Traffic section's Refusals by category card over the story's refused answers, read off the mock's `REQUESTS`:
-// `cyber` three times, `harmful` twice on two models and one the upstream gave no category, all inside the default day,
-// a bar per model and category as the route counts them. Each bar links the Requests view on its category's refused
-// answers over the page's range to the millisecond, with no session.
+// `cyber` three times on claude-sonnet-5-5, `harmful` once on each of claude-sonnet-4-5 and claude-sonnet-5-5 and one
+// the upstream gave no category on claude-sonnet-4-5, all inside the default day, a bar per model and category as the
+// route counts them, and the story's one request that presented a fallback token, a `claude-code/cli` row, counted in
+// the subtitle. Each bar links the Requests view on its model's and category's refused answers over the page's range to
+// the millisecond, with no session.
 await forView('/analytics', async () => {
   const DAY = 86_400_000;
   const TITLE = 'Refusals by category';
-  const SUBTITLE = 'Answers the upstream refused in range, by category, each a request that succeeded';
+  const SUBTITLE = 'Answers the upstream refused in range, by model and category, each a request that succeeded';
   const served = (r) => r.attempts.at(-1)?.response ?? null;
   const refused = requests.filter((r) => served(r)?.stopReason === 'refusal');
   const cardOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
@@ -18654,10 +18743,11 @@ await forView('/analytics', async () => {
       count: li.querySelector('.num')?.firstChild?.textContent?.trim() ?? null,
       href: li.querySelector('.num a')?.getAttribute('href') ?? null,
       label: li.querySelector('.mono')?.textContent?.trim() ?? null,
+      title: li.querySelector('.mono')?.getAttribute('title') ?? null,
     }));
   const countsOf = (page) => barsOf(page).map((b) => [b.label, b.count]);
-  /** The route's rows over `list`, the largest count first and then the model and the category in byte order, `-` read
-   *  none. */
+  /** The route's rows over `list`, the largest count first and then the model and the category in byte order, each
+   *  labeled with the model's short form and the category, `-` read none. */
   const ranked = (list) => {
     const counts = new Map();
     for (const r of list) {
@@ -18666,14 +18756,14 @@ await forView('/analytics', async () => {
       counts.set(key, { category, model: r.canonicalModel, n: (counts.get(key)?.n ?? 0) + 1 });
     }
     const bytes = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-    return [...counts.values()].sort((a, b) => b.n - a.n || bytes(a.model, b.model) || bytes(a.category, b.category)).map(({ category, n }) => [category === '-' ? 'none' : category, String(n)]);
+    return [...counts.values()].sort((a, b) => b.n - a.n || bytes(a.model, b.model) || bytes(a.category, b.category)).map(({ category, model, n }) => [`${shortModel(model)} · ${category === '-' ? 'none' : category}`, String(n)]);
   };
   // Each parameter by name, in key order, since the codec writes the categories before the stop reasons.
   const paramsOf = (href) => Object.fromEntries([...new URL(href, 'http://console.test').searchParams].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   const rowIds = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null).sort();
 
   const cardCheck =
-    '/analytics the Refusals by category card follows Refusals by code with its subtitle, a bar per model and category with cyber first and none for the refusal with no category, each linking the refused answers over the range to the millisecond with no session';
+    '/analytics the Refusals by category card follows Refusals by code with its subtitle counting the one request that presented a fallback token, a bar per model and category with the short model on its label and the whole id on its hover, cyber first and none for the refusal with no category, each linking its model\'s refused answers over the range to the millisecond with no session';
   const page = await mount('/analytics', { now: CLOCK_ORIGIN });
   const titles = [...(cardOf(page, 'Refusals by code')?.parentElement?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? null);
   const bars = barsOf(page);
@@ -18684,24 +18774,26 @@ await forView('/analytics', async () => {
     ok:
       titles.indexOf(TITLE) > 0 &&
       titles.indexOf(TITLE) === titles.indexOf('Refusals by code') + 1 &&
-      subtitleOf(page) === SUBTITLE &&
-      JSON.stringify(countsOf(page)) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]) &&
+      subtitleOf(page) === `${SUBTITLE}. 1 request presented a fallback token` &&
+      JSON.stringify(countsOf(page)) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]) &&
       JSON.stringify(countsOf(page)) === JSON.stringify(ranked(refused)) &&
+      JSON.stringify(bars.map((b) => b.title)) === JSON.stringify(['claude-sonnet-5-5', 'claude-sonnet-4-5', 'claude-sonnet-4-5', 'claude-sonnet-5-5']) &&
       JSON.stringify(links) ===
         JSON.stringify([
-          { from: span.from, refusal_categories: 'cyber', stop_reasons: 'refusal', to: span.to },
-          { from: span.from, refusal_categories: '-', stop_reasons: 'refusal', to: span.to },
-          { from: span.from, refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
-          { from: span.from, refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, models: 'claude-sonnet-5-5', refusal_categories: 'cyber', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, models: 'claude-sonnet-4-5', refusal_categories: '-', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, models: 'claude-sonnet-4-5', refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
+          { from: span.from, models: 'claude-sonnet-5-5', refusal_categories: 'harmful', stop_reasons: 'refusal', to: span.to },
         ]),
-    missing: [JSON.stringify(titles), subtitleOf(page) ?? 'no subtitle', JSON.stringify(countsOf(page)), JSON.stringify(links)],
+    missing: [JSON.stringify(titles), subtitleOf(page) ?? 'no subtitle', JSON.stringify(countsOf(page)), JSON.stringify(bars.map((b) => b.title)), JSON.stringify(links)],
   });
 
-  // The bar's address lands on the list of its category's refused answers inside the card's window, and nothing else.
-  const landingCheck = "/analytics the cyber bar's link opens the Requests view on the cyber refusals of the card's window alone";
-  const cyberHref = bars.find((b) => b.label === 'cyber')?.href ?? null;
+  // The bar's address lands on the list of its model's and category's refused answers inside the card's window, and
+  // nothing else.
+  const landingCheck = "/analytics the cyber bar's link opens the Requests view on its model's cyber refusals of the card's window alone";
+  const cyberHref = bars.find((b) => b.label === 'sonnet-5-5 · cyber')?.href ?? null;
   page.unmount();
-  const wanted = refused.filter((r) => served(r).refusalCategory === 'cyber' && Date.parse(r.at) >= CLOCK_ORIGIN - DAY && Date.parse(r.at) <= CLOCK_ORIGIN).map((r) => r.id).sort();
+  const wanted = refused.filter((r) => r.canonicalModel === 'claude-sonnet-5-5' && served(r).refusalCategory === 'cyber' && Date.parse(r.at) >= CLOCK_ORIGIN - DAY && Date.parse(r.at) <= CLOCK_ORIGIN).map((r) => r.id).sort();
   if (cyberHref === null) controlMissing(landingCheck, 'the cyber bar');
   else {
     const landed = await mount(cyberHref, { now: CLOCK_ORIGIN });
@@ -18737,7 +18829,7 @@ await forView('/analytics', async () => {
       during.codes > 0 &&
       during.errors > 0 &&
       retried.error === null &&
-      JSON.stringify(retried.counts) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]),
+      JSON.stringify(retried.counts) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]),
     missing: [JSON.stringify(during), JSON.stringify(retried)],
   });
   failed.unmount();
@@ -18787,8 +18879,8 @@ await forView('/analytics', async () => {
     results.push({
       name: sessionCheck,
       ok:
-        subtitleOf(scoped) === `${SUBTITLE}. The session filter does not apply here` &&
-        JSON.stringify(countsOf(scoped)) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]) &&
+        subtitleOf(scoped) === `${SUBTITLE}. 1 request presented a fallback token. The session filter does not apply here` &&
+        JSON.stringify(countsOf(scoped)) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]) &&
         scopedLinks.length === 4 &&
         scopedLinks.every((l) => l !== null && !('session' in l)),
       missing: [subtitleOf(scoped) ?? 'no subtitle', JSON.stringify(countsOf(scoped)), JSON.stringify(scopedLinks)],
@@ -18798,8 +18890,10 @@ await forView('/analytics', async () => {
 
   // The route reads the client pattern, so the card counts the refused answers of the clients it matches alone: none
   // under `claude-code/sdk*`, since every refused answer of the story is the laptop's on `claude-code/cli`, and all six
-  // under `claude-code/cli`, whose links carry the pattern. The subtitle names no client filter under either.
-  const clientCheck = '/analytics under a client pattern the Refusals by category card counts the matching clients alone, its subtitle naming no client filter, its links carrying the pattern and no session';
+  // under `claude-code/cli`, whose links carry the pattern. The subtitle names no client filter under either, and its
+  // count of the requests that presented a fallback token reads the story's one presenter, a `claude-code/cli` row,
+  // under the second alone.
+  const clientCheck = '/analytics under a client pattern the Refusals by category card counts the matching clients alone, its subtitle naming no client filter and counting the fallback presenters the pattern matches, its links carrying the pattern and no session';
   const sent = recordedCalls('getAnalyticsRefusalCategories');
   const missed = await mount('/analytics?clients=claude-code%2Fsdk*', { now: CLOCK_ORIGIN });
   sent.restore();
@@ -18817,9 +18911,9 @@ await forView('/analytics', async () => {
       ranked(refused.filter((r) => r.client?.startsWith('claude-code/sdk'))).length === 0 &&
       missedRead.empty === 'No answer was refused in this range.' &&
       missedRead.counts.length === 0 &&
-      missedRead.subtitle === SUBTITLE &&
-      subtitleOf(matched) === SUBTITLE &&
-      JSON.stringify(countsOf(matched)) === JSON.stringify([['cyber', '3'], ['none', '1'], ['harmful', '1'], ['harmful', '1']]) &&
+      missedRead.subtitle === `${SUBTITLE}. 0 requests presented a fallback token` &&
+      subtitleOf(matched) === `${SUBTITLE}. 1 request presented a fallback token` &&
+      JSON.stringify(countsOf(matched)) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]) &&
       JSON.stringify(countsOf(matched)) === JSON.stringify(onCli) &&
       matchedLinks.length === 4 &&
       matchedLinks.every((l) => l !== null && l.client === 'claude-code/cli' && !('session' in l)),

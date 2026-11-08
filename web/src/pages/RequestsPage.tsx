@@ -125,6 +125,11 @@ const transportLabel = (r: Pick<RequestLog, 'transport'>) => (r.transport === 's
 const HEAD_ID_CHARS = 24;
 const GEOGRAPHY_TITLE = 'The inference geography the upstream reported for the answer: global or us. Not available means the model does not take the inference geography parameter.';
 const UPSTREAM_REFUSAL_TITLE = 'The upstream refused this answer. Open the request for the stop reason and the recommended model.';
+/** The issuer's account where a loaded row's attempt issued the presented token, the generic words otherwise. */
+const fallbackTitle = (r: RequestLog, rows: readonly RequestLog[]): string => {
+  const issuer = rows.flatMap((row) => row.attempts).find((a) => a.issuedDigest === r.fallbackDigest)?.accountId ?? null;
+  return issuer === null ? 'A fallback token presented with this request' : `A fallback token issued by ${issuer}`;
+};
 
 /** The log on this request, a quarter hour either side of it. A row with no duration is read as a moment. */
 const routingLogHref = (r: RequestLog, now: number) => {
@@ -278,7 +283,7 @@ export function RequestsPage() {
   const order = REQUEST_ORDER_OF[filters.sort];
   const query = useMemo<RequestQuery>(
     // Probes are off the log unless they are what the filter asks for.
-    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, dir, efforts: filters.efforts, from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, order, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
+    () => ({ accountIds: filters.accounts, agentId: filters.agentId || undefined, agentTypes: filters.agentTypes, cacheMissReasons: filters.cacheMissReasons, classifiers: filters.classifiers, client: filters.client, cursor, dir, efforts: filters.efforts, fallback: filters.fallback === '' ? undefined : filters.fallback === 'true', from: iso(span.from), guardrails: filters.guardrails, held: filters.held, includeProbes: filters.kind === 'probe', keyIds: filters.keys, kind: filters.kind || null, limit: filters.rows, models: filters.models, order, outcomes: filters.outcomes, poolIds: filters.pools, refusalCategories: filters.refusalCategories, request: filters.request || undefined, requestClasses: filters.requestClasses, search: filters.search, session: filters.session || undefined, speeds: filters.speeds, statuses: filters.statuses.map(Number), stopReasons: filters.stopReasons, to: cursor !== undefined && !custom ? undefined : iso(readEnd(custom, span.to, pagedTo ?? span.to)), turnOrigins: filters.turnOrigins, userAgent: filters.agent }),
     [filters, cursor, custom, dir, order, span, pagedTo],
   );
   const requests = useAsync(() => api.listRequests(query), [query]);
@@ -319,9 +324,14 @@ export function RequestsPage() {
       cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
       classifiers: [
         { label: 'client classifier', value: 'client' },
+        { label: 'client classifier off', value: 'client_off' },
         { label: 'none', value: NO_CLASS },
       ],
       efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
+      fallback: [
+        { label: 'yes', value: 'true' },
+        { label: 'no', value: 'false' },
+      ],
       guardrails: guardrailOptions(guardrails.data, rows, filters.guardrails),
       keys: keyOptions(keys.data, filters.keys),
       kind: (['inference', 'count_tokens', 'probe'] as const).map((value) => ({ label: REQUEST_KIND_LABEL[value], value })),
@@ -456,6 +466,11 @@ export function RequestsPage() {
                                 {servingResponse(r)?.stopReason === 'refusal' && (
                                   <Badge tone="warning" title={UPSTREAM_REFUSAL_TITLE}>
                                     {servingResponse(r)?.refusalCategory ?? 'none'}
+                                  </Badge>
+                                )}
+                                {r.fallbackDigest !== null && (
+                                  <Badge tone="info" title={fallbackTitle(r, rows)}>
+                                    fallback
                                   </Badge>
                                 )}
                                 {r.outcome !== 'succeeded' && <span className="muted requests__outcome">{REQUEST_OUTCOME_LABEL[r.outcome]}</span>}
@@ -732,7 +747,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                 { label: 'Temperature', value: r.shape.temperature !== null ? String(r.shape.temperature) : <span className="muted">not sent</span> },
                 { label: 'Speed, service tier', value: `${r.shape.requestedSpeed ?? 'default'}, ${r.shape.requestedServiceTier ?? 'default'}` },
                 { label: 'Auto mode', value: autoModeLabel(r.autoMode), mono: false },
-                { label: 'Classifier', title: "The client's own auto-mode classifier call, which takes no share of a plan window", value: r.classifier ?? <span className="muted">none</span>, mono: r.classifier !== null },
+                { label: 'Classifier', title: r.classifier === 'client_off' ? "The client's own auto-mode classifier call, run off the account its judged turn ended on or with no turn to judge, so it is charged as any call" : "The client's own auto-mode classifier call, which takes no share of a plan window", value: r.classifier ?? <span className="muted">none</span>, mono: r.classifier !== null },
               ]}
             />
           </section>

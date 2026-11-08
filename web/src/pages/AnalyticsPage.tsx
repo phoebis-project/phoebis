@@ -23,7 +23,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsColumnOf, analyticsKeysOf, sortAddressOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -31,7 +31,7 @@ import { failed, weekScale } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
-import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, shortId, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, plural, shortId, shortModel, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeObserver, useWeekReading, type Loaded } from '@/lib/hooks';
 import { REFUSED_TITLE } from '@/lib/requests';
@@ -702,7 +702,10 @@ export function AnalyticsPage() {
 
               {/* Its own error with Try again, as a card reading a route of its own draws one, and no count while the
                   answer is stale, so no figure stands under links for filters it was not read for. */}
-              <Card title="Refusals by category" subtitle={`Answers the upstream refused in range, by category, each a request that succeeded${refusalsNote(sessionId !== null)}`}>
+              <Card
+                title="Refusals by category"
+                subtitle={sentences(['Answers the upstream refused in range, by model and category, each a request that succeeded', refusalCategories.current === null ? null : `${plural(refusalCategories.current.fallbacks, 'request')} presented a fallback token`, refusalsNote(sessionId !== null)])}
+              >
                 {refusalCategories.error !== null ? (
                   <ErrorState title="Could not load refusals by category" body={refusalCategories.error} retry={refusalCategories.reload} />
                 ) : refusalCategories.current === null ? (
@@ -1348,7 +1351,7 @@ function BreakdownTable({
  * its count linking the requests it counts, and `empty` when every count is zero. A row whose label another row shares
  * carries a `key` of its own.
  */
-function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; key?: string; label: string; target?: RequestsLinkTarget }[] }) {
+function CountBars({ color, empty, rows }: { color: string; empty: string; rows: { count: number; key?: string; label: string; target?: RequestsLinkTarget; title?: string }[] }) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   const total = rows.reduce((s, r) => s + r.count, 0);
   if (total === 0) return <p className="muted">{empty}</p>;
@@ -1363,17 +1366,21 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
           label={r.label}
           labelClass="mono"
           share={fmtPct(r.count / total)}
+          title={r.title}
         />
       ))}
     </ul>
   );
 }
 
-/** A bar list's row, `fill` the bar's share of its track. `count` is drawn as given, so a list can link it. */
-function HBarRow({ color, count, fill, label, labelClass, rowClass, share }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; share: string }) {
+/**
+ * A bar list's row, `fill` the bar's share of its track. `count` is drawn as given, so a list can link it, and `title`
+ * is the label's hover, for a label that shortens what it names.
+ */
+function HBarRow({ color, count, fill, label, labelClass, rowClass, share, title }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; share: string; title?: string }) {
   return (
     <li className={rowClass}>
-      <span className={labelClass}>{label}</span>
+      <span className={labelClass} title={title}>{label}</span>
       <div className="hbars__track">
         <span className="hbars__fill" style={{ width: `${fill * 100}%`, background: color }} />
       </div>
@@ -1394,10 +1401,10 @@ function ErrorBars({ errors, color, empty = 'No errors in range.' }: { color: st
 /** A count under several client patterns stays plain, since a link could carry one of them alone. */
 const SEVERAL_CLIENTS: RequestsLinkTarget = { href: null, title: CLIENT_PATTERNS_PLAIN };
 
-/** One bar per model and category in the route's order, `-` read `none`, each count linking its category's refused
- *  answers. */
+/** One bar per model and category in the route's order, `-` read `none`, the model short on the label and whole on its
+ *  hover, each count linking its model's and category's refused answers. */
 const refusalRows = (answer: RefusalCategoriesAnswer, input: ReasonLink, plainLinks: boolean) =>
-  answer.rows.map((r) => ({ count: r.requests, key: `${r.model}:${r.category}`, label: r.category === '-' ? 'none' : r.category, target: plainLinks ? SEVERAL_CLIENTS : refusalLink(input, r.category, r.requests) }));
+  answer.rows.map((r) => ({ count: r.requests, key: `${r.model}:${r.category}`, label: `${shortModel(r.model)} · ${r.category === '-' ? 'none' : r.category}`, target: plainLinks ? SEVERAL_CLIENTS : refusalLink(input, r.category, r.requests, r.model), title: r.model }));
 
 /** Requests per effort level, each named as the rollups file it; `none`, the requests that asked for no level, last. */
 function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[] }) {
@@ -1985,8 +1992,8 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, readi
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';
 /** The refusals card's note: the session filter, the one filter of the page the refusal route does not read, if set. */
-function refusalsNote(session: boolean): string {
-  return session ? '. The session filter does not apply here' : '';
+function refusalsNote(session: boolean): string | null {
+  return session ? 'The session filter does not apply here' : null;
 }
 const BURN_UNFILTERED_NOTE = '. Of the filters above, the Accounts filter and the user agent groups alone apply here';
 type TimeAxis = { axisLine: { stroke: string }; dataKey: 'at'; height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; minTickGap: number; tickFormatter: (v: number) => string; tickLine: false };

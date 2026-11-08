@@ -768,25 +768,29 @@ be after start." while the pair is wrong, an end past now reads as now, and the 
 id", matches the request id, the session, the key, the model, the error code, and an attempt's account, upstream request
 id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after the last
 keystroke, on Enter, or when the field loses focus. Add filter opens a "Filter by" field over the filters in four
-groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Guardrail, Held only, Outcome, Refusal
-category, Status, Stop reason), Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed, Turn
-origin, User agent) and Subject (Agent, Request, Session). Choosing one opens its values: a list with a Select all row
-that applies on each click (checking it checks every option and unchecking it clears every check), a pattern field for
-Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting
-either, and a value with no wildcard matching in full), an id field for Agent, Request and Session, which match the id
-exactly (an agent id is `main` or a subagent's id, carried in the address as `agent_id`), or the Kind choices (Any kind,
-Inference, Count tokens, Probe), while Held only applies at once. Guardrail lists the registry's guardrails by name,
-then the ids of deleted guardrails the loaded rows still carry as `{id} (deleted)`, then `none` for a request no
-guardrail matched ([Guardrails](guardrails.md)). Stop reason lists the stop reasons the console names (`end_turn`,
-`max_tokens`, `model_context_window_exceeded`, `pause_turn`, `refusal`, `stop_sequence`, `tool_use`) and any other the
-loaded rows carry, Refusal category the categories it names (`cyber`) and any other the loaded rows carry, each list
-ending on `none` for a request whose serving attempt carries no value or that no attempt served. A pattern or an id
-applies on Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary,
-nightly" or "held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind
-"+N more", and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account
-filter keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the
-account that answered it. Every filter, the range, the page size and the order live in the page's address, so a reload
-or a shared link keeps them.
+groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Fallback, Guardrail, Held only, Outcome,
+Refusal category, Status, Stop reason), Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed,
+Turn origin, User agent) and Subject (Agent, Request, Session). Choosing one opens its values: a list with a Select all
+row that applies on each click (checking it checks every option and unchecking it clears every check), a pattern field
+for Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash
+quoting either, and a value with no wildcard matching in full), an id field for Agent, Request and Session, which match
+the id exactly (an agent id is `main` or a subagent's id, carried in the address as `agent_id`), the Kind choices (Any
+kind, Inference, Count tokens, Probe) or the Fallback choices (Either, yes for the requests that presented a fallback
+credit token and no for the rest, the chip reading "fallback: yes" or "fallback: no"), while Held only applies at once.
+Classifier offers client classifier (`client`, the client's own auto-mode classifier call on the account its judged turn
+ended on), client classifier off (`client_off`, one that ran off that account or with no turn to judge) and `none` for
+every other request, its chip printing the word. Guardrail lists the registry's guardrails by name, then the ids of
+deleted guardrails the loaded rows still carry as `{id} (deleted)`, then `none` for a request no guardrail matched
+([Guardrails](guardrails.md)). Stop reason lists the stop reasons the console names (`end_turn`, `max_tokens`,
+`model_context_window_exceeded`, `pause_turn`, `refusal`, `stop_sequence`, `tool_use`) and any other the loaded rows
+carry, Refusal category the categories it names (`cyber`) and any other the loaded rows carry, each list ending on
+`none` for a request whose serving attempt carries no value or that no attempt served. A pattern or an id applies on
+Enter or Apply. Each filter in force stands as a chip on a line under the bar, such as "account: primary, nightly" or
+"held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more",
+and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter
+keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the account that
+answered it. Every filter, the range, the page size and the order live in the page's address, so a reload or a shared
+link keeps them.
 
 The table offers fourteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status, Attempts, TTFB,
 Duration, Tokens and Cost, with Duration, Kind, Pool and Transport hidden until the Columns control turns them on, and
@@ -805,37 +809,39 @@ whole on hover, with the agent type beneath it on a subagent's turn. The drawer'
 branched from another conversation, `fork of {base} at 3`, with the base's whole id on hover. Status reads the code, a
 warning badge with the refusal's category where the upstream refused the answer (`none` where it gave no category, its
 hover "The upstream refused this answer. Open the request for the stop reason and the recommended model.", the request
-having succeeded), and the outcome word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`,
-`incomplete` or `rejected`). One row is one client request however many attempts it took: Attempts reads `2 attempts`
-with the trail of account and status on hover, nothing for a request of one attempt, and a `waited 42 s` badge for a
-request that waited through a hold, for a slot while every account was at its cap, for a reset, for the slow-down or for
-the rewrite in flight, whose hover names each wait with its reason in the row's order and the account it waited on,
-`waited for the slow-down 42 s, for a slot 3 s on {account}` or `waited for the rewrite in flight 2 s on {account}`, or
-each with its own account where the waits span two, `waited for the slow-down 42 s on {account}, for a slot 3 s on
-{other}` (a row from before the reasons reads `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost
-reads in the top bar's unit, its header's hover naming what each kind of request reads under the position. Under Native
-a request a subscription window paid reads one figure in the chosen week, such as `0.0244% Ultra week`, with its hint
-and the dollar equivalent on hover. The hint names the account's plan, its display name where the account carries one,
-and its share of each window the account has, in the order 5-hour, 7-day and the model week, with "(in the band)" after
-a 5-hour share that completed inside the band of the cost revision in force at its completion: "Ultra: 0.11% of the
-7-day window, 0.22% of the Fable week". It names no window the account lacks, so an approved Ultra account reads no
-5-hour share, and no Fable week on a Pro account. Under the Max and Ultra weeks the figure waits on the settings, so the
-cell draws its placeholder until they answer. Where that read fails, the cell draws a dash titled with the read's
-message, the drawer's Estimated cost row draws the same dash with the message leading its hover, and the split Refresh
-button's body reads the settings again. A request whose model has no weight in the cost model reads its dollar
-equivalent over `equivalent` with the hover "The cost model prices no share for this request". Under All in dollars and
-Dollar equivalent a subscription request reads its dollar equivalent over `equivalent` with the hint and the figure in
-the chosen week on hover, and under Billed dollars a dash with the hover "Nothing billed: a subscription request". An
-API-key, fast mode, overage or usage-based request reads dollars under every position but Dollar equivalent, where it
-reads a dash with the hover "Billed in dollars, no subscription equivalent". A client classifier call on a subscription
-account reads `0%` in the chosen week under Native, with the hover "Free on the plan: a client classifier call takes no
-window share" ahead of the hint, its dollar equivalent over `equivalent` under All in dollars and Dollar equivalent with
-the same hover ahead of its zero figure, and a dash under Billed dollars, while on an overage or API-key account it
-reads its dollars as any billed request does. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First,
-Previous and Next, holds the requests up to the moment you opened it so paging does not shift, and the split Refresh
-button's body brings it up to now. An empty table reads "No requests match" with "Widen the range or clear a filter."
-and "Reset filters", which clears the filters, the search and the range. What each figure means is on
-[Statistics](statistics.md).
+having succeeded), an info badge `fallback` where the request presented a fallback credit token (its hover "A fallback
+token issued by {account}" naming the account of the refused attempt that issued the token where the table holds the
+issuing request, and "A fallback token presented with this request" otherwise), and the outcome word beside it where the
+request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
+however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
+request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
+account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
+its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
+or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two, `waited
+for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads `waited 1 s on
+{account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover naming what
+each kind of request reads under the position. Under Native a request a subscription window paid reads one figure in the
+chosen week, such as `0.0244% Ultra week`, with its hint and the dollar equivalent on hover. The hint names the
+account's plan, its display name where the account carries one, and its share of each window the account has, in the
+order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share that completed inside the band of the
+cost revision in force at its completion: "Ultra: 0.11% of the 7-day window, 0.22% of the Fable week". It names no
+window the account lacks, so an approved Ultra account reads no 5-hour share, and no Fable week on a Pro account. Under
+the Max and Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer. Where
+that read fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the same
+dash with the message leading its hover, and the split Refresh button's body reads the settings again. A request whose
+model has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model
+prices no share for this request". Under All in dollars and Dollar equivalent a subscription request reads its dollar
+equivalent over `equivalent` with the hint and the figure in the chosen week on hover, and under Billed dollars a dash
+with the hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads
+dollars under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no
+subscription equivalent". A client classifier call on a subscription account reads `0%` in the chosen week under Native,
+with the hover "Free on the plan: a client classifier call takes no window share" ahead of the hint, its dollar
+equivalent over `equivalent` under All in dollars and Dollar equivalent with the same hover ahead of its zero figure,
+and a dash under Billed dollars, while on an overage or API-key account it reads its dollars as any billed request does.
+The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
+moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
+reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which clears the filters, the
+search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -883,7 +889,8 @@ Selecting a row opens the "Request details" drawer, with the request's id and ti
   per attempt with the upstream's request id and, on the answer that served, its message id.
 - Request shape: Effort (the level the upstream applies), Thinking, Max tokens, "Tools, system blocks, messages",
   Context edits, Temperature, "Speed, service tier", Auto mode and Classifier (`client` for the client's own auto-mode
-  classifier call, `none` otherwise), "not sent" where absent.
+  classifier call, which takes no share of a plan window, `client_off` for one run off the account its judged turn
+  ended on or with no turn to judge, which is charged as any call, and `none` otherwise), "not sent" where absent.
 - Client hints: Agent type, Compaction, Context compacted, Turn origin and Tool time before this turn.
 - Captured bodies: the request and the response, each with Copy all and "Open wide", which draws a body of any size
   pretty-printed in a window of its lines and a streamed answer as its events, or "Not captured for this key. Enable
@@ -966,28 +973,30 @@ with nothing reads "No traffic in this range." What each figure means is on [Sta
 Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
 Exhausted), Errors by code ("Failed and incomplete responses in range, the refused requests left out"), Refusals by code
 ("Requests the router refused before any account was asked, not in the counts", or "No request was refused in this
-range." where none was), Refusals by category ("Answers the upstream refused in range, by category, each a request that
-succeeded", one bar per category linking the Requests view on the stop reason `refusal` and the category over the range
-to the millisecond, `none` for a refusal with no category, or "No answer was refused in this range." where none was, and
-under a client or user agent filter the matching requests' alone, and under a session filter every session's, which its
-subtitle then names, its links carrying the client pattern and no session, plain under a user agent filter as the Misses
-by reason counts are), Failovers, Migration rewrites with its moves (one bar per move reason, stacked by the
-destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment titled `{fit} {n}` and the bar labeled
-with the reason's total, and under them "Held by the slow-down", a bar per bucket of the time the slow-down held
-requests in the warning tone, its hover `12 requests held 14 min in all`, `no request held` on a bucket that held none,
-and its legend line the range's sum, or `none in range` with no chart), Requests by speed, Effort levels, then at full
-width the card "Guardrails" ("Matches by guardrail in range, every key") with one row per guardrail that matched in the
-range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and no other filter, a guardrail the
-registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range." where none did
-([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited, Failed,
-Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests and Error rate headers
-reading "The refused requests are left out, see the Refused column" on hover and the Refused header the Dashboard's
-Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no model", which
-the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its Error rate
-cell, as the head's `{pct}` reads a dash where the range rated no request. A request the router refused before any
-account was asked is counted in its group's Refused column and in the "Refusals by code" card, a guardrail's block on
-the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the outcome columns, the
-error rate, the cache figures or the latency.
+range." where none was), Refusals by category ("Answers the upstream refused in range, by model and category, each a
+request that succeeded", one bar per model and category linking the Requests view on the stop reason `refusal`, the
+category and the model over the range to the millisecond, each bar labeled with the model's family and version and the
+category, such as `sonnet-5-5 · cyber`, with the whole model id on hover, `none` for a refusal with no category, or "No
+answer was refused in this range." where none was, with the requests that presented a fallback token counted in the
+subtitle ("1 request presented a fallback token"), and under a client or user agent filter the matching requests' alone,
+and under a session filter every session's, which its subtitle then names, its links carrying the client pattern and no
+session, plain under a user agent filter as the Misses by reason counts are), Failovers, Migration rewrites with its
+moves (one bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each
+segment titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar
+per bucket of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`, `no
+request held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart),
+Requests by speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key")
+with one row per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the
+range alone and no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched
+in this range." where none did ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests,
+OK, Rate limited, Failed, Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the
+Requests and Error rate headers reading "The refused requests are left out, see the Refused column" on hover and the
+Refused header the Dashboard's Refused tile hover. Under the model grouping a request refused before it resolved a model
+groups under "no model", which the Cache by model table leaves out, and a group with no request, as that one, reads a
+muted dash in its Error rate cell, as the head's `{pct}` reads a dash where the range rated no request. A request the
+router refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card,
+a guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
+outcome columns, the error rate, the cache figures or the latency.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

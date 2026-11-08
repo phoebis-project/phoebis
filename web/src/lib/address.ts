@@ -225,12 +225,14 @@ export interface RequestsAddress {
   agentId: string;
   agentTypes: string[];
   cacheMissReasons: string[];
-  /** `client`, `-` for a request the marker does not hold. */
+  /** `client`, `client_off`, `-` for a request the marker does not hold. */
   classifiers: string[];
   client: string;
   /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
   dir: '' | SortDir;
   efforts: string[];
+  /** `true` for the rows that presented a fallback token, `false` for the rest, empty for both. */
+  fallback: '' | 'false' | 'true';
   /** Guardrail ids, `-` for a request no guardrail matched. */
   guardrails: string[];
   held: boolean;
@@ -291,6 +293,7 @@ export const REQUESTS_CODEC = codecOf<RequestsAddress>({
   classifiers: list('classifiers'),
   speeds: list('speeds'),
   held: { kind: 'flag', name: 'held' },
+  fallback: { default: '', kind: 'choice', name: 'fallback', values: ['', 'true', 'false'] },
   keys: list('keys'),
   pools: list('pools'),
   accounts: list('accounts'),
