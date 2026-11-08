@@ -640,26 +640,26 @@ pools, each as a chip of its own, such as "pool: jobs" and "pool: all", and a po
 does not list keeps its chip until the pools load. The search, the filters and the sort with its direction live in the
 page's address, so a reload keeps them and the pool card's key count link lands on its pool's keys. Under either
 direction a key never used files last under Last used, one that never expires last under Expiry and one whose week
-priced nothing last under "Cost, 7d" while the top bar's unit is Native. No column shows a key's requests of the week,
-so while "Requests, 7d" is picked each row reads `{n} requests, 7d` under its name. The sort orders the table alone, and
-the card's bars keep their order by cost. Auto reload starts at 5 s and waits while a dialog or a row's menu is open.
-The tiles Keys, Active, Lifetime requests and Lifetime cost follow, and the card "Lifetime cost by key" ("Relative spend
-across all keys"), a bar per key. The lifetime tiles and the card's bars count their rows older than the week from a
-read made once an hour, so a request older than a week that lands late joins them within the hour. Lifetime cost, each
-bar's figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the
-subscription traffic's figure in the chosen week over the billed traffic's dollars, and a bar's figure and a cost line
-read a key's figure beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the cost
-line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing, and its bar
-draws no fill and sorts last. A key spans its pool's accounts, so its figures carry no hint. The columns are Name,
-Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and each row ends in its menu. Under the name a row notes the
-capture setting, `bodies captured, {h}h` or `bodies not captured`, with "inherited" where the key follows its pool and
-"keepalive off" for a key opted out of cache warming. Models reads `{n} rules`, with "(replace)" where they replace the
-pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never". Status carries the key's state with `used
-{ago}` and, after a rotation, `{n} sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate
-{name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately. Its history stays in the ledger.")
-and Delete (`Delete {name}`: "Removes the key and detaches its request history from the key name. This cannot be
-undone."). Before the first key the table reads "No keys yet" with "Create key". What a key's settings mean is on
-[Keys](routing.md#keys).
+priced nothing last under "Cost, 7d" while the top bar's unit is Native. No column shows a key's creation date or its
+requests of the week, so while Created or "Requests, 7d" is picked each row reads `created {date}` (the time on hover)
+or `{n} requests, 7d` under its name. The sort orders the table alone, and the card's bars keep their order by cost.
+Auto reload starts at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests
+and Lifetime cost follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. The
+lifetime tiles and the card's bars count their rows older than the week from a read made once an hour, so a request
+older than a week that lands late joins them within the hour. Lifetime cost, each bar's figure and the cost line under a
+key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the subscription traffic's figure in the
+chosen week over the billed traffic's dollars, and a bar's figure and a cost line read a key's figure beside its billed
+dollars, a side with no traffic left out, the tile, the bar's figure and the cost line each reading the subscription
+side as a dash with the Dashboard's hover where a request priced nothing, and its bar draws no fill and sorts last. A
+key spans its pool's accounts, so its figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d",
+Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting, `bodies captured,
+{h}h` or `bodies not captured`, with "inherited" where the key follows its pool and "keepalive off" for a key opted out
+of cache warming. Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No
+rules". Expiry reads the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n}
+sessions still on the previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`:
+"Requests with this key are rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`:
+"Removes the key and detaches its request history from the key name. This cannot be undone."). Before the first key the
+table reads "No keys yet" with "Create key". What a key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as

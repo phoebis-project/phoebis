@@ -10487,10 +10487,11 @@ await forView('/guardrails', async () => {
 await forView('/guardrails', async () => {
   // The bar's Sort control on a bare /guardrails, which orders the rows by name. Matches, 24h reads the story's day
   // (`web/src/mock/guardrails.ts` and the rows that matched them): the summary observed 7 requests and the large
-  // auxiliary guardrail blocked 3. No column draws a guardrail's dates, so Created draws each row's under its name
-  // while picked: the seeds date the large auxiliary guardrail 2 days and the summary 3 days before the harness clock,
-  // Sep 14 and Sep 13, 2026 in UTC, where the smoke runs.
-  const name = "/guardrails the sort control orders the rows by name at rest, Matches, 24h puts the most matched first and flips with the direction, Created draws each row's date under its name while picked, the address carries the pick and a reload reads it back";
+  // auxiliary guardrail blocked 3. No column draws a guardrail's dates, so Created and Last updated draw each row's
+  // under its name while picked: the seeds create the large auxiliary guardrail 2 days and the summary 3 days before
+  // the harness clock, Sep 14 and Sep 13, 2026 in UTC, where the smoke runs, and update the large auxiliary one 30
+  // hours before it, Sep 15, a day apart from its creation, so a line reading the other stamp fails.
+  const name = "/guardrails the sort control orders the rows by name at rest, Matches, 24h puts the most matched first and flips with the direction, Created and Last updated draw each row's date under its name while picked, the address carries the pick and a reload reads it back";
   const listed = await api.listGuardrails();
   const large = listed.find((g) => g.id === 'large-auxiliary');
   const page = await mount('/guardrails', { now: CLOCK_ORIGIN });
@@ -10524,6 +10525,7 @@ await forView('/guardrails', async () => {
   const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
   const reloaded = read(again);
   const created = await pick(again, 'Created');
+  const updated = await pick(again, 'Last updated');
   again.unmount();
   const shown = (arrow, rows, search, label, word, stamps = [], stampTitle = null) => ({ arrow, rows, search, stamps, stampTitle, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}` });
   const flipped = shown('up', ['Large auxiliary requests', 'Subagent status summary'], '?sort=matches&dir=asc', 'Matches, 24h', 'ascending');
@@ -10533,8 +10535,9 @@ await forView('/guardrails', async () => {
     ascending: { ...flipped, open: false },
     reloaded: flipped,
     created: { ...shown('down', ['Large auxiliary requests', 'Subagent status summary'], '?sort=created', 'Created', 'descending', ['created Sep 14, 2026', 'created Sep 13, 2026'], fmtAbsolute(large?.createdAt ?? null)), open: false },
+    updated: { ...shown('down', ['Large auxiliary requests', 'Subagent status summary'], '?sort=updated', 'Last updated', 'descending', ['updated Sep 15, 2026', 'updated Sep 13, 2026'], fmtAbsolute(large?.updatedAt ?? null)), open: false },
   };
-  const got = { bare, matches, ascending, reloaded, created };
+  const got = { bare, matches, ascending, reloaded, created, updated };
   results.push({
     name,
     ok: large !== undefined && JSON.stringify(got) === JSON.stringify(want),
@@ -23116,15 +23119,22 @@ await forView('/keys', async () => {
   // The bar's Sort control on a bare /keys, which orders the table by name at rest. The orders are the story's keys
   // (`KEYS` in `web/src/mock/pools.ts`, each key's last use and week folded from its requests in
   // `web/src/mock/requests.ts`) beside from-pool, the key the pool dialog's create case added with no request, under
-  // native, the stored default. from-pool was never used, so it files last under Last used. desktop's and laptop's weeks
-  // hold requests the cost model has no weight for, so they price nothing and file last under Cost, 7d in either
-  // direction. No column draws the week's requests, so Requests, 7d draws them under each name while picked, and no
-  // other key does.
+  // native, the stored default. from-pool was never used, so it files last under Last used, and the mock stamps its
+  // creation with the story's load instant, so it files first under Created. desktop's and laptop's weeks hold requests
+  // the cost model has no weight for, so they price nothing and file last under Cost, 7d in either direction. No column
+  // draws a key's creation date or its week's requests, so Created and Requests, 7d draw them under each name while
+  // picked, in UTC where the smoke runs, and no other key does.
   const name = "/keys the sort control orders the table by name at rest, each pick orders the rows by the key's figure with an unpriced key last under either direction, the address carries the pick and a reload reads it back";
+  const fromPool = (await api.listKeys()).find((k) => k.id === 'from-pool');
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
   const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
+  /** The picked key's line under each name, and the first one's title. */
+  const linesOf = (rows) => {
+    const lines = rows.flatMap((tr) => [...tr.children[0].querySelectorAll('.sub')].filter((s) => /^created | requests?, 7d$/.test(s.textContent?.trim() ?? '')));
+    return { lines: lines.map((s) => s.textContent?.trim() ?? ''), lineTitle: lines[0]?.getAttribute('title') ?? null };
+  };
   const read = (p) => {
     const rows = [...p.container.querySelectorAll('.card--table tbody tr.key-row')];
     return {
@@ -23134,7 +23144,7 @@ await forView('/keys', async () => {
       text: button(p)?.textContent ?? null,
       title: button(p)?.getAttribute('title') ?? null,
       unit: shellUnit(p)?.value ?? null,
-      requests: rows.flatMap((tr) => [...tr.children[0].querySelectorAll('.sub')].map((s) => s.textContent?.trim() ?? '').filter((t) => / requests?, 7d$/.test(t))),
+      ...linesOf(rows),
     };
   };
   const bare = read(page);
@@ -23142,6 +23152,7 @@ await forView('/keys', async () => {
   for (const [key, label] of [
     ['lastUsed', 'Last used'],
     ['requests', 'Requests, 7d'],
+    ['created', 'Created'],
     ['cost', 'Cost, 7d'],
     ['costAsc', 'Ascending'],
   ]) {
@@ -23149,28 +23160,31 @@ await forView('/keys', async () => {
     await page.settle(100);
     [...(box()?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
     await page.settle(300);
-    const { requests, ...rest } = read(page);
-    picks[key] = { ...rest, first: requests[0] ?? 'no week line', open: box() !== null };
+    picks[key] = { ...read(page), open: box() !== null };
   }
   const at = page.location();
   page.unmount();
   const again = await mount(`${at.pathname}${at.search}`, { now: CLOCK_ORIGIN });
   const reloaded = read(again);
   again.unmount();
-  const shown = (arrow, rows, search, label, word) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native' });
+  const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'ci', 'fleet', 'from-pool', 'bench', 'notebook', 'desktop', 'laptop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
+  const weeks = ['224 requests, 7d', '113 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
-    lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), first: 'no week line', open: false },
-    requests: { ...shown('down', ['laptop', 'desktop', 'ci', 'notebook', 'fleet', 'bench', 'batch', 'from-pool'], '?sort=requests', 'Requests, 7d', 'descending'), first: '224 requests, 7d', open: false },
-    cost: { ...shown('down', ['notebook', 'bench', 'batch', 'ci', 'fleet', 'from-pool', 'desktop', 'laptop'], '?sort=cost', 'Cost, 7d', 'descending'), first: 'no week line', open: false },
-    costAsc: { ...ascending, first: 'no week line', open: false },
+    lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
+    requests: { ...shown('down', ['laptop', 'desktop', 'ci', 'notebook', 'fleet', 'bench', 'batch', 'from-pool'], '?sort=requests', 'Requests, 7d', 'descending', weeks, weeks[0]), open: false },
+    created: { ...shown('down', ['from-pool', 'desktop', 'notebook', 'bench', 'fleet', 'laptop', 'batch', 'ci'], '?sort=created', 'Created', 'descending', created, fmtAbsolute(fromPool?.createdAt ?? null)), open: false },
+    cost: { ...shown('down', ['notebook', 'bench', 'batch', 'ci', 'fleet', 'from-pool', 'desktop', 'laptop'], '?sort=cost', 'Cost, 7d', 'descending'), open: false },
+    costAsc: { ...ascending, open: false },
   };
   results.push({
     name,
     ok:
-      JSON.stringify(bare) === JSON.stringify({ ...shown('up', ['batch', 'bench', 'ci', 'desktop', 'fleet', 'from-pool', 'laptop', 'notebook'], '', 'Name', 'ascending'), requests: [] }) &&
+      fromPool !== undefined &&
+      JSON.stringify(bare) === JSON.stringify(shown('up', ['batch', 'bench', 'ci', 'desktop', 'fleet', 'from-pool', 'laptop', 'notebook'], '', 'Name', 'ascending')) &&
       JSON.stringify(picks) === JSON.stringify(wantPicks) &&
-      JSON.stringify(reloaded) === JSON.stringify({ ...ascending, requests: [] }),
+      JSON.stringify(reloaded) === JSON.stringify(ascending),
     missing: [`bare ${JSON.stringify(bare)}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(wantPicks[key])}`), `reloaded ${JSON.stringify(reloaded)}`],
   });
 });

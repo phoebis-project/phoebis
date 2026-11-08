@@ -35,6 +35,8 @@ const NO_RULES: Record<ModelRulesMode, string> = { extend: 'Pool rules', replace
 const RETIRED_SECRET_HINT = 'Sessions whose newest request presented the previous secret. A session that registered a companion and sent no request since counts as switched.';
 /** The note under the Status badge. The fill column cuts it, so its title opens with the whole of it. */
 const retiredNote = (sessions: number) => `${plural(sessions, 'session')} still on the previous secret`;
+/** The week's requests under a key's name, which the line's title repeats since the fill column can cut it. */
+const weekRequests = (k: Pick<ApiKey, 'usage7d'>) => `${plural(k.usage7d.requests, 'request')}, 7d`;
 const STATUS_OPTIONS = {
   status: [
     { label: 'Active', value: 'active' },
@@ -288,8 +290,18 @@ export function KeysPage() {
                               )}
                             </span>
                             {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
-                            {/* No column draws the week's requests, so the order's figure sits under the name while picked. */}
-                            {filters.sort === 'requests' && <span className="sub">{plural(k.usage7d.requests, 'request')}, 7d</span>}
+                            {/* No column draws the creation date or the week's requests, so the order's figure sits
+                                under the name while picked. */}
+                            {filters.sort === 'created' && (
+                              <span className="sub" title={fmtAbsolute(k.createdAt)}>
+                                created {fmtDate(k.createdAt)}
+                              </span>
+                            )}
+                            {filters.sort === 'requests' && (
+                              <span className="sub" title={weekRequests(k)}>
+                                {weekRequests(k)}
+                              </span>
+                            )}
                           </td>
                           <td className="mono col-fit">{k.prefix}…</td>
                           <td className="mono col-fit">{k.poolId}</td>
