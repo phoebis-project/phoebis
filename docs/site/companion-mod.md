@@ -63,9 +63,9 @@ the Management URL is refused with `an http or https URL with a host` for a valu
 accepted, since empty means the environment), with `a URL with a username or password` for a credential inside the URL,
 with `a URL with a query` for a `?`, and with `a URL with a fragment` for a `#`. The session start runs the same check
 on the URL it resolves, from the option or from `ANTHROPIC_BASE_URL`, so a value edited by hand into a settings file or
-a base URL with a query reaches no request, and the start line names the reason. The Router key is trimmed when it is
-saved. The mod's requests go through Claude Code's fetch, so the plugin network access policy described below applies to
-them and Claude Code handles their TLS.
+a base URL with a query or a fragment reaches no request, and the start line names the reason. The Router key is trimmed
+when it is saved. The mod's requests go through Claude Code's fetch, so the plugin network access policy described below
+applies to them and Claude Code handles their TLS.
 
 With `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1` set, Claude Code checks the organization's policy for plugin network
 access before a mod's first fetch, against `api.anthropic.com` with the credential it holds. A router key fails that
@@ -106,11 +106,13 @@ text. The keepalive part retries along its backoff as [The relay](relay.md#the-k
 With Start check toasts on, each transcript line the mod writes at session start, the three lines
 [Configure](#configure) names for an unset setting included, also raises a toast with the same text. A failure text, the
 URL included, has its secrets redacted before it reaches a transcript line, a toast or a tool result, since a fetch
-error can carry the bearer. A reload of the plugin runs the start check again, with the tool's cache cleared first, so a
-reload under a changed URL or key never answers the earlier configuration's body, and registers the same tool under the
-same name, which replaces the registration without a second entry in the tool list. A later start, a reload included,
-whose check answers `200` clears the refusal an earlier `401` left and registers the session again under the corrected
-key, so a key fixed in the settings dialog needs no restart.
+error can carry the bearer.
+
+A reload of the plugin runs the start check again, with the tool's cache cleared first, so a reload under a changed URL
+or key never answers the earlier configuration's body, and registers the same tool under the same name, which replaces
+the registration without a second entry in the tool list. A reload or a later start whose check answers `200` clears the
+refusal an earlier `401` left and registers the session again under the corrected key, so a key fixed in the `/plugin`
+menu needs no restart.
 
 ## The allowance tool
 
@@ -284,9 +286,8 @@ while the two variables still name it, so the owner line and the instance stay, 
 owner. A child process inherits the two variables but runs as another process, for which the store holds no pair, so it
 mints its own pair and registers as its own instance. Where Claude Code cannot run the command that reads the process's
 identity, a reload after a `/clear` mints a new pair. A child process that never runs the fence keeps the parent's owner
-line: one on a client older than the floor, which gets the transcript line and the toast [Install](#install) names, one
-with the mod disabled, or one without a URL or a key. That line matters only for a child that sends the parent's session
-id.
+line: one on a client older than the floor, where the mod writes only the line [Install](#install) names, one with the
+mod disabled, or one without a URL or a key. That line matters only for a child that sends the parent's session id.
 
 A `session_start` the router refuses with a bare `instance_conflict`, since another instance holds the session under a
 live lease, leaves the session live. The mod writes one line to the transcript, `phoebis-companion: another instance
@@ -336,11 +337,11 @@ the Desktop app, the terminal and the VS Code extension's chat panel. It behaves
 key it reports, checks and answers the tool unless Claude Code refuses its fetch (see [Configure](#configure)), and
 without them it writes its one transcript line and does nothing else. A `claude -p` run registers, reports its turns,
 its background commands and its subagents, and ends its session when it exits. The mod draws nothing beyond the toasts
-of the start check. Its messages are the version line of [Install](#install), the transcript lines of [The start
-check](#the-start-check), the conflict line and the takeover line of [The owner header](#the-owner-header), and the
-lines in Claude Code's debug log: a dropped report, a refused key, a report whose fetch threw, the allowance permission
-the operator withheld, the client process's identity read at load, and the tool left unregistered on a client older than
-2.1.293.
+of the start check. Its messages are the version line of [Install](#install), the transcript lines of
+[Configure](#configure) and [The start check](#the-start-check), the conflict line and the takeover line of [The owner
+header](#the-owner-header), and the lines in Claude Code's debug log: a dropped report, a refused key, a report whose
+fetch threw, a start hook that threw, the allowance permission the operator withheld, the client process's identity read
+at load, and the tool left unregistered on a client older than 2.1.293.
 
 ## Verify
 
