@@ -25,7 +25,7 @@ use crate::record::{
     RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    account_end, burn_unit, decide, obstacle, pace_of, passes_reset, projection_of, projections_of,
+    burn_unit, decide, obstacle, pace_of, passes_reset, projection_of, projections_of,
     release_reasons, routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle,
     Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
@@ -2668,24 +2668,21 @@ fn projections(
                 BurnRead::Demand,
                 None,
             );
-            let end = account_end(snapshot, account_id, now);
             let windows = all_plan_windows()
                 .filter_map(|window| {
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
+                    let pace = pace_of(state, snapshot, pool, &candidate, window, now, None);
                     Some((
                         window.to_string(),
                         WindowProjection {
                             predicted: projection.predicted,
                             projection: projection.at_horizon,
                             horizon: projection.horizon,
-                            wall: projection.reset.into_iter().chain(end).min(),
+                            wall: pace.deadline,
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
-                            spare_rate: pace_of(
-                                state, snapshot, pool, &candidate, window, now, None,
-                            )
-                            .score,
+                            spare_rate: pace.score,
                         },
                     ))
                 })

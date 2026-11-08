@@ -3559,7 +3559,7 @@ fn reserve_step(reservation: &Reservation) -> (WalkStep, ReservationFacts) {
     )
 }
 
-pub(crate) fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
+fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
     snapshot
         .term(account_id)
         .and_then(|term| term::end_of(term, now))

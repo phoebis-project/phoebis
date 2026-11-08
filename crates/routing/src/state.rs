@@ -244,7 +244,7 @@ pub fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str>
 /// Every plan window an account can hold a reading of, in the trigger's order: both shared windows, then each model
 /// week `MODEL_WINDOWS` names. The projections, the member facts and the route iterate this one list, so a week added
 /// to the table is projected wherever the others are.
-pub fn all_plan_windows() -> impl Iterator<Item = &'static str> {
+pub(crate) fn all_plan_windows() -> impl Iterator<Item = &'static str> {
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .chain(MODEL_WINDOWS.iter().map(|(_, window)| *window))
