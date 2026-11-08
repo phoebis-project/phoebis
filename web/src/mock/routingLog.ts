@@ -1774,18 +1774,20 @@ const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyI
 /**
  * The afternoon round's pins on primary, cold first. The cold pin holds Sonnet 4.5, which has no weight of its own, so
  * the round prices no burn for it and skips it as unpriced rather than shed a session on a guess. No sibling has
- * runway for the other walked pin, since nightly projects past the ceiling, secondary is spent and cooling, and the
- * Overflow workspace needs funding. Three pins leave the round before the order: the parked Opus pin rides the fast
- * lane, so it holds no share of a plan window, the pin of the session the mod released whole after its one turn at
- * 14:03 belongs to an agent that ended, and the pin of the classifier call placed here at 14:02:40 burns nothing,
- * since the router folds a classifier call into its unmetered copy alone.
+ * runway for the two other walked pins, since nightly projects past the ceiling, secondary is spent and cooling, and
+ * the Overflow workspace needs funding: the current pin, and the pin of the classifier call placed here at 14:02:40 off
+ * its judged account, which the router folds as a standard answer. That pin's burn is its call's five-hour share of
+ * 0.000053 over all's half-hour burn average, decayed over the 590 s since: 0.000106 an hour times e^(-590/1800), about
+ * 0.000076. Two pins leave the round before the order: the parked Opus pin rides the fast lane, so it holds no share
+ * of a plan window, and the pin of the session the mod released whole after its one turn at 14:03 belongs to an agent
+ * that ended.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.000076, cold: false, keyId: 'desktop', lastInputTokens: 3_600, marked: false, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 18_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
-  { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 3_600, marked: false, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5'), skip: 'no_burn' },
 ];
 
 /**
@@ -2790,7 +2792,7 @@ function buildEvents(): RoutingEvent[] {
   seeds.push({ accountId: 'studio', at: iso(LATE_EVENT_AT), detail: { access_expires_at: LATE_EVENT_AT + 8 * HOUR, refresh_expires_at: studioRefresh === null ? null : Date.parse(studioRefresh), until: LATE_EVENT_AT + 8 * HOUR }, kind: 'refresh_succeeded' });
   // At one instant the kinds read alphabetically, save that a placement writes the release of the row it replaces
   // before the pin it creates, so the ledger numbers the release first.
-  const instantKey = (kind: string) => (kind === 'pin_created' ? 'pin_zcreated' : kind);
+  const instantKey = (kind: string) => (kind === 'pin_expired' || kind === 'pin_released' ? `pin_0${kind.slice(4)}` : kind);
   return seeds
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at) || instantKey(a.kind).localeCompare(instantKey(b.kind)))
     .map((e, i) => ({ type: 'event', accountId: e.accountId, actor: e.actor ?? null, agentId: e.agentId ?? null, at: e.at, detail: e.detail, id: i + 1, keyId: e.keyId ?? null, kind: e.kind, model: e.model ?? null, poolId: e.poolId ?? null, requestId: e.requestId ?? null, sessionId: e.sessionId ?? null }));

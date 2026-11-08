@@ -16569,9 +16569,10 @@ await forView('/routing-log', async () => {
         seq: 1,
         terminus: ['chosen', 'Chosen', 'renewed'],
         // The round marked nothing, so its Round group names each pin it passed over and why, in the round's order: the
-        // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin with no runway on
-        // any sibling, then the three left out before the walk (`NO_RUNWAY_PINS` in mock/routingLog.ts): the parked
-        // Opus pin on the fast lane, the released session's pin whose agent ended and the classifier pin with no burn.
+        // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin and the
+        // off-account classifier call's pin with no runway on any sibling, then the two left out before the walk
+        // (`NO_RUNWAY_PINS` in mock/routingLog.ts): the parked Opus pin on the fast lane and the released session's
+        // pin whose agent ended.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
@@ -16579,9 +16580,9 @@ await forView('/routing-log', async () => {
             skipped.length === 5 &&
             /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[0]) &&
             /^skipped [0-9a-f]{8}: no runway$/.test(skipped[1]) &&
-            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]) &&
-            /^skipped [0-9a-f]{8}: ended$/.test(skipped[3]) &&
-            /^skipped [0-9a-f]{8}: no burn$/.test(skipped[4])
+            /^skipped [0-9a-f]{8}: no runway$/.test(skipped[2]) &&
+            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[3]) &&
+            /^skipped [0-9a-f]{8}: ended$/.test(skipped[4])
           );
         },
         what: 'round that marked nothing',

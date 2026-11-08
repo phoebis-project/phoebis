@@ -1774,7 +1774,6 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   // The first eligible row skips the draws below, as it did when it carried the drawer's spent move, so every later
   // row keeps its draws.
   let spentOwed = true;
-  let releaseOwed = true;
   for (const r of REQUESTS) {
     if (r.sessionId === null || r.kind === 'probe' || STORY_IDS.has(r.id)) continue;
     const events: RequestEvent[] = [];
@@ -1803,13 +1802,6 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       const reason = supportedRule(r, from);
       if (reason) events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason }, kind: 'pin_migrated' });
       spentOwed = false;
-    }
-    // One release for the drawer and the smoke checks: a pin that expired on a cooled account whose window was
-    // spent, with no sibling holding allowance to move to. The row it lands on is nightly's, in overage under all's
-    // preference for a plan, which the release names in the router's order.
-    if (events.length === 0 && releaseOwed && r.status === 200 && lane && lane.accountIds.length > 1) {
-      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['cooldown', 'overage', 'spent'] }, kind: 'pin_expired' });
-      releaseOwed = false;
     }
     if (events.length) out.set(r.id, events);
   }
