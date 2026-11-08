@@ -159,7 +159,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   // A field written again unchanged, as the override's focus writes its mode, keeps the form, so it keeps the server's
   // words too.
   const set = <K extends keyof KeyForm>(key: K, value: KeyForm[K]) => setForm((f) => (f[key] === value ? f : { ...f, [key]: value }));
-  const { autoModeServer, captureHours, captureMode, enabled, expiry, guardrails, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId } = form;
+  const { allowance, autoModeServer, captureHours, captureMode, enabled, expiry, guardrails, keepalive, longContextTwins, modelRules, modelRulesMode, name, notes, poolId } = form;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState<string | null>(null);
@@ -363,16 +363,11 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     ),
     sessions: (
       <div className="cells">
-        <Field
-          label="Cache warming opt-out"
-          beside
-          hint={
-            <>
-              Sessions on this key never get cache-warming probes, even when the pool keeps caches warm. The pool&apos;s Keepalive is on the <PageLink to="/pools">Pools page</PageLink>.
-            </>
-          }
-        >
-          <Toggle checked={optOut} onChange={(v) => set('optOut', v)} label="Cache warming opt-out" />
+        <Field label="Allowance tool" beside hint="The model may read the pool's allowance through the companion.">
+          <Toggle checked={allowance} onChange={(v) => set('allowance', v)} label="Allowance tool" />
+        </Field>
+        <Field label="Cache warming" beside hint="The router warms this key's sessions' caches.">
+          <Toggle checked={keepalive} onChange={(v) => set('keepalive', v)} label="Cache warming" />
         </Field>
       </div>
     ),

@@ -12,6 +12,7 @@ import type {
   BurnPoint,
   CapturedBodies,
   CatalogModel,
+  CompanionPermission,
   CreatedApiKey,
   DecisionRecord,
   KeepaliveOverview,
@@ -57,12 +58,13 @@ export type AccountPatch = { canceled: false; subscriptionEndsAt: null } | { can
 export interface KeyInput {
   autoModeServer: boolean | null;
   bodyCaptureHours: number | null;
+  /** The words that are on, replacing the stored set. Undefined leaves it alone, and a create then permits both. */
+  companionPermissions?: CompanionPermission[];
   enabled: boolean;
   /** An ISO instant, or null for no expiry; undefined leaves the stored expiry alone. */
   expiresAt?: string | null;
   /** The key's own list in order, replacing it whole. Undefined leaves it alone, and the create route refuses it. */
   guardrails?: string[];
-  keepaliveOptOut: boolean;
   longContextTwins: boolean;
   modelRules: ModelRule[];
   modelRulesMode: ModelRulesMode;

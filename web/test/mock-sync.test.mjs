@@ -79,7 +79,7 @@ const SYNC = {
   guardrails: { decode: (b) => b.guardrails.map(d.decodeGuardrail), mock: (api) => api.listGuardrails() },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
   keepalive_recipes: { decode: (b) => b.recipes.map(d.decodeRecipe), mock: (api) => api.listKeepaliveRecipes() },
-  key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresAt: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
+  key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresAt: null, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
   key_models: { decode: (b) => d.decodeKeyModels(b), mock: (api) => api.getKeyModels('laptop') },
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing({ accountId: 'legacy' }) },
@@ -218,7 +218,7 @@ test('the mock stores a key edit\'s enabled flag and expiry and folds them into 
   const api = await admin();
   const batch = (await api.listKeys()).find((k) => k.id === 'batch');
   assert.deepEqual([batch.enabled, batch.status], [false, 'disabled']);
-  const edit = { bodyCaptureHours: batch.bodyCaptureHours, enabled: false, keepaliveOptOut: batch.keepaliveOptOut, longContextTwins: batch.longContextTwins, modelRules: batch.modelRules, modelRulesMode: batch.modelRulesMode, name: 'nightly', notes: batch.notes, poolId: batch.poolId };
+  const edit = { bodyCaptureHours: batch.bodyCaptureHours, companionPermissions: batch.companionPermissions, enabled: false, longContextTwins: batch.longContextTwins, modelRules: batch.modelRules, modelRulesMode: batch.modelRulesMode, name: 'nightly', notes: batch.notes, poolId: batch.poolId };
   const renamed = await api.updateKey('batch', { ...edit, expiresAt: undefined });
   assert.deepEqual([renamed.name, renamed.enabled, renamed.status, renamed.expiresAt], ['nightly', false, 'disabled', batch.expiresAt], 'an absent expiry leaves the stored one alone');
   const on = await api.updateKey('batch', { ...edit, enabled: true, expiresAt: '2099-01-01T00:00:00.000Z' });

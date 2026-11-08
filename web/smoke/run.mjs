@@ -551,7 +551,7 @@ const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200)
 const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
 await forView('/requests', async () => {
   const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
-  results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
+  results.push({ name: 'fixture: a key that permits no cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
 });
 
 await forView('/pools', async () => {
@@ -3260,7 +3260,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   {
     const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
     const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
-    results.push({ name: '/accounts/primary the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type', missing: labels });
+    results.push({ name: '/accounts/primary the identity card draws no Trial ends row for a profile without a trial', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Organization|Billing type|Companion id', missing: labels });
   }
   {
     // The subscription end edits in place on the identity card: ticking leaves the date to the operator and the editor
@@ -3330,7 +3330,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     const endValue = endRow?.querySelector('dd');
     results.push({
       name: '/accounts/primary unticking clears the date, and a saved end reads as a countdown row after the tier',
-      ok: cleared === '' && labels().join('|') === 'Type|Plan|Rate-limit tier|Ends|Organization|Billing type' && /^ends in \d+ days$/.test(endValue?.textContent?.trim() ?? '') && (endValue?.getAttribute('title') ?? '') !== '',
+      ok: cleared === '' && labels().join('|') === 'Type|Plan|Rate-limit tier|Ends|Organization|Billing type|Companion id' && /^ends in \d+ days$/.test(endValue?.textContent?.trim() ?? '') && (endValue?.getAttribute('title') ?? '') !== '',
       missing: [String(cleared), ...labels(), endRow?.textContent ?? 'no Ends row'],
     });
     // Cleared again, so every later check reads the story as it was.
@@ -4143,7 +4143,7 @@ expect('/accounts/secondary', m.text(), [
   results.push({ name: '/accounts/secondary greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const labels = [...(identity?.querySelectorAll('.kv__row dt') ?? [])].map((d) => d.textContent?.trim() ?? '');
-  results.push({ name: '/accounts/secondary the identity card reads the end and the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Ends|Trial ends|Organization|Billing type', missing: labels });
+  results.push({ name: '/accounts/secondary the identity card reads the end and the trial end after the tier', ok: labels.join('|') === 'Type|Plan|Rate-limit tier|Ends|Trial ends|Organization|Billing type|Companion id', missing: labels });
   const value = (label) => [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
   // The story ends the plan five days after the anchor and the trial eight, and the page reads both a moment later.
   results.push({
@@ -4226,7 +4226,7 @@ expect('/accounts/secondary', m.text(), [
   const row = rows.find((r) => r.label === 'Plan ended');
   results.push({
     name: '/accounts/secondary an ended plan reads Plan ended after Ends, the relative instant with the absolute on hover',
-    ok: rows.map((r) => r.label).join('|') === 'Type|Plan|Rate-limit tier|Ends|Plan ended|Trial ends|Organization|Billing type' && row?.value === '3h ago' && row?.title === fmtAbsolute(endedAt) && row?.title === 'Sep 16, 2026, 11:30:00',
+    ok: rows.map((r) => r.label).join('|') === 'Type|Plan|Rate-limit tier|Ends|Plan ended|Trial ends|Organization|Billing type|Companion id' && row?.value === '3h ago' && row?.title === fmtAbsolute(endedAt) && row?.title === 'Sep 16, 2026, 11:30:00',
     missing: [rows.map((r) => r.label).join('|'), JSON.stringify(row ?? null)],
   });
   api.listAccounts = listAccounts;
@@ -4384,7 +4384,7 @@ await m.navigate('/accounts/spare');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   results.push({
     name: '/accounts/spare an unpaired OAuth account reads as OAuth, never as an API key',
-    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('API key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
+    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('API key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-|Companion id=d7c0384f',
     missing: rows,
   });
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
@@ -7429,8 +7429,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       // Back into the pool it left, for the stale move check below, which reads the key there.
       const scratch = (await api.listKeys()).find((k) => k.id === 'from-pool');
       if (scratch) {
-        const { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes } = scratch;
-        await api.updateKey(scratch.id, { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId: 'all' });
+        const { autoModeServer, bodyCaptureHours, companionPermissions, enabled, longContextTwins, modelRules, modelRulesMode, name, notes } = scratch;
+        await api.updateKey(scratch.id, { autoModeServer, bodyCaptureHours, companionPermissions, enabled, longContextTwins, modelRules, modelRulesMode, name, notes, poolId: 'all' });
       }
     }
   }
@@ -7891,8 +7891,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(200);
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   if (mover) {
-    const { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId } = mover;
-    await api.updateKey(mover.id, { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId });
+    const { autoModeServer, bodyCaptureHours, companionPermissions, enabled, longContextTwins, modelRules, modelRulesMode, name, notes, poolId } = mover;
+    await api.updateKey(mover.id, { autoModeServer, bodyCaptureHours, companionPermissions, enabled, longContextTwins, modelRules, modelRulesMode, name, notes, poolId });
   }
   footButton(moveDlg, 'Move key')?.click();
   await m.settle(600);
@@ -8405,9 +8405,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     api.updateKey('laptop', {
       autoModeServer: laptop.autoModeServer,
       bodyCaptureHours: laptop.bodyCaptureHours,
+      companionPermissions: laptop.companionPermissions,
       enabled: laptop.enabled,
       expiresAt: undefined,
-      keepaliveOptOut: laptop.keepaliveOptOut,
       longContextTwins: laptop.longContextTwins,
       modelRules: laptop.modelRules,
       modelRulesMode: laptop.modelRulesMode,
@@ -9371,7 +9371,7 @@ await forView(['/keys', '/pools'], async () => {
     Access: [['Expiry'], '1 more setting in the '],
     Models: [['Model rules'], '2 more settings in the '],
     Guardrails: [['Guardrails'], null],
-    Sessions: [['Cache warming opt-out'], null],
+    Sessions: [['Allowance tool', 'Cache warming'], null],
     Capture: [['Capture request and response bodies'], null],
   };
   results.push({
@@ -9809,7 +9809,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   btn?.click();
   await m.settle(200);
   const dlg = m.container.querySelector('dialog[open]');
-  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Cache warming opt-out', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
+  expect('/keys create dialog opens', dlg?.textContent ?? '', ['Create key', 'Expiry', 'Notes', 'Capture request and response bodies', 'Allowance tool', 'Cache warming', 'Model rules', 'Extend pool rules', 'Replace pool rules', 'from pool', 'List [1m] twins in the models listing', 'written with a trailing *']);
   {
     // Read while the name is blank, so Key carries its refusal mark; the label span passes over the dot and the note.
     const railLabels = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((l) => l.textContent?.trim());
@@ -9879,7 +9879,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     results.push({ name: '/keys Access reads Expiry and Server-side auto mode', ok: JSON.stringify(labels) === JSON.stringify(['Expiry', 'Server-side auto mode']), missing: labels });
     const sessions = group(dlg, 'Sessions');
     const sessionLabels = [...(sessions?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
-    results.push({ name: '/keys Sessions holds Cache warming opt-out alone', ok: JSON.stringify(sessionLabels) === JSON.stringify(['Cache warming opt-out']), missing: sessionLabels });
+    results.push({ name: '/keys Sessions holds Allowance tool and Cache warming', ok: JSON.stringify(sessionLabels) === JSON.stringify(['Allowance tool', 'Cache warming']), missing: sessionLabels });
   }
   {
     // A new key extends its pool's list, drawn read-only after its own rows; replacing the list drops them.
@@ -9973,7 +9973,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   edit?.click();
   await m.settle(300);
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.']);
+  expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Allowance tool', 'Cache warming', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret. A revoked key cannot.']);
   {
     // The edit dialog's outside path: unchanged, a backdrop click closes it at once. After a typed change it asks,
     // Keep editing returns to the edit, and Discard closes. Every close reopens the edit through the row menu, so
@@ -10241,7 +10241,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     return [...m.container.querySelectorAll('dialog[open]')].pop();
   };
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
-  const input = { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, enabled: laptop.enabled, keepaliveOptOut: laptop.keepaliveOptOut, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: 'laptop (written)', notes: laptop.notes, poolId: laptop.poolId };
+  const input = { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, companionPermissions: laptop.companionPermissions, enabled: laptop.enabled, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: 'laptop (written)', notes: laptop.notes, poolId: laptop.poolId };
   const stale = await edit('laptop');
   // Through the API, which the mock stamps later than the row the dialog opened with.
   await api.updateKey('laptop', input);
@@ -10315,7 +10315,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   dlg = await edit('laptop');
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   // Another operator's write through the API: the same fields under a later stamp.
-  await api.updateKey('laptop', { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, enabled: laptop.enabled, keepaliveOptOut: laptop.keepaliveOptOut, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: laptop.name, notes: laptop.notes, poolId: laptop.poolId });
+  await api.updateKey('laptop', { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, companionPermissions: laptop.companionPermissions, enabled: laptop.enabled, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: laptop.name, notes: laptop.notes, poolId: laptop.poolId });
   foot(dlg, 'Save')?.click();
   await page.settle(600);
   const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
@@ -10344,7 +10344,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
 {
   // The key routes refuse a body member outside the key input with 400, so the dialog's own save is read against the
   // members the routes take.
-  const KEY_INPUT_MEMBERS = new Set(['autoModeServer', 'bodyCaptureHours', 'enabled', 'expiresAt', 'guardrails', 'keepaliveOptOut', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+  const KEY_INPUT_MEMBERS = new Set(['autoModeServer', 'bodyCaptureHours', 'companionPermissions', 'enabled', 'expiresAt', 'guardrails', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
   const page = await mount('/keys');
   const rows = () => [...page.container.querySelectorAll('.card--table tbody tr')];
   const listed = (name) => rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name);
@@ -26719,7 +26719,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     const explained = m.text();
     api.listSessions = listSessions;
     await expanded();
-    expect('/sessions says why the ci sessions have no recipe', explained, ['pool jobs keeps no caches warm', 'key ci opts out']);
+    expect('/sessions says why the ci sessions have no recipe', explained, ['pool jobs keeps no caches warm', 'key ci permits no cache warming']);
   }
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
   results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });

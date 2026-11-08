@@ -587,9 +587,9 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
         >
           <KeyValue
             className="kv--spread"
-            rows={
+            rows={[
               // The kind decides the card, not the profile: an OAuth account has none until it is paired.
-              isOauth
+              ...(isOauth
                 ? [
                     { label: 'Type', value: 'OAuth login' },
                     {
@@ -609,8 +609,9 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
                 : [
                     { label: 'Type', value: 'API key' },
                     { label: 'Windows', value: 'None reported, billed per token' },
-                  ]
-            }
+                  ]),
+              { label: 'Companion id', value: <code>{account.companionId}</code> },
+            ]}
           />
           {endForm && (
             <div className="capture" style={{ marginTop: 12 }}>

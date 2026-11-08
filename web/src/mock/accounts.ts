@@ -128,6 +128,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'primary',
+    companionId: '3c9e41a7',
     kind: 'oauth',
     label: 'primary',
     email: 'operator@example.com',
@@ -173,6 +174,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'secondary',
+    companionId: '8b2d06f5',
     kind: 'oauth',
     label: 'secondary',
     email: 'operator+second@example.com',
@@ -217,6 +219,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'nightly',
+    companionId: 'e4170c3b',
     kind: 'oauth',
     label: 'nightly',
     email: 'operator+nightly@example.com',
@@ -251,6 +254,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'studio',
+    companionId: '5a8fd291',
     kind: 'oauth',
     label: 'studio',
     email: 'operator+studio@example.com',
@@ -276,6 +280,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'annex',
+    companionId: 'c06b7e48',
     kind: 'api_key',
     label: 'Studio annex',
     email: null,
@@ -293,6 +298,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'overflow',
+    companionId: '71d4a95e',
     kind: 'api_key',
     label: 'Overflow workspace',
     email: null,
@@ -310,6 +316,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'research',
+    companionId: '9f3a2c60',
     kind: 'api_key',
     label: 'Research workspace',
     email: null,
@@ -328,6 +335,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'legacy',
+    companionId: '2e85b1d9',
     kind: 'oauth',
     label: 'legacy',
     email: 'operator+old@example.com',
@@ -357,6 +365,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'spare',
+    companionId: 'd7c0384f',
     kind: 'oauth',
     label: 'spare',
     email: 'operator+spare@example.com',
@@ -377,6 +386,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'reserve',
+    companionId: '46ea9b12',
     kind: 'oauth',
     label: 'reserve',
     email: 'operator+reserve@example.com',
@@ -407,6 +417,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'sunset',
+    companionId: 'b5137f8c',
     kind: 'oauth',
     label: 'sunset',
     email: 'operator+sunset@example.com',
@@ -435,6 +446,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'contract',
+    companionId: '0a6cd5e3',
     kind: 'oauth',
     label: 'contract',
     email: 'operator+contract@example.com',
@@ -471,6 +483,7 @@ const SEEDS = [
   {
     ...ACCOUNT_SAMPLE,
     id: 'workshop',
+    companionId: 'f8294a76',
     kind: 'oauth',
     label: 'workshop',
     email: 'operator+workshop@example.com',

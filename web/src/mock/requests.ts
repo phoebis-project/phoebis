@@ -167,11 +167,11 @@ const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_AC
 const modelOf = (attempts: Attempt[], drawn: string) => (attempts.some((a) => a.accountId === UNPRICED_ACCOUNT && a.cooldownSet?.reason !== 'model_rejected') ? 'claude-sonnet-4-5' : drawn);
 
 /**
- * Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by
- * one.
+ * Probes exist only where the pool keeps caches warm and the key permits cache warming, and so does anything kept warm
+ * by one.
  */
 export function warmsCaches(keyId: string, poolId: string): boolean {
-  return poolById.get(poolId)?.keepalive.enabled === true && keyById.get(keyId)?.keepaliveOptOut !== true;
+  return poolById.get(poolId)?.keepalive.enabled === true && keyById.get(keyId)?.companionPermissions.includes('keepalive') !== false;
 }
 
 const TRAFFIC_KINDS: { value: RequestKind; weight: number }[] = [

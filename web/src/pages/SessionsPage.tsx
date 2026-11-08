@@ -223,13 +223,13 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     const idleLimitOnly = agents.length > 0 && agents.every((a) => a.cause === 'idle_limit');
     const causes: string[] = [];
     let idleLimit: Row['idleLimit'] = null;
-    // The live key's pool and opt-out say nothing about a session that no longer belongs to it, so an earlier
+    // The live key's pool and permissions say nothing about a session that no longer belongs to it, so an earlier
     // holder carries that reason alone.
     if (session.historical) causes.push(HISTORICAL_CAUSE);
     else if (poolsFailed && key !== null && pool === null) causes.push('the pool list did not load');
     else {
       if (pool && !pool.keepalive.enabled) causes.push(`pool ${pool.name} keeps no caches warm`);
-      if (key?.keepaliveOptOut) causes.push(`key ${key.name} opts out`);
+      if (key && !key.companionPermissions.includes('keepalive')) causes.push(`key ${key.name} permits no cache warming`);
       if (idleLimitOnly) idleLimit = { ranOutAt: idleLimitRanOutAt(session, pool) };
       else if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }

@@ -2,7 +2,7 @@ import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/
 import { iso } from '@/api/decode';
 import { slug } from '@/api/http';
 import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
-import { AFFINITY_MODE_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { byteOrder, fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
 import { canceledEndOf } from './quota';
@@ -304,6 +304,7 @@ export type CaptureMode = 'inherit' | 'off' | 'override';
 
 /** The key dialog's fields as the operator leaves them. */
 export interface KeyForm {
+  allowance: boolean;
   autoModeServer: AutoModeOverride;
   /** The override field's text, kept as typed so an emptied field reads empty rather than 0. */
   captureHours: string;
@@ -313,12 +314,12 @@ export interface KeyForm {
   expiry: string;
   /** The key's own guardrail ids in the order they run, after its pool's. */
   guardrails: string[];
+  keepalive: boolean;
   longContextTwins: boolean;
   modelRules: ModelRule[];
   modelRulesMode: ModelRulesMode;
   name: string;
   notes: string;
-  optOut: boolean;
   poolId: string;
 }
 
@@ -342,6 +343,7 @@ export const sameMembers = (a: readonly string[], b: readonly string[]): boolean
 /** The dialog's starting fields: the stored key's, or a new key's in `poolId`. */
 export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
+    allowance: existing?.companionPermissions.includes('allowance') ?? true,
     autoModeServer: existing?.autoModeServer == null ? 'inherit' : existing.autoModeServer ? 'on' : 'off',
     captureHours: String(existing?.bodyCaptureHours || 6),
     captureMode: existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit',
@@ -350,12 +352,12 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
     enabled: existing?.enabled ?? true,
     expiry: existing ? 'keep' : 'never',
     guardrails: guardrailIdsOf(existing?.guardrails ?? []),
+    keepalive: existing?.companionPermissions.includes('keepalive') ?? true,
     longContextTwins: existing?.longContextTwins ?? true,
     modelRules: existing?.modelRules ?? [],
     modelRulesMode: existing?.modelRulesMode ?? 'extend',
     name: existing?.name ?? '',
     notes: existing?.notes ?? '',
-    optOut: existing?.keepaliveOptOut ?? false,
     poolId: existing?.poolId ?? poolId,
   };
 }
@@ -364,9 +366,10 @@ export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?
   return {
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
     bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : Number(form.captureHours),
+    // The form's switches carry the words' own names.
+    companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => form[p]),
     enabled: form.enabled,
     expiresAt: form.expiry === 'keep' ? undefined : form.expiry === 'never' ? null : iso(now + Number(form.expiry) * DAY),
-    keepaliveOptOut: form.optOut,
     longContextTwins: form.longContextTwins,
     modelRules: form.modelRules,
     modelRulesMode: form.modelRulesMode,

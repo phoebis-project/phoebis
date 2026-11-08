@@ -416,7 +416,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 1,
     notes: 'Main workstation. Claude Code launches through the shell profile.',
     bodyCaptureHours: null,
-    keepaliveOptOut: false,
+    companionPermissions: ['allowance', 'keepalive'],
     lifetime: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0 },
   },
   {
@@ -443,7 +443,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 0,
     notes: 'Travel laptop. Bodies captured while debugging the pre-commit hook.',
     bodyCaptureHours: 6,
-    keepaliveOptOut: false,
+    companionPermissions: ['allowance', 'keepalive'],
     // Plan-funded, so its dollars bill nothing. Its equivalents before the month the rollups hold are not drawn, so
     // they read the rollups' sums.
     lifetime: { billedUsd: 0, cost: 38.6, equivalent: 0, requests: 1_012 },
@@ -470,7 +470,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 0,
     notes: 'Nightly evaluation runs. Switched off between campaigns rather than revoked.',
     bodyCaptureHours: 0,
-    keepaliveOptOut: true,
+    companionPermissions: ['allowance'],
     // The jobs pool's one member is an API key account, so every dollar of its life billed.
     lifetime: { billedUsd: 31.8, cost: 31.8, equivalent: 0, requests: 2_204 },
   },
@@ -500,7 +500,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 0,
     notes: 'Rotated out after the runner image moved to its own key.',
     bodyCaptureHours: 0,
-    keepaliveOptOut: true,
+    companionPermissions: ['allowance'],
     lifetime: { billedUsd: 21.4, cost: 21.4, equivalent: 0, requests: 960 },
   },
   {
@@ -525,7 +525,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 0,
     notes: 'Handed out for the data notebooks, which call the Messages API through the SDK.',
     bodyCaptureHours: null,
-    keepaliveOptOut: false,
+    companionPermissions: ['allowance', 'keepalive'],
     lifetime: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0 },
   },
   {
@@ -549,7 +549,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 0,
     notes: 'Batch workers on the Enterprise contract seat, billed per token at API rates.',
     bodyCaptureHours: 0,
-    keepaliveOptOut: false,
+    companionPermissions: ['allowance', 'keepalive'],
     lifetime: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0 },
   },
   {
@@ -573,7 +573,7 @@ export const KEYS: KeyRow[] = [
     sessionsOnRetiredSecret: 0,
     notes: "The workshop's clients, on the approved Ultra seat.",
     bodyCaptureHours: 0,
-    keepaliveOptOut: false,
+    companionPermissions: ['allowance', 'keepalive'],
     lifetime: { billedUsd: 0, cost: 0, equivalent: 0, requests: 0 },
   },
 ];

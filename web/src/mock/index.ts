@@ -136,7 +136,7 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
  * The key routes refuse a body with a member outside `KeyInput` before they read any member, so the mock answers the
  * pool routes' sentence first.
  */
-const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'enabled', 'expiresAt', 'guardrails', 'keepaliveOptOut', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
+const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'companionPermissions', 'enabled', 'expiresAt', 'guardrails', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
 const unknownKeyMember = (input: object): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k)) ? 'body must be a JSON object' : null);
 
 /**
@@ -947,6 +947,7 @@ export class MockApi implements Api {
       poolId: input.poolId,
       // The route's defaults for a body that leaves these fields out, which a caller outside the console may.
       autoModeServer: input.autoModeServer ?? null,
+      companionPermissions: input.companionPermissions ?? ['allowance', 'keepalive'],
       longContextTwins: input.longContextTwins ?? true,
       modelRules: input.modelRules ?? [],
       modelRulesMode: input.modelRulesMode ?? 'extend',
@@ -955,7 +956,6 @@ export class MockApi implements Api {
       updatedAt: iso(NOW),
       revision: stampToken((this.buriedKeys.get(id) ?? 0) + 1, iso(NOW)),
       expiresAt: input.expiresAt ?? null,
-      keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
       notes: input.notes,
       bodyCaptureHours: input.bodyCaptureHours,

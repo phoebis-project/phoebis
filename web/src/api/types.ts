@@ -138,6 +138,8 @@ export interface AccountSlowDown {
 export interface Account {
   /** Set only on an OAuth account; an api_key account always reads false. */
   canceled: boolean;
+  /** The eight-character pseudonym the companion's allowance route lists the account under. */
+  companionId: string;
   cooldowns: Cooldown[];
   credential: Credential;
   email: string | null;
@@ -569,6 +571,10 @@ export interface Pool {
 
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
+export const COMPANION_PERMISSION_VALUES = ['allowance', 'keepalive'] as const;
+/** A companion route a key may use: the allowance tool's read, or the router warming its sessions' caches. */
+export type CompanionPermission = (typeof COMPANION_PERMISSION_VALUES)[number];
+
 /** `equivalent` is 0 with no plan-funded request. */
 export interface KeyFigures extends FundedSum { requests: number }
 
@@ -577,6 +583,8 @@ export interface ApiKey {
   autoModeServer: boolean | null;
   /** Hours of captured bodies for this key. `null` inherits the pool's hours, and 0 turns capture off here. */
   bodyCaptureHours: number | null;
+  /** The companion routes the key permits, in the order `allowance`, `keepalive`: both for a new key. */
+  companionPermissions: CompanionPermission[];
   createdAt: string;
   /** The stored switch, which `status` folds expiry and revocation over; an edit sends it back as it stands. */
   enabled: boolean;
@@ -584,8 +592,6 @@ export interface ApiKey {
   /** The key's own guardrails, which run after its pool's, ordered by `position`. */
   guardrails: GuardrailRef[];
   id: string;
-  /** Sessions on this key never receive cache-warming probes. */
-  keepaliveOptOut: boolean;
   lastUsedAt: string | null;
   lifetime: KeyFigures;
   /** Whether `GET /v1/models` under this key lists an `id[1m]` twin beside every long-context model. */

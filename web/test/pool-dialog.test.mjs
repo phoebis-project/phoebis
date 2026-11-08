@@ -252,11 +252,11 @@ test("a key move sends the stored key's settings with the new pool, the name tri
   const stored = {
     autoModeServer: false,
     bodyCaptureHours: 12,
+    companionPermissions: [],
     enabled: false,
     expiresAt: '2026-12-01T00:00:00.000Z',
     guardrails: [],
     id: 'mover',
-    keepaliveOptOut: true,
     longContextTwins: false,
     modelRules: [{ not: true, pattern: 'claude-opus-*' }],
     modelRulesMode: 'replace',
@@ -291,9 +291,9 @@ test("a key move sends the stored key's settings with the new pool, the name tri
   assert.deepStrictEqual(sent[0].input, {
     autoModeServer: false,
     bodyCaptureHours: 12,
+    companionPermissions: [],
     enabled: false,
     expiresAt: undefined,
-    keepaliveOptOut: true,
     longContextTwins: false,
     modelRules: [{ not: true, pattern: 'claude-opus-*' }],
     modelRulesMode: 'replace',

@@ -11014,6 +11014,52 @@ async function keyDialogGeometry(theme) {
 }
 
 /**
+ * The key dialog's two companion switches on the mock's batch key, which permits the allowance tool alone: its
+ * Sessions group opens with Allowance tool on and Cache warming off, and with Allowance tool switched off and saved,
+ * the key's row reads the allowance off and cache warming off badges. The bare view loads again after, so the shot and
+ * the measures after it read the story's rows.
+ */
+async function keyCompanionPermissions(theme) {
+  const say = (what) => failures.push(`${theme} /keys batch companion permissions: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const batch = page.locator('.card--table tbody tr').filter({ has: page.locator('td:first-child > b', { hasText: /^batch$/ }) }).first();
+  const switchOf = (label) => dialog.locator(`section.dialog-group[aria-label="Sessions"] button[role="switch"][aria-label="${label}"]`);
+  try {
+    await batch.locator('.menu__trigger').click();
+    await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await railEntry(dialog, 'Sessions').click();
+    await settle();
+    const opened = { allowance: await switchOf('Allowance tool').getAttribute('aria-checked'), keepalive: await switchOf('Cache warming').getAttribute('aria-checked') };
+    measurements.push(`${theme} /keys batch dialog Sessions switches ${JSON.stringify(opened)}`);
+    if (opened.allowance !== 'true' || opened.keepalive !== 'false') say(`the dialog opens with Allowance tool ${opened.allowance} and Cache warming ${opened.keepalive}, not true and false`);
+    await switchOf('Allowance tool').click();
+    await dialog.locator('.dialog__foot').getByRole('button', { name: 'Save', exact: true }).click();
+    await advance(LOAD_MS);
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+    const badges = await batch.locator('td:first-child .sub').allTextContents();
+    measurements.push(`${theme} /keys batch row after the save ${JSON.stringify(badges)}`);
+    const missing = ['allowance off', 'cache warming off'].filter((badge) => !badges.includes(badge));
+    if (missing.length) say(`the saved row reads ${JSON.stringify(badges)}, without ${missing.join(' and ')}`);
+  } catch (error) {
+    say(error instanceof Error ? error.message : String(error));
+  }
+  await loadAtOrigin('/keys', '.card--table tbody tr');
+  await atRest();
+}
+
+/** The Identity card's Companion id row on the mock's first account, primary, its pseudonym drawn as code. */
+async function companionIdRow(theme) {
+  const read = await page.evaluate(() => {
+    const identity = [...document.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    const row = [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Companion id');
+    return row ? (row.querySelector('dd > code')?.textContent ?? null) : undefined;
+  });
+  measurements.push(`${theme} /accounts Identity Companion id ${JSON.stringify(read ?? 'no row')}`);
+  if (read !== '3c9e41a7') failures.push(`${theme} /accounts: the Identity card's Companion id reads ${read === undefined ? 'no row' : JSON.stringify(read)}, not the code 3c9e41a7`);
+}
+
+/**
  * The Keys bar's pool chip against the status chip beside it on an address that holds both, the pool the table's first
  * key sits in, since the page drops a pool the router does not hold: the same box, type and border at the chips' 26 px.
  * Read after the view's shot, and the bare page loads again after.
@@ -13521,6 +13567,7 @@ try {
         await fastLane(theme, view.path);
         await deleteAccountButton(theme);
         await subscriptionEndForm(theme);
+        if (mock) await companionIdRow(theme);
         await addAccountDialog(theme);
         await catalogDialog(theme);
       }
@@ -13529,6 +13576,8 @@ try {
         await keyBadges(theme);
         await keyAccessSelects(theme);
         await keyDialogGeometry(theme);
+        // Its load ends on the bare view, so the measures after it read the view as it first drew.
+        if (mock) await keyCompanionPermissions(theme);
         await keysPageMenus(theme);
       }
       if (view.path === '/requests') {

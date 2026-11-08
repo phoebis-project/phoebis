@@ -287,7 +287,8 @@ export function KeysPage() {
                                 </span>
                               )}
                             </span>
-                            {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
+                            {!k.companionPermissions.includes('allowance') && <span className="sub" title="allowance off">allowance off</span>}
+                            {!k.companionPermissions.includes('keepalive') && <span className="sub" title="cache warming off">cache warming off</span>}
                             {/* No column draws the creation date or the week's requests, so the order's figure sits
                                 under the name while picked. */}
                             {filters.sort === 'created' && <StampSub at={k.createdAt} word="created" />}

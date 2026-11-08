@@ -11,6 +11,7 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/accounts/business",
     "body": {
       "id": "business",
+      "companion_id": "1fa58bef",
       "kind": "oauth",
       "label": "Business",
       "enabled": true,
@@ -297,6 +298,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "accounts": [
         {
           "id": "business",
+          "companion_id": "1fa58bef",
           "kind": "oauth",
           "label": "Business",
           "enabled": true,
@@ -442,6 +444,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "id": "direct",
+          "companion_id": "218d65f9",
           "kind": "api_key",
           "label": "Direct",
           "enabled": true,
@@ -476,6 +479,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "id": "free-org",
+          "companion_id": "987c459d",
           "kind": "oauth",
           "label": "Free",
           "enabled": true,
@@ -540,6 +544,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "id": "usage-seat",
+          "companion_id": "4d142e3b",
           "kind": "oauth",
           "label": "Seat",
           "enabled": true,
@@ -11066,7 +11071,10 @@ export const FIXTURES: Record<string, Fixture> = {
       ],
       "model_rules_mode": "extend",
       "long_context_twins": true,
-      "keepalive_opt_out": false,
+      "companion_permissions": [
+        "allowance",
+        "keepalive"
+      ],
       "body_capture_hours": null,
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
@@ -11140,7 +11148,10 @@ export const FIXTURES: Record<string, Fixture> = {
           ],
           "model_rules_mode": "extend",
           "long_context_twins": true,
-          "keepalive_opt_out": false,
+          "companion_permissions": [
+            "allowance",
+            "keepalive"
+          ],
           "body_capture_hours": null,
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
