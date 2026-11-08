@@ -2,7 +2,7 @@ import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, Lifecycle, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
-  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
 import type { AgentContext, BurnFigures } from './types';
 import type { StreamCut } from './types';
@@ -341,13 +341,11 @@ export function decodePool(v: unknown): Pool {
     affinityMode: oneOf(AFFINITY_MODE_VALUES, p.affinity_mode) ?? POOL_AFFINITY_DEFAULTS.affinityMode,
     affinityTtlSeconds: num(p.affinity_ttl_seconds),
     autoModeServer: bool(p.auto_mode_server, true),
-    billed24h: num(p.billed_24h),
     bodyCaptureHours: num(p.body_capture_hours),
     burnAverageSeconds: num(p.burn_average_seconds, POOL_ENGINE_DEFAULTS.burnAverageSeconds),
     cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
-    cost24h: num(p.cost_24h),
-    equivalent24h: numOrNull(p.equivalent_24h),
+    day24h: { billedUsd: num(p.billed_24h), cost: num(p.cost_24h), equivalent: numOrNull(p.equivalent_24h) },
     guardrails: guardrailRefs(p.guardrails),
     id: str(p.id),
     inFlightCap: num(p.in_flight_cap, POOL_ENGINE_DEFAULTS.inFlightCap),
@@ -799,9 +797,7 @@ export function decodeDashboard(v: unknown): Overview {
   const d = rec(v);
   return {
     activePins: num(rec(d.sessions).active_pins),
-    billed24h: num(d.billed_24h),
-    cost24h: num(d.cost_24h),
-    equivalent24h: numOrNull(d.equivalent_24h),
+    day24h: { billedUsd: num(d.billed_24h), cost: num(d.cost_24h), equivalent: numOrNull(d.equivalent_24h) },
     errorRate24h: numOrNull(d.error_rate_24h),
     hourly: list(d.hourly).map(rec).map((h) => ({ at: isoOr(h.at, epoch), billed: num(h.billed), cost: num(h.cost), equivalent: numOrNull(h.equivalent), errors: num(h.errors), refused: num(h.refused), requests: num(h.requests), tokens: num(h.tokens) })),
     refused24h: num(d.refused_24h),
@@ -1044,6 +1040,13 @@ const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] =
   const costs = isMap(envelope) && typeof envelope.source === 'string' ? readCosts(envelope.content, envelope.unit) : null;
   const revisions = costs === null ? null : readRevisions(rec(envelope).revisions, rec(envelope).unit);
   return costs === null || revisions === null ? { ...emptyCosts(), problem: COSTS_UNREADABLE, revisions: [], source: str(rec(envelope).source) } : { ...costs, problem: null, revisions, source: str(rec(envelope).source) };
+};
+
+export const decodeSessionInfo = (v: unknown): SessionInfo => {
+  const r = rec(v);
+  // Named, since `text`'s refusal carries no message and the login's error line shows this one.
+  if (typeof r.session_id !== 'string') throw new Error('session_id must be a string');
+  return { persistent: r.persistent === true, sessionId: r.session_id };
 };
 
 export function decodeSettings(v: unknown): Settings {

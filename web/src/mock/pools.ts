@@ -120,10 +120,8 @@ export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKee
 }
 
 /** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
-const UNTIL_DRAWN: Pick<PoolSeed, 'billed24h' | 'cost24h' | 'equivalent24h' | 'requests24h' | 'traffic24h'> = {
-  billed24h: 0,
-  cost24h: 0,
-  equivalent24h: 0,
+const UNTIL_DRAWN: Pick<PoolSeed, 'day24h' | 'requests24h' | 'traffic24h'> = {
+  day24h: { billedUsd: 0, cost: 0, equivalent: 0 },
   requests24h: 0,
   traffic24h: [],
 };

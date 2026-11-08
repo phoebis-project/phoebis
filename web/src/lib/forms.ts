@@ -471,8 +471,10 @@ export function subscriptionEndRefusal(form: SubscriptionEndForm): string | null
   return null;
 }
 
-export function accountPatchOf(form: SubscriptionEndForm): AccountPatch {
-  return { canceled: form.canceled, subscriptionEndsAt: form.endsAt === '' ? null : new Date(form.endsAt).toISOString() };
+/** The route's pair for the form, or null for a form the editor refuses (`subscriptionEndRefusal`). */
+export function accountPatchOf(form: SubscriptionEndForm): AccountPatch | null {
+  if (subscriptionEndRefusal(form) !== null) return null;
+  return form.canceled ? { canceled: true, subscriptionEndsAt: new Date(form.endsAt).toISOString() } : { canceled: false, subscriptionEndsAt: null };
 }
 
 /** An account's edit token carries its revision in the low 32 bits and its incarnation above them. */

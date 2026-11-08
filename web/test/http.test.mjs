@@ -448,6 +448,8 @@ test('getSession answers null on 401 without running the hook', async () => {
   assert.equal(unauthorized, 0);
   stub(() => answer(200, { session_id: 's' }));
   assert.deepEqual(await new HttpApi().getSession(), { persistent: false, sessionId: 's' }, 'a body without the member reads as a session that is not kept');
+  stub(() => answer(200, { persistent: true }));
+  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof Error && /session_id must be a string/.test(e.message), 'a body without session_id is no session');
 });
 
 test('getSession reads a kept session off the persistent member', async () => {
@@ -489,9 +491,9 @@ test('a session read with no answer within the deadline fails as a read that nev
   }
 });
 
-test('a session body that is not JSON raises its parse error rather than reading as no answer', async () => {
+test('a session body that is not JSON raises the decoder\'s error rather than reading as no answer', async () => {
   stub(() => ({ headers: { get: () => null }, ok: true, status: 200, text: async () => '<html>' }));
-  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof SyntaxError && !(e instanceof ApiError));
+  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof Error && !(e instanceof ApiError) && /session_id must be a string/.test(e.message));
 });
 
 test('a GET with no answer within the deadline fails as a read that never answered', async () => {
@@ -575,7 +577,7 @@ test('a key creation and a key edit send the auto mode override in snake_case', 
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
   const calls = stub((url, init) => answer(200, { ...row, ...JSON.parse(init.body), ...(init.method === 'POST' ? { secret: 'phoebis-fixture' } : {}) }));
   const api = new HttpApi();
-  const created = await api.createKey({ ...keyEdit, expiresInDays: null });
+  const created = await api.createKey({ ...keyEdit, expiresAt: null });
   const edited = await api.updateKey('desktop', { ...keyEdit, autoModeServer: false });
   const sent = calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body).auto_mode_server]);
   assert.deepEqual(sent, [['POST', '/admin/keys', null], ['PATCH', '/admin/keys/desktop', false]]);
@@ -683,7 +685,7 @@ test("a dialog's write reaches no toast when refused, since the dialog draws the
   const api = new HttpApi();
   const dialogs = [
     () => api.createAccount({ id: 'work', kind: 'oauth', label: 'work', secret: null }),
-    () => api.createKey({ ...keyEdit, expiresInDays: null }),
+    () => api.createKey({ ...keyEdit, expiresAt: null }),
     () => api.createPool(poolSave('Spare')),
     () => api.renameAccount('work', 'Work', 1),
     () => api.updateAccount('work', { canceled: false, subscriptionEndsAt: null }, 1),

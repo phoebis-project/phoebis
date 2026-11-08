@@ -28,7 +28,7 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, editHref, poolKeysHref } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, daySumOf, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, type PoolGroup } from '@/lib/forms';
@@ -283,7 +283,7 @@ export function PoolsPage() {
             // Null until the key list is read, so the tile waits as the cards' Keys tiles do rather than reading 0.
             keys: keysRead === 'loaded' && keys.data ? keys.data.length : null,
             requests: pools.data.reduce((s, p) => s + p.requests24h, 0),
-            day: sumFunded(pools.data.map(daySumOf)),
+            day: sumFunded(pools.data.map((p) => p.day24h)),
           }
         : null,
     [keys.data, keysRead, pools.data],
@@ -534,7 +534,7 @@ function PoolCost({ pool, reading }: { pool: Pool; reading: WeekReading }) {
       -
     </dd>
   );
-  const day = daySumOf(pool);
+  const day = pool.day24h;
   const sides = nativeSidesOf(day);
   if (unit === 'native' && sides.equivalent === undefined && sides.billed === undefined) return dash('No request in the last 24 hours');
   const tile = sumTileOf(unit, day, reading);

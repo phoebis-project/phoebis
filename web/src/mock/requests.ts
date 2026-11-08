@@ -2811,7 +2811,7 @@ function deriveFigures() {
       bucket.tokens += tokensTotal(r.usage);
     }
     const day = requestSidesOf(mine);
-    Object.assign(p, { billed24h: day.billedUsd, cost24h: sumOf(mine, (r) => r.costUsd), equivalent24h: day.equivalent, requests24h: mine.length, traffic24h });
+    Object.assign(p, { day24h: { billedUsd: day.billedUsd, cost: sumOf(mine, (r) => r.costUsd), equivalent: day.equivalent }, requests24h: mine.length, traffic24h });
   }
 }
 

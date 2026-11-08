@@ -653,7 +653,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const p of s.pools) {
       const mine = s.asked(s.totalled).filter((r) => r.poolId === p.id);
       assert.equal(p.requests24h, mine.length, `${p.id}'s day`);
-      assert.ok(near(p.cost24h, sum(mine, (r) => r.costUsd)), `${p.id}'s cost`);
+      assert.ok(near(p.day24h.cost, sum(mine, (r) => r.costUsd)), `${p.id}'s cost`);
       assert.equal(p.traffic24h.length, 25, `${p.id}'s buckets`);
       assert.equal(Date.parse(p.traffic24h[0].at), s.totalledFrom, `${p.id}'s first bucket`);
       assert.equal(sum(p.traffic24h, (b) => b.requests), mine.length, `${p.id}'s buckets`);
@@ -740,13 +740,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([...new Set(burn.points.filter((p) => p.unpriced).map((p) => p.group))], ['claude-sonnet-4-5'], 'and no other model flags one');
     assert.ok(burn.points.every((p) => !p.unpriced || p.equivalent === null), 'a flagged bucket reads null');
     assert.ok(holds(s.counted), "the dashboard's day holds one");
-    assert.equal(s.overview.equivalent24h, null, "so the dashboard's day reads null");
-    for (const p of s.pools) assert.equal(p.equivalent24h === null, holds(s.totalled.filter((r) => r.poolId === p.id && !r.refused)), `${p.id}'s day`);
+    assert.equal(s.overview.day24h.equivalent, null, "so the dashboard's day reads null");
+    for (const p of s.pools) assert.equal(p.day24h.equivalent === null, holds(s.totalled.filter((r) => r.poolId === p.id && !r.refused)), `${p.id}'s day`);
     for (const k of s.keys) {
       const rows = s.rollups.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
       assert.equal(k.lifetime.equivalent === null, rows.some((r) => r.funding === 'plan' && r.equivalent === null), `${k.id}'s lifetime`);
     }
-    assert.ok(s.keys.some((k) => k.lifetime.equivalent === null) && s.pools.some((p) => p.equivalent24h === null), 'a key and a pool that served it read null');
+    assert.ok(s.keys.some((k) => k.lifetime.equivalent === null) && s.pools.some((p) => p.day24h.equivalent === null), 'a key and a pool that served it read null');
     const requests = s.requests.filter((r) => s.lib.undatedModel(r.canonicalModel) === 'claude-sonnet-4-5' && planPaid(s, r) && r.costEquivalent === null && requestTokens(r) > 0).length;
     assert.deepEqual(s.attention.filter((i) => i.kind === 'model_unpriced').map((i) => [i.detail, i.link, i.pools, i.subject.type]), [[{ model: 'claude-sonnet-4-5', requests }, null, [], 'model']], 'one item names the model and its plan requests');
     // The switch lends the story one plan request on a model the cost model lists in no tier, in a row of its own.
@@ -3239,8 +3239,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const plan = rows.filter((r) => planPaid(s, r));
       return plan.some((r) => requestTokens(r) > 0 && r.costEquivalent === null) ? null : sum(plan, (r) => r.costEquivalent ?? 0);
     };
-    assert.equal(s.overview.equivalent24h, figureOf(s.counted), `the day reads ${s.overview.equivalent24h}`);
-    assert.ok(near(s.overview.billed24h, sum(s.counted.filter((r) => !planPaid(s, r)), (r) => r.costUsd)), 'the billed rows alone');
+    assert.equal(s.overview.day24h.equivalent, figureOf(s.counted), `the day reads ${s.overview.day24h.equivalent}`);
+    assert.ok(near(s.overview.day24h.billedUsd, sum(s.counted.filter((r) => !planPaid(s, r)), (r) => r.costUsd)), 'the billed rows alone');
     for (const h of s.overview.hourly) {
       const rows = s.counted.filter((r) => startOfHour(Date.parse(r.at)) === Date.parse(h.at));
       const want = figureOf(rows);

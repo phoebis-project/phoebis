@@ -40,7 +40,7 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
     affinityTtlSeconds: 600,
     bodyCaptureHours: 0,
     cacheTtl: null,
-    cost24h: 0,
+    day24h: { billedUsd: 0, cost: 0, equivalent: 0 },
     id: 'p',
     keepalive: {
       enabled: false,

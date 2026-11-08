@@ -18,9 +18,7 @@ const signedIn = async () => {
  */
 const poolInputOf = ({ guardrails: _, ...p }) => ({ ...p, members: p.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })) });
 const storyPool = async (api) => poolInputOf((await api.listPools()).find((p) => p.id === 'all'));
-const keyInput = { autoModeServer: null, bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
-// The edit route reads `expiresAt` and refuses the create's `expiresInDays` as a member outside its input.
-const { expiresInDays: _days, ...keyEdit } = keyInput;
+const keyInput = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'fresh', notes: null, poolId: 'all' };
 
 const refusedAs = (status, message) => (e) => e instanceof d.ApiError && e.status === status && e.message === message && e.code === null;
 
@@ -212,7 +210,7 @@ test('a pool answers its keys from the key registry', async () => {
   await api.revokeKey('notebook');
   assert.deepEqual(await keysOf('work'), [['scratch', true], ['notebook', false]], 'a revocation switches the key off in the pool\'s list too');
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
-  await api.updateKey('laptop', { ...keyEdit, name: laptop.name, poolId: 'work', expiresAt: undefined });
+  await api.updateKey('laptop', { ...keyInput, name: laptop.name, poolId: 'work', expiresAt: undefined });
   assert.ok((await keysOf('work')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
 });
 
@@ -220,7 +218,7 @@ test("a key edit naming a pool that does not exist answers the route's 404 and s
   const api = await signedIn();
   const before = await api.listKeys();
   const laptop = before.find((k) => k.id === 'laptop');
-  const edit = { ...keyEdit, expiresAt: undefined, name: laptop.name };
+  const edit = { ...keyInput, expiresAt: undefined, name: laptop.name };
   await assert.rejects(() => api.updateKey('laptop', { ...edit, poolId: 'ghost' }), refusedAs(404, 'pool not found'));
   assert.deepEqual(await api.listKeys(), before, 'a refused edit stores nothing');
   const moved = await api.updateKey('laptop', { ...edit, poolId: 'work' });
@@ -258,7 +256,7 @@ test('a pool or key save over a revision the row no longer carries is refused as
   await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'again' }, pool.revision), staleAs(POOL_STALE), 'the stamp moved past the sent token');
   const key = await storyKey(api, 'laptop');
   assert.equal(key.revision, tokenOf(1, key.updatedAt), "the story's key carries the token of its stamp");
-  const edit = { ...keyEdit, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
   await assert.rejects(() => api.updateKey('laptop', edit, key.revision + 1), staleAs(KEY_STALE));
   assert.deepEqual(await storyKey(api, 'laptop'), key);
   const savedKey = await api.updateKey('laptop', edit, key.revision);
@@ -271,7 +269,7 @@ test('a pool or key save over a revision the row no longer carries is refused as
 test("a stale key edit onto a pool that does not exist answers the route's 404, since the route reads the pool before it compares the stamp", async () => {
   const api = await signedIn();
   const key = await storyKey(api, 'laptop');
-  const edit = { ...keyEdit, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
   await assert.rejects(() => api.updateKey('laptop', { ...edit, poolId: 'ghost' }, key.revision + 1), refusedAs(404, 'pool not found'));
   assert.deepEqual(await storyKey(api, 'laptop'), key, 'a refused edit stores nothing');
 });
@@ -280,7 +278,7 @@ test("a key edit onto a pool that does not exist answers the route's 404 ahead o
   const api = await signedIn();
   const before = await api.listKeys();
   const laptop = before.find((k) => k.id === 'laptop');
-  const edit = { ...keyEdit, expiresAt: undefined, name: laptop.name };
+  const edit = { ...keyInput, expiresAt: undefined, name: laptop.name };
   const refusals = [
     [{ guardrails: ['fresh', 'fresh'] }, 'guardrails lists fresh twice'],
     [{ modelRulesMode: 'merge' }, 'model_rules_mode is extend or replace'],
@@ -297,17 +295,14 @@ test("a key edit or creation carrying a member outside the input's set answers t
   const api = await signedIn();
   const before = await api.listKeys();
   const laptop = before.find((k) => k.id === 'laptop');
-  const edit = { ...keyEdit, expiresAt: undefined, name: laptop.name };
+  const edit = { ...keyInput, expiresAt: undefined, name: laptop.name };
   const shape = refusedAs(400, 'body must be a JSON object');
   await assert.rejects(() => api.updateKey('laptop', { ...edit, color: 'red' }), shape, 'a member of no input');
   assert.deepEqual(await api.listKeys(), before, 'a refused edit stores nothing');
-  // The edit route reads the expiry as `expiresAt`, so the create's member is unknown to it.
-  await assert.rejects(() => api.updateKey('laptop', { ...edit, expiresInDays: 7 }), shape, "the create's member on an edit");
-  assert.deepEqual(await api.listKeys(), before, 'a refused edit stores nothing');
   await assert.rejects(() => api.createKey({ ...keyInput, color: 'red' }), shape, 'a member of no input on a create');
   assert.deepEqual(await api.listKeys(), before, 'a refused create writes no key');
-  const { key } = await api.createKey({ ...keyInput, name: 'plain' });
-  assert.equal(key.id, 'plain', 'a create carrying its own expiresInDays lands');
+  const { key } = await api.createKey({ ...keyInput, expiresAt: null, name: 'plain' });
+  assert.equal(key.id, 'plain', 'a create carrying its own expiry lands');
 });
 
 test('a pool or key save opened before a guardrail-side attachment is refused as stale, and a reread lists the guardrail', async () => {
@@ -317,7 +312,7 @@ test('a pool or key save opened before a guardrail-side attachment is refused as
   const conditions = [{ operator: 'equals', subject: 'request_class', value: 'auxiliary' }];
   const attached = await api.createGuardrail({ conditions, description: '', enabled: true, keys: ['laptop'], mode: 'observe', name: 'Fresh', pools: ['all'] });
   await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.revision), staleAs(POOL_STALE));
-  const edit = { ...keyEdit, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
   await assert.rejects(() => api.updateKey('laptop', edit, key.revision), staleAs(KEY_STALE));
   assert.ok((await api.listPools()).find((p) => p.id === 'all').guardrails.some((r) => r.id === attached.id), 'the reread pool lists the guardrail');
   assert.ok((await storyKey(api, 'laptop')).guardrails.some((r) => r.id === attached.id), 'the reread key lists the guardrail');
@@ -340,13 +335,13 @@ test('a guardrail save opened before a pool-side detach is refused as stale', as
 test('an editor opened before its pool or key was deleted and created again is refused as stale and stores nothing', async () => {
   const api = await signedIn();
   const fresh = { ...(await storyPool(api)), members: [], name: 'fresh' };
-  const spare = { ...keyEdit, name: 'spare', poolId: 'fresh' };
+  const spare = { ...keyInput, name: 'spare', poolId: 'fresh' };
   const first = await api.createPool(fresh);
-  const { key: firstKey } = await api.createKey({ ...spare, expiresInDays: null });
+  const { key: firstKey } = await api.createKey({ ...spare, expiresAt: null });
   await api.deleteKey('spare');
   await api.deletePool('fresh');
   const pool = await api.createPool(fresh);
-  const { key } = await api.createKey({ ...spare, expiresInDays: null });
+  const { key } = await api.createKey({ ...spare, expiresAt: null });
   assert.deepEqual([pool.updatedAt, key.updatedAt], [first.updatedAt, firstKey.updatedAt], 'each replacement lands in its predecessor\'s millisecond');
   assert.deepEqual([pool.revision, key.revision], [tokenOf(2, pool.updatedAt), tokenOf(2, key.updatedAt)], 'each replacement takes the next incarnation');
   await assert.rejects(() => api.updatePool('fresh', { ...poolInputOf(pool), name: 'stale' }, first.revision), staleAs(POOL_STALE));
@@ -364,7 +359,7 @@ test("a pool deleted and created again under its id counts the pins of the keys 
   const [work, all] = [await poolOf('work'), await poolOf('all')];
   assert.ok(work.activePins > 0 && formerPins(work) > 0, "the story's work pool holds pins, one of them on a former member");
   // A pool leaves once no key points at it, so its keys move first and take their pins along.
-  for (const k of (await api.listKeys()).filter((x) => x.poolId === 'work')) await api.updateKey(k.id, { ...keyEdit, expiresAt: undefined, name: k.name, poolId: 'all' });
+  for (const k of (await api.listKeys()).filter((x) => x.poolId === 'work')) await api.updateKey(k.id, { ...keyInput, expiresAt: undefined, name: k.name, poolId: 'all' });
   await api.deletePool('work');
   const again = await api.createPool({ ...poolInputOf(work), members: [] });
   assert.deepEqual([again.id, again.activePins, formerPins(again)], ['work', 0, 0], 'the pool created again holds no key, so no pin');
@@ -389,7 +384,7 @@ test('a rotation or a revocation moves the key\'s stamp, so an edit read before 
     assert.ok(Date.parse(after.updatedAt) > Date.parse(before.updatedAt), id);
     assert.equal(after.revision, tokenOf(1, after.updatedAt), id);
     // The key's own switch, since the route refuses re-enabling a revoked key ahead of the fence.
-    await assert.rejects(() => api.updateKey(id, { ...keyEdit, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.revision), staleAs(KEY_STALE), id);
+    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.revision), staleAs(KEY_STALE), id);
     assert.equal((await storyKey(api, id)).name, before.name, id);
   }
 });
@@ -400,7 +395,7 @@ test("a key write stores the server-side auto mode override and a pool write sto
   assert.equal(inheriting.autoModeServer, null, 'the mock answers the inherit it was sent');
   const { key: pinned } = await api.createKey({ ...keyInput, autoModeServer: false, name: 'pinned' });
   assert.equal(pinned.autoModeServer, false);
-  const edited = await api.updateKey('pinned', { ...keyEdit, autoModeServer: true, expiresAt: undefined, name: 'pinned' });
+  const edited = await api.updateKey('pinned', { ...keyInput, autoModeServer: true, expiresAt: undefined, name: 'pinned' });
   assert.equal(edited.autoModeServer, true);
   const plain = { ...keyInput, name: 'plain' };
   delete plain.autoModeServer;
@@ -507,7 +502,7 @@ test('an account answers the pool a member write left it in', async () => {
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
-  const laptop = { ...keyEdit, name: 'laptop' };
+  const laptop = { ...keyInput, name: 'laptop' };
   const stored = async () => [(await api.listPools()).map((p) => p.modelRules), (await api.listKeys()).map((k) => [k.modelRules, k.modelRulesMode])];
   const before = await stored();
   const writes = (modelRules) => [
@@ -531,8 +526,8 @@ test('a model rule list the route refuses is refused on every pool and key write
 
 test('a key write without the model fields takes the route\'s defaults on create and keeps the stored ones on edit', async () => {
   const api = await signedIn();
-  const { longContextTwins: _t, modelRules: _r, modelRulesMode: _m, ...bare } = keyEdit;
-  const { key } = await api.createKey({ ...bare, expiresInDays: null, name: 'bare' });
+  const { longContextTwins: _t, modelRules: _r, modelRulesMode: _m, ...bare } = keyInput;
+  const { key } = await api.createKey({ ...bare, expiresAt: null, name: 'bare' });
   assert.deepEqual([key.modelRules, key.modelRulesMode, key.longContextTwins], [[], 'extend', true]);
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const edited = await api.updateKey('laptop', { ...bare, name: 'laptop' });
@@ -547,8 +542,6 @@ test('an account patch is refused where the account route refuses it, and a canc
   const end = '2026-10-19T09:15:00.000Z';
   const before = await api.listAccounts();
   await assert.rejects(() => api.updateAccount('overflow', { canceled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is canceled'));
-  await assert.rejects(() => api.updateAccount('primary', { canceled: false, subscriptionEndsAt: end }), refusedAs(400, 'subscription_ends_at needs canceled'));
-  await assert.rejects(() => api.updateAccount('primary', { canceled: true, subscriptionEndsAt: null }), refusedAs(400, 'canceled needs subscription_ends_at'));
   await assert.rejects(() => api.updateAccount('nobody', { canceled: false, subscriptionEndsAt: null }), refusedAs(404, 'account not found'));
   assert.deepEqual(await api.listAccounts(), before, 'a refused patch stores nothing');
   const canceled = await api.updateAccount('primary', { canceled: true, subscriptionEndsAt: end });
@@ -800,7 +793,7 @@ test('a_guardrail_is_created_edited_attached_and_deleted_on_the_mock_with_the_ro
   for (let i = 0; i < 64; i += 1) many.push((await api.createGuardrail({ ...input, name: `bound ${i}` })).id);
   const pool = (await api.listPools()).find((p) => p.id === 'all');
   await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), guardrails: [...many, 'fresh'] }), refusedAs(400, 'pool all would hold more than 64 guardrails'));
-  await assert.rejects(() => api.updateKey('laptop', { ...keyEdit, expiresAt: undefined, guardrails: many, name: 'laptop' }), refusedAs(400, 'key laptop would hold more than 64 guardrails'));
+  await assert.rejects(() => api.updateKey('laptop', { ...keyInput, expiresAt: undefined, guardrails: many, name: 'laptop' }), refusedAs(400, 'key laptop would hold more than 64 guardrails'));
   assert.deepEqual(await listOf('all'), [['subagent-status-summary', 1]], 'a refused attachment stores nothing');
   assert.deepEqual((await api.listKeys()).find((k) => k.id === 'laptop').guardrails.map((r) => r.id), ['fresh']);
 

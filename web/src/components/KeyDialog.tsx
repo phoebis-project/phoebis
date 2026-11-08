@@ -222,7 +222,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         onUpdated?.(updated);
         return;
       }
-      const created = await api.createKey({ ...input, expiresInDays: expiry === 'never' ? null : Number(expiry) });
+      const created = await api.createKey(input);
       setBusy(false);
       onCreated(created);
     } catch (e) {

@@ -4,7 +4,6 @@ import * as d from './decode';
 import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, PairingConfirmed, PairingInput, PairingPreview, PairingStart, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 import { clock } from '@/lib/clock';
 import { messageOf } from '@/lib/format';
-import { DAY } from '@/lib/time';
 
 export class ApiError extends Error {
   code: string | null;
@@ -232,10 +231,7 @@ export class HttpApi implements Api {
   confirmPairing = async (pairingId: string): Promise<PairingConfirmed> => d.decodePairingConfirmed(await call('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`));
   createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, DIALOG_WRITE));
   createGuardrail = async (input: CreateGuardrailInput) => d.decodeGuardrail(await call('POST', '/admin/guardrails', { ...d.encodeGuardrail(input), id: slug(input.name) }, DIALOG_WRITE));
-  createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
-    const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * DAY;
-    return d.decodeCreatedKey(await call('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, DIALOG_WRITE));
-  };
+  createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => d.decodeCreatedKey(await call('POST', '/admin/keys', { ...d.encodeKey(input), id: slug(input.name) }, DIALOG_WRITE));
   createPool = async (input: CreatePoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, DIALOG_WRITE));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
   deleteGuardrail = (id: string) => call<void>('DELETE', `/admin/guardrails/${enc(id)}`);
@@ -270,22 +266,13 @@ export class HttpApi implements Api {
       })),
     );
   getSession = async (): Promise<SessionInfo | null> => {
-    // Read straight through: a missing session is the normal first load, not a lost one for the hook to report.
-    let answer: { status: number; text: string | null };
     try {
-      answer = await withinDeadline(async (signal) => {
-        const response = await fetch('/admin/session', { credentials: 'same-origin', signal });
-        return { status: response.status, text: response.ok ? await response.text() : null };
-      });
+      // No hook runs: a missing session is the normal first load, not a lost one for the hook to report.
+      return d.decodeSessionInfo(await call('GET', '/admin/session', undefined, { report: 'none' }));
     } catch (e) {
-      // Raised as `call` raises it, so the login screen can tell a router that never answered from "no session".
-      throw new ApiError(0, messageOf(e), null);
+      if (e instanceof ApiError && e.status === 401) return null;
+      throw e;
     }
-    if (answer.status === 401) return null;
-    if (answer.text === null) throw new ApiError(answer.status, `GET /admin/session answered ${answer.status}`, null);
-    // Parsed after the catch, as `call` parses, so a body that is not JSON raises its own error, never no answer.
-    const r = JSON.parse(answer.text) as { persistent?: boolean; session_id: string };
-    return { persistent: r.persistent === true, sessionId: r.session_id };
   };
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));

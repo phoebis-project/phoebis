@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
@@ -398,16 +398,6 @@ export const sidesLine = (sides: { billed: number | undefined; equivalent: numbe
   nativeFiguresOf(sides, week, scale)
     .figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text))
     .join(', ');
-/** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
-export interface FundedSum {
-  /** The rows no subscription window paid, in dollars. */
-  billedUsd: number;
-  cost: number;
-  /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
-  equivalent: number | null;
-}
-/** The day's sum of a pool or of the overview, from the route's three 24-hour fields. */
-export const daySumOf = (d: { billed24h: number; cost24h: number; equivalent24h: number | null }): FundedSum => ({ billedUsd: d.billed24h, cost: d.cost24h, equivalent: d.equivalent24h });
 /** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**

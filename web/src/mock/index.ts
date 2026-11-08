@@ -134,7 +134,7 @@ const keyRulesRefusal = (input: Partial<Pick<KeyInput, 'modelRules' | 'modelRule
  * pool routes' sentence first.
  */
 const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyCaptureHours', 'enabled', 'expiresAt', 'guardrails', 'keepaliveOptOut', 'longContextTwins', 'modelRules', 'modelRulesMode', 'name', 'notes', 'poolId']);
-const unknownKeyMember = (input: object, also: readonly string[] = []): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k) && !also.includes(k)) ? 'body must be a JSON object' : null);
+const unknownKeyMember = (input: object): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k)) ? 'body must be a JSON object' : null);
 
 /**
  * The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
@@ -926,7 +926,7 @@ export class MockApi implements Api {
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
-    const shape = unknownKeyMember(input, ['expiresInDays']);
+    const shape = unknownKeyMember(input);
     if (shape) throw new ApiError(400, shape, null);
     // A new key starts with none of its own, so once the body's shape passes, the route refuses the member before it
     // reads anything else.
@@ -954,7 +954,7 @@ export class MockApi implements Api {
       createdAt: iso(NOW),
       updatedAt: iso(NOW),
       revision: stampToken((this.buriedKeys.get(id) ?? 0) + 1, iso(NOW)),
-      expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
+      expiresAt: input.expiresAt ?? null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
       notes: input.notes,
@@ -978,8 +978,7 @@ export class MockApi implements Api {
     const pool: StoredPool = {
       ...POOL_SAMPLE,
       ...input,
-      billed24h: 0,
-      cost24h: 0,
+      day24h: { billedUsd: 0, cost: 0, equivalent: 0 },
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
       keepaliveResolved: this.resolvedOf(input),
@@ -1216,9 +1215,7 @@ export class MockApi implements Api {
     return latency({
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
       activePins: this.registry().pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
-      billed24h: day.billedUsd,
-      cost24h: cost,
-      equivalent24h: day.equivalent,
+      day24h: { billedUsd: day.billedUsd, cost, equivalent: day.equivalent },
       errorRate24h: rated.length ? rated.filter((r) => r.outcome !== 'succeeded').length / rated.length : null,
       hourly: [...hourlyMap.values()],
       refused24h: last24h.length - rated.length,
@@ -1463,12 +1460,10 @@ export class MockApi implements Api {
     return latency({ requests, sample, totals: { indeterminate: count('indeterminate'), matched: count('matched'), sampled: requests.length, unmatched: count('unmatched') } }, 300);
   }
 
-  /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
+  /** The account route's refusals in its order and words. The end is kept only while the flag stands. */
   async updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account> {
     const a = this.account(accountId);
     if (patch.canceled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is canceled', null);
-    if (!patch.canceled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs canceled', null);
-    if (patch.canceled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'canceled needs subscription_ends_at', null);
     if (revision !== undefined && revision !== a.revision) {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }

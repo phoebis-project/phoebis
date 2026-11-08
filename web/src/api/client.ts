@@ -51,12 +51,8 @@ import type {
 import type { Condition, Guardrail, GuardrailCounts, GuardrailMode, GuardrailPreset, GuardrailTestResult } from './types';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS } from '@/lib/presets';
 
-/** The account route's cancellation pair; the route refuses an end without the flag and the flag without an end. */
-export interface AccountPatch {
-  canceled: boolean;
-  /** An ISO instant, or null to clear it. */
-  subscriptionEndsAt: string | null;
-}
+/** The account route's cancellation pair. An end travels with the flag, and the flag with an end. */
+export type AccountPatch = { canceled: false; subscriptionEndsAt: null } | { canceled: true; subscriptionEndsAt: string };
 
 export interface KeyInput {
   autoModeServer: boolean | null;
@@ -76,7 +72,6 @@ export interface KeyInput {
 }
 
 export interface CreateKeyInput extends KeyInput {
-  expiresInDays: number | null;
   guardrails?: never;
 }
 

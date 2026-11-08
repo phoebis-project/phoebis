@@ -365,8 +365,11 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
     setEditing(false);
   };
   const saveEnd = async (form: SubscriptionEndForm) => {
+    const patch = accountPatchOf(form);
+    // Save is held while the editor refuses the form, and the callout beside the field already states the refusal.
+    if (patch === null) return;
     setEndRefused(null);
-    const saved = await run(() => api.updateAccount(account.id, accountPatchOf(form), form.revision), 'Subscription end saved', setEndRefused);
+    const saved = await run(() => api.updateAccount(account.id, patch, form.revision), 'Subscription end saved', setEndRefused);
     if (!saved) return;
     const { revision } = saved.answer;
     setAnswered(saved.answer);

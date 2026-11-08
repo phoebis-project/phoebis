@@ -17,7 +17,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
-import { daySumOf, dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
 import { isFinished, lineTotals, sessionLines, withinExpiry } from '@/lib/keepalive';
@@ -62,7 +62,7 @@ interface CostTile {
  * cost model sizes no chosen week. The dollar positions read their dollars.
  */
 function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
-  const day = daySumOf(o);
+  const day = o.day24h;
   const tile = sumTileOf(unit, day, reading);
   if (unit !== 'native') {
     const dollars = dollarsUnder(unit, day);
@@ -82,7 +82,7 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
   if (scale === null) return { ...tile, note: null, spark: spark(1) };
   return {
     ...tile,
-    note: billed || !plan ? `${fmtUsd(o.billed24h / 24)} billed per hour` : `${equivalentOrDash(o.equivalent24h === null ? null : o.equivalent24h / 24, week, scale)} per hour`,
+    note: billed || !plan ? `${fmtUsd(o.day24h.billedUsd / 24)} billed per hour` : `${equivalentOrDash(o.day24h.equivalent === null ? null : o.day24h.equivalent / 24, week, scale)} per hour`,
     spark: spark(scale),
   };
 }

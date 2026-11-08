@@ -210,11 +210,11 @@ test('the sums decode a null figure as null on the dashboard, a key, a pool and 
   const pool = fixture('pools').pools[0];
   // A null is a request the cost model could not price, which a zero would read as a sum with no plan-funded request.
   const day = d.decodeDashboard({ ...dashboard, equivalent_24h: null, hourly: dashboard.hourly.map((h, i) => ({ ...h, equivalent: i === 0 ? null : 0.0042 })) });
-  assert.deepEqual([day.equivalent24h, day.hourly[0].equivalent, day.hourly[1].equivalent], [null, null, 0.0042]);
+  assert.deepEqual([day.day24h.equivalent, day.hourly[0].equivalent, day.hourly[1].equivalent], [null, null, 0.0042]);
   const k = d.decodeKey({ ...key, lifetime: { ...key.lifetime, equivalent: null }, usage_7d: { ...key.usage_7d, equivalent: 0.0042 } });
   assert.deepEqual([k.lifetime.equivalent, k.usage7d.equivalent], [null, 0.0042]);
   const p = d.decodePool({ ...pool, equivalent_24h: null, traffic_24h: pool.traffic_24h.map((b, i) => ({ ...b, equivalent: i === 0 ? null : 0.0042 })) });
-  assert.deepEqual([p.equivalent24h, p.traffic24h[0].equivalent, p.traffic24h[1].equivalent], [null, null, 0.0042]);
+  assert.deepEqual([p.day24h.equivalent, p.traffic24h[0].equivalent, p.traffic24h[1].equivalent], [null, null, 0.0042]);
 });
 
 test("a sum of groups adds the saving's Pro-week figure, and a group whose kept-warm count priced nothing nulls it", () => {
@@ -508,7 +508,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.traffic24h.length, 25);
   assert.ok(isIso(p.traffic24h[0].at));
   const wire = fixture('pools').pools[0];
-  assert.deepEqual([p.billed24h, p.equivalent24h], [wire.billed_24h, wire.equivalent_24h], "the day's billed dollars and Pro-week figure");
+  assert.deepEqual([p.day24h.billedUsd, p.day24h.equivalent], [wire.billed_24h, wire.equivalent_24h], "the day's billed dollars and Pro-week figure");
   const busy = wire.traffic_24h.findIndex((b) => b.requests > 0);
   const bucket = wire.traffic_24h[busy];
   assert.deepEqual([p.traffic24h[busy].billedUsd, p.traffic24h[busy].equivalent], [bucket.billed_usd, bucket.equivalent], "a bucket's billed dollars and Pro-week figure");
@@ -1289,11 +1289,11 @@ test('an answer without the Pro-week members reads them null and the billed doll
   const point = d.decodeBurnPoint({});
   assert.deepEqual([point.equivalent, point.unpriced, point.modelWeekShare], [null, false, null], 'a burn point');
   const day = d.decodeDashboard({ hourly: [{ at: 0 }] });
-  assert.deepEqual([day.billed24h, day.equivalent24h, day.hourly[0].billed, day.hourly[0].equivalent], [0, null, 0, null], 'the dashboard');
+  assert.deepEqual([day.day24h.billedUsd, day.day24h.equivalent, day.hourly[0].billed, day.hourly[0].equivalent], [0, null, 0, null], 'the dashboard');
   const key = d.decodeKey({});
   assert.deepEqual([key.lifetime.billedUsd, key.lifetime.equivalent, key.usage7d.billedUsd, key.usage7d.equivalent], [0, null, 0, null], 'a key');
   const pool = d.decodePool({ traffic_24h: [{ at: 0 }] });
-  assert.deepEqual([pool.billed24h, pool.equivalent24h, pool.traffic24h[0].billedUsd, pool.traffic24h[0].equivalent], [0, null, 0, null], 'a pool');
+  assert.deepEqual([pool.day24h.billedUsd, pool.day24h.equivalent, pool.traffic24h[0].billedUsd, pool.traffic24h[0].equivalent], [0, null, 0, null], 'a pool');
   const session = d.decodeSession({});
   assert.deepEqual([session.burnEquivalent, session.burnWindow], [null, null], 'a session');
   const request = d.decodeRequest({ attempts: [{ index: 1 }] });
@@ -2302,8 +2302,8 @@ test('the dashboard reads the live pin count the route answers beside the rollup
 test('the dashboard reads its billed dollars and its Pro-week figure for the day and per hour', () => {
   const wire = fixture('dashboard');
   const o = d.decodeDashboard(wire);
-  assert.deepEqual([o.billed24h, o.equivalent24h], [wire.billed_24h, wire.equivalent_24h]);
-  assert.ok(o.billed24h > 0, 'the captured day spent billed dollars');
+  assert.deepEqual([o.day24h.billedUsd, o.day24h.equivalent], [wire.billed_24h, wire.equivalent_24h]);
+  assert.ok(o.day24h.billedUsd > 0, 'the captured day spent billed dollars');
   const busy = wire.hourly.findIndex((h) => h.requests > 0);
   assert.deepEqual([o.hourly[busy].billed, o.hourly[busy].equivalent], [wire.hourly[busy].billed, wire.hourly[busy].equivalent], "an hour's billed dollars and figure");
 });

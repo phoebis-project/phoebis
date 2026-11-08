@@ -79,7 +79,7 @@ const SYNC = {
   guardrails: { decode: (b) => b.guardrails.map(d.decodeGuardrail), mock: (api) => api.listGuardrails() },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
   keepalive_recipes: { decode: (b) => b.recipes.map(d.decodeRecipe), mock: (api) => api.listKeepaliveRecipes() },
-  key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
+  key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresAt: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
   key_models: { decode: (b) => d.decodeKeyModels(b), mock: (api) => api.getKeyModels('laptop') },
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing({ accountId: 'legacy' }) },

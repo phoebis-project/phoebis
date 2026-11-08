@@ -471,6 +471,15 @@ export interface PoolWarning {
   text: string;
 }
 
+/** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
+export interface FundedSum {
+  /** The rows no subscription window paid, in dollars. */
+  billedUsd: number;
+  cost: number;
+  /** The plan rows as the Pro-week figure, null where a plan row priced nothing. */
+  equivalent: number | null;
+}
+
 export const POOL_STATUS_VALUES = ['active', 'degraded', 'disabled', 'exhausted'] as const;
 export interface Pool {
   activePins: number;
@@ -479,8 +488,6 @@ export interface Pool {
   affinityTtlSeconds: number;
   /** Whether the client's server-side auto mode checks travel; off drops them. */
   autoModeServer: boolean;
-  /** The day's dollars of the requests no subscription window paid. */
-  billed24h: number;
   /** Hours of captured request and response bodies for keys with no override; 0 is off. */
   bodyCaptureHours: number;
   /** The time constant of each session's burn average, which the projection and the shedding round read. */
@@ -489,10 +496,8 @@ export interface Pool {
   cacheDiagnostics: boolean;
   /** Always answered; `enabled` off is how a pool that rewrites no breakpoint reads. */
   cacheTtl: PoolCacheTtl;
-  cost24h: number;
-  /** The day's plan-funded requests as the Pro-week figure, whatever tier served them, null where a request priced
-   *  nothing and 0 with no plan-funded request. */
-  equivalent24h: number | null;
+  /** The day's sum: the billed rows' dollars, every row's cost and the plan rows as the Pro-week figure. */
+  day24h: FundedSum;
   /** The pool's own guardrails, which run before a key's, ordered by `position`. */
   guardrails: GuardrailRef[];
   id: string;
@@ -2131,14 +2136,10 @@ export interface AccountInput {
 export interface Overview {
   /** The router's live pins, which the session rows overcount: those also hold ledger-only and historical sessions. */
   activePins: number;
-  /** The day's dollars of the requests no subscription window paid. */
-  billed24h: number;
-  cost24h: number;
-  /** The day's plan-funded requests as the Pro-week figure, whatever tier served them, null where a request priced
-   *  nothing. */
-  equivalent24h: number | null;
+  /** The day's sum: the billed rows' dollars, every row's cost and the plan rows as the Pro-week figure. */
+  day24h: FundedSum;
   errorRate24h: number | null;
-  /** `billed` and `equivalent` split each hour as `billed24h` and `equivalent24h` split the day. */
+  /** `billed` and `equivalent` split each hour as `day24h` splits the day. */
   hourly: { at: string; billed: number; cost: number; equivalent: number | null; errors: number; refused: number; requests: number; tokens: number }[];
   /** The requests the router refused before any account was asked, not in `requests24h`. */
   refused24h: number;

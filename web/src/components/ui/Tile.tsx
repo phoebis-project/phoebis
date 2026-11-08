@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { dollarsUnder, nativeFiguresOf, nativeSidesOf, UNPRICED_TITLE, type CostFigure, type FundedSum, type WeekReading } from '@/lib/analytics';
+import type { FundedSum } from '@/api/types';
+import { dollarsUnder, nativeFiguresOf, nativeSidesOf, UNPRICED_TITLE, type CostFigure, type WeekReading } from '@/lib/analytics';
 import { fmtUsd } from '@/lib/format';
 import type { UnitPosition } from '@/lib/unit';
 import { Skeleton } from './primitives';
