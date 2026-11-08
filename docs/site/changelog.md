@@ -326,7 +326,8 @@ block and the Analytics card read each weekly reset in the chosen week and price
 that reset ([Accounts](console.md#accounts), [Analytics](console.md#analytics)). A new pool's dialog starts with cache
 warming off ([Pools](console.md#pools)). A pool card's Active pins fact counts every pin under the pool's keys, as the
 Dashboard's Sessions card does, and reads how many sit on a former member under the figure
-([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The pool dialog's idle window set above the break-even
+([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The pool dialog holds the save on a member budget field
+the browser cannot read as a number ([Pools](console.md#pools)). The pool dialog's idle window set above the break-even
 reads a note that the ceiling lies above it and prices its cost from the set value, while the parked and horizon
 ceilings stay capped at the break-even ([Pools](console.md#pools)). The Pools dialog's return rate reads the last 7 or
 30 days ([Pools](console.md#pools)). The Pools view names the third selection tier `metered` in its serving table and

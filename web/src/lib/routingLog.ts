@@ -109,7 +109,7 @@ export function releaseLabel(reason: string): string {
 }
 
 /** The Pin fold's row for a record that pins nothing: 'not looked up' (a refusal's) or 'pinning off'. */
-export const PIN_REASON_LABEL: Record<PinReason, string> = {
+const PIN_REASON_LABEL: Record<PinReason, string> = {
   not_looked_up: 'not looked up',
   pinning_off: 'pinning off',
 };
@@ -849,7 +849,7 @@ const requestChip = (id: string): Chip => ({ href: entityHref('request', id), mo
 export const plain = (value: string, label?: string): Chip => (label === undefined ? { value } : { label, value });
 
 /** Why a member could not take the request, the hover of the candidate table's verdict chip. */
-export const OBSTACLE_HINT: Record<string, string> = {
+const OBSTACLE_HINT: Record<string, string> = {
   above_ceiling: 'above the utilization ceiling',
   at_cap: 'at its in-flight cap',
   attempted: 'already tried by this request',
@@ -1202,7 +1202,7 @@ export function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | nu
   return refused.sort((a, b) => b.depth - a.depth)[0] ?? null;
 }
 
-const ruleWord = (step: string) => (STEP_NAME[step] ?? words(step.slice('move:'.length))).toLowerCase();
+const ruleWord = (step: string) => (lookup(STEP_NAME, step) ?? words(step.slice('move:'.length))).toLowerCase();
 
 /**
  * The walk as numbered lines in the engine's order. The rules after a fired one never ran, so they fold into one line,

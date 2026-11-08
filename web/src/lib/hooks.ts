@@ -229,19 +229,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // The load effect's run for the current deps: a refresh that lands after the deps changed or the page left is
   // dropped by it, as the load's own answer is.
   const run = useRef({ alive: false });
-  // Every read takes the next number, and one that settles after a higher number has landed is dropped, success and
-  // failure alike, so an older answer never replaces a newer one; a slow read still lands while nothing newer has.
-  const started = useRef(0);
-  const landedSeq = useRef(0);
   // The hook's reads still out, the load effect's and the refreshes' alike, since a load for new deps can outlast the
   // period and a tick would read the route a second time beside it.
   const inFlight = useRef(0);
-  /** Whether the read numbered `seq` may land, which marks it as the newest landed. */
-  const lands = (seq: number) => {
-    if (seq < landedSeq.current) return false;
-    landedSeq.current = seq;
-    return true;
-  };
   // The streak of the hook's reads, the load's and the refreshes' alike.
   const streak = useRef<Streak>({ failing: false, paths: new Set() });
   // The deps the streak's routes failed for.
@@ -260,19 +250,16 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     streakFailed(streak.current, err);
     setError(messageOf(err));
   };
-  /**
-   * Lands `read`, the read numbered `seq` for the deps `answered`, or its failure, while `alive()` holds and nothing
-   * newer has landed.
-   */
-  const settle = useCallback((read: Promise<T>, seq: number, alive: () => boolean, answered: readonly unknown[]) => {
+  /** Lands `read`, the read for the deps `answered`, or its failure, while `alive()` holds. */
+  const settle = useCallback((read: Promise<T>, alive: () => boolean, answered: readonly unknown[]) => {
     read.then(
       (value) => {
-        if (!alive() || !lands(seq)) return;
+        if (!alive()) return;
         landed(value, answered);
         setLoading(false);
       },
       (err: unknown) => {
-        if (!alive() || !lands(seq)) return;
+        if (!alive()) return;
         failed(err);
         setLoading(false);
       },
@@ -290,9 +277,7 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     run.current = current;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- a read for new deps starts here, and the page draws its loading state until it lands
     setLoading(true);
-    started.current += 1;
-    const seq = started.current;
-    settle(counted(inFlight, latest.current.load()), seq, () => current.alive, held);
+    settle(counted(inFlight, latest.current.load()), () => current.alive, held);
     return () => {
       current.alive = false;
     };
@@ -308,11 +293,9 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     const refresh = () => {
       const loadRun = run.current;
       const { deps: answered, load: read } = latest.current;
-      started.current += 1;
-      const seq = started.current;
       // A refresh starts only while no read is out, and a load for new deps ends the run a refresh still out belongs
       // to, so no refresh outruns a load.
-      settle(counted(inFlight, readQuiet(streak.current, read)), seq, () => armed.alive && loadRun.alive, answered);
+      settle(counted(inFlight, readQuiet(streak.current, read)), () => armed.alive && loadRun.alive, answered);
     };
     // The load effect runs first in a commit and counts its read, so the arm's read at once yields to a read for new
     // deps the same render started, and that render reads once.

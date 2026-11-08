@@ -1910,6 +1910,13 @@ test('an error code named like an object member keeps its count under its code, 
   assert.equal(Object.getPrototypeOf(mocked.errors), null, 'the mock sums into a map with no inherited members too');
 });
 
+test("an account window whose id is a prototype member's name decodes under its own label and no period", () => {
+  const body = fixture('account');
+  const [w] = d.decodeAccount({ ...body, windows: [{ ...body.windows[0], id: 'constructor' }] }).windows;
+  assert.equal(w.label, 'constructor');
+  assert.equal(w.periodHours, 0);
+});
+
 test('a session fold reads a probe the router held while its ledger caught up under its held count alone', () => {
   const served = d.decodeRequest(fixture('requests').requests.find((r) => r.id === 'r-captured'));
   const held = { ...served, accountId: null, attempts: [], costUsd: 0, errorCode: 'ledger_behind', kind: 'probe', outcome: 'rejected', status: 503 };

@@ -11,11 +11,11 @@ import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
-import { emptyCounts } from '@/lib/counts';
+import { emptyCounts, lookup } from '@/lib/counts';
 import { earlierHolderLabel, fmtDate, formatIn } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, inWindowOrder, windowKeyId } from '@/lib/windows';
+import { WINDOW_HOURS, hoursOfKey, inWindowOrder, windowKeyId, windowLabelOf } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 export const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -55,7 +55,7 @@ function decodeWindow(w: Rec): RateLimitWindow | null {
   const id = windowKeyId(str(w.id));
   if (id === null) return null;
   return {
-    burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: WINDOW_LABEL[id] ?? id, lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
+    burn: numOrNull(w.burn), demand: numOrNull(w.demand), horizon: isoOrNull(w.horizon), id, label: windowLabelOf(id), lead: numOrNull(w.lead), observedAt: isoOr(w.observed_at, epoch), periodHours: lookup(WINDOW_HOURS, id) ?? hoursOfKey(id),
     projection: numOrNull(w.projection), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization),
   };
 }

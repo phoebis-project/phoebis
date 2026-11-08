@@ -68,10 +68,10 @@ test('a pool input refuses a keepalive idle below 0, a fraction of a second and 
 
 test('a pool input refuses members the member write would refuse', () => {
   assert.notEqual(d.poolRefusals({ ...input, members: [] }, accounts).length, 0, 'a pool needs a member');
-  assert.notEqual(d.poolRefusals({ ...input, members: [...input.members, { accountId: 'ghost', priority: 0 }] }, accounts).length, 0, 'an account the console does not know');
-  assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, priority: -1 }] }, accounts).length, 0, 'priorities are unsigned');
-  assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, priority: 1.5 }] }, accounts).length, 0, 'priorities are whole');
-  assert.deepEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, priority: 7 }] }, accounts), []);
+  assert.notEqual(d.poolRefusals({ ...input, members: [...input.members, { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }] }, accounts).length, 0, 'an account the console does not know');
+  assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: -1 }] }, accounts).length, 0, 'priorities are unsigned');
+  assert.notEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1.5 }] }, accounts).length, 0, 'priorities are whole');
+  assert.deepEqual(d.poolRefusals({ ...input, members: [{ accountId: input.members[0].accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 7 }] }, accounts), []);
 });
 
 test('a members list that did not load holds the save once and names no member', () => {
@@ -151,8 +151,6 @@ test('a pool input takes each listed spelling of the pin and placement fields, a
 });
 
 test('a member budget is a dollar amount above 0 or none, a daily and a monthly side by side', () => {
-  for (const v of ['', '  ', '0.01', '12.5', '50', '1e3']) assert.equal(d.budgetRefusal(v), null, `${JSON.stringify(v)} is taken`);
-  for (const v of ['0', '-1', 'x', 'Infinity', '12,50']) assert.equal(d.budgetRefusal(v), 'A budget is a dollar amount above 0. Leave it empty for no budget.', `${JSON.stringify(v)} is refused`);
   const [first] = input.members;
   const withBudget = (budget) => d.poolRefusals({ ...input, members: [{ ...first, ...budget }] }, accounts);
   assert.deepEqual(withBudget({ budgetDailyUsd: 12.5, budgetMonthlyUsd: null }), []);
@@ -163,9 +161,10 @@ test('a member budget is a dollar amount above 0 or none, a daily and a monthly 
   assert.notEqual(withBudget({ budgetDailyUsd: 5, budgetMonthlyUsd: Number.NaN }).length, 0, 'a field that read no number');
 });
 
-test('the prefix threshold is a whole number of tokens at or above 0', () => {
-  for (const v of ['0', '20000', ' 512 ']) assert.equal(d.prefixThresholdRefusal(v), null, `${JSON.stringify(v)} is taken`);
-  for (const v of ['', '-1', '1.5', 'x', '9007199254740993']) assert.equal(d.prefixThresholdRefusal(v), 'The minimum shared prefix is a whole number of tokens, 0 or more.', `${JSON.stringify(v)} is refused`);
+test('a number field reads empty as none and a field the browser could not parse as NaN', () => {
+  assert.equal(d.typedNumber('', false), null);
+  assert.equal(d.typedNumber('', true), Number.NaN, 'a field the browser could not parse is not read as empty');
+  assert.equal(d.typedNumber(' 512 ', false), 512);
 });
 
 const key = d.decodeKey(fixture('keys').keys[0]);
@@ -313,8 +312,8 @@ test('a pool refusal names the group its control sits in', () => {
   const cases = [
     [{ name: '' }, refused('Name', 'identity', 'the pool needs a name.')],
     [{ members: [] }, refused('members', 'members', 'the pool needs a member.')],
-    [{ members: [...input.members, { accountId: 'ghost', priority: 0 }] }, [{ field: 'member:ghost', group: 'members', member: { accountId: 'ghost', column: 'member' }, text: 'ghost is not an account the console lists.' }]],
-    [{ members: [{ accountId: first.accountId, priority: 1.5 }] }, [{ field: 'priority:business', group: 'members', member: { accountId: 'business', column: 'priority' }, text: 'Priority is a whole number of 0 or more.' }]],
+    [{ members: [...input.members, { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }] }, [{ field: 'member:ghost', group: 'members', member: { accountId: 'ghost', column: 'member' }, text: 'ghost is not an account the console lists.' }]],
+    [{ members: [{ accountId: first.accountId, budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 1.5 }] }, [{ field: 'priority:business', group: 'members', member: { accountId: 'business', column: 'priority' }, text: 'Priority is a whole number of 0 or more.' }]],
     [{ members: [{ ...first, budgetDailyUsd: 0 }] }, [{ field: 'budget_daily:business', group: 'members', member: { accountId: 'business', column: 'budget_daily' }, text: 'A budget is a dollar amount above 0. Leave it empty for no budget.' }]],
     [{ members: [{ ...first, budgetMonthlyUsd: -1 }] }, [{ field: 'budget_monthly:business', group: 'members', member: { accountId: 'business', column: 'budget_monthly' }, text: 'A budget is a dollar amount above 0. Leave it empty for no budget.' }]],
     [{ modelRules: rules('a***') }, refused('Model rules', 'models', 'model_rules[0]: pattern holds three stars in a row')],

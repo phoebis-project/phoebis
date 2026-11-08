@@ -31,7 +31,7 @@ import { accountHref, editHref, poolKeysHref } from '@/lib/address';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, daySumOf, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, type PoolGroup } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -971,8 +971,11 @@ interface PoolForm {
   affinity: number;
   affinityMode: AffinityMode;
   autoModeServer: boolean;
-  /** Each member's daily and monthly budget fields as typed, empty for none, and kept for an unticked member too. */
-  budgets: Record<string, { daily: string; monthly: string }>;
+  /**
+   * Each member's daily and monthly budget fields as typed, empty for none, and kept for an unticked member too. A
+   * field the browser could not parse reads empty as well, so each carries its flag beside it.
+   */
+  budgets: Record<string, { daily: string; dailyBad: boolean; monthly: string; monthlyBad: boolean }>;
   cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
   capture: boolean;
@@ -997,7 +1000,8 @@ interface PoolForm {
   name: string;
   overage: OveragePolicy;
   preferSubscription: boolean;
-  /** The threshold field as typed. */
+  prefixBad: boolean;
+  /** The threshold field as typed, with `prefixBad` telling a field the browser could not parse from an emptied one. */
   prefixTokens: string;
   sessionPlacement: SessionPlacement;
   sheddingCustom: boolean;
@@ -1032,6 +1036,7 @@ const blankForm = (): PoolForm => ({
   name: '',
   overage: 'prefer_plan',
   preferSubscription: true,
+  prefixBad: false,
   prefixTokens: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
   sheddingCustom: false,
@@ -1044,7 +1049,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
   autoModeServer: pool.autoModeServer,
-  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: m.budgetDailyUsd === null ? '' : String(m.budgetDailyUsd), monthly: m.budgetMonthlyUsd === null ? '' : String(m.budgetMonthlyUsd) }])),
+  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: m.budgetDailyUsd === null ? '' : String(m.budgetDailyUsd), dailyBad: false, monthly: m.budgetMonthlyUsd === null ? '' : String(m.budgetMonthlyUsd), monthlyBad: false }])),
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: {
     ...pool.cacheTtl,
@@ -1086,6 +1091,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   overage: pool.overagePolicy,
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
+  prefixBad: false,
   prefixTokens: String(pool.minSharedPrefixTokens),
   sessionPlacement: pool.sessionPlacement,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
@@ -1255,7 +1261,7 @@ export function PoolDialog({
   const shareOf = savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
-  const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
+  const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', dailyBad: false, monthly: '', monthlyBad: false };
   const input: CreatePoolInput = {
     ...form.engine,
     affinityMode: form.affinityMode,
@@ -1276,13 +1282,11 @@ export function PoolDialog({
       : { ...(pool?.keepalive ?? KEEPALIVE_DEFAULTS), enabled: false },
     members: Object.entries(form.members).map(([accountId, priority]) => {
       const budget = budgetOf(accountId);
-      // A field that reads no number goes on as NaN, which the refusals below hold the save for.
-      const usd = (typed: string) => (typed.trim() === '' ? null : Number(typed));
-      return { accountId, budgetDailyUsd: usd(budget.daily), budgetMonthlyUsd: usd(budget.monthly), priority };
+      return { accountId, budgetDailyUsd: typedNumber(budget.daily, budget.dailyBad), budgetMonthlyUsd: typedNumber(budget.monthly, budget.monthlyBad), priority };
     }),
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
-      ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
+      ? (typedNumber(form.prefixTokens, form.prefixBad) ?? Number.NaN)
       : (pool?.minSharedPrefixTokens ?? POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: form.modelRules,
     name: form.name.trim(),
@@ -1309,8 +1313,8 @@ export function PoolDialog({
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
   const rulesRefusal = refusalOf('Model rules');
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
-  const setBudget = (accountId: string, patch: Partial<{ daily: string; monthly: string }>) =>
-    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', monthly: '' }), ...patch } } }));
+  const setBudget = (accountId: string, patch: Partial<PoolForm['budgets'][string]>) =>
+    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', dailyBad: false, monthly: '', monthlyBad: false }), ...patch } } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const keysChanged = () => {
@@ -1523,7 +1527,7 @@ export function PoolDialog({
                             value={budgetOf(a.id).daily}
                             disabled={!on}
                             placeholder="none"
-                            onChange={(e) => setBudget(a.id, { daily: e.target.value })}
+                            onChange={(e) => setBudget(a.id, { daily: e.target.value, dailyBad: e.target.validity.badInput })}
                             aria-label={`Daily budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_daily', a.id))}
                           />
@@ -1536,7 +1540,7 @@ export function PoolDialog({
                             value={budgetOf(a.id).monthly}
                             disabled={!on}
                             placeholder="none"
-                            onChange={(e) => setBudget(a.id, { monthly: e.target.value })}
+                            onChange={(e) => setBudget(a.id, { monthly: e.target.value, monthlyBad: e.target.validity.badInput })}
                             aria-label={`Monthly budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_monthly', a.id))}
                           />
@@ -1761,7 +1765,10 @@ export function PoolDialog({
                 min={0}
                 step={1_000}
                 value={form.prefixTokens}
-                onChange={(e) => set('prefixTokens', e.target.value)}
+                onChange={(e) => {
+                  set('prefixBad', e.target.validity.badInput);
+                  set('prefixTokens', e.target.value);
+                }}
                 disabled={!prefixEnabled}
                 aria-label="Minimum shared prefix, tokens"
                 aria-invalid={invalid('Minimum shared prefix, tokens')}

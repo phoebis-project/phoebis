@@ -1,8 +1,9 @@
 import { planName } from '@/api/decode';
 import type { Account, BurnUnit, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
+import { lookup } from '@/lib/counts';
 import { endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { kindGroup } from '@/lib/selection';
-import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey, windowKeyId } from '@/lib/windows';
+import { WINDOW_HOURS, hoursOfKey, windowKeyId, windowLabelOf } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
 import { round } from './round';
@@ -27,10 +28,10 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
     demand: burn,
     horizon: burn === null ? null : ahead(horizonInMs),
     id,
-    label: WINDOW_LABEL[id] ?? id,
+    label: windowLabelOf(id),
     lead: null,
     observedAt: ago(observedAgoMs),
-    periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
+    periodHours: lookup(WINDOW_HOURS, id) ?? hoursOfKey(id),
     projection: burn === null ? null : round(utilization + (burn * horizonInMs) / HOUR, 3),
     resetsAt: ahead(resetsInMs),
     utilization,
@@ -476,7 +477,7 @@ const PLAN_OF_TIER = new Map<string, PlanWord>([
 
 /** The resolved plan as the account view answers it: the usage-based class first, the organization type second, the
  *  tier third, as the router resolves it. Null without a profile. */
-export function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | null {
+function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | null {
   const sub = a.subscription;
   if (sub === null) return null;
   if (a.usageBased) return 'usage_based';

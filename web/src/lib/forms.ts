@@ -55,16 +55,18 @@ export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'shedCap' | 'windowCe
 const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 const ratio = (v: number, min: number) => v >= min && v <= 1;
 
-/** Why the member write would refuse a budget field as it stands, or null; empty is no budget. */
-export function budgetRefusal(value: string): string | null {
-  if (value.trim() === '') return null;
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 ? null : 'A budget is a dollar amount above 0. Leave it empty for no budget.';
+/** A number field's value: null where it reads empty, NaN where the browser could not parse what was typed. */
+export const typedNumber = (typed: string, badInput: boolean): number | null => (badInput ? Number.NaN : typed.trim() === '' ? null : Number(typed));
+
+/** Why the member write would refuse a budget as it stands, or null. A null budget is none. */
+function budgetRefusal(value: number | null): string | null {
+  if (value === null) return null;
+  return Number.isFinite(value) && value > 0 ? null : 'A budget is a dollar amount above 0. Leave it empty for no budget.';
 }
 
-/** Why the pool routes would refuse the prefix threshold field as it stands, or null. */
-export function prefixThresholdRefusal(value: string): string | null {
-  return value.trim() !== '' && whole(Number(value), 0, Number.MAX_SAFE_INTEGER) ? null : 'The minimum shared prefix is a whole number of tokens, 0 or more.';
+/** Why the pool routes would refuse the prefix threshold as it stands, or null. */
+function prefixThresholdRefusal(value: number): string | null {
+  return whole(value, 0, Number.MAX_SAFE_INTEGER) ? null : 'The minimum shared prefix is a whole number of tokens, 0 or more.';
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
@@ -176,9 +178,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
     const refuseMember = (column: MemberColumn, text: string | null) => refuse('members', memberField(column, id), text, { accountId: id, column });
     if (accountIds !== null) refuseMember('member', accountIds.has(id) ? null : `${id} is not an account the console lists.`);
     refuseMember('priority', whole(m.priority, 0, Number.MAX_SAFE_INTEGER) ? null : 'Priority is a whole number of 0 or more.');
-    // A member written without a budget field has no budget over that period, as the member write reads it.
-    refuseMember('budget_daily', m.budgetDailyUsd == null ? null : budgetRefusal(String(m.budgetDailyUsd)));
-    refuseMember('budget_monthly', m.budgetMonthlyUsd == null ? null : budgetRefusal(String(m.budgetMonthlyUsd)));
+    refuseMember('budget_daily', budgetRefusal(m.budgetDailyUsd));
+    refuseMember('budget_monthly', budgetRefusal(m.budgetMonthlyUsd));
   }
 
   refuse('models', 'Model rules', modelRulesRefusal(input.modelRules));
@@ -186,7 +187,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   const choice = (group: PoolGroup, label: string, values: readonly string[], value: string) => refuse(group, label, values.some((v) => v === value) ? null : listed(label));
   choice('placement', 'Subagent placement', SUBAGENT_PLACEMENT_VALUES, input.subagentPlacement);
   choice('placement', 'Session placement', SESSION_PLACEMENT_VALUES, input.sessionPlacement);
-  refuse('placement', 'Minimum shared prefix, tokens', prefixThresholdRefusal(String(input.minSharedPrefixTokens)));
+  refuse('placement', 'Minimum shared prefix, tokens', prefixThresholdRefusal(input.minSharedPrefixTokens));
 
   refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
   choice('pinning', 'Pin sessions', AFFINITY_MODE_VALUES, input.affinityMode);
