@@ -16,7 +16,7 @@ use phoebis_ledger::{funding_of, Speed};
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_relay::{authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{
-    ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot,
+    ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot, HOUR_MS,
 };
 use phoebis_store::{AccountRow, AccountState, CompanionKey, PoolRow};
 use serde::Serialize;
@@ -322,19 +322,17 @@ fn runway_minutes(
     if burn_per_hour <= 0.0 {
         return None;
     }
-    // Floored with a tolerance: the difference of two shares can land a hair under a whole minute (0.95 - 0.4 is
-    // 0.5499999999999999), which a bare floor reads a minute short. Rounding up instead could move a runway that ends
-    // just before the wall onto it, which reads as unbounded.
-    let minutes = ((ceiling - predicted) / burn_per_hour * 60.0 + 1e-9).floor() as u64;
-    let reached = now.saturating_add(
-        i64::try_from(minutes)
-            .unwrap_or(i64::MAX)
-            .saturating_mul(MINUTE_MS),
-    );
-    match wall {
-        Some(wall) if wall > now && reached >= wall => None,
-        _ => Some(minutes),
+    let hours = (ceiling - predicted) / burn_per_hour;
+    // Compared with the wall before the floor: a ceiling under a minute away floors to zero minutes, which lands
+    // before any wall ahead.
+    if wall
+        .is_some_and(|wall| wall > now && hours * HOUR_MS as f64 >= wall.saturating_sub(now) as f64)
+    {
+        return None;
     }
+    // Floored with a tolerance: the difference of two shares can land a hair under a whole minute (0.95 - 0.4 is
+    // 0.5499999999999999), which a bare floor reads a minute short.
+    Some((hours * 60.0 + 1e-9).floor() as u64)
 }
 
 /// `ms` in RFC 3339 at UTC, held inside jiff's range so a field the contract types as a time is always one.
@@ -350,8 +348,6 @@ fn stamp(ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use phoebis_routing::HOUR_MS;
-
     use super::*;
 
     const NOW: i64 = 1_000_000;
@@ -372,6 +368,19 @@ mod tests {
         assert_eq!(
             runway_minutes(0.45, 0.504, 0.95, NOW, Some(NOW + 60 * MINUTE_MS)),
             Some(59)
+        );
+    }
+
+    #[test]
+    fn a_runway_under_a_minute_is_unbounded_only_when_the_wall_comes_first() {
+        // 0.01 / 0.8 hours puts the ceiling 45 seconds away.
+        assert_eq!(
+            runway_minutes(0.94, 0.8, 0.95, NOW, Some(NOW + 30_000)),
+            None
+        );
+        assert_eq!(
+            runway_minutes(0.94, 0.8, 0.95, NOW, Some(NOW + 60_000)),
+            Some(0)
         );
     }
 }
