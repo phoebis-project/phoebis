@@ -1763,17 +1763,20 @@ function derivedSpecs(r: RequestLog): Spec[] {
 const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWith(prefix))?.sessionId ?? prefix;
 
 /**
- * The 11:00 round's four pins on secondary in its order: the cold one, then the warm ones by burn over their prompt.
- * Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour, which sum
- * to the account's burn. The first two cover the target under the cap and plan their moves to primary, where they fit,
- * and the walk stops before the current pin. The round is an earlier build's record, which priced Sonnet 4.5 through
- * its fallback weight, so its burns and marks stand as it stored them.
+ * The 11:00 round's four walked pins on secondary in its order: the cold one, then the warm ones by burn over their
+ * prompt. Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour,
+ * which sum to the account's burn. The first two cover the target under the cap and plan their moves to primary, where
+ * they fit, and the walk stops before the current pin. A fifth pin, the current session's auto-mode classifier, made
+ * only client classifier calls on secondary, which the router frees, so it has no priced burn on the window and leaves
+ * the round before the order. The round is an earlier build's record, which priced Sonnet 4.5 through its fallback
+ * weight, so its burns and marks stand as it stored them.
  */
 const ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
   { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('c64358b5'), skip: null },
   { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
   { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('76ddb35b'), skip: null },
+  { agentId: 'b4e9', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 3_400, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('407dd39b'), skip: 'no_burn' },
 ];
 
 /**
