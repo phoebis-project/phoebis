@@ -10,8 +10,8 @@ use phoebis_routing::{RegistrySnapshot, Report};
 
 use crate::config::LEASE_MS;
 use crate::engine::{
-    agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, Inner, Park, ParkKind,
-    Reason, Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
+    agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, HeldPark, Inner, Park,
+    ParkKind, Reason, Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 
 pub const PROTOCOL: u64 = 1;
@@ -374,7 +374,7 @@ fn agents_of(session: &Session) -> Vec<AckAgent> {
         .values()
         .map(|a| AckAgent {
             agent_id: a.id.clone(),
-            park: a.park,
+            park: a.park.map(|held| held.park),
             request_generation: a.generation,
             state: a.state,
         })
@@ -603,13 +603,12 @@ impl Inner {
                 let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
                 // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's start,
                 // which the parked ceiling counts from.
-                if agent.state != AgentState::Parked
-                    || agent.park.map(|p| p.kind) != Some(park.kind)
-                {
-                    agent.park_began = Some(now);
-                }
+                let began = agent
+                    .park
+                    .filter(|held| agent.state == AgentState::Parked && held.park.kind == park.kind)
+                    .map_or(now, |held| held.began);
                 agent.set_state(AgentState::Parked);
-                agent.park = Some(*park);
+                agent.park = Some(HeldPark { began, park: *park });
             }
             Reported::State {
                 request_generation,

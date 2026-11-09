@@ -18,9 +18,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::{KeepaliveTiming, LEASE_MS};
 use crate::engine::{
-    agent_mut, agent_ref, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner,
-    Kept, Observation, Park, ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason,
-    SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    agent_mut, agent_ref, Agent, AgentState, Engine, Guard, HeldPark, IdleEpisode,
+    IdleReturnBucket, Inner, Kept, Observation, Park, ParkKind, PrefixAnchor, PriorCoverage,
+    ProbeCharge, Reason, SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted,
+    MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::AttemptFunding;
@@ -445,10 +446,10 @@ impl PersistedAgent {
             key_generation: agent.key_generation,
             incarnation: agent.incarnation,
             state: agent.state,
-            deadline: agent.park.and_then(|p| p.deadline),
-            park_kind: agent.park.map(|p| p.kind),
-            wake_at: agent.park.and_then(|p| p.wake_at),
-            park_began: agent.park_began,
+            deadline: agent.park.and_then(|held| held.park.deadline),
+            park_kind: agent.park.map(|held| held.park.kind),
+            wake_at: agent.park.and_then(|held| held.park.wake_at),
+            park_began: agent.park.map(|held| held.began),
             park_ended_at: agent.park_ended_at,
             idle_episode: agent.idle_episode.as_ref().map(|episode| PersistedEpisode {
                 started: episode.started,
@@ -570,12 +571,17 @@ impl PersistedAgent {
         );
         agent.key_generation = self.key_generation;
         agent.state = self.state;
-        agent.park = self.park_kind.map(|kind| Park {
-            deadline: self.deadline,
-            kind,
-            wake_at: self.wake_at,
-        });
-        agent.park_began = self.park_began;
+        agent.park = self
+            .park_kind
+            .zip(self.park_began)
+            .map(|(kind, began)| HeldPark {
+                began,
+                park: Park {
+                    deadline: self.deadline,
+                    kind,
+                    wake_at: self.wake_at,
+                },
+            });
         agent.park_ended_at = self.park_ended_at;
         agent.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
             started: episode.started,

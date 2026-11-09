@@ -851,7 +851,7 @@ impl Inner {
 
 /// The ceilings over one agent at `now`, active while any of them says probe. The idle window is main's in every
 /// state, from the later of `last_activity` (a real request, a prompt or a presence report) and `park_ended_at`. A
-/// park on a background command or a subagent is probed for `parked_ms` from `park_began`, and one on a scheduled
+/// park on a background command or a subagent is probed for `parked_ms` from its start, and one on a scheduled
 /// wakeup while the wake is at most `horizon_ms` away, held under `horizon` beyond it. A busy subagent has no
 /// ceiling of its own. A silent session reads the window alone, from the session's last real request, for every
 /// agent: nothing reports its parks any more.
@@ -879,14 +879,11 @@ pub(crate) fn ceiling(
     }
     match agent.state {
         AgentState::Parked => {
-            let Some(park) = agent.park else {
+            let Some(held) = agent.park else {
                 return Verdict::End(Reason::ParkedLimit);
             };
-            if park.kind.background()
-                && agent
-                    .park_began
-                    .is_some_and(|began| now - began < ceilings.parked_ms)
-            {
+            let park = held.park;
+            if park.kind.background() && now - held.began < ceilings.parked_ms {
                 return Verdict::Probe;
             }
             match park.wake_at.filter(|_| park.kind.scheduled()) {

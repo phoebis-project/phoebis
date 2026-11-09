@@ -137,6 +137,14 @@ impl Park {
     }
 }
 
+/// A park as the engine holds it: the reported value with the start the parked ceiling counts from, which no report
+/// or answer carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HeldPark {
+    pub began: i64,
+    pub park: Park,
+}
+
 /// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
 /// cache. The label the wasted count carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -608,11 +616,9 @@ pub(crate) struct Agent {
     pub incarnation: u64,
     /// Written through `set_state`, which ends the park on any move out of `Parked`.
     pub state: AgentState,
-    /// The park the last `parked` report described, cleared with `park_began` on every move out of `Parked`, so a
-    /// reader never finds a park on an agent that is not parked.
-    pub park: Option<Park>,
-    /// When the current park was reported, kept across a repeated `parked` of the same kind.
-    pub park_began: Option<i64>,
+    /// The park the last `parked` report described, cleared on every move out of `Parked`, so a reader never finds a
+    /// park on an agent that is not parked. Its start is kept across a repeated `parked` of the same kind.
+    pub park: Option<HeldPark>,
     /// When a deadline or a wake passed without a request: the idle window restarts here. No report clears it,
     /// since the window starts at the later of it and `last_activity` and an older end never outranks a newer
     /// request.
@@ -730,7 +736,6 @@ impl Agent {
             incarnation,
             state: AgentState::Busy,
             park: None,
-            park_began: None,
             park_ended_at: None,
             idle_episode: None,
             idle_window_floor: None,
@@ -926,7 +931,6 @@ impl Agent {
         self.state = state;
         if state != AgentState::Parked {
             self.park = None;
-            self.park_began = None;
         }
     }
 }
@@ -2206,14 +2210,17 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
-        let Some(park) = agent.park else {
+        let Some(held) = agent.park else {
             return;
         };
-        let left = park.passed(now);
-        if left == Some(park) {
+        let left = held.park.passed(now);
+        if left == Some(held.park) {
             return;
         }
-        agent.park = left;
+        agent.park = left.map(|park| HeldPark {
+            began: held.began,
+            park,
+        });
         if left.is_some() {
             self.touch_agent(key, agent_id);
             return;
@@ -2223,7 +2230,6 @@ impl Inner {
         agent.idle_window_floor = None;
         agent.park_ended_at = Some(now);
         if agent.id != MAIN_AGENT {
-            agent.park_began = None;
             self.touch_agent(key, agent_id);
             return;
         }
@@ -2767,6 +2773,7 @@ impl Engine {
             &(key_id.to_string(), session_id.to_string()),
             agent_id,
         )?;
+        let park = agent.park.map(|held| held.park);
         Some(AgentStatus {
             account_id: agent.account.clone(),
             agent_id: agent.id.clone(),
@@ -2775,14 +2782,14 @@ impl Engine {
             cold: agent.cold,
             counters_day: agent.counters_day,
             credited_today: agent.credited_today,
-            deadline: agent.park.and_then(|p| p.deadline),
+            deadline: park.and_then(|p| p.deadline),
             failures: agent.failures,
             idle_ticks: agent.idle_ticks,
             in_flight: agent.in_flight,
             last_activity: agent.last_activity,
             migrations: agent.migrations,
             next_probe_at: agent.next_probe_at(),
-            park_kind: agent.park.map(|p| p.kind),
+            park_kind: park.map(|p| p.kind),
             paused: agent.paused,
             probe_usage: agent.usage,
             probes: agent.probes,
@@ -2791,7 +2798,7 @@ impl Engine {
             request_generation: agent.generation,
             state: agent.state,
             unanswered: agent.unanswered.len() + agent.kept.len(),
-            wake_at: agent.park.and_then(|p| p.wake_at),
+            wake_at: park.and_then(|p| p.wake_at),
         })
     }
 
