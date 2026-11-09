@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, plural, sentences, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, plural, sentences, setTimeFormat, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -223,13 +223,6 @@ test('a window share reads as a percent to three significant digits with no trai
   assert.equal(fmtShare(0.125), '12.5%');
   assert.equal(fmtShare(0.0061), '0.61%', 'a trailing zero drops');
   assert.equal(fmtShare(0.0000571), '0.00571%', 'a small share keeps its three digits');
-});
-
-test("a share names its window through the console's labels and an unknown key as itself", () => {
-  assert.equal(shareLabel('five_hour', 0.0042), '0.42% of 5-hour');
-  assert.equal(shareLabel('seven_day', 0.00061), '0.061% of 7-day');
-  assert.equal(shareLabel('seven_day_fable', 0.0012), '0.12% of 7-day Fable', 'the model week reads the label the pages draw');
-  assert.equal(shareLabel('seven_day_opus', 0.5), '50% of seven_day_opus', 'a window the pages do not know keeps its key');
 });
 
 test('a count with its noun groups its digits', () => {

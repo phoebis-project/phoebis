@@ -1,7 +1,6 @@
 import type { ApiKey, Placement } from '@/api/types';
 import { DAY, HOUR, MINUTE } from '@/lib/time';
 import { WEEK_LABEL, type WeekPosition } from '@/lib/unit';
-import { windowLabelOf } from '@/lib/windows';
 
 export type TimeFormat = '12h' | '24h';
 
@@ -72,8 +71,6 @@ export const pct = (v: number | null | undefined, signed = false) => {
 export const figure = (n: number) => String(Number(n.toPrecision(3)));
 /** A share of a window as a percent to three significant digits, trailing zeros dropped: 8.41%, 0.219%, 12.5%. */
 export const fmtShare = (ratio: number) => `${figure(ratio * 100)}%`;
-/** A share with its window named ("0.42% of 5-hour", "0.12% of 7-day Fable"), a window the pages do not know under its key. */
-export const shareLabel = (windowKey: string, share: number): string => `${fmtShare(share)} of ${windowLabelOf(windowKey)}`;
 /** A share as a whole percent with the space before the sign, as the pool card's badge writes it. */
 export const percentText = (share: number) => `${Math.round(share * 100)} %`;
 /** The word a count takes, for a site that prints the count in a form of its own or leaves it out. */
