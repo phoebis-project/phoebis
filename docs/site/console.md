@@ -831,25 +831,25 @@ or `waited for the rewrite in flight 2 s on {account}`, or each with its own acc
 naming what each kind of request reads under the position. Under Native a request a subscription window paid reads one
 figure in the chosen week, such as `0.0244% Ultra week`, with its hint and the dollar equivalent on hover. The hint
 names the account's plan, its display name where the account carries one, and its share of each window the account has,
-in the order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share that completed inside the band
-of the cost revision in force at its completion: "Ultra: 0.11% of the 7-day window, 0.22% of the Fable week". It names
-no window the account lacks, so an approved Ultra account reads no 5-hour share, and no Fable week on a Pro account.
-Under the Max and Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer.
-Where that read fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the
-same dash with the message leading its hover, and the split Refresh button's body reads the settings again. A request
-whose model has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model
-prices no share for this request". Under All in dollars and Dollar equivalent a subscription request reads its dollar
-equivalent over `equivalent` with the hint and the figure in the chosen week on hover, and under Billed dollars a dash
-with the hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads
-dollars under every position but Dollar equivalent, where it reads a dash with the hover "Billed in dollars, no
-subscription equivalent". A client classifier call on a subscription account reads `0%` in the chosen week under Native,
-with the hover "Free on the plan: a client classifier call takes no window share" ahead of the hint, its dollar
-equivalent over `equivalent` under All in dollars and Dollar equivalent with the same hover ahead of its zero figure,
-and a dash under Billed dollars, while on an overage or API-key account it reads its dollars as any billed request does.
-The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
-moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
-reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which clears the filters, the
-search and the range. What each figure means is on [Statistics](statistics.md).
+in the order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share that completed inside the band,
+read at its completion on the cost revision in force when the request was received: "Ultra: 0.11% of the 7-day window,
+0.22% of the Fable week". It names no window the account lacks, so an approved Ultra account reads no 5-hour share, and
+no Fable week on a Pro account. Under the Max and Ultra weeks the figure waits on the settings, so the cell draws its
+placeholder until they answer. Where that read fails, the cell draws a dash titled with the read's message, the drawer's
+Estimated cost row draws the same dash with the message leading its hover, and the split Refresh button's body reads the
+settings again. A request whose model has no weight in the cost model reads its dollar equivalent over `equivalent` with
+the hover "The cost model prices no share for this request". Under All in dollars and Dollar equivalent a subscription
+request reads its dollar equivalent over `equivalent` with the hint and the figure in the chosen week on hover, and
+under Billed dollars a dash with the hover "Nothing billed: a subscription request". An API-key, fast mode, overage or
+usage-based request reads dollars under every position but Dollar equivalent, where it reads a dash with the hover
+"Billed in dollars, no subscription equivalent". A client classifier call on a subscription account reads `0%` in the
+chosen week under Native, with the hover "Free on the plan: a client classifier call takes no window share" ahead of the
+hint, its dollar equivalent over `equivalent` under All in dollars and Dollar equivalent with the same hover ahead of
+its zero figure, and a dash under Billed dollars, while on an overage or API-key account it reads its dollars as any
+billed request does. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds
+the requests up to the moment you opened it so paging does not shift, and the split Refresh button's body brings it up
+to now. An empty table reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which
+clears the filters, the search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range

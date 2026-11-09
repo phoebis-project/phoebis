@@ -358,73 +358,73 @@ way, and a request the drawer could not load draws its error with Try again ([Re
 whose answer the upstream refused draws the refusal's category as a warning badge beside its status, and the Outcome
 group of Add filter offers Stop reason and Refusal category ([Requests](console.md#requests)). A request whose stream
 was cut after its head reads what cut it in its drawer's Error row ([Requests](console.md#requests)). A request's "(in
-the band)" reads the band of the cost revision in force when it completed ([Requests](console.md#requests)). An auto
-reload on a custom range reads once a request received inside the range and written after an earlier read, as a preset
-range does ([Requests](console.md#requests)). Each captured body block in the request drawer has a find field that
-counts the lines holding a term, opens the wide window on a hit, marks every occurrence on the drawn rows and walks the
-hits with Enter and Shift+Enter ([Requests](console.md#requests)). A request row of `GET /admin/requests` and a
-request's captured bodies carry no request truncation flag, since the router stores a captured request whole, and the
-bodies' byte counts say what a cut dropped ([API reference](api-reference.md), [Requests](console.md#requests)). A pool
-member's `eligible` word on `GET /admin/pools` reads `spent` for a usage-based seat at its spend cap and
-`budget_unknown` for a budgeted member while the ledger is degraded, each a reason the router skips the member
-([API reference](api-reference.md)). The Pools view's Standing reads `spend cap until {time}` for a seat at its spend
-cap, `budget unknown` for a budgeted member while the ledger is degraded, `subscription ended` for a member whose
-subscription ended and `unknown` for a member the router answers no reading of, and an exhausted pool's status sentence
-names when a spent member's spend cap resets ([Pools](console.md#pools)). On the Routing log an exhaustion that waits on
-a spend cap reads `spend cap` in its By chip, and a candidate at its spend cap reads `spend cap reached until {time}` in
-its Verdict chip ([Routing log](console.md#routing-log)). `GET /admin/analytics/burn` and `GET /admin/sessions` read
-each account's kind from the routing snapshot and answer no `storage failure` ([API reference](api-reference.md)). On
-the Requests view and the Routing log a late row that lands below the rows shown draws on the next auto reload read on
-any range whose rows fit on the page ([Requests](console.md#requests), [Routing log](console.md#routing-log)). On the
-Requests view and the Routing log the list's late answer replaces the page an auto reload poll stood in for it, and Next
-past an overrun under a preset reads to the router's clock ([Requests](console.md#requests),
-[Routing log](console.md#routing-log)). The pressed range pill names its range and its end on hover, and when the tab
-comes back to a read at once the rows it brought keep their tint through the read after it
-([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log Time cells print
-the date before the time on every row, and the Routing log's columns fit their content ([Requests](console.md#requests),
-[Routing log](console.md#routing-log)). The Requests and Routing log views filter on an agent id through the Agent
-filter of the Subject group, carried in the address as `agent_id` ([Requests](console.md#requests),
-[Routing log](console.md#routing-log)). The Requests rows mark a request that presented a fallback token, the Fallback
-filter lists them, and the Classifier filter offers `client_off` ([Requests](console.md#requests)). The Requests,
-Sessions and Routing log tables lay their columns out by one rule, with a minimum per column kind, one fill column and a
-set wider than the card scrolling inside it, so the Requests table fits 1280 px with its default columns
-([Requests](console.md#requests), [Sessions](console.md#sessions), [Routing log](console.md#routing-log)). The Requests
-table orders by Time, Attempts, Duration or TTFB through the Sort control and offers a Duration column
-([Requests](console.md#requests)). The Requests view's empty state reads "Widen the range or clear a filter.", as the
-Routing log's does, and a request the router refused before it resolved a model reads a dash for its model
-([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every check, the inverse of checking
-it, and an empty list keeps its meaning ([Requests](console.md#requests), [Routing log](console.md#routing-log)). A
-deleted key's group reads `<id> (deleted, created <time>)`, its creation instant in the viewer's zone
-([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router reads, and the Accounts in
-range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)). The Accounts section's card
-"Unused allowance by account" ranks the subscription accounts by the figure of their weekly windows left unused over the
-last four weeks, in the chosen week, with the fleet's figures ([Analytics](console.md#analytics)). The Analytics session
-view narrows to one agent under the Agent filter of the Subject group, carried in the address as `agent_id` and written
-by the Sessions view's agent menu, its links to the request log carrying the agent, the filter disabled until a session
-is picked and leaving with the session ([Analytics](console.md#analytics)). The Analytics session view reads the
-session's rows through the route's session filter, and each auto reload re-reads the first page alone
-([Analytics](console.md#analytics)). The Analytics view's breakdown tables head a failed read with the table's name
-([Analytics](console.md#analytics)). The Analytics view's Burn tab draws three plan cards, Plan per hour, 5-hour per
-hour and Fable week per hour, the subscription traffic per hour in the chosen week and the same figure scaled to the
-chosen tier's 5-hour window and to its Fable week, a bucket the cost model could not price staying a gap under a "model
-unlisted" entry ([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across
-the row where that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's
-group tables order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)).
-The Analytics view's model grouping lists a request refused before it resolved a model under "no model"
-([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
-Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
-saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
-([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
-each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
-gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their
-figures in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
-request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
-reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
-category card narrows under the Client and User agent filters and its links carry the client pattern
-([Analytics](console.md#analytics)). The Refusals by category card splits its bars by model and counts the requests that
-presented a fallback token ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts
-the answers the upstream refused by category, each bar opening the Requests view on them
-([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
+the band)" reads the band at the request's completion on the cost revision in force at its receipt
+([Requests](console.md#requests)). An auto reload on a custom range reads once a request received inside the range and
+written after an earlier read, as a preset range does ([Requests](console.md#requests)). Each captured body block in the
+request drawer has a find field that counts the lines holding a term, opens the wide window on a hit, marks every
+occurrence on the drawn rows and walks the hits with Enter and Shift+Enter ([Requests](console.md#requests)). A request
+row of `GET /admin/requests` and a request's captured bodies carry no request truncation flag, since the router stores a
+captured request whole, and the bodies' byte counts say what a cut dropped ([API reference](api-reference.md),
+[Requests](console.md#requests)). A pool member's `eligible` word on `GET /admin/pools` reads `spent` for a usage-based
+seat at its spend cap and `budget_unknown` for a budgeted member while the ledger is degraded, each a reason the router
+skips the member ([API reference](api-reference.md)). The Pools view's Standing reads `spend cap until {time}` for a
+seat at its spend cap, `budget unknown` for a budgeted member while the ledger is degraded, `subscription ended` for a
+member whose subscription ended and `unknown` for a member the router answers no reading of, and an exhausted pool's
+status sentence names when a spent member's spend cap resets ([Pools](console.md#pools)). On the Routing log an
+exhaustion that waits on a spend cap reads `spend cap` in its By chip, and a candidate at its spend cap reads
+`spend cap reached until {time}` in its Verdict chip ([Routing log](console.md#routing-log)).
+`GET /admin/analytics/burn` and `GET /admin/sessions` read each account's kind from the routing snapshot and answer no
+`storage failure` ([API reference](api-reference.md)). On the Requests view and the Routing log a late row that lands
+below the rows shown draws on the next auto reload read on any range whose rows fit on the page
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). On the Requests view and the Routing log the
+list's late answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads
+to the router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill
+names its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep their tint
+through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
+Routing log Time cells print the date before the time on every row, and the Routing log's columns fit their content
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views filter on
+an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests rows mark a request that
+presented a fallback token, the Fallback filter lists them, and the Classifier filter offers `client_off`
+([Requests](console.md#requests)). The Requests, Sessions and Routing log tables lay their columns out by one rule, with
+a minimum per column kind, one fill column and a set wider than the card scrolling inside it, so the Requests table fits
+1280 px with its default columns ([Requests](console.md#requests), [Sessions](console.md#sessions),
+[Routing log](console.md#routing-log)). The Requests table orders by Time, Attempts, Duration or TTFB through the Sort
+control and offers a Duration column ([Requests](console.md#requests)). The Requests view's empty state reads "Widen the
+range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model reads
+a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every check, the
+inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests),
+[Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation
+instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router
+reads, and the Accounts in range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)).
+The Accounts section's card "Unused allowance by account" ranks the subscription accounts by the figure of their weekly
+windows left unused over the last four weeks, in the chosen week, with the fleet's figures
+([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent filter of the
+Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its links to the
+request log carrying the agent, the filter disabled until a session is picked and leaving with the session
+([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session
+filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
+breakdown tables head a failed read with the table's name ([Analytics](console.md#analytics)). The Analytics view's Burn
+tab draws three plan cards, Plan per hour, 5-hour per hour and Fable week per hour, the subscription traffic per hour in
+the chosen week and the same figure scaled to the chosen tier's 5-hour window and to its Fable week, a bucket the cost
+model could not price staying a gap under a "model unlisted" entry ([Analytics](console.md#analytics)). The Analytics
+view's Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab does
+([Analytics](console.md#analytics)). The Analytics view's group tables order through the bar's Sort control by Name or
+the open tab's columns ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused
+before it resolved a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member
+budgets, its reconciliation rows listed on the Meter view ([Analytics](console.md#analytics),
+[Meter](console.md#meter)). The Cache warming tab shows what the probes saved and the net saving after their cost, as
+tiles, a chart and a Saved column per pool ([Analytics](console.md#analytics)). The Client and User agent filters list
+the range's values and take a typed pattern, each value a chip ([Analytics](console.md#analytics)). The Cost by chart's
+note names the unpriced groups it draws as gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring
+and the Plan per hour legend read their figures in the chosen week ([Analytics](console.md#analytics)). The ledger
+records a null diagnostics member on a request that named a message as `none` and a comparison the upstream was still
+running as `pending`, which Misses by reason and its per-group table read as No divergence and Pending
+([Analytics](console.md#analytics)). The Refusals by category card narrows under the Client and User agent filters and
+its links carry the client pattern ([Analytics](console.md#analytics)). The Refusals by category card splits its bars by
+model and counts the requests that presented a fallback token ([Analytics](console.md#analytics)). The Traffic section's
+Refusals by category card counts the answers the upstream refused by category, each bar opening the Requests view on
+them ([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
 ([Analytics](console.md#analytics)). The unused allowance card and the Accounts detail's allowance block read their
 figures in the chosen week under every position and wait on the cost model, so a failed settings read draws their error
 ([Analytics](console.md#analytics), [Accounts](console.md#accounts)). Under the Analytics classifier grouping the

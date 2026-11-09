@@ -113,8 +113,9 @@ export function requestHintArgs(r: Pick<RequestLog, 'accountId' | 'at' | 'costSh
   const plan = hintPlan(accounts.find((a) => a.id === r.accountId), r.tier);
   if (plan === null) return null;
   const completion = Date.parse(r.at) + (r.durationMs ?? 0);
-  // The band in force when the request completed, which the loaded table's band can differ from after a revision.
-  const table = costs === null ? null : (revisionAt(costs.revisions, completion)?.content ?? costs);
+  // The ledger prices a row on the revision in force at its receipt and reads that revision's band at its completion,
+  // and the loaded table's band can differ from it after a revision.
+  const table = costs === null ? null : (revisionAt(costs.revisions, Date.parse(r.at))?.content ?? costs);
   return [plan, r.costShares, r.tier, table === null ? null : inBand(table, completion)];
 }
 

@@ -39,7 +39,7 @@ test('a request that starts before the band and completes inside it reads the ba
   assert.deepEqual(d.requestHintArgs(row, [{ id: 'nightly', subscription: null }], costs), ['Max', shares, 'default_claude_max_5x', true]);
 });
 
-test('a request reads the band of the cost revision in force when it completed, which the loaded table can differ from', () => {
+test('a request reads the band of the cost revision in force when it was received, which the loaded table can differ from', () => {
   // The band ran 13:00 to 19:00 UTC in September and 05:00 to 11:00 UTC from October 1, the loaded table October's.
   const september = { fromHour: 13, toHour: 19, weekdays: true, zone: 'UTC' };
   const october = { fromHour: 5, toHour: 11, weekdays: true, zone: 'UTC' };
@@ -52,6 +52,19 @@ test('a request reads the band of the cost revision in force when it completed, 
   const row = (at) => ({ accountId: 'nightly', at, costShares: shares, durationMs: null, tier: 'default_claude_max_5x' });
   assert.equal(d.requestHintArgs(row('2026-09-16T15:00:00Z'), accounts, { peak: october, revisions })?.[3], true, 'a Wednesday at 15:00 inside the September band');
   assert.equal(d.requestHintArgs(row('2026-10-16T15:00:00Z'), accounts, { peak: october, revisions })?.[3], false, 'a Friday at 15:00 outside the October band');
+});
+
+test("a request received before a cost revision takes effect and completed after it reads the earlier revision's band at its completion", () => {
+  // The band ran 12:00 to 18:00 UTC until 12:00 UTC on Thursday October 1 and 05:00 to 11:00 UTC from then, and the
+  // request ran from 11:59 to 12:01, so the revision that priced it at its receipt has 12:01 inside its band.
+  const earlier = { fromHour: 12, toHour: 18, weekdays: true, zone: 'UTC' };
+  const later = { fromHour: 5, toHour: 11, weekdays: true, zone: 'UTC' };
+  const revisions = [
+    { content: { peak: earlier }, effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00Z' },
+    { content: { peak: later }, effective: '2026-10-01', effectiveDate: '2026-10-01T12:00:00Z' },
+  ];
+  const row = { accountId: 'nightly', at: '2026-10-01T11:59:00Z', costShares: { five_hour: 0.0267, seven_day: 0.0022 }, durationMs: 120_000, tier: 'default_claude_max_5x' };
+  assert.equal(d.requestHintArgs(row, [{ id: 'nightly', subscription: null }], { peak: later, revisions })?.[3], true);
 });
 
 test('a row whose shares are null, or name no window the route priced, reads no hint', () => {
