@@ -17,6 +17,7 @@
     "e2e": "node e2e/views.mjs",
     "e2e:mock": "npm run build:mock && node e2e/mock-pass.mjs",
     "e2e:reference": "node e2e/reference.mjs",
+    "e2e:styles": "npm run build:mock && node e2e/styles.mjs",
     "lint": "eslint . --max-warnings 0",
     "preview": "vite preview",
     "smoke": "vite build -c smoke/vite.config.ts && TZ=UTC node smoke/run.mjs",

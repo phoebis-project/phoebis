@@ -467,6 +467,57 @@ and its empty state are checked against the router's seeded registry alone (`PHO
 mock's story has subscription accounts and no empty list on the dashboard. The subscription end editor needs the story's
 OAuth account, so against the router's seed that part stands down.
 
+## Compare the computed styles
+
+```sh
+npm run e2e:styles -- --baseline /tmp/phoebis-styles/baseline.json --write
+npm run e2e:styles -- --baseline /tmp/phoebis-styles/baseline.json
+```
+
+`e2e:styles` builds the mock bundle and runs `styles.mjs`, which reads the computed style of every element the console
+draws in a set of states and compares it with a baseline the same script wrote. It checks a change that has to draw the
+same pixels, such as a rule section moved from one stylesheet to another or a palette's token set that must match the
+other's: the baseline is written before the change and compared after it. A comparison that finds nothing prints
+`styles: no difference` and exits 0. Otherwise it prints each differing state with its count, then the first twenty
+differences (the state, the element's path, the property, the baseline's value and this run's), writes the whole list
+to `differences.txt` beside the baseline, names that file on its last line and exits 1.
+
+The script serves the bundle, signs in with the mock's admin secret and sets the page up as the mock pass does: the
+clock paused at `2026-09-16T14:30:00Z` and set back there before each state loads, the time zone UTC, animations and
+transitions cut. It walks the states in the light and the dark theme, each under the default and the GitHub palette,
+with `phoebis.palette` written beside `phoebis.theme`. The views of `VIEWS` are read at rest at 360, 375, 400, 720 and
+1280 px wide, and so is the routing log filtered on five kinds, at 360 and 1280, since no view at rest draws a filter
+chip and this one's values cut at the chip's width. The open surfaces are read at 1280: Add filter on the request log,
+the Sort control on Accounts, a Sessions row's menu, a routing log decision's strip popover, the pool chart's tooltip
+and the attempt trail's hover card. The Create guardrail, Create key and Create pool dialogs are read at 720, where a
+grouped dialog's rail turns into two strips, and at 1280. The pool dialog is read on its Members group, whose unchecked
+rows hold disabled fields. A state whose opener the page lacks, or whose surface never appears, is skipped with a
+printed note, and a comparison then lists it as read on one side alone. `views.mjs` runs its pass on import, so
+`styles.mjs` keeps its own copy of the views' paths and waits, and a view added to `VIEWS` reaches no state until its
+row joins that copy.
+
+The baseline holds one JSON object per line, one line per state:
+`{"key":"<theme>/<palette>/<state>@<width>","elements":{...}}`. Each element is keyed by its path from the document
+element down, each step its tag, its classes and its `nth-of-type` index, and holds the properties whose computed value
+differs from its parent element's, while the document element holds every property. A value an element shares with its
+parent adds nothing to the record, and a change shows on the topmost element whose value changed, so the bound loses no
+difference and keeps the file to about 270 MB. The script writes the file a state at a time and reads it a line at a
+time. It compares the states, the elements and each property's value as sets, so a state or an element present on one
+side alone is a difference, and a property an element's entry leaves out reads as its parent's value. A walk that
+yields one path for two elements stops with exit 2, since the second element would overwrite the first in both runs and
+hide a change on it. The baseline is taken from one tree on one host and only the runs around a change read it, so it
+lives outside the repository and is never committed. Keep it beside the screenshot directory rather than inside it, so
+clearing the shots between passes leaves it in place.
+
+`--baseline <path>` is required and names the file to compare against or to write. `--write` writes the file, creating
+its directory, and always covers both palettes, so it takes no `--palette`. `--palette default` or `--palette github`
+limits a comparison to that palette's states, for a change that moves one palette and must leave the other alone. Any
+other word exits 2, since a filter that matches no state would compare two empty sets and report no difference.
+
+The script's exclusion list is empty, since two runs over one tree read every property alike. A property that two runs
+read apart joins the list with its reason. Under the cut, every animation and transition reads a duration and a delay
+of 0s, so a change to either draws no difference.
+
 ## The API reference page
 
 ```sh
