@@ -48,7 +48,7 @@ test('an auto reload poll reads eight pages and names the cursor past the last w
   const r = route(325);
   const shown = r.rows.slice(300);
   const polled = await d.followPages(r.read, new Set(shown.map(byId)), byId, belowOf(shown));
-  assert.equal(r.reads.length, d.FOLLOW_PAGES);
+  assert.equal(r.reads.length, 8);
   assert.deepEqual(polled.rows.map(byId), r.rows.slice(0, 200).map(byId));
   assert.equal(polled.overrun, '200');
 });
@@ -126,7 +126,7 @@ test('under a watermark the poll reads on past known rows and sets the overrun w
   // A row the list shows can land again, so a page of known rows says nothing about what lies below it.
   const r = watermarked(325);
   const polled = await d.followPages(r.read, new Set(r.rows.map(byId)), byId, belowOf(r.rows), false);
-  assert.equal(r.reads.length, d.FOLLOW_PAGES);
+  assert.equal(r.reads.length, 8);
   assert.equal(polled.overrun, '200');
   assert.equal(polled.landedThrough, 1_000, "the first page's stamp, a later page's ignored");
 });
@@ -134,7 +134,7 @@ test('under a watermark the poll reads on past known rows and sets the overrun w
 test('under a watermark eight pages whose last answers no next cursor set no overrun', async () => {
   const r = watermarked(200);
   const polled = await d.followPages(r.read, new Set(r.rows.map(byId)), byId, belowOf(r.rows), false);
-  assert.deepEqual([r.reads.length, polled.overrun, polled.rows.length], [d.FOLLOW_PAGES, null, 200]);
+  assert.deepEqual([r.reads.length, polled.overrun, polled.rows.length], [8, null, 200]);
 });
 
 test("under a watermark a page that reaches past the list's last row ends the poll and leaves the rows below to Next", async () => {

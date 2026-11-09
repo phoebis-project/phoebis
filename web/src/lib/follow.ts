@@ -2,7 +2,7 @@ import { iso } from '@/api/decode';
 import { fmtInt, fmtTime } from './format';
 
 /** The pages one auto reload poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
-export const FOLLOW_PAGES = 8;
+const FOLLOW_PAGES = 8;
 /** The intervals the split Refresh button offers, 0 for off. */
 export const RELOAD_INTERVALS = [
   { label: 'Off', ms: 0 },

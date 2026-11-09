@@ -480,7 +480,7 @@ test('an auto reload poll stops at eight pages and names the cursor that reaches
   const route = arrivals(325);
   const shown = route.rows.slice(300);
   const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)), d.identityOf, (r) => d.compareRows(r, shown.at(-1)) > 0);
-  assert.equal(route.reads.length, d.FOLLOW_PAGES);
+  assert.equal(route.reads.length, 8);
   assert.deepEqual(polled.rows.map(d.identityOf), route.rows.slice(0, 200).map(d.identityOf));
   assert.equal(polled.overrun, '200');
   const gap = await route.read(polled.overrun);
