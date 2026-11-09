@@ -2402,7 +2402,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the default range's kept-warm saving nets a figure per pool, a saving where the pool keeps caches warm and a loss on one whose probes cost more than they saved, at ${at}`, async () => {
     const s = await story;
-    const groups = s.lib.groupsOf(defaultRange(s), { groupBy: 'pool', includeProbes: false });
+    const groups = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'pool', includeProbes: false });
     const nets = groups.map((g) => ({ kept: g.keptWarm.tokens1h + g.keptWarm.tokens5m, net: g.savingUsd - g.probeCostUsd, pool: g.key }));
     assert.ok(nets.every((n) => Number.isFinite(n.net)), `every pool nets a figure: ${JSON.stringify(nets)}`);
     assert.ok(nets.some((n) => n.kept > 0 && n.net > 0), `a pool that keeps caches warm nets a saving: ${JSON.stringify(nets)}`);
@@ -3492,13 +3492,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(row.diagnosticsSource, 'client', 'the body carried the member');
   });
 
-  // The Analytics page's default range, the last day up to the story's instant, read off the rollups as the mock's
-  // `inQuery` reads them: from the hour holding the range's start up to the hour ceiling of its end.
-  const defaultRange = (s) => s.allRollups.filter((r) => inHours(Date.parse(r.hour), s.now - DAY, s.now));
+  // The Analytics page's default range, the last day up to the story's instant, which `breakdownOf` reads as the route
+  // does: from the hour holding the range's start up to the hour ceiling of its end.
+  const defaultRange = (s) => ({ from: iso(s.now - DAY), to: iso(s.now) });
 
   test(`every reason the default range's totals count lists a request under it in the window its link writes, at ${at}`, async () => {
     const s = await story;
-    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
     const counted = Object.entries(totals.cacheMissReasons).filter(([, n]) => n > 0);
     assert.ok(counted.length > 1, 'the range counts several reasons');
     const filters = { accountIds: [], clientPattern: '', includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' };
@@ -3524,12 +3524,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const want = {};
       for (const r of rows) want[fold(r)] = (want[fold(r)] ?? 0) + 1;
       // A group of probe rows alone counts no request while probes are left out, as the route answers it.
-      const groups = s.lib.groupsOf(defaultRange(s), { groupBy, includeProbes: false }).filter((g) => g.requests > 0);
+      const groups = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy, includeProbes: false }).filter((g) => g.requests > 0);
       assert.deepEqual(Object.fromEntries(groups.map((g) => [g.key, g.requests]).sort()), Object.fromEntries(Object.entries(want).sort()), groupBy);
     }
     // A client classifier call takes no plan share, so its group's cost, cache, saving and split figures read zero,
     // its account's shares and the Pro-week figures alike.
-    const [free] = s.lib.groupsOf(defaultRange(s), { accountIds: ['primary'], groupBy: 'classifier', includeProbes: false }).filter((g) => g.key === 'client');
+    const [free] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), accountIds: ['primary'], groupBy: 'classifier', includeProbes: false }).filter((g) => g.key === 'client');
     const figures = [free?.costEquivalent, free?.cacheEquivalent?.read, free?.cacheEquivalent?.write, free?.savingEquivalent, ...Object.values(free?.equivalentSplit ?? {}), ...Object.values(free?.costShares ?? {})];
     assert.ok(free?.requests === 2 && figures.every((v) => v === 0), `the client group reads ${JSON.stringify(free && { cacheEquivalent: free.cacheEquivalent, costEquivalent: free.costEquivalent, costShares: free.costShares, equivalentSplit: free.equivalentSplit, requests: free.requests, savingEquivalent: free.savingEquivalent })}`);
   });
@@ -3566,7 +3566,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(closed.length > 0, 'the story holds a canceled request');
     for (const r of closed) assert.ok(['client_gone', 'router_shutdown'].includes(r.errorCode), `${r.id} names the code, not ${r.errorCode}`);
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
-    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
     assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
     // A canceled request is a cut and no upstream failure, and an undecodable stream files under its own code.
     const upstreamErrors = rows.filter((r) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable');
@@ -3577,7 +3577,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`the default range's outcome totals add up to its request total, and that total to the rows it counts, at ${at}`, async () => {
     const s = await story;
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
-    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
     const outcomes = { failed: totals.failed, incomplete: totals.incomplete, rateLimited: totals.rateLimited, succeeded: totals.succeeded };
     assert.equal(sum(Object.values(outcomes), (n) => n), totals.requests, `the outcomes ${JSON.stringify(outcomes)} against ${totals.requests} requests`);
     assert.equal(totals.requests, rows.length, 'each row counts once');
@@ -3600,7 +3600,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(s.requests.filter((r) => 'refusalCategory' in r || 'stopReason' in r).map((r) => r.id), [], 'the serving attempt alone carries the refusal');
     // Requests by outcome and the Traffic table's OK column count a refused answer as the request that succeeded.
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
-    const [totals] = s.lib.groupsOf(defaultRange(s), { groupBy: 'all', includeProbes: false });
+    const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
     assert.ok(refused.some((r) => rows.includes(r)), 'the default range holds a refused answer');
     assert.equal(totals.succeeded, rows.filter((r) => r.outcome === 'succeeded').length, 'the OK count holds the refused answers');
     // The route orders the rows by the count, then by the model and the category in byte order, where the dash sorts

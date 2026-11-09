@@ -473,7 +473,7 @@ test("the mock's client classifier group reads zero cache, saving and split figu
   assert.ok(template, 'the story holds a plan-funded hour on primary');
   const tokens = { ...template.tokens, cacheRead: 2_000_000, cacheWrite1h: 300_000, cacheWrite5m: 200_000, output: 40_000, uncachedInput: 50_000 };
   const row = (classifier, sessionId) => ({ ...template, classifier, equivalent: 0, keptWarm: { requests: 3, tokens1h: 400_000, tokens5m: 100_000 }, model: 'claude-sonnet-5-5', sessionId, shares: { five_hour: 0, seven_day: 0 }, tokens });
-  const groups = d.groupsOf([row('client', 's-free'), row('client', 's-free-again'), row('-', 's-plain')], { accountIds: ['primary'], groupBy: 'classifier', includeProbes: false });
+  const groups = d.breakdownOf([row('client', 's-free'), row('client', 's-free-again'), row('-', 's-plain')], { accountIds: ['primary'], from: template.hour, groupBy: 'classifier', includeProbes: false, to: new Date(Date.parse(template.hour) + HOUR).toISOString() });
   const figures = (g) => ({
     cache: [g.cacheEquivalent?.read, g.cacheEquivalent?.write],
     saving: [g.savingEquivalent],
