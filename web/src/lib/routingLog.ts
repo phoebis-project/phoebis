@@ -743,8 +743,11 @@ export type LogLink = Partial<Pick<LogFilters, 'accounts' | 'agentId' | 'kinds' 
 
 export const identityOf = (row: RoutingLogRow) => (row.type === 'decision' ? `${row.requestId}/${row.seq}` : `event/${row.id}`);
 
+/** The fields of a row the route's order reads, which a cursor names, so a decoded cursor compares as its row does. */
+type OrderFields = Pick<DecisionSummary, 'at' | 'requestId' | 'seq' | 'type'> | Pick<RoutingEvent, 'at' | 'id' | 'type'>;
+
 /** The route's order: newest first, a decision before an event at one instant. */
-export function compareRows(a: RoutingLogRow, b: RoutingLogRow): number {
+export function compareRows(a: OrderFields, b: OrderFields): number {
   const at = Date.parse(b.at) - Date.parse(a.at);
   if (at !== 0) return at;
   if (a.type !== b.type) return a.type === 'decision' ? -1 : 1;

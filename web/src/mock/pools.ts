@@ -1,5 +1,6 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
 import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
+import { lookup } from '@/lib/counts';
 import { accountById } from './accounts';
 import { paceDeadline, paceHours } from './lead';
 import { round } from './round';
@@ -24,9 +25,10 @@ export const WORST_BUCKET: Readonly<Record<string, number>> = { annex: 0.02, ove
 export function servedFigures(accountId: string, now: number, slowDown: boolean): Pick<PoolMember, 'burn' | 'factor' | 'paceScore' | 'speed'> {
   const account = accountById.get(accountId);
   if (account === undefined) return { burn: null, factor: null, paceScore: null, speed: null };
-  if (account.kind === 'api_key') return { burn: null, factor: null, paceScore: 1 - (WORST_BUCKET[accountId] ?? 0), speed: null };
-  const factor = slowDown ? (account.slowDown?.factor ?? null) : null;
-  const speed = slowDown ? (account.slowDown?.speed ?? null) : null;
+  if (account.kind === 'api_key') return { burn: null, factor: null, paceScore: 1 - (lookup(WORST_BUCKET, accountId) ?? 0), speed: null };
+  const slowed = slowDown ? account.slowDown : null;
+  const factor = slowed?.factor ?? null;
+  const speed = slowed?.speed ?? null;
   const week = account.windows.find((w) => w.id === '7d');
   if (week === undefined) return { burn: null, factor, paceScore: null, speed };
   const reset = week.resetsAt === null ? null : Date.parse(week.resetsAt);
@@ -125,8 +127,11 @@ export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKee
   return { breakEvenSeconds: be, horizonSeconds: capped(policy.scheduledHorizonSeconds), idleSeconds: idle, idleShare: { max: share('max'), min: share('min') }, parkedSeconds: capped(policy.maxParkedSeconds) };
 }
 
-/** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
-const UNTIL_DRAWN: Pick<PoolSeed, 'day24h' | 'requests24h' | 'traffic24h'> = {
+/**
+ * The day's traffic of a pool no request has reached: a new pool's, and a seed's until `requests.ts` derives it
+ * from the request rows once they are drawn.
+ */
+export const UNTIL_DRAWN: Pick<PoolSeed, 'day24h' | 'requests24h' | 'traffic24h'> = {
   day24h: { billedUsd: 0, cost: 0, equivalent: 0 },
   requests24h: 0,
   traffic24h: [],
@@ -338,10 +343,9 @@ const POOL_ROWS: PoolSeed[] = [
     loadShedding: false,
     slowDown: false,
     movesPerHour: {},
-    // Off, so a session's cache lives as long as its own turns keep it. The figures are the plan's on both TTLs, as a
-    // policy that leaves the markers as sent brings them.
+    // Off, so a session's cache lives as long as its own turns keep it.
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
-    keepaliveResolved: merged(FIGURES.plan['5m'], FIGURES.plan['1h']),
+    keepaliveResolved: composedFor(['oauth'], POOL_SAMPLE.cacheTtl),
     bodyCaptureHours: 0,
     modelRules: [],
     members: [unbudgeted('workshop', 0)],
@@ -362,10 +366,9 @@ const POOL_ROWS: PoolSeed[] = [
     loadShedding: false,
     slowDown: false,
     movesPerHour: {},
-    // Off, with nothing to warm. An OAuth and an API-key member bring the plan's and the dollar rows' figures on both
-    // TTLs, as a policy that leaves the markers as sent brings them.
+    // Off, with nothing to warm.
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
-    keepaliveResolved: merged(merged(FIGURES.plan['5m'], FIGURES.plan['1h']), merged(FIGURES.dollars['5m'], FIGURES.dollars['1h'])),
+    keepaliveResolved: composedFor(['oauth', 'api_key'], POOL_SAMPLE.cacheTtl),
     bodyCaptureHours: 0,
     modelRules: [],
     members: [unbudgeted('sunset', 0), unbudgeted('youngest', 0), unbudgeted('zenith', 0)],

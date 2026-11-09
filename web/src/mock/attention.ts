@@ -1,5 +1,6 @@
 import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
+import { lookup } from '@/lib/counts';
 import { tokensTotal, undatedModel } from '@/lib/format';
 import { hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
@@ -121,9 +122,10 @@ const HELD_TODAY: Readonly<Record<string, { held: number; heldMs: number }>> = {
  * to now, each span clamped to the day and one with no part inside it not counted. It holds once the account's held
  * time of the day passes the bar, twice the stretch threshold the newest span's start row read and at least an hour,
  * from the own start of the oldest span, with the day's held time, the held count and the stretch threshold of the
- * newest span's pool. Null where no span falls inside the day or it does not hold.
+ * newest span's pool. Null where no span falls inside the day or it does not hold. `held` is the day's held count and
+ * held time, which the ledger sums from the hourly rollups.
  */
-export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number): Pick<AttentionItem, 'detail' | 'since'> | null {
+export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number, held: { held: number; heldMs: number }): Pick<AttentionItem, 'detail' | 'since'> | null {
   const from = now - DAY;
   const spans: { open: boolean; pool: string; since: number; thresholdMs: number | null }[] = [];
   const count = (pool: string, since: number, end: number, open: boolean, thresholdMs: number | null) => {
@@ -161,7 +163,6 @@ export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: n
   if (spans.length === 0) return null;
   const newest = spans.reduce((a, b) => (b.since > a.since ? b : a));
   const barMs = Math.max(SLOWED_LONG_STRETCHES * (newest.thresholdMs ?? 0), SLOWED_LONG_FLOOR_MS);
-  const held = HELD_TODAY[accountId] ?? { held: 0, heldMs: 0 };
   if (held.heldMs <= barMs) return null;
   const stretch = poolById.get(newest.pool)?.slowDownStretchSeconds;
   return {
@@ -206,7 +207,7 @@ const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<At
   ['meter_drift', drift],
   ['wall_reached', walls],
   ['destination_spent', spentDestination],
-  ['slowed_long', (id) => slowedLongOf(ROUTING_EVENTS, id, NOW)],
+  ['slowed_long', (id) => slowedLongOf(ROUTING_EVENTS, id, NOW, lookup(HELD_TODAY, id) ?? { held: 0, heldMs: 0 })],
 ];
 
 /**

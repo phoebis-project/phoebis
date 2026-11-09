@@ -1,9 +1,10 @@
 import type {
   Account, AllowanceReset, Attempt, AttemptWindow, CohortHold, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, MoveCause, PinReason, Placement, PrefixEntry, RecordBudget, RecordCandidate, RecordCompletion, RecordCooldown, RecordHold, RecordOutcome,
-  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
+  PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestEvent, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { DECISION_KIND_VALUES } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
+import { lookup } from '@/lib/counts';
 import { placementHit } from '@/lib/format';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
@@ -106,7 +107,7 @@ interface Spec {
   fact?: SummaryFact[];
   /** The pin event reason of a failover placement, which moves the pin from the task rather than by a rule. */
   failover?: string;
-  /** The account the pin was on before a move, a failover, or a first placement that replaced an expired pin. */
+  /** The account the pin was on before a move or a failover. */
   from?: string;
   /** The holds before this attempt's placement, summed as the placement's row names them. */
   heldBefore?: CohortHold;
@@ -131,6 +132,8 @@ interface Spec {
   /** The windows a member reads where the story's own readings are not the walk back's. */
   readings?: Record<string, AttemptWindow[]>;
   refusal?: Refusal;
+  /** The expired row a first placement released on another account, with the reasons its release names. */
+  replaced?: { accountId: string; reasons: string[] };
   request: RequestLog;
   round?: ShedRound;
   rule?: string;
@@ -322,22 +325,23 @@ const inOverageAt = (accountId: string, at: number) => accountId === 'nightly' &
  * request already made, so a member it tried reads the cooldown that answered rather than the attempt.
  */
 export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
+  const plain = (name: string, reason: string | null = null, until: string | null = null) => ({ name, reason, scope: null, until, window: null });
   const state = stateAt(a, at);
-  if (state !== 'ready' || !a.routingEnabled) return { name: 'operator', reason: null, scope: null, until: null, window: null };
+  if (state !== 'ready' || !a.routingEnabled) return plain('operator');
   const endsAt = a.subscription?.endsAt ? Date.parse(a.subscription.endsAt) : null;
-  if (endsAt !== null && endsAt <= at) return { name: 'subscription_ended', reason: null, scope: null, until: null, window: null };
+  if (endsAt !== null && endsAt <= at) return plain('subscription_ended');
   const live = COOLDOWNS.filter((c) => c.accountId === a.id && c.setAt <= at && at < c.until && holds(c, model, fast));
   const cooldown = (c: CooldownRow) => ({ name: 'cooldown', reason: c.reason, scope: c.scope, until: iso(c.until), window: c.window });
   const blocking = live.find((c) => c.scope !== 'fast');
   if (blocking) return cooldown(blocking);
   const credits = fast ? creditsAt(a.id, at) : null;
-  if (credits?.blocked) return { name: 'credits', reason: credits.blocked, scope: null, until: null, window: null };
+  if (credits?.blocked) return plain('credits', credits.blocked);
   // The engine names the reached budget whose period ends last, the one that keeps the member out longest.
   const reached = budgetsAt(pool, a.id, at).filter((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd).sort((x, y) => Date.parse(y.periodEnd ?? '') - Date.parse(x.periodEnd ?? ''))[0];
-  if (reached) return { name: 'budget', reason: reached.period, scope: null, until: reached.periodEnd, window: null };
+  if (reached) return plain('budget', reached.period, reached.periodEnd);
   const fastLimited = live.find((c) => c.scope === 'fast');
   if (fastLimited) return cooldown(fastLimited);
-  if (attempted.includes(a.id)) return { name: 'attempted', reason: null, scope: null, until: null, window: null };
+  if (attempted.includes(a.id)) return plain('attempted');
   return null;
 }
 
@@ -517,7 +521,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
         windows.spend = { ageMs, ahead: null, demand: null, horizon: null, observedAt: iso(at - ageMs), projection: null, reserved: 0, reset: spend.resetsAt, source: spend.resetSource, utilization: spend.utilization };
       }
     } else {
-      windows.worst_bucket = { ageMs: 4_000, ahead: null, demand: null, horizon: null, observedAt: iso(at - 4_000), projection: null, reserved: 0, reset: iso(at + 40_000), source: 'head', utilization: WORST_BUCKET[a.id] ?? 0.1 };
+      windows.worst_bucket = { ageMs: 4_000, ahead: null, demand: null, horizon: null, observedAt: iso(at - 4_000), projection: null, reserved: 0, reset: iso(at + 40_000), source: 'head', utilization: lookup(WORST_BUCKET, a.id) ?? 0.1 };
     }
     const cooldowns: RecordCooldown[] = COOLDOWNS.filter((c) => c.accountId === a.id && c.setAt <= at && at < c.until)
       .map((c) => ({ blocking: holds(c, r.canonicalModel, fast), reason: c.reason, scope: c.scope, until: iso(c.until), window: c.window }))
@@ -990,7 +994,7 @@ function fillDrawnRivals(spec: Spec, candidates: RecordCandidate[], pool: PoolSe
   const fits = (c: RecordCandidate) => spec.kind === 'placed' && freshFitOf(spec, c, pool).verdict === 'fits';
   const unfit = spec.kind === 'placed' && !fits(winner);
   for (const c of candidates) {
-    if (c === winner || c.obstacle !== null || c.accountId === spec.from) continue;
+    if (c === winner || c.obstacle !== null || c.accountId === (spec.from ?? spec.replaced?.accountId)) continue;
     const picked = !spec.rung && (tierBefore(c.tier, winner.tier) || (tierKey(c.tier) === tierKey(winner.tier) && outscores(c)));
     if (picked || (unfit && fits(c))) c.inFlight = c.inFlightCap;
   }
@@ -1106,6 +1110,14 @@ interface PinState {
 const pins = new Map<string, PinState>();
 let epochs = 0;
 const pinKeyOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+const recordShedOf = (shed: PinState['shed']): RecordPin['shed'] => (shed === null ? null : { at: iso(shed.at), from: shed.from, reason: shed.reason });
+/** The pin step's facts on the row it read, which follow its `found` fact. */
+const pinFacts = (state: PinState, idleMs: number, refreshAgeMs: number) => [fact('account_id', state.accountId, null, state.accountId), fact('epoch', state.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', refreshAgeMs, 'ms')];
+/** The reasons a `pin_expired` event's release names, none where the event carries no list. */
+const releasedReasons = (e: RequestEvent | undefined): string[] => {
+  const reasons = e?.detail?.reasons;
+  return Array.isArray(reasons) ? reasons.map(String) : [];
+};
 const laneOf = (r: RequestLog) => `${r.canonicalModel}|${r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard'}|${r.shape.thinkingType ?? 'none'}|${r.shape.effort ?? '-'}`;
 
 /**
@@ -1161,18 +1173,15 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   if (spec.pin === 'none') {
     // A first placement that replaced the session's row reads the row the purge had not yet taken, idle past the
     // pool's window, with the reasons its release names. The engine writes no warmth and no mark for a row it releases.
-    const expired = spec.kind === 'placed' && spec.attempt === 1 && spec.from !== undefined && held?.accountId === spec.from ? held : undefined;
-    if (expired) {
-      const lastUsedAt = expired.endedAt ?? expired.lastUsedAt;
+    if (spec.replaced !== undefined && held?.accountId === spec.replaced.accountId) {
+      const lastUsedAt = held.endedAt ?? held.lastUsedAt;
       const idleMs = spec.at - lastUsedAt;
-      const reasons = REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired')?.detail?.reasons;
       const pin: RecordPin = {
-        accountId: expired.accountId, createdAt: iso(expired.createdAt), cycleMs: null, epoch: expired.epoch, found: 'expired_idle', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(expired.lastRefreshAt), lastUsedAt: iso(lastUsedAt),
-        marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: spec.at - expired.lastRefreshAt, released: Array.isArray(reasons) ? reasons.map(String) : [],
-        shed: expired.shed === null ? null : { at: iso(expired.shed.at), from: expired.shed.from, reason: expired.shed.reason }, slowDownUntil: null, warmth: null, warmthCause: null,
+        accountId: held.accountId, createdAt: iso(held.createdAt), cycleMs: null, epoch: held.epoch, found: 'expired_idle', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(held.lastRefreshAt), lastUsedAt: iso(lastUsedAt),
+        marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: spec.at - held.lastRefreshAt, released: spec.replaced.reasons,
+        shed: recordShedOf(held.shed), slowDownUntil: null, warmth: null, warmthCause: null,
       };
-      const facts = [fact('found', 'expired_idle'), fact('account_id', expired.accountId, null, expired.accountId), fact('epoch', expired.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', spec.at - expired.lastRefreshAt, 'ms')];
-      return { pin, pinReason: null, steps: [step('pin', 'none', facts)] };
+      return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'expired_idle'), ...pinFacts(held, idleMs, spec.at - held.lastRefreshAt)])] };
     }
     const pin: RecordPin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
     // The story's `client` calls are the ones the router directed to their judged turn's account, which the engine
@@ -1194,10 +1203,10 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   const pin: RecordPin = {
     accountId: found.accountId, createdAt: iso(found.createdAt), cycleMs: spec.pinPace?.cycleMs ?? null, epoch: found.epoch, found: 'live', idleMs, incarnation: 1, lane: laneOf(r), lastRefreshAt: iso(spec.at - idleMs), lastUsedAt: iso(spec.at - idleMs),
     marked: mark !== null, markedAt: mark === null ? null : iso(mark.at), markedOn: mark?.on ?? null, markedWindow: mark?.window ?? null, refreshAgeMs: idleMs, released,
-    shed: found.shed === null ? null : { at: iso(found.shed.at), from: found.shed.from, reason: found.shed.reason },
+    shed: recordShedOf(found.shed),
     slowDownUntil: spec.pinPace?.slowDownUntil === null || spec.pinPace?.slowDownUntil === undefined ? null : iso(spec.pinPace.slowDownUntil), warmth: spec.pin.warmth, warmthCause: spec.pin.cause,
   };
-  return { pin, pinReason: null, steps: [step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)])] };
+  return { pin, pinReason: null, steps: [step('pin', 'match', [fact('found', 'live'), ...pinFacts(found, idleMs, idleMs), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)])] };
 }
 
 /**
@@ -1462,7 +1471,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     exhaustion,
     // A first placement names the pin it replaced on another account, as a failover's landing names the account it
     // left.
-    fromAccountId: spec.kind === 'moved' || spec.failover || (spec.kind === 'placed' && spec.attempt === 1) ? (spec.from ?? null) : null,
+    fromAccountId: spec.kind === 'moved' || spec.failover ? (spec.from ?? null) : (spec.replaced?.accountId ?? null),
     hold,
     inOverage: chosen?.inOverage ?? false,
     kind: spec.kind,
@@ -1566,7 +1575,7 @@ function pinEventsOf(spec: Spec, pinning: boolean): RecordOutcome['pinEvents'] {
   const moved = attempt && events.find((e) => e.kind === 'pin_migrated' && e.at === attempt.startedAt && e.accountId === attempt.accountId);
   if (moved && pinning && (spec.kind === 'placed' || spec.kind === 'moved')) return [{ kind: 'pin_migrated', reason: String(moved.detail?.reason ?? '') }];
   const expired = spec.seq === 1 ? events.find((e) => e.kind === 'pin_expired') : undefined;
-  const reasons = expired && Array.isArray(expired.detail?.reasons) ? (expired.detail.reasons as unknown[]).map(String) : [];
+  const reasons = releasedReasons(expired);
   const created = pinning && r.kind === 'inference' && spec.kind === 'placed' && spec.pin === 'none';
   return [...(expired ? [{ kind: 'pin_expired', reason: reasons[0] ?? null }] : []), ...(created ? [{ kind: 'pin_created', reason: null }] : [])];
 }
@@ -1720,9 +1729,11 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const rule = moved !== null && failover === undefined ? moved : undefined;
     // A request that can hold no pin renews none and moves none: it is placed.
     const kind: DecisionKind = !pinning ? 'placed' : s?.renewed ? 'renewed' : rule ? 'moved' : 'placed';
-    // A first placement that released an expired pin on another account names that account as its source.
-    const replaced = i === 0 && kind === 'placed' ? REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired' && e.accountId !== a.accountId)?.accountId : undefined;
-    const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : (replaced ?? undefined);
+    // A first placement that released an expired pin on another account names that account, with the release's reasons.
+    const expired = i === 0 && kind === 'placed' ? REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired' && e.accountId !== a.accountId) : undefined;
+    const replacedOn = expired?.accountId ?? null;
+    const replaced = replacedOn === null ? undefined : { accountId: replacedOn, reasons: releasedReasons(expired) };
+    const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : undefined;
     const live = kind === 'renewed' || kind === 'moved' || failover !== undefined;
     // A probe and a token count leave the pin's warmth untouched.
     const untouched = r.kind === 'probe' || r.kind === 'count_tokens';
@@ -1736,7 +1747,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
       prefix[a.accountId] = rung.rung === 'static' ? { static: found, staticMatch: found } : { content: found, contentMatch: found };
     }
     const heldBefore = holds.length ? { cohort: holds[holds.length - 1].cohort, heldMs: holds.reduce((n, h) => n + h.heldMs, 0), waitedOn: holds.map((h) => h.accountId), waits: holds.map((h) => ({ heldMs: h.heldMs, reason: 'cap' })) } : undefined;
-    specs.push({ ...base, accountId: a.accountId, at: start, attempt: i + 1, attempted, failover, from: from ?? pinOn ?? undefined, heldBefore: hold ? heldBefore : undefined, holds: [...holds], kind, pin: pinSpec, prefix, rule, rung, seq });
+    specs.push({ ...base, accountId: a.accountId, at: start, attempt: i + 1, attempted, failover, from: from ?? pinOn ?? undefined, heldBefore: hold ? heldBefore : undefined, holds: [...holds], kind, pin: pinSpec, prefix, replaced, rule, rung, seq });
     pinOn = a.accountId;
   });
   const last = r.attempts[r.attempts.length - 1];
@@ -2816,23 +2827,14 @@ const EVENT_KINDS: readonly string[] = [
  * under `dir: 'asc'`, so a cursor resumes past its row by the same comparisons flipped.
  */
 const cursorOf = (row: RoutingLogPage['rows'][number]) => (row.type === 'decision' ? `${Date.parse(row.at)}:1:${row.requestId}/${row.seq}` : `${Date.parse(row.at)}:0:${row.id}`);
-function after(row: RoutingLogPage['rows'][number], cursor: string, dir: 'asc' | 'desc'): boolean {
+/** The fields of the row a cursor names, as `compareRows` reads them. */
+const cursorKeyOf = (cursor: string) => {
   const [at, rank, ...rest] = cursor.split(':');
   const id = rest.join(':');
-  const asc = dir === 'asc';
-  const rowAt = Date.parse(row.at);
-  if (rowAt !== Number(at)) return asc ? rowAt > Number(at) : rowAt < Number(at);
-  if (row.type === 'decision') {
-    if (rank !== '1') return asc;
-    const slash = id.lastIndexOf('/');
-    const requestId = id.slice(0, slash);
-    const seq = Number(id.slice(slash + 1));
-    if (row.requestId !== requestId) return asc ? row.requestId > requestId : row.requestId < requestId;
-    return asc ? row.seq > seq : row.seq < seq;
-  }
-  if (rank === '1') return !asc;
-  return asc ? row.id > Number(id) : row.id < Number(id);
-}
+  if (rank !== '1') return { at: iso(Number(at)), id: Number(id), type: 'event' as const };
+  const slash = id.lastIndexOf('/');
+  return { at: iso(Number(at)), requestId: id.slice(0, slash), seq: Number(id.slice(slash + 1)), type: 'decision' as const };
+};
 
 /**
  * The merged page by the route's rules, newest first and oldest first under `dir: 'asc'`. The range runs from an hour
@@ -2864,23 +2866,25 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { even
       (!query.accountIds?.length || query.accountIds.some((id) => id === s.accountId || id === s.fromAccountId)) &&
       (kinds === undefined || (kinds.includes(s.kind) && !s.probe) || (kinds.includes('probe') && s.probe)),
   );
-  const events = [...rows.events, ...rows.written].filter(
-    (e) =>
-      within(e.at) &&
-      (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
-      (!query.request || e.requestId === query.request) &&
-      session(e.sessionId) &&
-      agent(e.agentId) &&
-      inList(query.keyIds, e.keyId) &&
-      inList(query.poolIds, e.poolId) &&
-      inList(query.models, e.model) &&
-      inList(query.accountIds, e.accountId) &&
-      (kinds === undefined || kinds.includes(e.kind)),
-  );
+  const keep = (e: RoutingEvent) =>
+    within(e.at) &&
+    (e.id !== LATE_EVENT_ID || now >= LATE_EVENT_AT) &&
+    (!query.request || e.requestId === query.request) &&
+    session(e.sessionId) &&
+    agent(e.agentId) &&
+    inList(query.keyIds, e.keyId) &&
+    inList(query.poolIds, e.poolId) &&
+    inList(query.models, e.model) &&
+    inList(query.accountIds, e.accountId) &&
+    (kinds === undefined || kinds.includes(e.kind));
+  const events = [...rows.events.filter(keep), ...rows.written.filter(keep)];
   const dir = query.dir ?? 'desc';
   const merged = [...decisions, ...events].sort(compareRows);
   if (dir === 'asc') merged.reverse();
-  const rest = query.cursor ? merged.filter((row) => after(row, query.cursor!, dir)) : merged;
+  // The route resumes strictly past the cursor's row in the page's order.
+  const cursor = query.cursor ? cursorKeyOf(query.cursor) : null;
+  const sign = dir === 'asc' ? -1 : 1;
+  const rest = cursor === null ? merged : merged.filter((row) => sign * compareRows(row, cursor) > 0);
   const limit = query.limit ?? 25;
   const page = rest.slice(0, limit);
   const last = page[page.length - 1];

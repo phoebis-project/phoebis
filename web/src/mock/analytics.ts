@@ -17,7 +17,7 @@ import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
-import { bandAt, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
+import { bandAt, freesPlanShare, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
 import type { EventSeed } from './routingLog';
@@ -210,11 +210,10 @@ const pricedRows = new WeakMap<HourlyRollup, Record<keyof CostSplit | 'keptRead'
 /**
  * A row's Pro-week figures at the row's hour: its four token kinds, and the kept-warm credit's cache read and cache
  * writes. The band is read once where the model has a 7-day weight, and a figure is null where the weight or the
- * band's reading is missing. A client classifier call takes no share of a plan window, so each of its figures reads
- * zero, as the route answers them.
+ * band's reading is missing. A row of freed classifier calls reads zero on each figure, as the route answers it.
  */
 function figuresOf(r: HourlyRollup): Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null> {
-  if (r.classifier === 'client') return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
+  if (freesPlanShare(r.classifier)) return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
   const known = pricedRows.get(r);
   if (known) return known;
   const inside = bandAt(r.model, Date.parse(r.hour));
@@ -556,8 +555,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     const share = (list: (number | null)[]) => (account === null ? null : bucketShare(list));
     // The route answers no 5-hour or 7-day share where the account's window set lacks that window, a billed row's zero
     // included, and keeps the model week's share.
-    const noFiveHour = account !== null && !sharedWindowsOf(account).includes('five_hour');
-    const noSevenDay = account !== null && !sharedWindowsOf(account).includes('seven_day');
+    const shared = account === null ? null : sharedWindowsOf(account);
+    const lacks = (w: 'five_hour' | 'seven_day') => shared !== null && !shared.includes(w);
     // A usage-based seat is a paid source, so its burn reads in dollars as an API key's does.
     const unit = account === null ? null : burnUnitOf(account);
     return starts.map((at): BurnPoint => {
@@ -566,10 +565,10 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
         at: iso(at),
         cachedTokens: Math.round(s.cached),
         equivalent: bucketShare(s.equivalent),
-        fiveHourShare: noFiveHour ? null : share(s.fiveHour),
+        fiveHourShare: lacks('five_hour') ? null : share(s.fiveHour),
         group,
         modelWeekShare: share(s.week),
-        sevenDayShare: noSevenDay ? null : share(s.sevenDay),
+        sevenDayShare: lacks('seven_day') ? null : share(s.sevenDay),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),
         unit,

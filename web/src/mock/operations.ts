@@ -8,7 +8,7 @@ import { compareRequests } from '@/lib/requests';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
-import { keyById, poolById } from './pools';
+import { keyById, poolById, servedFigures } from './pools';
 import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, WORKSHOP_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
@@ -780,6 +780,7 @@ const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number;
 // Every pin of the account reads the window's runway: until its burn carries the utilization to the pool's ceiling.
 const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');
 const studioRunwayMs = studioFive?.burn ? Math.round(((poolById.get('work')!.windowCeiling - studioFive.utilization) / studioFive.burn) * HOUR) : null;
+const studioSlowed = servedFigures('studio', NOW, poolById.get('work')!.slowDown);
 SLOWED_PINS.forEach((pin, k) => {
   // The rows run newest first, and the main agent's newest turn is the pin's last use.
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
@@ -804,12 +805,12 @@ SLOWED_PINS.forEach((pin, k) => {
   SESSIONS.push({
     ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
     cycleMs: pin.cycleMs,
-    factor: accountById.get('studio')?.slowDown?.factor ?? null,
+    factor: studioSlowed.factor,
     lastRequestAt: rows[0].at,
     requests: rows.length,
     runwayBounded: studioRunwayMs !== null,
     runwayMs: studioRunwayMs,
-    speed: accountById.get('studio')?.slowDown?.speed ?? null,
+    speed: studioSlowed.speed,
   });
 });
 

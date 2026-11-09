@@ -56,6 +56,8 @@ export const windowKeyId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?
 export const windowEntry = <T>(table: ByWindow<T>, key: string): T | undefined => lookup(table, windowKeyId(key) ?? '');
 /** A window's label under any of its spellings, a window the console does not know under its key. */
 export const windowLabelOf = (key: string): string => windowEntry(WINDOW_LABEL, key) ?? key;
+/** A window's period in hours: the table's for a window the pages know, else its key family's. */
+export const periodHoursOf = (id: WindowId): number => lookup(WINDOW_HOURS, id) ?? hoursOfKey(id);
 /** A window's word in a column head: "7-day", "Fable", "5-hour", a window the console does not know under its key. */
 export const windowWord = (key: string): string => (windowKeyId(key) === '7d_fable' ? 'Fable' : windowLabelOf(key));
 /** A known window's tag under any of its spellings, nothing for a window the console does not know. */

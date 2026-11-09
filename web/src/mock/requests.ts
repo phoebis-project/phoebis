@@ -791,7 +791,7 @@ function buildRequests(): RequestLog[] {
   // The day's one fallback: the oldest refused laptop turn issued a credit token, and the session's next inference
   // turn on the key presented it. Neither pass draws, so every row keeps its draws.
   const oldestFirst = [...rows].reverse();
-  const issuer = oldestFirst.find((r) => r.keyId === 'laptop' && r.attempts[r.attempts.length - 1]?.response.stopReason === 'refusal');
+  const issuer = oldestFirst.find((r) => r.keyId === 'laptop' && servingResponse(r)?.stopReason === 'refusal');
   const presenter = issuer && oldestFirst.find((r) => r.keyId === issuer.keyId && r.sessionId === issuer.sessionId && r.kind === 'inference' && Date.parse(r.at) > Date.parse(issuer.at));
   if (issuer && presenter) {
     issuer.attempts = onServing(issuer.attempts, (a) => ({ ...a, issuedDigest: FALLBACK_DIGEST }));
@@ -959,7 +959,7 @@ interface StorySeed {
   capturedBodies?: boolean;
   /** The client's own auto-mode classifier call, which the class header and the beta mark: `client` on the account and
    * incarnation its judged turn ended on, `client_off` off them. */
-  classifier?: 'client' | 'client_off';
+  classifier?: NonNullable<RequestLog['classifier']>;
   /** The label the ledger wrote, where it is not the lane's. */
   client?: string | null;
   /** The item a contract refusal named. */
@@ -1777,7 +1777,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     if (r.sessionId === null || r.kind === 'probe' || STORY_IDS.has(r.id)) continue;
     const events: RequestEvent[] = [];
     // The pin the event belongs to: the drawer shows a move only where these match the request's own.
-    const pin = { keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId };
+    const pin = pinFieldsOf(r);
     // A failover moves the pin off the account whose answer set a cooldown. The event lands as the next attempt
     // starts. A token count writes no pin for one to move.
     for (let i = 1; i < r.attempts.length && r.kind !== 'count_tokens'; i += 1) {
@@ -1811,7 +1811,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   if (story) {
     const refused = story.attempts[0];
     const served = story.attempts[story.attempts.length - 1];
-    const pin = { keyId: story.keyId, model: story.canonicalModel, sessionId: story.sessionId };
+    const pin = pinFieldsOf(story);
     const detail = { request_id: null, source_request_id: story.id, wire_model: story.model };
     const events: RequestEvent[] = [
       ...(out.get(story.id) ?? []),
@@ -1834,7 +1834,7 @@ function storyEvents(): Map<string, RequestEvent[]> {
   const moved = (id: string, at: number, from: string, to: string, reason: PinMigrationReason) => {
     const r = requestById.get(id);
     if (!r) return;
-    const event: RequestEvent = { accountId: to, at: iso(at), detail: { agent_id: r.agentId, epoch: 0, from_account: from, reason }, keyId: r.keyId, kind: 'pin_migrated', model: r.canonicalModel, sessionId: r.sessionId };
+    const event: RequestEvent = { ...pinFieldsOf(r), accountId: to, at: iso(at), detail: { agent_id: r.agentId, epoch: 0, from_account: from, reason }, kind: 'pin_migrated' };
     out.set(id, [...(out.get(id) ?? []), event]);
   };
   moved('req_4b0e9d17-c31', clock(14, 27, 1), 'primary', 'nightly', 'fast_lane');
@@ -1849,10 +1849,10 @@ function storyEvents(): Map<string, RequestEvent[]> {
   // The placement's release of the expired row on nightly, which it writes before the pin it creates, its reasons in
   // the router's order: the idle row, and nightly's overage under all's preference for a plan.
   const replaced = requestById.get(REPLACED_PIN_ID);
-  if (replaced) out.set(replaced.id, [{ accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired', 'overage'] }, keyId: replaced.keyId, kind: 'pin_expired', model: replaced.canonicalModel, sessionId: replaced.sessionId }]);
+  if (replaced) out.set(replaced.id, [{ ...pinFieldsOf(replaced), accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired', 'overage'] }, kind: 'pin_expired' }]);
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
-    const pin = { keyId: rejected.keyId, model: rejected.canonicalModel, sessionId: rejected.sessionId };
+    const pin = pinFieldsOf(rejected);
     const detail = { source_request_id: rejected.id, wire_model: 'claude-haiku-4-5' };
     out.get(rejected.id)?.push(
       { ...pin, accountId: 'primary', at: iso(clock(14, 24, 10)), detail: { attempt: 1, request_id: rejected.attempts[0].upstreamRequestId, ...detail }, kind: 'model_rejected' },
@@ -1884,6 +1884,10 @@ const OBSTACLE_DRAWS: { value: string; weight: number }[] = [
 ];
 
 const pinOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.canonicalModel}`;
+/** An event's pin fields. A declaration, since `REQUEST_EVENTS` above reads it at load. */
+function pinFieldsOf(r: RequestLog): Pick<RequestEvent, 'keyId' | 'model' | 'sessionId'> {
+  return { keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId };
+}
 
 /**
  * A share of the fresh placements land where a prefix is warm: a main conversation by its messages or its static
@@ -1919,11 +1923,10 @@ const cohortHoldOf = (p: Rng, w: Rng, r: RequestLog, placement: Placement | null
 function addStoryEvents() {
   const busy = new Set([...REQUEST_EVENTS.keys(), ...STORY_IDS].flatMap((id) => { const r = requestById.get(id); return r ? [pinOf(r)] : []; }));
   const owed: ((r: RequestLog, from: string) => RequestEvent)[] = [];
-  const pinned = (r: RequestLog) => ({ keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId });
   const shedMoved = [...REQUEST_EVENTS.values()].some((events) => events.some((e) => e.detail?.reason === 'shed'));
-  if (!shedMoved) owed.push((r, from) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason: 'shed' }, kind: 'pin_migrated' }));
-  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['client_error'] }, kind: 'pin_expired' }));
-  owed.push((r) => ({ ...pinned(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['subscription_ended'] }, kind: 'pin_expired' }));
+  if (!shedMoved) owed.push((r, from) => ({ ...pinFieldsOf(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason: 'shed' }, kind: 'pin_migrated' }));
+  owed.push((r) => ({ ...pinFieldsOf(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['client_error'] }, kind: 'pin_expired' }));
+  owed.push((r) => ({ ...pinFieldsOf(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['subscription_ended'] }, kind: 'pin_expired' }));
   for (const r of REQUESTS) {
     const lane = LANES.find((l) => l.keyId === r.keyId);
     const next = owed[0];
@@ -2132,14 +2135,16 @@ function seedHolds() {
  */
 export const bandAt = (model: string, at: number): boolean | null => (weightOf(TABLES, model, 'seven_day') !== null ? inBand(TABLES, at) : null);
 
+/** The router frees only the classifier call that landed on the judged turn's account, the one it reads `client`. */
+export const freesPlanShare = (classifier: string | null): boolean => classifier === 'client';
+
 /**
  * A row's Pro-week figure and its shares of its account's windows, as the request route answers them: null for a
  * request no subscription window paid, else the figure at the request's completion, null for a model without a weight
  * of its own, and a share on each window of the account's set and each week the model applies to, under the account's
  * tier, a window the cost model cannot price carried as null and an account without a tier an empty share map. A
- * `client` classifier call reads zero, on each such window the tier sizes, with the share reason, while a `client_off`
- * call and a classifier call billed in dollars carry no reason, as the route answers them: the router frees only the
- * call that landed on the judged turn's account.
+ * classifier call `freesPlanShare` frees reads zero, on each such window the tier sizes, with the share reason, while
+ * any other classifier call and one billed in dollars carry no reason, as the route answers them.
  */
 function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
   if (!planPaid(r)) return { costEquivalent: null, costShares: null, shareReason: null };
@@ -2147,7 +2152,7 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
-  if (r.classifier === 'client') {
+  if (freesPlanShare(r.classifier)) {
     const zeros = (sizing: string) =>
       Object.fromEntries(
         windows.filter((w) => {
@@ -2427,10 +2432,9 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
         cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
-        // At each answer's completion, the instant its own shares price it at. A `client` classifier call takes no
-        // share of a plan window, so its part prices nothing and reads zero, while a `client_off` part prices as any
-        // other.
-        ...hourShares(accountId, partRows[0].canonicalModel, classifier !== 'client' ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
+        // At each answer's completion, the instant its own shares price it at. A part of freed classifier calls prices
+        // nothing and reads zero.
+        ...hourShares(accountId, partRows[0].canonicalModel, !freesPlanShare(classifier) ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },

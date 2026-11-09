@@ -3,7 +3,7 @@ import type { Account, BurnUnit, PlanWord, QuotaHistory, QuotaSample, QuotaSnaps
 import { lookup } from '@/lib/counts';
 import { endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { kindGroup } from '@/lib/selection';
-import { WINDOW_HOURS, hoursOfKey, windowKeyId, windowLabelOf } from '@/lib/windows';
+import { periodHoursOf, windowKeyId, windowLabelOf } from '@/lib/windows';
 import { leadOf } from './lead';
 import { createRng } from './rng';
 import { round } from './round';
@@ -31,7 +31,7 @@ function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoM
     label: windowLabelOf(id),
     lead: null,
     observedAt: ago(observedAgoMs),
-    periodHours: lookup(WINDOW_HOURS, id) ?? hoursOfKey(id),
+    periodHours: periodHoursOf(id),
     projection: burn === null ? null : round(utilization + (burn * horizonInMs) / HOUR, 3),
     resetsAt: ahead(resetsInMs),
     utilization,
@@ -113,6 +113,11 @@ const SPEND_RESET_ESTIMATE = endOfMonth(NOW);
 
 /** A story account as written: the account view's shape, its subscription's plan word left to the final map. */
 type Seed = Omit<Account, 'subscription'> & { subscription: Omit<Subscription, 'plan'> | null };
+
+/** The credential of a row that holds no token. */
+export const NO_CREDENTIAL: Account['credential'] = { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null };
+
+const CONTRACT_SUBSCRIPTION: Omit<Subscription, 'plan'> = { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null };
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
@@ -280,7 +285,7 @@ const SEEDS = [
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
-    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    credential: NO_CREDENTIAL,
     subscription: null,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
@@ -297,7 +302,7 @@ const SEEDS = [
     fableWindow: null,
     extraUsage: null,
     fastLane: fastLane(0.18, 0.05, 40_000),
-    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    credential: NO_CREDENTIAL,
     subscription: null,
     requests: { last24h: 0, last7d: 0, lifetime: 3_104 },
     cooldowns: [],
@@ -314,7 +319,7 @@ const SEEDS = [
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
-    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    credential: NO_CREDENTIAL,
     subscription: null,
     // The jobs pool's one member, so its lifetime holds what both of that pool's keys sent.
     requests: { last24h: 0, last7d: 0, lifetime: 3_400 },
@@ -361,7 +366,7 @@ const SEEDS = [
     fableWindow: win('7d_fable', 0, 3 * DAY + 4 * HOUR, SPARE_READ_AGO, null),
     extraUsage: null,
     fastLane: null,
-    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    credential: NO_CREDENTIAL,
     subscription: null,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
@@ -455,7 +460,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(80 * DAY),
     },
-    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: CONTRACT_SUBSCRIPTION,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
@@ -501,7 +506,7 @@ const SEEDS = [
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
-    credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+    credential: NO_CREDENTIAL,
     subscription: null,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
@@ -537,7 +542,7 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
-    subscription: { billingType: 'stripe_subscription_contracted', organizationType: 'claude_enterprise', planDisplayName: null, rateLimitTier: 'default_claude_zero', since: ago(45 * DAY), trialEndsAt: null, endsAt: null },
+    subscription: CONTRACT_SUBSCRIPTION,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
@@ -684,10 +689,10 @@ const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_
 
 /**
  * Where an account's samples end: at its last reading, the last clean poll where every poll after it failed (legacy's
- * and reserve's), spare's reading before its disconnect, and the rest now.
+ * and reserve's), an unpaired row's last reading before its disconnect, and the rest now.
  */
 const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
-  const last = account.usage?.poll?.lastOutcome === 'failed' ? account.usage.poll.lastCleanAt : account.id === 'spare' ? account.usage?.fetchedAt : null;
+  const last = account.usage?.poll?.lastOutcome === 'failed' ? account.usage.poll.lastCleanAt : account.status === 'unpaired' ? account.usage?.fetchedAt : null;
   return last ? Date.parse(last) : NOW;
 };
 

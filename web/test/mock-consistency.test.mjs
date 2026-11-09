@@ -250,13 +250,13 @@ test("the mock's slowed-account fold reads its bar from the start rows, its span
     started(now - 2 * HOUR, 0.4),
     ended(now - HOUR + 2 * MINUTE, now - 2 * HOUR, HOUR, 0.4),
   ];
-  assert.deepEqual(slowedLongOf(rows, 'studio', now), {
+  assert.deepEqual(slowedLongOf(rows, 'studio', now, { held: 72, heldMs: 7_700_000 }), {
     detail: { bar_ms: 80 * MINUTE, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], spans: 2 },
     since: iso(cutoff - 30 * MINUTE),
   });
   // The hour's span alone runs 60 minutes, under the bar of twice 40, and studio's seeded held time of the day, past
   // the bar, holds the item.
-  assert.deepEqual(slowedLongOf(rows.slice(2), 'studio', now), {
+  assert.deepEqual(slowedLongOf(rows.slice(2), 'studio', now, { held: 72, heldMs: 7_700_000 }), {
     detail: { bar_ms: 80 * MINUTE, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], spans: 1 },
     since: iso(now - 2 * HOUR),
   });

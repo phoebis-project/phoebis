@@ -12,19 +12,19 @@ import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, Gua
 import { AFFINITY_MODE_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
-import { byteOrder, tokensTotal } from '@/lib/format';
+import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
-import { compareRequests } from '@/lib/requests';
-import { ACCOUNTS, QUOTA_HISTORY, accountById, usageOf } from './accounts';
+import { compareOrderKeys, compareRequests, type OrderKey } from '@/lib/requests';
+import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
-import { KEYS, POOLS, UNLOADED_MEMBERS, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
+import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { createRng } from './rng';
@@ -75,9 +75,12 @@ const FIRST_POLL_MS = 2_000;
 const FIRST_READING = accountById.get('primary')?.windows ?? [];
 
 // The routes' own wording, so a page draws the text the router would have sent.
+const ACCOUNT_STALE = 'the account changed while it was being edited, so reload and try again';
 const ACCOUNT_TAKEN = 'an account with this id exists';
+const KEY_STALE = 'the key changed while it was being edited, so reload and try again';
 const KEY_TAKEN = 'a key with this id exists';
 const PAIRING_NOT_FOUND = 'pairing session not found';
+const POOL_STALE = 'the pool changed while it was being edited, so reload and try again';
 const POOL_TAKEN = 'a pool with this id exists';
 
 /** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
@@ -301,6 +304,9 @@ const OTHER_BUILD = '0'.repeat(40);
  */
 export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
 const unpricedStory = (): boolean => switchSet(UNPRICED_STORY_KEY);
+const DAY_ROWS_UNPRICED = [...DAY_ROWS, UNPRICED_REQUEST];
+const NO_REQUESTS = new Map<string, RequestLog>();
+const ROLLUPS_UNPRICED = [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS];
 /**
  * The ledger's read sets as the routes fold them: the story's, the unpriced request's rows beside the story's under
  * its switch, and an empty form of each for a fresh installation, so a route that reads its rows here answers that
@@ -313,16 +319,16 @@ const ledger = () => {
     accountRollups: empty ? [] : ACCOUNT_ROLLUPS,
     attention: empty ? [] : ATTENTION,
     catalog: empty ? [] : CATALOG,
-    dayRows: empty ? [] : unpriced ? [...DAY_ROWS, UNPRICED_REQUEST] : DAY_ROWS,
+    dayRows: empty ? [] : unpriced ? DAY_ROWS_UNPRICED : DAY_ROWS,
     decisionOf: (requestId: string, seq: number): DecisionRecord | null => (empty ? null : getDecision(requestId, seq)),
     keepalive: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW,
     keepalive30d: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW_30D,
     quotaHistory: empty ? [] : QUOTA_HISTORY,
     reconciliations: empty ? [] : RECONCILIATIONS,
     recipes: empty ? [] : RECIPES,
-    requestById: empty ? new Map<string, RequestLog>() : requestById,
+    requestById: empty ? NO_REQUESTS : requestById,
     requests: empty ? [] : REQUESTS,
-    rollups: empty ? [] : unpriced ? [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS] : ALL_ROLLUPS,
+    rollups: empty ? [] : unpriced ? ROLLUPS_UNPRICED : ALL_ROLLUPS,
     routingEvents: empty ? [] : ROUTING_EVENTS,
     summaries: empty ? [] : SUMMARIES,
     weeklyResets: empty ? [] : WEEKLY_RESETS,
@@ -332,7 +338,7 @@ const ledger = () => {
  * The rows the ledger has written by `now`: it lists a request once it has written it, so a row whose landing the
  * clock has not reached stays out of the request log and of the sessions' folds alike.
  */
-const writtenBy = (now: number, rows: readonly RequestLog[]): RequestLog[] => rows.filter((r) => landedAt(r) <= now);
+const writtenBy = (now: number): RequestLog[] => ledger().requests.filter((r) => landedAt(r) <= now);
 /**
  * The key the unpriced request lands on, its lifetime and its week read null under the switch, since the request
  * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
@@ -375,7 +381,7 @@ function fromCallbackUrl(url: string): { code: string; state: string } | null {
 /**
  * A flag outranks the enabled bit and the cooldowns in the status the account view folds, so pausing never hides one.
  */
-const statusOf = (a: Account, enabled: boolean): Account['status'] => accountStatusOf(flagOf(a.status), enabled, a.cooldowns);
+const statusOf = (a: Account, enabled: boolean, flag = flagOf(a.status)): Account['status'] => accountStatusOf(flag, enabled, a.cooldowns);
 
 type BudgetedSeed = Pick<PoolMember, 'budgetDailyUsd' | 'budgetMonthlyUsd' | 'spends'>;
 
@@ -499,49 +505,34 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
  * attempt's counts, the last attempt's, so a request whose last attempt answered no 200 carries none.
  */
 const figureOf = (r: RequestLog, order: RequestOrder): number | null => {
-  const answered = servingAttempt(r)?.upstreamStatus === 200;
-  return {
-    attempts: r.attempts.length,
-    duration_ms: r.durationMs,
-    input_tokens: answered ? r.usage.input : null,
-    output_tokens: answered ? r.usage.output : null,
-    received_at: Date.parse(r.at),
-    ttfb_ms: r.ttfbMs,
-  }[order];
+  switch (order) {
+    case 'attempts':
+      return r.attempts.length;
+    case 'duration_ms':
+      return r.durationMs;
+    case 'input_tokens':
+      return servingAttempt(r)?.upstreamStatus === 200 ? r.usage.input : null;
+    case 'output_tokens':
+      return servingAttempt(r)?.upstreamStatus === 200 ? r.usage.output : null;
+    case 'received_at':
+      return Date.parse(r.at);
+    case 'ttfb_ms':
+      return r.ttfbMs;
+  }
 };
+const keyOf = (r: RequestLog, order: RequestOrder): OrderKey => ({ figure: figureOf(r, order), id: r.id });
 /** The route's cursor under a key: `<figure>:<id>`, the figure empty where the row carries none. */
 const cursorOf = (r: RequestLog, order: RequestOrder): string => `${figureOf(r, order) ?? ''}:${r.id}`;
-
-/**
- * The route's order under a key and a direction: a row without the figure after every row with one, under either
- * direction, then the figure and the id, both in the direction asked, so rows that share a figure keep one order.
- */
-const requestOrderOf =
-  (order: RequestOrder, dir: 'asc' | 'desc') =>
-  (a: RequestLog, b: RequestLog): number => {
-    const x = figureOf(a, order);
-    const y = figureOf(b, order);
-    if ((x === null) !== (y === null)) return x === null ? 1 : -1;
-    return (dir === 'asc' ? 1 : -1) * ((x ?? 0) - (y ?? 0) || byteOrder(a.id, b.id));
-  };
-
-/**
- * The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither repeated
- * nor skipped: past a row with the figure lie the rows past it by the figure and the id, then every row without one,
- * and past a row without the figure only the rows without it, past its id.
- */
-function isAfterCursor(r: RequestLog, cursor: string, order: RequestOrder, dir: 'asc' | 'desc'): boolean {
+const cursorKeyOf = (cursor: string): OrderKey => {
   const sep = cursor.indexOf(':');
   const value = cursor.slice(0, sep);
-  const id = cursor.slice(sep + 1);
-  const figure = figureOf(r, order);
-  const sign = dir === 'asc' ? 1 : -1;
-  const pastId = sign * byteOrder(r.id, id) > 0;
-  if (value === '') return figure === null && pastId;
-  if (figure === null) return true;
-  const at = Number(value);
-  return sign * (figure - at) > 0 || (figure === at && pastId);
-}
+  return { figure: value === '' ? null : Number(value), id: cursor.slice(sep + 1) };
+};
+
+const requestOrderOf = (order: RequestOrder, dir: 'asc' | 'desc') => {
+  const compare = compareOrderKeys(dir);
+  return (a: RequestLog, b: RequestLog): number => compare(keyOf(a, order), keyOf(b, order));
+};
 
 type StoredPool = PoolRow<Omit<PoolMember, 'activePins'>>;
 
@@ -771,7 +762,7 @@ export class MockApi implements Api {
     return {
       ...ACCOUNT_SAMPLE,
       cooldowns: [],
-      credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
+      credential: NO_CREDENTIAL,
       email,
       extraUsage: null,
       fableWindow: null,
@@ -837,10 +828,8 @@ export class MockApi implements Api {
 
   async clearFunding(accountId: string) {
     const a = this.account(accountId);
-    // `statusOf` keeps the flag the status carries, so the clear drops the funding flag before the fold reads the
-    // enabled bit and the cooldowns.
     const flag = flagOf(a.status);
-    this.putAccount(revised({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: accountStatusOf(flag === 'funding_required' ? null : flag, a.routingEnabled, a.cooldowns) }));
+    this.putAccount(revised({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: statusOf(a, a.routingEnabled, flag === 'funding_required' ? null : flag) }));
     return latency(undefined, 200);
   }
 
@@ -989,7 +978,7 @@ export class MockApi implements Api {
     const pool: StoredPool = {
       ...POOL_SAMPLE,
       ...input,
-      day24h: { billedUsd: 0, cost: 0, equivalent: 0 },
+      ...UNTIL_DRAWN,
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
       keepaliveResolved: this.resolvedOf(input),
@@ -1000,9 +989,7 @@ export class MockApi implements Api {
       // The route starts a pool with no list when the body leaves it out, whatever the sample row holds.
       modelRules: input.modelRules ?? [],
       movesPerHour: {},
-      requests24h: 0,
       revision: stampToken((this.buriedPools.get(id) ?? 0) + 1, iso(NOW)),
-      traffic24h: [],
       updatedAt: iso(NOW),
     };
     this.pools = [...this.pools, pool];
@@ -1053,7 +1040,7 @@ export class MockApi implements Api {
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
     // the poll's standing goes too.
-    this.putAccount(revised({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) }));
+    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) }));
     return latency(undefined, 250);
   }
 
@@ -1323,12 +1310,16 @@ export class MockApi implements Api {
     // The newest stamp is over the rows the query's filters admit, its `to` included, with its `landedAfter` as the
     // floor and capped at its `to` unless the query marks a fixed end, as the route reads it.
     const now = mockClock.now();
-    const written = writtenBy(now, ledger().requests);
+    const written = writtenBy(now);
     const since = query.landedAfter;
     const matched = written.filter((r) => matchesQuery(r, query, live) && (since === undefined || landedAt(r) > since)).sort(requestOrderOf(order, dir));
     const newest = matched.reduce((stamp, r) => Math.max(stamp, landedAt(r)), since ?? 0);
     const landedThrough = query.to && !query.fixedEnd ? Math.min(newest, Date.parse(query.to)) : newest;
-    const after = query.cursor ? matched.filter((r) => isAfterCursor(r, query.cursor!, order, dir)) : matched;
+    // The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither
+    // repeated nor skipped.
+    const cursor = query.cursor ? cursorKeyOf(query.cursor) : null;
+    const compare = compareOrderKeys(dir);
+    const after = cursor === null ? matched : matched.filter((r) => compare(keyOf(r, order), cursor) > 0);
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];
@@ -1348,7 +1339,7 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now(), ledger().requests)));
+    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now())));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
@@ -1382,7 +1373,7 @@ export class MockApi implements Api {
   async renameAccount(accountId: string, label: string, revision?: number) {
     const a = this.account(accountId);
     if (revision !== undefined && revision !== a.revision) {
-      return Promise.reject(new ApiError(409, 'the account changed while it was being edited, so reload and try again', 'stale_edit'));
+      return Promise.reject(new ApiError(409, ACCOUNT_STALE, 'stale_edit'));
     }
     return latency(this.withPool(this.putAccount(revised({ ...a, label }))), 250);
   }
@@ -1475,7 +1466,7 @@ export class MockApi implements Api {
     const a = this.account(accountId);
     if (patch.canceled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is canceled', null);
     if (revision !== undefined && revision !== a.revision) {
-      return Promise.reject(new ApiError(409, 'the account changed while it was being edited, so reload and try again', 'stale_edit'));
+      return Promise.reject(new ApiError(409, ACCOUNT_STALE, 'stale_edit'));
     }
     // The route answers a subscription block for a canceled OAuth row even before it pairs, so its end has a place.
     const blank: Subscription = { billingType: '', endsAt: null, organizationType: '', plan: null, planDisplayName: null, rateLimitTier: '', since: null, trialEndsAt: null };
@@ -1547,7 +1538,7 @@ export class MockApi implements Api {
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const twice = repeatedId(ownIds);
     if (twice !== null) return Promise.reject(new ApiError(400, `guardrails lists ${twice} twice`, null));
-    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited, so reload and try again', 'stale_edit'));
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, KEY_STALE, 'stale_edit'));
     // The pool the key lands in, a new one on a move, with the key's own list as the edit leaves it.
     const own = ownIds ?? this.guardrailRefs('keys', id).map((r) => r.id);
     const bound = boundRefusal(rest.poolId, this.guardrailRefs('pools', rest.poolId).map((r) => r.id), [[id, own]]);
@@ -1576,7 +1567,7 @@ export class MockApi implements Api {
     // In the route's order: the stamp after the list's own shape and ahead of the member lookups, so a stale edit that
     // names an unknown or a held member answers `stale_edit`.
     const current = this.pools[idx];
-    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited, so reload and try again', 'stale_edit'));
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, POOL_STALE, 'stale_edit'));
     // The store counts the guardrail list against every key of the pool first in its transaction, then writes the
     // members and looks each guardrail up last.
     if (guardrailIds !== undefined) {
