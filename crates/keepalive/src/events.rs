@@ -10,8 +10,8 @@ use phoebis_routing::{RegistrySnapshot, Report};
 
 use crate::config::LEASE_MS;
 use crate::engine::{
-    agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, Inner, ParkKind, Reason,
-    Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
+    agent_mut, agent_ref, open_idle_episode, Agent, AgentState, Engine, Inner, Park, ParkKind,
+    Reason, Session, SessionKey, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 
 pub const PROTOCOL: u64 = 1;
@@ -44,14 +44,10 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct AckAgent {
     pub agent_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deadline: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub park_kind: Option<ParkKind>,
+    #[serde(flatten)]
+    pub park: Option<Park>,
     pub request_generation: u64,
     pub state: AgentState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wake_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -188,14 +184,12 @@ pub enum Reported {
         owner_id: Option<String>,
         previous_instance_id: Option<String>,
     },
-    /// A state, with the park kind, the wake and the deadline a `parked` state alone carries.
+    /// A state, with the park a `parked` state alone carries.
     State {
         agent_id: String,
-        deadline: Option<i64>,
-        park_kind: Option<ParkKind>,
+        park: Option<Park>,
         request_generation: Option<u64>,
         state: AgentState,
-        wake_at: Option<i64>,
     },
 }
 
@@ -248,11 +242,11 @@ impl TryFrom<Event> for EventReport {
             Some("presence") => true,
             Some(_) => return Err(err("invalid_state", 400)),
         };
-        let (state, park_kind) = match event.state.as_deref() {
+        let (state, park) = match event.state.as_deref() {
             None => (None, None),
             Some(word) => {
                 let state = AgentState::parse(word).ok_or(err("invalid_state", 400))?;
-                let park_kind = if state == AgentState::Parked {
+                let park = if state == AgentState::Parked {
                     let kind = event
                         .park_kind
                         .as_deref()
@@ -261,7 +255,11 @@ impl TryFrom<Event> for EventReport {
                     if kind != ParkKind::Background && event.wake_at.is_none() {
                         return Err(err("invalid_event", 400));
                     }
-                    Some(kind)
+                    Some(Park {
+                        deadline: event.deadline,
+                        kind,
+                        wake_at: event.wake_at,
+                    })
                 } else if event.park_kind.is_some()
                     || event.wake_at.is_some()
                     || event.deadline.is_some()
@@ -270,19 +268,17 @@ impl TryFrom<Event> for EventReport {
                 } else {
                     None
                 };
-                (Some(state), park_kind)
+                (Some(state), park)
             }
         };
         let Event {
             agent_id,
-            deadline,
             instance_id,
             owner_id,
             previous_instance_id,
             request_generation,
             sequence,
             session_id,
-            wake_at,
             ..
         } = validate(event)?;
         let required = || err("invalid_event", 400);
@@ -304,11 +300,9 @@ impl TryFrom<Event> for EventReport {
             },
             EventKind::State => Reported::State {
                 agent_id: agent_id.ok_or_else(required)?,
-                deadline,
-                park_kind,
+                park,
                 request_generation,
                 state: state.ok_or_else(required)?,
-                wake_at,
             },
         };
         Ok(EventReport {
@@ -364,11 +358,9 @@ fn agents_of(session: &Session) -> Vec<AckAgent> {
         .values()
         .map(|a| AckAgent {
             agent_id: a.id.clone(),
-            deadline: a.deadline,
-            park_kind: a.park_kind,
+            park: a.park,
             request_generation: a.generation,
             state: a.state,
-            wake_at: a.wake_at,
         })
         .collect()
 }
@@ -588,26 +580,24 @@ impl Inner {
                 }
             }
             Reported::State {
-                deadline,
-                park_kind,
+                park,
                 request_generation,
                 state,
-                wake_at,
                 ..
             } => {
                 let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
                 let was = agent.state;
-                let (state, park_kind) = (*state, *park_kind);
+                let (state, park) = (*state, *park);
                 if state == AgentState::Parked {
                     // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
                     // start, which the parked ceiling counts from.
-                    if was != AgentState::Parked || agent.park_kind != park_kind {
+                    if was != AgentState::Parked
+                        || agent.park.map(|p| p.kind) != park.map(|p| p.kind)
+                    {
                         agent.park_began = Some(now);
                     }
                     agent.set_state(state);
-                    agent.park_kind = park_kind;
-                    agent.wake_at = *wake_at;
-                    agent.deadline = *deadline;
+                    agent.park = park;
                 } else {
                     // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports
                     // idle before or after the router's tick does: a park that ended without a request, which

@@ -13,7 +13,7 @@ use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, AgentState, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits,
-    KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS,
+    KeepalivePolicy, KeepaliveTiming, ParkKind, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -2257,6 +2257,42 @@ async fn a_restored_park_past_the_idle_window_survives_one_lease_length_and_ends
         (second.recipes_for("desktop", "session"), main.reason),
         (Vec::new(), Reason::IdleLimit),
         "no registration came, so the silent session's idle window applies at the window's end: {main:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    let deadline = r.now() + 10 * MINUTE;
+    let wake = r.now() + 60 * MINUTE;
+    r.event(Event {
+        event: "state".into(),
+        agent_id: Some("main".into()),
+        state: Some("parked".into()),
+        park_kind: Some("both".into()),
+        deadline: Some(deadline),
+        wake_at: Some(wake),
+        request_generation: Some(r.agent("main").request_generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.flush_persisted().await;
+
+    let second = r.restart().await;
+    second.load_persisted().await;
+    second.step().await;
+    second.wait_idle().await;
+    let main = second.agent_status("desktop", "session", "main").unwrap();
+    assert_eq!(
+        (main.state, main.park_kind, main.wake_at, main.deadline),
+        (
+            AgentState::Parked,
+            Some(ParkKind::Both),
+            Some(wake),
+            Some(deadline)
+        ),
+        "{main:?}"
     );
 }
 

@@ -27,7 +27,7 @@ pub use config::{
 pub use engine::{
     continues_prefix, guard, idle_age_bucket, pool_fundings, spawn_observer, AgentState,
     AgentStatus, Engine, EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns,
-    ParkKind, PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS,
+    Park, ParkKind, PrefixAnchor, Reason, SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS,
     MAIN_AGENT,
 };
 pub use events::{

@@ -157,14 +157,14 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeV
         agent_state: agent.state,
         cause: agent.reason,
         credited_today,
-        deadline: agent.deadline,
+        deadline: agent.park.and_then(|p| p.deadline),
         key_id: key_id.into(),
         last_guard: agent.last_guard,
         last_probe_at: agent.last_probe_at,
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
         next_probe_at: agent.next_probe_at(),
-        park_kind: agent.park_kind,
+        park_kind: agent.park.map(|p| p.kind),
         pool_id: agent.pool_id.clone(),
         probes_today,
         session_id: session_id.into(),
@@ -178,7 +178,7 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeV
             state => state,
         },
         ttl_seconds: agent.ttl_ms / 1_000,
-        wake_at: agent.wake_at,
+        wake_at: agent.park.and_then(|p| p.wake_at),
     }
 }
 

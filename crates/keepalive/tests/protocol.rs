@@ -1444,6 +1444,127 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
 }
 
 #[tokio::test]
+async fn a_scheduled_park_with_a_deadline_drops_the_deadline_when_its_wake_passes() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.observe("worker").await;
+    let base = r.sequence;
+    let app = keepalive_router(r.engine.clone());
+    let wake = r.now() + 10 * MINUTE;
+    let deadline = r.now() + 60 * MINUTE;
+    let park = report(
+        "state",
+        "session",
+        "instance",
+        base + 1,
+        json!({
+            "agent_id": "worker",
+            "state": "parked",
+            "park_kind": "scheduled",
+            "wake_at": wake,
+            "deadline": deadline,
+            "request_generation": r.status("worker").request_generation
+        }),
+    );
+    assert_eq!(post(&app, park, Some(KEY)).await.status, 200);
+    r.advance(11 * MINUTE);
+    r.step().await;
+    let worker = r.status("worker");
+    assert_eq!(
+        (
+            worker.state,
+            worker.park_kind,
+            worker.wake_at,
+            worker.deadline
+        ),
+        (AgentState::Parked, None, None, None),
+        "the passed wake ends the scheduled park whole"
+    );
+    let again = post(
+        &app,
+        report("session_start", "session", "instance", base + 2, json!({})),
+        Some(KEY),
+    )
+    .await;
+    assert_eq!(
+        (again.status, again.body["agents"][1].clone()),
+        (
+            200,
+            json!({
+                "agent_id": "worker",
+                "request_generation": worker.request_generation,
+                "state": "parked"
+            })
+        ),
+        "the registration answer carries no key of the ended park"
+    );
+}
+
+#[tokio::test]
+async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_its_wake() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.observe("worker").await;
+    let base = r.sequence;
+    let app = keepalive_router(r.engine.clone());
+    let deadline = r.now() + 10 * MINUTE;
+    let wake = r.now() + 60 * MINUTE;
+    let park = report(
+        "state",
+        "session",
+        "instance",
+        base + 1,
+        json!({
+            "agent_id": "worker",
+            "state": "parked",
+            "park_kind": "both",
+            "wake_at": wake,
+            "deadline": deadline,
+            "request_generation": r.status("worker").request_generation
+        }),
+    );
+    assert_eq!(post(&app, park, Some(KEY)).await.status, 200);
+    r.advance(11 * MINUTE);
+    r.step().await;
+    let worker = r.status("worker");
+    assert_eq!(
+        (
+            worker.state,
+            worker.park_kind,
+            worker.wake_at,
+            worker.deadline
+        ),
+        (
+            AgentState::Parked,
+            Some(ParkKind::Scheduled),
+            Some(wake),
+            None
+        ),
+        "the passed deadline leaves the wake's part of the park"
+    );
+    let again = post(
+        &app,
+        report("session_start", "session", "instance", base + 2, json!({})),
+        Some(KEY),
+    )
+    .await;
+    assert_eq!(
+        (again.status, again.body["agents"][1].clone()),
+        (
+            200,
+            json!({
+                "agent_id": "worker",
+                "park_kind": "scheduled",
+                "request_generation": worker.request_generation,
+                "state": "parked",
+                "wake_at": wake
+            })
+        ),
+        "the registration answer carries the narrowed park without its deadline"
+    );
+}
+
+#[tokio::test]
 async fn instance_conflict_names_an_ended_or_silent_holder_and_the_generation_refusals_name_the_current_one(
 ) {
     let r = rig(RigSpec::default()).await;

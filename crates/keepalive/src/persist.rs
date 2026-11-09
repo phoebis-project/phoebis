@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{KeepaliveTiming, LEASE_MS};
 use crate::engine::{
     agent_mut, agent_ref, Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner,
-    Kept, Observation, ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason, SavingsUnit,
-    Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
+    Kept, Observation, Park, ParkKind, PrefixAnchor, PriorCoverage, ProbeCharge, Reason,
+    SavingsUnit, Session, SessionKey, Settlement, UnansweredProbe, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::AttemptFunding;
@@ -445,9 +445,9 @@ impl PersistedAgent {
             key_generation: agent.key_generation,
             incarnation: agent.incarnation,
             state: agent.state,
-            deadline: agent.deadline,
-            park_kind: agent.park_kind,
-            wake_at: agent.wake_at,
+            deadline: agent.park.and_then(|p| p.deadline),
+            park_kind: agent.park.map(|p| p.kind),
+            wake_at: agent.park.and_then(|p| p.wake_at),
             park_began: agent.park_began,
             park_ended_at: agent.park_ended_at,
             idle_episode: agent.idle_episode.as_ref().map(|episode| PersistedEpisode {
@@ -570,9 +570,11 @@ impl PersistedAgent {
         );
         agent.key_generation = self.key_generation;
         agent.state = self.state;
-        agent.deadline = self.deadline;
-        agent.park_kind = self.park_kind;
-        agent.wake_at = self.wake_at;
+        agent.park = self.park_kind.map(|kind| Park {
+            deadline: self.deadline,
+            kind,
+            wake_at: self.wake_at,
+        });
         agent.park_began = self.park_began;
         agent.park_ended_at = self.park_ended_at;
         agent.idle_episode = self.idle_episode.map(|episode| IdleEpisode {

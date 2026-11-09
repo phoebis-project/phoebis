@@ -879,7 +879,7 @@ pub(crate) fn ceiling(
     }
     match agent.state {
         AgentState::Parked => {
-            let kind = agent.park_kind;
+            let kind = agent.park.map(|park| park.kind);
             let background = matches!(kind, Some(ParkKind::Background | ParkKind::Both));
             if background
                 && agent
@@ -889,7 +889,8 @@ pub(crate) fn ceiling(
                 return Verdict::Probe;
             }
             let wake = agent
-                .wake_at
+                .park
+                .and_then(|park| park.wake_at)
                 .filter(|_| matches!(kind, Some(ParkKind::Scheduled | ParkKind::Both)));
             match wake {
                 Some(wake) if wake - now <= ceilings.horizon_ms => Verdict::Probe,

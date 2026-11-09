@@ -90,6 +90,18 @@ impl ParkKind {
     }
 }
 
+/// What a parked agent waits on and until when, held as one value so that a park with no kind cannot be represented
+/// and no reader has to compensate for a deadline or a wake that a pass left behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct Park {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<i64>,
+    #[serde(rename = "park_kind")]
+    pub kind: ParkKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wake_at: Option<i64>,
+}
+
 /// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
 /// cache. The label the wasted count carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -561,11 +573,9 @@ pub(crate) struct Agent {
     pub incarnation: u64,
     /// Written through `set_state`, which ends the park on any move out of `Parked`.
     pub state: AgentState,
-    // The park the last `parked` report described, cleared with `park_began` on every move out of `Parked`, so a
-    // reader never finds a park on an agent that is not parked.
-    pub deadline: Option<i64>,
-    pub park_kind: Option<ParkKind>,
-    pub wake_at: Option<i64>,
+    /// The park the last `parked` report described, cleared with `park_began` on every move out of `Parked`, so a
+    /// reader never finds a park on an agent that is not parked.
+    pub park: Option<Park>,
     /// When the current park was reported, kept across a repeated `parked` of the same kind.
     pub park_began: Option<i64>,
     /// When a deadline or a wake passed without a request: the idle window restarts here. No report clears it,
@@ -684,9 +694,7 @@ impl Agent {
             key_generation: 0,
             incarnation,
             state: AgentState::Busy,
-            deadline: None,
-            park_kind: None,
-            wake_at: None,
+            park: None,
             park_began: None,
             park_ended_at: None,
             idle_episode: None,
@@ -882,9 +890,7 @@ impl Agent {
     pub(crate) fn set_state(&mut self, state: AgentState) {
         self.state = state;
         if state != AgentState::Parked {
-            self.park_kind = None;
-            self.wake_at = None;
-            self.deadline = None;
+            self.park = None;
             self.park_began = None;
         }
     }
@@ -892,28 +898,28 @@ impl Agent {
     /// Drops the part of a park whose return has come without a request: a deadline the harness stopped the command
     /// at, or a wake that passed. True when nothing is left of the park, which is when it ended.
     pub(crate) fn pass_park(&mut self, now: i64) -> bool {
-        let Some(kind) = self.park_kind else {
+        let Some(mut park) = self.park else {
             return false;
         };
-        let mut kind = Some(kind);
-        if self.deadline.is_some_and(|deadline| deadline <= now) {
-            self.deadline = None;
+        let mut kind = Some(park.kind);
+        if park.deadline.is_some_and(|deadline| deadline <= now) {
+            park.deadline = None;
             kind = match kind {
                 Some(ParkKind::Background) => None,
                 Some(ParkKind::Both) => Some(ParkKind::Scheduled),
                 other => other,
             };
         }
-        if self.wake_at.is_some_and(|wake| wake <= now) {
-            self.wake_at = None;
+        if park.wake_at.is_some_and(|wake| wake <= now) {
+            park.wake_at = None;
             kind = match kind {
                 Some(ParkKind::Scheduled) => None,
                 Some(ParkKind::Both) => Some(ParkKind::Background),
                 other => other,
             };
         }
-        self.park_kind = kind;
-        kind.is_none()
+        self.park = kind.map(|kind| Park { kind, ..park });
+        self.park.is_none()
     }
 }
 
@@ -2192,9 +2198,9 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
-        let park = (agent.park_kind, agent.deadline, agent.wake_at);
+        let park = agent.park;
         if !agent.pass_park(now) {
-            if park != (agent.park_kind, agent.deadline, agent.wake_at) {
+            if park != agent.park {
                 self.touch_agent(key, agent_id);
             }
             return;
@@ -2756,14 +2762,14 @@ impl Engine {
             cold: agent.cold,
             counters_day: agent.counters_day,
             credited_today: agent.credited_today,
-            deadline: agent.deadline,
+            deadline: agent.park.and_then(|p| p.deadline),
             failures: agent.failures,
             idle_ticks: agent.idle_ticks,
             in_flight: agent.in_flight,
             last_activity: agent.last_activity,
             migrations: agent.migrations,
             next_probe_at: agent.next_probe_at(),
-            park_kind: agent.park_kind,
+            park_kind: agent.park.map(|p| p.kind),
             paused: agent.paused,
             probe_usage: agent.usage,
             probes: agent.probes,
@@ -2772,7 +2778,7 @@ impl Engine {
             request_generation: agent.generation,
             state: agent.state,
             unanswered: agent.unanswered.len() + agent.kept.len(),
-            wake_at: agent.wake_at,
+            wake_at: agent.park.and_then(|p| p.wake_at),
         })
     }
 
