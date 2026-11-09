@@ -89,7 +89,8 @@
   --motion-base: 120ms;
   --motion-fast: 100ms;
 
-  /* The page-level stacking layers, named so the boxes that share one stay on it together. */
+  /* The page-level stacking layers, named so the boxes that share a layer stay on it together and a layer one rule
+     alone reads still names its place in the order, since a layer means something only against the others. */
   --z-drawer: 30;
   --z-menu: 20;
   --z-popover: 30;

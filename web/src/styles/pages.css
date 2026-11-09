@@ -1980,10 +1980,6 @@
   z-index: var(--z-menu);
   width: max-content;
   padding: 6px 8px;
-  background: var(--surface);
-  border: 1px solid var(--hairline-strong);
-  border-radius: 6px;
-  box-shadow: var(--shadow-pop);
 }
 
 /* A fit column is as wide as its widest single item, so the two links take the sub line's 11.5 px and stack there,
