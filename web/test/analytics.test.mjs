@@ -443,7 +443,7 @@ test("the placements table's hit share formats", () => {
 });
 
 test("the mock files its hourly rows under the speed each hour's answers reported, one key's Opus hours fast", () => {
-  const groups = d.groupsOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'speed', to: d.ALL_ROLLUPS.at(-1).hour });
+  const groups = d.breakdownOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'speed', to: new Date(Date.parse(d.ALL_ROLLUPS.at(-1).hour) + HOUR).toISOString() });
   assert.deepEqual(groups.map((g) => g.key), ['fast', 'standard']);
   const fast = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
   assert.ok(fast.length > 0 && fast.every((r) => r.keyId === 'desktop' && r.model.includes('opus') && r.kind === 'inference'));
@@ -462,7 +462,7 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
   const lastHour = Date.parse(d.ALL_ROLLUPS.at(-1).hour);
   const lastDay = probeRows.filter((r) => Date.parse(r.hour) >= lastHour - 23 * HOUR);
   assert.equal(lastDay.reduce((n, r) => n + r.probes.held, 0), 1, 'the last day holds one, so the default range draws the slice');
-  const [all] = d.groupsOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'all', to: d.ALL_ROLLUPS.at(-1).hour });
+  const [all] = d.breakdownOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'all', to: new Date(Date.parse(d.ALL_ROLLUPS.at(-1).hour) + HOUR).toISOString() });
   assert.equal(all.probes.held, held, 'the mock route sums the probe rows it groups');
 });
 
