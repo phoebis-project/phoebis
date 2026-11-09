@@ -3,7 +3,7 @@ import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
 import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
-import { REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
+import { CLASSIFIER_VALUES, REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
 import { BodyViewer } from '@/components/BodyViewer';
@@ -27,6 +27,7 @@ import { bodyLines, bodyText, findHits } from '@/lib/bodies';
 import { CACHE_MISS_REASONS, isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
+import { groupInto } from '@/lib/counts';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { keyOptions, notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
@@ -116,6 +117,7 @@ const REQUEST_OUTCOME_LABEL: Record<RequestOutcome, string> = {
   rejected: 'rejected',
   succeeded: 'succeeded',
 };
+const CLASSIFIER_LABEL: Record<(typeof CLASSIFIER_VALUES)[number], string> = { client: 'client classifier', client_off: 'client classifier off' };
 const transportLabel = (r: Pick<RequestLog, 'transport'>) => (r.transport === 'sse' ? 'SSE' : 'JSON');
 
 /**
@@ -126,8 +128,8 @@ const HEAD_ID_CHARS = 24;
 const GEOGRAPHY_TITLE = 'The inference geography the upstream reported for the answer: global or us. Not available means the model does not take the inference geography parameter.';
 const UPSTREAM_REFUSAL_TITLE = 'The upstream refused this answer. Open the request for the stop reason and the recommended model.';
 /** The issuer's account where a loaded row's attempt issued the presented token, the generic words otherwise. */
-const fallbackTitle = (r: RequestLog, rows: readonly RequestLog[]): string => {
-  const issuer = rows.flatMap((row) => row.attempts).find((a) => a.issuedDigest === r.fallbackDigest)?.accountId ?? null;
+const fallbackTitle = (digest: string, issuedBy: ReadonlyMap<string, Attempt[]>): string => {
+  const issuer = issuedBy.get(digest)?.[0]?.accountId ?? null;
   return issuer === null ? 'A fallback token presented with this request' : `A fallback token issued by ${issuer}`;
 };
 
@@ -305,6 +307,7 @@ export function RequestsPage() {
     stack,
     stale: requests.stale,
   });
+  const issuedBy = useMemo(() => groupInto(rows.flatMap((row) => row.attempts), (a) => a.issuedDigest), [rows]);
 
   const refresh = () => {
     resetPaging();
@@ -322,11 +325,7 @@ export function RequestsPage() {
       accounts: (accounts.data ?? []).map((a) => ({ label: a.label, value: a.id })),
       agentTypes: AGENT_TYPES.map((v) => ({ label: v, value: v })),
       cacheMissReasons: missReasonOptions(rows, filters.cacheMissReasons),
-      classifiers: [
-        { label: 'client classifier', value: 'client' },
-        { label: 'client classifier off', value: 'client_off' },
-        { label: 'none', value: NO_CLASS },
-      ],
+      classifiers: [...CLASSIFIER_VALUES.map((v) => ({ label: CLASSIFIER_LABEL[v], value: v })), { label: 'none', value: NO_CLASS }],
       efforts: [...EFFORT_LEVELS, NO_EFFORT, OTHER_DIMENSION].map((v) => ({ label: v, value: v })),
       fallback: [
         { label: 'yes', value: 'true' },
@@ -355,6 +354,7 @@ export function RequestsPage() {
   const shown = requestId ? new Set<ColumnId>(COMPACT) : visible;
   const fills = COLUMNS.some((c) => shown.has(c.id) && 'fill' in c && c.fill);
   const detailTo = (id: string) => ({ pathname: requestHref(id), search: location.search });
+  const closeDrawer = () => navigate({ pathname: '/requests', search: location.search });
 
   return (
     <PopoverHost.Provider value={host}>
@@ -424,7 +424,7 @@ export function RequestsPage() {
                           key={r.id}
                           className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
                           tabIndex={0}
-                          {...toggleRow(() => (r.id === requestId ? navigate({ pathname: '/requests', search: location.search }) : navigate(detailTo(r.id))))}
+                          {...toggleRow(() => (r.id === requestId ? closeDrawer() : navigate(detailTo(r.id))))}
                         >
                           {shown.has('time') && (
                             <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
@@ -466,7 +466,7 @@ export function RequestsPage() {
                                   </Badge>
                                 )}
                                 {r.fallbackDigest !== null && (
-                                  <Badge tone="info" title={fallbackTitle(r, rows)}>
+                                  <Badge tone="info" title={fallbackTitle(r.fallbackDigest, issuedBy)}>
                                     fallback
                                   </Badge>
                                 )}
@@ -535,7 +535,7 @@ export function RequestsPage() {
 
         {requestId && (
           <Descriptions>
-            <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={filters.rows} settings={settings.data} unit={unit} onClose={() => navigate({ pathname: '/requests', search: location.search })} />
+            <RequestDrawer context={context} request={selected} requestId={requestId} guardrails={guardrails.data} now={now} rows={filters.rows} settings={settings.data} unit={unit} onClose={closeDrawer} />
           </Descriptions>
         )}
       </div>

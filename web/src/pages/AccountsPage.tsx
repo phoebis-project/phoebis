@@ -597,11 +597,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
                       title: account.subscription?.rateLimitTier || undefined,
                       // The start date is the paid subscription's, so it names nothing true once the plan ended, and
                       // the Plan ended row carries the end's instant.
-                      value: account.subscription
-                        ? account.planEndedAt !== null
-                          ? (account.plan ?? '-')
-                          : `${account.plan ?? '-'}${account.subscription.since ? ` since ${fmtDate(account.subscription.since)}` : ''}`
-                        : 'unknown until paired',
+                      value: account.subscription ? `${account.plan ?? '-'}${account.planEndedAt === null && account.subscription.since ? ` since ${fmtDate(account.subscription.since)}` : ''}` : 'unknown until paired',
                     },
                     { label: 'Rate-limit tier', value: account.subscription ? `${account.subscription.rateLimitTier}${account.usageBased ? ', usage-based' : ''}` : '-', mono: account.subscription !== null },
                     ...(endsAt ? [{ label: 'Ends', title: fmtAbsolute(endsAt), value: fmtEndsIn(endsAt, now) }] : []),

@@ -18,7 +18,6 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
 import { dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
-import { weekScale, weekUnpricedTitle } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
 import { isFinished, lineTotals, sessionLines, withinExpiry } from '@/lib/keepalive';
@@ -83,7 +82,7 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
   if (scale === null) return { ...tile, note: null, spark: spark(1) };
   return {
     ...tile,
-    note: billed || !plan ? `${fmtUsd(o.day24h.billedUsd / 24)} billed per hour` : `${equivalentOrDash(o.day24h.equivalent === null ? null : o.day24h.equivalent / 24, week, scale)} per hour`,
+    note: billed || !plan ? `${fmtUsd(day.billedUsd / 24)} billed per hour` : `${equivalentOrDash(day.equivalent === null ? null : day.equivalent / 24, week, scale)} per hour`,
     spark: spark(scale),
   };
 }
@@ -115,6 +114,7 @@ export function DashboardPage() {
   const costTile = useMemo(() => (o ? costTileOf(unit, o, reading) : null), [o, reading, unit]);
   const accountsFailure = failedFirst(accounts) ? <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} /> : null;
   const ringFailure = accountsFailure ?? (failedFirst(settings) ? <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} /> : null);
+  const ringUnpriced = reading.failure?.unpriced ? reading.failure.text : null;
   const overviewFailed = failedFirst(overview);
   const asOf = asOfLine(
     [
@@ -174,8 +174,9 @@ export function DashboardPage() {
           now={now}
           week={week}
           failure={ringFailure}
+          unpriced={ringUnpriced}
         />
-        <RemainingCard title="Fable week remaining" subtitle="Subscription accounts, Fable week, weighed by tier" windowId="7d_fable" accounts={accounts.data} costs={costs} now={now} week={week} failure={ringFailure} />
+        <RemainingCard title="Fable week remaining" subtitle="Subscription accounts, Fable week, weighed by tier" windowId="7d_fable" accounts={accounts.data} costs={costs} now={now} week={week} failure={ringFailure} unpriced={ringUnpriced} />
       </div>
 
       <section>
@@ -234,10 +235,10 @@ function StatTile({ label, value, note, spark, color, failure = null, title }: {
 /** The window's words in a ring's empty sentence. */
 const RING_WINDOW: Record<RingWindow, string> = { '7d': '7-day window', '7d_fable': 'Fable week' };
 
-function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; week: WeekPosition; windowId: RingWindow }) {
+/** `unpriced` is the week reading's unpriced sentence, null where the reading is priced or waits on the cost model. */
+function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, failure, unpriced }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; unpriced: string | null; week: WeekPosition; windowId: RingWindow }) {
   const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, week, now) : null), [accounts, costs, windowId, week, now]);
   const slotOf = useMemo(() => accountSlots((accounts ?? []).map((a) => a.id)), [accounts]);
-  const unsized = costs !== null && weekScale(costs, week) === null;
   return (
     <Card title={title} subtitle={subtitle}>
       {failure ? (
@@ -252,7 +253,7 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, 
         // week whose tier holds no 7-day capacity the week is what lacks a size, so the card names the week.
         <>
           <p className="muted remaining__none">
-            {figures.carried ? (unsized ? `${weekUnpricedTitle(week)}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
+            {figures.carried ? (unpriced !== null ? `${unpriced}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
           </p>
           <LeftOut accounts={figures.leftOut} />
         </>

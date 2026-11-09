@@ -1,5 +1,5 @@
 import { iso } from '@/api/decode';
-import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOrder, RequestOutcome } from '@/api/types';
+import type { Account, BurnGroup, KeyStatus, RequestKind, RequestOrder, RequestOutcome, SortDir } from '@/api/types';
 import { REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/types';
 import { CACHE_MISS_REASONS, missShort } from './cache';
 import { clock } from './clock';
@@ -60,7 +60,7 @@ export type KeySpec =
   | { kind: 'range'; default: string }
   | { kind: 'text'; name: string };
 
-export type SortDir = 'asc' | 'desc';
+export type { SortDir } from '@/api/types';
 export const SORT_DIRS = ['asc', 'desc'] as const;
 export type SortDefault = SortDir | 'none';
 

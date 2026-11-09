@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, Lifecycle, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FundedSum, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, Lifecycle, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
   MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
@@ -250,6 +250,8 @@ const keyFigures = (v: unknown): KeyFigures => {
   return { billedUsd: num(f.billed_usd), cost: num(f.cost_usd), equivalent: numOrNull(f.equivalent), requests: num(f.requests) };
 };
 
+const daySum = (r: Rec): FundedSum => ({ billedUsd: num(r.billed_24h), cost: num(r.cost_24h), equivalent: numOrNull(r.equivalent_24h) });
+
 /** A key's status from its stored flags: routing refuses a key that is revoked, expired or switched off, in that order
  *  of finality. */
 export const keyStatusOf = (revoked: boolean, expiresAt: string | null, enabled: boolean, now: number): ApiKey['status'] =>
@@ -345,7 +347,7 @@ export function decodePool(v: unknown): Pool {
     burnAverageSeconds: num(p.burn_average_seconds, POOL_ENGINE_DEFAULTS.burnAverageSeconds),
     cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
-    day24h: { billedUsd: num(p.billed_24h), cost: num(p.cost_24h), equivalent: numOrNull(p.equivalent_24h) },
+    day24h: daySum(p),
     guardrails: guardrailRefs(p.guardrails),
     id: str(p.id),
     inFlightCap: num(p.in_flight_cap, POOL_ENGINE_DEFAULTS.inFlightCap),
@@ -797,7 +799,7 @@ export function decodeDashboard(v: unknown): Overview {
   const d = rec(v);
   return {
     activePins: num(rec(d.sessions).active_pins),
-    day24h: { billedUsd: num(d.billed_24h), cost: num(d.cost_24h), equivalent: numOrNull(d.equivalent_24h) },
+    day24h: daySum(d),
     errorRate24h: numOrNull(d.error_rate_24h),
     hourly: list(d.hourly).map(rec).map((h) => ({ at: isoOr(h.at, epoch), billed: num(h.billed), cost: num(h.cost), equivalent: numOrNull(h.equivalent), errors: num(h.errors), refused: num(h.refused), requests: num(h.requests), tokens: num(h.tokens) })),
     refused24h: num(d.refused_24h),

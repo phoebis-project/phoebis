@@ -4,7 +4,7 @@ import { Link, useRouteError } from 'react-router-dom';
 import type { ToastItem } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
-import { plural } from '@/lib/format';
+import { fmtAbsolute, fmtDate, plural } from '@/lib/format';
 import { useKeyedMap, useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
@@ -1183,6 +1183,15 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
         </div>
       ))}
     </dl>
+  );
+}
+
+/** The sub line under a row's name that dates it by the list's sort date, the full instant on hover. */
+export function StampSub({ at, word }: { at: string; word: string }) {
+  return (
+    <span className="sub" title={fmtAbsolute(at)}>
+      {word} {fmtDate(at)}
+    </span>
   );
 }
 

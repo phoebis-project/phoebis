@@ -569,9 +569,8 @@ export interface Pool {
 
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
 
-/** `billedUsd` is the dollars of the requests no subscription window paid, and `equivalent` the plan-funded requests
- *  as the Pro-week figure, null where a request priced nothing and 0 with no plan-funded request. */
-export interface KeyFigures { billedUsd: number; cost: number; equivalent: number | null; requests: number }
+/** `equivalent` is 0 with no plan-funded request. */
+export interface KeyFigures extends FundedSum { requests: number }
 
 export interface ApiKey {
   /** Null inherits the pool's `autoModeServer`; true or false overrides it for this key. */
@@ -936,6 +935,7 @@ export interface RequestDetail {
 /** The route's own list of the request list's keys, its default first. */
 export const REQUEST_ORDER_VALUES = ['received_at', 'attempts', 'duration_ms', 'ttfb_ms', 'input_tokens', 'output_tokens'] as const;
 export type RequestOrder = (typeof REQUEST_ORDER_VALUES)[number];
+export type SortDir = 'asc' | 'desc';
 
 export interface RequestQuery {
   accountIds?: string[];
@@ -950,7 +950,7 @@ export interface RequestQuery {
   client?: string;
   cursor?: string;
   /** The key's direction, `desc` the route's default. */
-  dir?: 'asc' | 'desc';
+  dir?: SortDir;
   /** The effort as the rollups fold it: a level, `none` or `other`. */
   efforts?: string[];
   /** `true` keeps the rows that presented a fallback digest, `false` the rest. */
@@ -1129,7 +1129,7 @@ export interface RoutingLogQuery {
   agentId?: string;
   cursor?: string;
   /** The time's direction, `desc` the route's default. */
-  dir?: 'asc' | 'desc';
+  dir?: SortDir;
   from?: string;
   keyIds?: string[];
   /** Decision kinds, event kinds and the pseudo-kind `probe`. Absent, it is the route's default set. */

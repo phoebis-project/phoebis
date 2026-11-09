@@ -55,8 +55,17 @@ export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'shedCap' | 'windowCe
 const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 const ratio = (v: number, min: number) => v >= min && v <= 1;
 
+/**
+ * A number field as typed, with `bad` telling a field the browser could not parse from an emptied one, since both read
+ * an empty value. Both are read from `onInput`, since `onChange` stays silent while a number field's value reads empty
+ * for text it cannot parse.
+ */
+export type TypedField = { bad: boolean; text: string };
+export const EMPTY_FIELD: TypedField = { bad: false, text: '' };
+export const typedOf = (el: HTMLInputElement): TypedField => ({ bad: el.validity.badInput, text: el.value });
+
 /** A number field's value: null where it reads empty, NaN where the browser could not parse what was typed. */
-export const typedNumber = (typed: string, badInput: boolean): number | null => (badInput ? Number.NaN : typed.trim() === '' ? null : Number(typed));
+export const typedNumber = (field: TypedField): number | null => (field.bad ? Number.NaN : field.text.trim() === '' ? null : Number(field.text));
 
 /** Why the member write would refuse a budget as it stands, or null. A null budget is none. */
 function budgetRefusal(value: number | null): string | null {

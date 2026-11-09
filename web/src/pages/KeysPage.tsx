@@ -14,7 +14,7 @@ import { SortControl } from '@/components/SortControl';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, SkeletonRows } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, SkeletonRows, StampSub } from '@/components/ui/primitives';
 import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortDirOf, type KeysAddress } from '@/lib/address';
 import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
@@ -290,11 +290,7 @@ export function KeysPage() {
                             {k.keepaliveOptOut && <span className="sub" title="keepalive off">keepalive off</span>}
                             {/* No column draws the creation date or the week's requests, so the order's figure sits
                                 under the name while picked. */}
-                            {filters.sort === 'created' && (
-                              <span className="sub" title={fmtAbsolute(k.createdAt)}>
-                                created {fmtDate(k.createdAt)}
-                              </span>
-                            )}
+                            {filters.sort === 'created' && <StampSub at={k.createdAt} word="created" />}
                             {filters.sort === 'requests' && (
                               <span className="sub" title={weekRequests(k)}>
                                 {weekRequests(k)}

@@ -178,15 +178,18 @@ export async function call<T = unknown>(method: string, path: string, body?: unk
   return parsed as T;
 }
 
-/** A 404 is a row the ledger no longer holds, read as gone. A decoder that throws still rethrows. */
-const unlessGone = async <T,>(read: Promise<T>): Promise<T | null> => {
+/** A refusal with `status` reads as null. A decoder that throws still rethrows, since its error is no `ApiError`. */
+const unlessStatus = async <T,>(status: number, read: Promise<T>): Promise<T | null> => {
   try {
     return await read;
   } catch (e) {
-    if (e instanceof ApiError && e.status === 404) return null;
+    if (e instanceof ApiError && e.status === status) return null;
     throw e;
   }
 };
+
+/** A 404 is a row the ledger no longer holds, read as gone. */
+const unlessGone = <T,>(read: Promise<T>) => unlessStatus(404, read);
 
 const qs = (params: Record<string, string | number | boolean | string[] | undefined>) => {
   const q = new URLSearchParams();
@@ -265,15 +268,8 @@ export class HttpApi implements Api {
         streamCut: d.decodeStreamCut(body.stream_cut),
       })),
     );
-  getSession = async (): Promise<SessionInfo | null> => {
-    try {
-      // No hook runs: a missing session is the normal first load, not a lost one for the hook to report.
-      return d.decodeSessionInfo(await call('GET', '/admin/session', undefined, { report: 'none' }));
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) return null;
-      throw e;
-    }
-  };
+  // No hook runs: a missing session is the normal first load, not a lost one for the hook to report.
+  getSession = (): Promise<SessionInfo | null> => unlessStatus(401, call('GET', '/admin/session', undefined, { report: 'none' }).then(d.decodeSessionInfo));
   getSettings = async () => d.decodeSettings(await call('GET', '/admin/settings'));
   listAccountRollups = async (from: string, to: string) => d.decodeAccountRollups(await call('GET', `/admin/analytics/accounts?range=${range(from, to)}`));
   listAccounts = async () => (await call<{ accounts: unknown[] }>('GET', '/admin/accounts')).accounts.map(d.decodeAccount);

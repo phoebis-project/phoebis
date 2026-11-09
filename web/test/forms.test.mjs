@@ -163,9 +163,9 @@ test('a member budget is a dollar amount above 0 or none, a daily and a monthly 
 });
 
 test('a number field reads empty as none and a field the browser could not parse as NaN', () => {
-  assert.equal(d.typedNumber('', false), null);
-  assert.equal(d.typedNumber('', true), Number.NaN, 'a field the browser could not parse is not read as empty');
-  assert.equal(d.typedNumber(' 512 ', false), 512);
+  assert.equal(d.typedNumber({ bad: false, text: '' }), null);
+  assert.equal(d.typedNumber({ bad: true, text: '' }), Number.NaN, 'a field the browser could not parse is not read as empty');
+  assert.equal(d.typedNumber({ bad: false, text: ' 512 ' }), 512);
 });
 
 const key = d.decodeKey(fixture('keys').keys[0]);

@@ -10,10 +10,11 @@ import { SortControl } from '@/components/SortControl';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StampSub, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { GUARDRAIL_SORT_KEYS, GUARDRAILS_CODEC, poolKeysHref, requestHref, sortDirOf, type GuardrailsAddress } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
-import { fmtAbsolute, fmtDate, fmtInt, messageOf, plural } from '@/lib/format';
+import { groupInto } from '@/lib/counts';
+import { fmtAbsolute, fmtInt, messageOf, plural } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
 import { guardrailRefusals, MODE_TONE, presetBadges, verdictWords } from '@/lib/guardrails';
 import { useAsync, useQueryFilters } from '@/lib/hooks';
@@ -119,15 +120,15 @@ export function GuardrailsPage(): JSX.Element {
   const presetList = useMemo(() => presets.data ?? [], [presets.data]);
   const { address, filters, update } = useQueryFilters(GUARDRAILS_CODEC);
   const dir = sortDirOf(GUARDRAIL_SORT_KEYS, filters);
+  const countById = useMemo(() => (counts.data === null ? null : groupInto(counts.data.guardrails, (c) => c.id)), [counts.data]);
   const list = useMemo(() => {
     if (guardrails.data === null) return null;
-    const counted = counts.data;
     const figures: Record<GuardrailsAddress['sort'], (g: Guardrail) => SortFigure> = {
       created: (g) => Date.parse(g.createdAt),
       // Null until the count read answers, so the rows whose cell draws its dash file last.
       matches: (g) => {
-        if (counted === null) return null;
-        const count = counted.guardrails.find((c) => c.id === g.id);
+        if (countById === null) return null;
+        const count = countById.get(g.id)?.[0];
         return count === undefined ? 0 : count.observed + count.blocked;
       },
       mode: (g) => g.mode,
@@ -135,7 +136,7 @@ export function GuardrailsPage(): JSX.Element {
       updated: (g) => Date.parse(g.updatedAt),
     };
     return orderRows(guardrails.data, figures[filters.sort], dir, (g) => g.name);
-  }, [counts.data, dir, filters.sort, guardrails.data]);
+  }, [countById, dir, filters.sort, guardrails.data]);
   // The order's own date where no column draws it, so the rows read in the order they sit.
   const stampOf = (g: Guardrail): { at: string; word: string } | null => (filters.sort === 'created' ? { at: g.createdAt, word: 'created' } : filters.sort === 'updated' ? { at: g.updatedAt, word: 'updated' } : null);
 
@@ -173,7 +174,7 @@ export function GuardrailsPage(): JSX.Element {
           const nowhere = attachedPools.length === 0 && attachedKeys.length === 0;
           const where = `${plural(attachedPools.length, 'pool')}, ${plural(attachedKeys.length, 'key')}`;
           const names = [...attachedPools.map((p) => `pool ${p.label}`), ...attachedKeys.map((k) => `key ${k.label}`)].join(', ');
-          const count = counts.data?.guardrails.find((c) => c.id === g.id);
+          const count = countById?.get(g.id)?.[0];
           const presetName = g.preset === null ? null : `${presetList.find((p) => p.id === g.preset?.id)?.name ?? g.preset.id} v${g.preset.version}`;
           const stamp = stampOf(g);
           return (
@@ -185,11 +186,7 @@ export function GuardrailsPage(): JSX.Element {
                     {g.description}
                   </span>
                 )}
-                {stamp !== null && (
-                  <span className="sub" title={fmtAbsolute(stamp.at)}>
-                    {stamp.word} {fmtDate(stamp.at)}
-                  </span>
-                )}
+                {stamp !== null && <StampSub {...stamp} />}
               </td>
               <td className="col-fit">
                 <Badge tone={MODE_TONE[g.mode]}>{g.mode}</Badge>

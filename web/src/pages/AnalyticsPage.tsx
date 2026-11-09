@@ -27,7 +27,7 @@ import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costH
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { bandFactor, fableWeekReadingOf, failed, fiveHourReadingOf, weekScale } from '@/lib/costs';
+import { bandFactor, fableWeekReadingOf, failed, fiveHourReadingOf, pendingReading, weekScale } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
@@ -151,7 +151,13 @@ function nativeRatiosOf(totals: AnalyticsGroup, week: WeekPosition, weekFactor: 
 }
 
 /** The native table's columns: Cost, the figure in the chosen week with the billed dollars under it, then the ratios. */
-const NATIVE_COLUMNS = ['Requests', 'Cost', 'Per request', 'Per 1k output'];
+const NATIVE_COLUMNS = analyticsKeysOf('cost', 'native').slice(1).map((k) => k.label);
+/** The Traffic heads whose count leaves the refused requests out, or counts them alone, say so on hover. */
+const TRAFFIC_HEAD_TITLE: Partial<Record<string, string>> = {
+  error_rate: 'The refused requests are left out, see the Refused column',
+  refused: REFUSED_TITLE,
+  requests: 'The refused requests are left out, see the Refused column',
+};
 /** A native cell's figure over its billed line, the full reading on its title. */
 const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNode => (
   <span title={cell.title || undefined}>
@@ -169,13 +175,15 @@ function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, 
   const figure = sides.equivalent === undefined ? null : g.costEquivalent;
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
   const both = (equivalent: number | null, billed: number | null, shown: string | null = null) => nativeCell(nativeCellOf(sides.equivalent === undefined ? undefined : equivalent, sides.billed === undefined ? undefined : billed, week, weekFactor, shown));
-  const ratio = (planCount: number | null, whole: number, scale: number) => both(per(figure, planCount, scale), per(sides.billed ?? null, billedCount(planCount, whole), scale));
+  const ratio = (planPer: number | null, planCount: number | null, whole: number, scale: number) => both(planPer, per(sides.billed ?? null, billedCount(planCount, whole), scale));
+  const perRequest = per(figure, g.planRequests, 1);
+  const perThousand = per(figure, g.planOutputTokens, 1000);
   // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
   return {
-    cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(g.planRequests, g.requests, 1), ratio(g.planOutputTokens, g.tokens.output, 1000)],
+    cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(perRequest, g.planRequests, g.requests, 1), ratio(perThousand, g.planOutputTokens, g.tokens.output, 1000)],
     // The Cost key reads the plan rows' figure, 0 for a group of billed rows alone and null where a plan row priced
     // nothing, so an unpriced group files last under either direction.
-    figures: { cost: g.costEquivalent, per_1k_output: per(figure, g.planOutputTokens, 1000), per_request: per(figure, g.planRequests, 1), requests: g.requests },
+    figures: { cost: g.costEquivalent, per_1k_output: perThousand, per_request: perRequest, requests: g.requests },
     key: g.key,
     label: g.label,
   };
@@ -559,7 +567,7 @@ export function AnalyticsPage() {
   // Where the cards size their lines by tier, which the cost model holds, the week card alone waits on the model: its
   // Pro reading sizes without it, and the 5-hour and Fable week readings already read its absence as the settings
   // read's failure.
-  const burnReading: WeekReading = burnSizes && costs === null ? { failure: failed(costSettings.error), scale: null, week } : reading;
+  const burnReading: WeekReading = burnSizes && costs === null ? pendingReading(costSettings.error, week) : reading;
   const burnReadings = {
     fable: fableWeekReadingOf(costs, costSettings.error, week),
     fiveHour: fiveHourReadingOf(costs, costSettings.error, week),
@@ -753,7 +761,17 @@ export function AnalyticsPage() {
               title={`Traffic by ${groupLabel.toLowerCase()}`}
               loading={loading}
               groupLabel={groupLabel}
-              columns={[<span key="requests" title="The refused requests are left out, see the Refused column">Requests</span>, 'OK', 'Rate limited', 'Failed', 'Incomplete', 'Exhausted', 'Rejected', <span key="refused" title={REFUSED_TITLE}>Refused</span>, <span key="rate" title="The refused requests are left out, see the Refused column">Error rate</span>, 'Failovers', 'Search', 'Fetch']}
+              columns={analyticsKeysOf('traffic', unit)
+                .slice(1)
+                .map((k) =>
+                  TRAFFIC_HEAD_TITLE[k.id] === undefined ? (
+                    k.label
+                  ) : (
+                    <span key={k.id} title={TRAFFIC_HEAD_TITLE[k.id]}>
+                      {k.label}
+                    </span>
+                  ),
+                )}
               order={tableOrder}
               rows={groups.map((g) => ({
                 key: g.key,
@@ -799,14 +817,7 @@ export function AnalyticsPage() {
               title={`Latency by ${groupLabel.toLowerCase()}`}
               loading={loading}
               groupLabel={groupLabel}
-              columns={[
-                'Requests',
-                <PctLabel key="a" text="TTFB p50" />,
-                <PctLabel key="b" text="TTFB p99" />,
-                <PctLabel key="c" text="TTFT p99" />,
-                <PctLabel key="d" text="Duration p99" />,
-                <PctLabel key="e" text="tok/s p50" />,
-              ]}
+              columns={analyticsKeysOf('latency', unit).slice(1).map((k, i) => (i === 0 ? k.label : <PctLabel key={k.id} text={k.label} />))}
               order={tableOrder}
               rows={groups.map((g) => ({
                 key: g.key,
@@ -1003,23 +1014,18 @@ export function AnalyticsPage() {
                 failure={costFailure}
                 loading={costLoading}
                 groupLabel={groupLabel}
-                columns={['Requests', 'Cost', 'Input', 'Cache read', 'Cache write', 'Output', 'Per request', 'Per 1k output']}
+                columns={analyticsKeysOf('cost', unit).slice(1).map((k) => k.label)}
                 order={tableOrder}
-                rows={costGroups.map((g) => ({
-                  key: g.key,
-                  label: g.label,
-                  cells: [
-                    fmtInt(g.requests),
-                    fmtUsd(g.costUsd),
-                    fmtUsd(g.cost.input),
-                    usdOrDash(g.cost.cacheRead),
-                    usdOrDash(g.cost.cacheWrite),
-                    fmtUsd(g.cost.output),
-                    fmtUsd(per(g.costUsd, g.requests, 1) ?? 0),
-                    fmtUsd(per(g.costUsd, g.tokens.output, 1000) ?? 0),
-                  ],
-                  figures: { cache_read: g.cost.cacheRead, cache_write: g.cost.cacheWrite, cost: g.costUsd, input: g.cost.input, output: g.cost.output, per_1k_output: per(g.costUsd, g.tokens.output, 1000) ?? 0, per_request: per(g.costUsd, g.requests, 1) ?? 0, requests: g.requests },
-                }))}
+                rows={costGroups.map((g) => {
+                  const perRequest = per(g.costUsd, g.requests, 1) ?? 0;
+                  const perThousand = per(g.costUsd, g.tokens.output, 1000) ?? 0;
+                  return {
+                    key: g.key,
+                    label: g.label,
+                    cells: [fmtInt(g.requests), fmtUsd(g.costUsd), fmtUsd(g.cost.input), usdOrDash(g.cost.cacheRead), usdOrDash(g.cost.cacheWrite), fmtUsd(g.cost.output), fmtUsd(perRequest), fmtUsd(perThousand)],
+                    figures: { cache_read: g.cost.cacheRead, cache_write: g.cost.cacheWrite, cost: g.costUsd, input: g.cost.input, output: g.cost.output, per_1k_output: perThousand, per_request: perRequest, requests: g.requests },
+                  };
+                })}
               />
             )}
           </Section>
@@ -2226,6 +2232,7 @@ const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown
 const TIER_UNKNOWN_HINT = 'A free plan, no tier on file or one the cost model does not hold, and no bucket of the range priced, so no share of the week is drawn';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model without a weight in the cost model prices no share and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
+const EMPTY_FOLD = { lines: [] as BurnLine[], rows: [] as BurnRow[] };
 const NO_POINTS: AnalyticsPoint[] = [];
 const NO_REQUESTS: RequestLog[] = [];
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
@@ -2240,11 +2247,11 @@ const FABLE_WEEK_SUBTITLE = "The subscription traffic per hour as a share of the
 /** A plan card's figure under the chosen week, in full for a hover and short for the legend. */
 type FigureWords = (v: number, week: WeekPosition, form: 'full' | 'short') => string;
 const weekWords: FigureWords = (v, week, form) => (form === 'full' ? fmtWeek(v, week) : weekShort(v, week));
-/** "0.11% of the Ultra 5-hour window" in full and "0.11% Ultra 5-hour" short, a zero "0%" in both as `fmtWeek` reads
- *  it. */
-const fiveHourWords: FigureWords = (v, week, form) => (v === 0 ? '0%' : form === 'full' ? `${fmtShare(v)} of the ${WEEK_SHORT[week]} 5-hour window` : `${fmtShare(v)} ${WEEK_SHORT[week]} 5-hour`);
-/** "0.11% of the Ultra Fable week" in full and "0.11% Ultra Fable week" short, a zero "0%" in both. */
-const fableWeekWords: FigureWords = (v, week, form) => (v === 0 ? '0%' : form === 'full' ? `${fmtShare(v)} of the ${WEEK_SHORT[week]} Fable week` : `${fmtShare(v)} ${WEEK_SHORT[week]} Fable week`);
+/** A tier window's words, such as "0.11% of the Ultra 5-hour window" in full and "0.11% Ultra 5-hour" short, or "0.11%
+ *  of the Ultra Fable week" and "0.11% Ultra Fable week", a zero "0%" in both as `fmtWeek` reads it. */
+const tierWindowWords = (full: string, short: string): FigureWords => (v, week, form) => (v === 0 ? '0%' : form === 'full' ? `${fmtShare(v)} of the ${WEEK_SHORT[week]} ${full}` : `${fmtShare(v)} ${WEEK_SHORT[week]} ${short}`);
+const fiveHourWords = tierWindowWords('5-hour window', '5-hour');
+const fableWeekWords = tierWindowWords('Fable week', 'Fable week');
 
 /**
  * A line's dot, drawn on the slots `isolatedSlots` names alone: the line leaves its null slots unconnected, so a
@@ -2295,23 +2302,23 @@ function BurnCharts({
   // that window with the rows.
   const fold = useCallback(
     (scaleAt: ((at: number) => number | null) | null) =>
-      answer === null ? { lines: [] as BurnLine[], rows: [] as BurnRow[] } : foldBurn(scaleAt === null ? answer.points : scalePoints(answer.points, scaleAt), groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, rangeEndMs, readAt, { account }),
+      answer === null ? EMPTY_FOLD : foldBurn(scaleAt === null ? answer.points : scalePoints(answer.points, scaleAt), groupBy, answer.bucketSeconds, sized ?? NO_ACCOUNT, rangeEndMs, readAt, { account }),
     [account, answer, groupBy, rangeEndMs, readAt, sized],
   );
   // Spend per minute and the colors read this fold's lines, and a line's unit follows the route's own figures, so while
   // the week's scale is out the points fold as answered. The plan card draws its skeleton then and reads none of it.
   const weekFold = useMemo(() => fold(weekFactor === null ? null : () => weekFactor), [fold, weekFactor]);
-  const fiveHourFold = useMemo(
-    () =>
-      fold((at) => {
-        const base = readings.fiveHour.scale;
-        if (base === null || costs === null) return null;
-        const band = bandFactor(costs, 'five_hour', at);
-        return band === null ? null : base * band;
-      }),
-    [costs, fold, readings.fiveHour.scale],
-  );
-  const fableWeekFold = useMemo(() => fold(() => readings.fable.scale), [fold, readings.fable.scale]);
+  // The 5-hour and Fable week cards draw their skeleton while their reading has no scale, so their folds wait on it.
+  const fiveHourBase = readings.fiveHour.scale;
+  const fiveHourFold = useMemo(() => {
+    if (costs === null || fiveHourBase === null) return EMPTY_FOLD;
+    return fold((at) => {
+      const band = bandFactor(costs, 'five_hour', at);
+      return band === null ? null : fiveHourBase * band;
+    });
+  }, [costs, fiveHourBase, fold]);
+  const fableScale = readings.fable.scale;
+  const fableWeekFold = useMemo(() => (fableScale === null ? EMPTY_FOLD : fold(() => fableScale)), [fableScale, fold]);
   const { lines, rows } = weekFold;
   // The points by bucket and group, for the tooltip's hint, which reads a bucket's one point of one account.
   const pointsAt = useMemo(() => groupInto(answer?.points ?? [], (p) => `${Date.parse(p.at)}|${p.group}`), [answer]);
@@ -2336,13 +2343,13 @@ function BurnCharts({
   const partial = rows[rows.length - 1]?.partial === true;
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
-  const scaleTo = (of: BurnRow[], values: number[]) => {
+  const scaleTo = (total: number, setting: number, values: number[]) => {
     const top = Math.max(0, ...values);
-    const setting = of.filter((r) => r.setsScale).length;
-    return setting > 0 && setting < of.length && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
+    return setting > 0 && setting < total && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
   };
-  const spentValues = rows.filter((r) => r.setsScale).flatMap((r) => spent.map(({ i }) => r.usd[i]));
-  const spentScale = scaleTo(rows, spentValues);
+  const settingRows = rows.filter((r) => r.setsScale);
+  const spentValues = settingRows.flatMap((r) => spent.map(({ i }) => r.usd[i]));
+  const spentScale = scaleTo(rows.length, settingRows.length, spentValues);
   // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
   const spentAxis = usdAxis('domain' in spentScale ? spentValues : rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   // The route answers a bucket's shares without the model week's key, so the hint names the model week the cost model
@@ -2434,7 +2441,7 @@ function BurnCharts({
         <LineChart data={cardRows} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={cardRows.map((r) => r.at)} {...axis} />
-          <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(cardRows, scaled.flatMap((r) => planned.map(({ i }) => r.equivalent[i] ?? 0)))} />
+          <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(cardRows.length, scaled.length, scaled.flatMap((r) => planned.map(({ i }) => r.equivalent[i] ?? 0)))} />
           {/* Recharts drops null entries by default, and a bucket whose every figure is null would lose its date, its
               dashes and the unpriced hint. */}
           <Tooltip
@@ -2598,6 +2605,7 @@ function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; 
 }
 
 const NO_SAMPLE_HINT = 'no utilization sampled in range';
+const WINDOW_OPTIONS = WINDOW_KEYS.map((id) => ({ label: windowLabelOf(id), value: id }));
 
 /** An hour with no sample carries no peak, so the maximum is over the sampled hours alone and null without one. */
 function peakOf(values: (number | null)[]): number | null {
@@ -2656,7 +2664,6 @@ function AccountsSection({
     [accounts, rollups],
   );
   const data = useMemo(() => peakLines(rollups ?? [], accounts, span, bucketMs), [rollups, accounts, span, bucketMs]);
-  const windows = WINDOW_KEYS;
   const [window, setWindow] = useState('five_hour');
   const usage = useMemo(() => windowLines(rollups ?? [], window, 'usage', span, bucketMs), [rollups, window, span, bucketMs]);
   const pace = useMemo(() => windowLines(rollups ?? [], window, 'pace', span, bucketMs), [rollups, window, span, bucketMs]);
@@ -2665,7 +2672,7 @@ function AccountsSection({
     const widest = Math.max(0, ...pace.data.flatMap((r) => accounts.map((a) => Math.abs(r[a] ?? 0))));
     return widest > 0 ? niceAxisTop(widest) : 50;
   }, [pace, accounts]);
-  const toggle = <Segmented value={window} options={windows.map((id) => ({ label: windowLabelOf(id), value: id }))} onChange={setWindow} ariaLabel="Window" />;
+  const toggle = <Segmented value={window} options={WINDOW_OPTIONS} onChange={setWindow} ariaLabel="Window" />;
   const colorOf = (a: string) => accountColor(ink, slotOf(a));
   const legend = accounts.map((a) => ({ color: colorOf(a), label: a, shape: 'line' as const }));
   const shareTip = timeTip<Record<string, number | null> & { at: number }>((p) => accounts.map((a) => ({ color: colorOf(a), label: a, value: pct(p[a]) })));

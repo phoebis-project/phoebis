@@ -32,7 +32,7 @@ import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS
 import { FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, type PoolGroup } from '@/lib/forms';
+import { EMPTY_FIELD, ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, typedOf, type PoolGroup, type TypedField } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -145,16 +145,7 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'never', title: 'Never', body: 'treat an account in extra usage as unavailable until its window resets' },
 ];
 /** Members first, lowest priority number first, then alphabetically. Non-members trail alphabetically. */
-const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] =>
-  [...accounts]
-    .sort((a, b) => {
-      const pa = members[a.id];
-      const pb = members[b.id];
-      if ((pa === undefined) !== (pb === undefined)) return pa === undefined ? 1 : -1;
-      if (pa !== undefined && pb !== undefined && pa !== pb) return pa - pb;
-      return a.label.localeCompare(b.label);
-    })
-    .map((a) => a.id);
+const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] => orderRows(accounts, (a) => members[a.id] ?? null, 'asc', (a) => a.label).map((a) => a.id);
 const AFFINITY_HINT = 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.';
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
 const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
@@ -873,10 +864,9 @@ function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps
       {error !== null && <p className="muted">Could not load the return rate: {error}</p>}
       {loading ? (
         <Skeleton height={28} />
-      ) : buckets.length === 0 ? (
-        error === null && <p className="muted">No idle windows recorded yet</p>
       ) : buckets.every((b) => b.reached === 0) ? (
-        <p className="muted">No idle windows recorded yet</p>
+        // A failed read with no buckets leaves its failure line alone, since it says nothing of the idle windows.
+        (buckets.length > 0 || error === null) && <p className="muted">No idle windows recorded yet</p>
       ) : (
         <ul className="plain-list return-rate__rows">
           {buckets.map((b) => {
@@ -933,15 +923,32 @@ function AtBudget({ periodEnd }: { periodEnd: string | null }) {
 
 /** The route's verdict, as the serving table's Standing cell reads it. The account only adds when and why. */
 function Eligibility({ verdict, account, now, periodEnd }: { account: Account | undefined; now: number; periodEnd: string | null; verdict: MemberEligibility }) {
-  if (verdict === 'eligible') return <Badge tone="good">eligible</Badge>;
-  if (verdict === 'budget') return <AtBudget periodEnd={periodEnd} />;
-  if (verdict === 'budget_unknown') return <Badge tone="warning" title="The ledger is degraded, so the router has no reading of this member's budget and places nothing on it">budget unknown</Badge>;
-  if (verdict === 'overage') return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
-  if (verdict === 'spent') return <WordedBadge tone="serious" badge={spentBadge(account?.spend?.resetsAt ?? null, now)} />;
-  if (verdict === 'unavailable') return <Badge tone="critical" title={account ? words(account.status) : 'not a known account'}>unavailable</Badge>;
-  if (verdict === 'unknown') return <Badge tone="neutral" title="The router has not loaded this member, or does not answer">unknown</Badge>;
-  if (verdict === 'subscription_ended') return <Badge tone="neutral">subscription ended</Badge>;
-  return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
+  switch (verdict) {
+    case 'eligible':
+      return <Badge tone="good">eligible</Badge>;
+    case 'budget':
+      return <AtBudget periodEnd={periodEnd} />;
+    case 'budget_unknown':
+      return <Badge tone="warning" title="The ledger is degraded, so the router has no reading of this member's budget and places nothing on it">{INELIGIBLE_LABEL[verdict]}</Badge>;
+    case 'overage':
+      return <WordedBadge tone="serious" badge={overageBadge(account?.overage?.reset ?? null, now)} />;
+    case 'spent':
+      return <WordedBadge tone="serious" badge={spentBadge(account?.spend?.resetsAt ?? null, now)} />;
+    // The badge keeps its one word, where the table's label reads "not available".
+    case 'unavailable':
+      return <Badge tone="critical" title={account ? words(account.status) : 'not a known account'}>unavailable</Badge>;
+    case 'unknown':
+      return <Badge tone="neutral" title="The router has not loaded this member, or does not answer">{INELIGIBLE_LABEL[verdict]}</Badge>;
+    case 'subscription_ended':
+      return <Badge tone="neutral">{INELIGIBLE_LABEL[verdict]}</Badge>;
+    case 'cooldown':
+      return <WordedBadge tone="warning" badge={cooldownBadge(account?.cooldowns.find((c) => c.scope === 'account')?.until, now)} />;
+    default: {
+      // A verdict the type gains fails to compile here until it draws a badge of its own.
+      const unhandled: never = verdict;
+      return unhandled;
+    }
+  }
 }
 
 /** Why an eligible member waits for the rest: winding down, with the time left to its end. */
@@ -999,12 +1006,8 @@ interface PoolForm {
   affinity: number;
   affinityMode: AffinityMode;
   autoModeServer: boolean;
-  /**
-   * Each member's daily and monthly budget fields as typed, empty for none, and kept for an unticked member too. A
-   * field the browser could not parse reads empty as well, so each carries its flag beside it. The flags are written
-   * from `onInput`, since `onChange` stays silent while a number field's value reads empty for text it cannot parse.
-   */
-  budgets: Record<string, { daily: string; dailyBad: boolean; monthly: string; monthlyBad: boolean }>;
+  /** Each member's daily and monthly budget fields, empty for none, and kept for an unticked member too. */
+  budgets: Record<string, { daily: TypedField; monthly: TypedField }>;
   cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
   capture: boolean;
@@ -1029,19 +1032,15 @@ interface PoolForm {
   name: string;
   overage: OveragePolicy;
   preferSubscription: boolean;
-  prefixBad: boolean;
-  /**
-   * The threshold field as typed, with `prefixBad` telling a field the browser could not parse from an emptied one. The
-   * flag is written from `onInput`, since `onChange` stays silent while a number field's value reads empty for text it
-   * cannot parse.
-   */
-  prefixTokens: string;
+  prefixTokens: TypedField;
   sessionPlacement: SessionPlacement;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
 }
+
+const NO_BUDGET: PoolForm['budgets'][string] = { daily: EMPTY_FIELD, monthly: EMPTY_FIELD };
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
 
@@ -1069,8 +1068,7 @@ const blankForm = (): PoolForm => ({
   name: '',
   overage: 'prefer_plan',
   preferSubscription: true,
-  prefixBad: false,
-  prefixTokens: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
+  prefixTokens: { bad: false, text: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens) },
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
   sheddingCustom: false,
   status: 'active',
@@ -1082,7 +1080,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
   autoModeServer: pool.autoModeServer,
-  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: m.budgetDailyUsd === null ? '' : String(m.budgetDailyUsd), dailyBad: false, monthly: m.budgetMonthlyUsd === null ? '' : String(m.budgetMonthlyUsd), monthlyBad: false }])),
+  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: { bad: false, text: m.budgetDailyUsd === null ? '' : String(m.budgetDailyUsd) }, monthly: { bad: false, text: m.budgetMonthlyUsd === null ? '' : String(m.budgetMonthlyUsd) } }])),
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: {
     ...pool.cacheTtl,
@@ -1124,8 +1122,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   overage: pool.overagePolicy,
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
-  prefixBad: false,
-  prefixTokens: String(pool.minSharedPrefixTokens),
+  prefixTokens: { bad: false, text: String(pool.minSharedPrefixTokens) },
   sessionPlacement: pool.sessionPlacement,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form. A degraded or exhausted pool is still routing.
@@ -1294,7 +1291,7 @@ export function PoolDialog({
   const shareOf = savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
-  const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', dailyBad: false, monthly: '', monthlyBad: false };
+  const budgetOf = (accountId: string) => form.budgets[accountId] ?? NO_BUDGET;
   const input: CreatePoolInput = {
     ...form.engine,
     affinityMode: form.affinityMode,
@@ -1315,11 +1312,11 @@ export function PoolDialog({
       : { ...(pool?.keepalive ?? KEEPALIVE_DEFAULTS), enabled: false },
     members: Object.entries(form.members).map(([accountId, priority]) => {
       const budget = budgetOf(accountId);
-      return { accountId, budgetDailyUsd: typedNumber(budget.daily, budget.dailyBad), budgetMonthlyUsd: typedNumber(budget.monthly, budget.monthlyBad), priority };
+      return { accountId, budgetDailyUsd: typedNumber(budget.daily), budgetMonthlyUsd: typedNumber(budget.monthly), priority };
     }),
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
-      ? (typedNumber(form.prefixTokens, form.prefixBad) ?? Number.NaN)
+      ? (typedNumber(form.prefixTokens) ?? Number.NaN)
       : (pool?.minSharedPrefixTokens ?? POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: form.modelRules,
     name: form.name.trim(),
@@ -1347,7 +1344,7 @@ export function PoolDialog({
   const rulesRefusal = refusalOf('Model rules');
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
   const setBudget = (accountId: string, patch: Partial<PoolForm['budgets'][string]>) =>
-    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? { daily: '', dailyBad: false, monthly: '', monthlyBad: false }), ...patch } } }));
+    setForm((f) => ({ ...f, budgets: { ...f.budgets, [accountId]: { ...(f.budgets[accountId] ?? NO_BUDGET), ...patch } } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const keysChanged = () => {
@@ -1557,10 +1554,10 @@ export function PoolDialog({
                             type="number"
                             min={0.01}
                             step="any"
-                            value={budgetOf(a.id).daily}
+                            value={budgetOf(a.id).daily.text}
                             disabled={!on}
                             placeholder="none"
-                            onInput={(e) => setBudget(a.id, { daily: e.currentTarget.value, dailyBad: e.currentTarget.validity.badInput })}
+                            onInput={(e) => setBudget(a.id, { daily: typedOf(e.currentTarget) })}
                             aria-label={`Daily budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_daily', a.id))}
                           />
@@ -1570,10 +1567,10 @@ export function PoolDialog({
                             type="number"
                             min={0.01}
                             step="any"
-                            value={budgetOf(a.id).monthly}
+                            value={budgetOf(a.id).monthly.text}
                             disabled={!on}
                             placeholder="none"
-                            onInput={(e) => setBudget(a.id, { monthly: e.currentTarget.value, monthlyBad: e.currentTarget.validity.badInput })}
+                            onInput={(e) => setBudget(a.id, { monthly: typedOf(e.currentTarget) })}
                             aria-label={`Monthly budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_monthly', a.id))}
                           />
@@ -1605,10 +1602,10 @@ export function PoolDialog({
                         <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={budgetOf(id).daily} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
+                        <Input type="number" value={budgetOf(id).daily.text} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={budgetOf(id).monthly} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
+                        <Input type="number" value={budgetOf(id).monthly.text} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
                       </td>
                     </tr>
                   ))}
@@ -1797,11 +1794,8 @@ export function PoolDialog({
                 type="number"
                 min={0}
                 step={1_000}
-                value={form.prefixTokens}
-                onInput={(e) => {
-                  set('prefixBad', e.currentTarget.validity.badInput);
-                  set('prefixTokens', e.currentTarget.value);
-                }}
+                value={form.prefixTokens.text}
+                onInput={(e) => set('prefixTokens', typedOf(e.currentTarget))}
                 disabled={!prefixEnabled}
                 aria-label="Minimum shared prefix, tokens"
                 aria-invalid={invalid('Minimum shared prefix, tokens')}

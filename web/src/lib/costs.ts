@@ -239,18 +239,21 @@ export const weekUnpricedTitle = (week: WeekPosition): string => unpricedFor('7-
 /** A read's failure as a surface draws it, which a retry may clear, so it never reads unpriced. */
 export const failed = (e: string | null): WeekReading['failure'] => (e === null ? null : { text: e, unpriced: false });
 
+/** The reading while the cost model is out: its skeleton waits on the settings read, or draws that read's failure. */
+export const pendingReading = (error: string | null, week: WeekPosition): WeekReading => ({ failure: failed(error), scale: null, week });
+
 /** A page's week reading from its settings read: `error` is that read's failure. A table that loaded and sizes no week
  *  for the chosen tier will not size one on a later read either, so its figures draw the unpriced dash, not the
  *  skeleton that waits for the table. */
 export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
   const scale = weekScale(costs, week);
   if (scale !== null) return { failure: null, scale, week };
-  if (costs === null) return { failure: failed(error), scale, week };
+  if (costs === null) return pendingReading(error, week);
   return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
 };
 
 const tableReading = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition, scaleOf: (c: SubscriptionCosts) => number | null, what: string): WeekReading => {
-  if (costs === null) return { failure: failed(error), scale: null, week };
+  if (costs === null) return pendingReading(error, week);
   const scale = scaleOf(costs);
   if (scale === null) return { failure: { text: unpricedFor(what, week), unpriced: true }, scale, week };
   return { failure: null, scale, week };
