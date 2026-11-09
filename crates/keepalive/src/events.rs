@@ -258,7 +258,7 @@ impl TryFrom<Event> for EventReport {
                         .as_deref()
                         .ok_or(err("invalid_event", 400))?;
                     let kind = ParkKind::parse(kind).ok_or(err("invalid_state", 400))?;
-                    if kind != ParkKind::Background && event.wake_at.is_none() {
+                    if kind.scheduled() && event.wake_at.is_none() {
                         return Err(err("invalid_event", 400));
                     }
                     Some(Park {

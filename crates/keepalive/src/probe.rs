@@ -16,8 +16,8 @@ use serde_json::Value;
 
 use crate::breakeven::Ceilings;
 use crate::engine::{
-    agent_mut, agent_ref, Agent, AgentState, Engine, Inner, Kept, ParkKind, ProbeCharge, Reason,
-    SavingsUnit, SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
+    agent_mut, agent_ref, Agent, AgentState, Engine, Inner, Kept, ProbeCharge, Reason, SavingsUnit,
+    SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::{probe_cost, settlement_unit, typed, unpriced_reason, AttemptFunding};
@@ -879,20 +879,17 @@ pub(crate) fn ceiling(
     }
     match agent.state {
         AgentState::Parked => {
-            let kind = agent.park.map(|park| park.kind);
-            let background = matches!(kind, Some(ParkKind::Background | ParkKind::Both));
-            if background
+            let Some(park) = agent.park else {
+                return Verdict::End(Reason::ParkedLimit);
+            };
+            if park.kind.background()
                 && agent
                     .park_began
                     .is_some_and(|began| now - began < ceilings.parked_ms)
             {
                 return Verdict::Probe;
             }
-            let wake = agent
-                .park
-                .and_then(|park| park.wake_at)
-                .filter(|_| matches!(kind, Some(ParkKind::Scheduled | ParkKind::Both)));
-            match wake {
+            match park.wake_at.filter(|_| park.kind.scheduled()) {
                 Some(wake) if wake - now <= ceilings.horizon_ms => Verdict::Probe,
                 // The wake is a certain return the hold keeps the prompt for, so it outranks a command's part
                 // whose ceiling ran out.

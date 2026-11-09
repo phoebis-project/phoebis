@@ -88,6 +88,23 @@ impl ParkKind {
             _ => return None,
         })
     }
+
+    pub(crate) fn background(self) -> bool {
+        matches!(self, ParkKind::Background | ParkKind::Both)
+    }
+
+    pub(crate) fn scheduled(self) -> bool {
+        matches!(self, ParkKind::Scheduled | ParkKind::Both)
+    }
+
+    fn of_halves(background: bool, scheduled: bool) -> Option<ParkKind> {
+        match (background, scheduled) {
+            (true, true) => Some(ParkKind::Both),
+            (true, false) => Some(ParkKind::Background),
+            (false, true) => Some(ParkKind::Scheduled),
+            (false, false) => None,
+        }
+    }
 }
 
 /// What a parked agent waits on and until when, held as one value so that a park with no kind cannot be represented
@@ -100,6 +117,24 @@ pub struct Park {
     pub kind: ParkKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wake_at: Option<i64>,
+}
+
+impl Park {
+    /// The park left at `now` once each part whose return came without a request drops out with its half: a deadline
+    /// the harness stopped the command at, or a wake that passed. `None` when no half is left, which is when it ended.
+    pub(crate) fn passed(self, now: i64) -> Option<Park> {
+        let deadline_passed = self.deadline.is_some_and(|deadline| deadline <= now);
+        let wake_passed = self.wake_at.is_some_and(|wake| wake <= now);
+        ParkKind::of_halves(
+            self.kind.background() && !deadline_passed,
+            self.kind.scheduled() && !wake_passed,
+        )
+        .map(|kind| Park {
+            deadline: self.deadline.filter(|_| !deadline_passed),
+            kind,
+            wake_at: self.wake_at.filter(|_| !wake_passed),
+        })
+    }
 }
 
 /// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
@@ -893,33 +928,6 @@ impl Agent {
             self.park = None;
             self.park_began = None;
         }
-    }
-
-    /// Drops the part of a park whose return has come without a request: a deadline the harness stopped the command
-    /// at, or a wake that passed. True when nothing is left of the park, which is when it ended.
-    pub(crate) fn pass_park(&mut self, now: i64) -> bool {
-        let Some(mut park) = self.park else {
-            return false;
-        };
-        let mut kind = Some(park.kind);
-        if park.deadline.is_some_and(|deadline| deadline <= now) {
-            park.deadline = None;
-            kind = match kind {
-                Some(ParkKind::Background) => None,
-                Some(ParkKind::Both) => Some(ParkKind::Scheduled),
-                other => other,
-            };
-        }
-        if park.wake_at.is_some_and(|wake| wake <= now) {
-            park.wake_at = None;
-            kind = match kind {
-                Some(ParkKind::Scheduled) => None,
-                Some(ParkKind::Both) => Some(ParkKind::Background),
-                other => other,
-            };
-        }
-        self.park = kind.map(|kind| Park { kind, ..park });
-        self.park.is_none()
     }
 }
 
@@ -2198,11 +2206,16 @@ impl Inner {
         let Some(agent) = agent_mut(&mut self.sessions, key, agent_id) else {
             return;
         };
-        let park = agent.park;
-        if !agent.pass_park(now) {
-            if park != agent.park {
-                self.touch_agent(key, agent_id);
-            }
+        let Some(park) = agent.park else {
+            return;
+        };
+        let left = park.passed(now);
+        if left == Some(park) {
+            return;
+        }
+        agent.park = left;
+        if left.is_some() {
+            self.touch_agent(key, agent_id);
             return;
         }
         // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
