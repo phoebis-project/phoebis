@@ -628,9 +628,10 @@ the saved {time}` for an unsaved edit. While the idle field reads 0 the cost lin
 the break-even, {time}`, and while the field reads more than the break-even's low end the note `Above the break-even,
 {range}` follows on a line of its own with the break-even's figures, since the window runs as set. Return rate by idle
 age lists the pool's ten buckets over the last 7 days, or 30 under the choice beside its label, which opens on 7 days,
-with the windows that returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet".
-The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the buckets under [The return rate
-by idle age](keepalive.md#the-return-rate-by-idle-age).
+with the windows that returned out of those that reached it and a bar of the rate, or "No idle windows recorded yet". A
+failed read draws `Could not load the return rate: {error}` above the buckets an earlier read of the same range drew, or
+on its own when there are none. The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the
+buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
 
 ## Keys
 
@@ -866,7 +867,8 @@ rows that read brought keep the tint through the read after it. A custom range w
 past when the page took it has nothing new to read, so the dropdown reads Off and stays disabled, while a link whose
 range ends at the moment it was made reads on, each read refreshing the rows inside it.
 
-Selecting a row opens the "Request details" drawer, with the request's id and time, a "Routing log" link that opens the
+Clicking a row, or pressing Enter or Space while the row has the focus, opens the "Request details" drawer, and doing
+the same on the open row closes it. The drawer holds the request's id and time, a "Routing log" link that opens the
 [routing log](#routing-log) on the request a quarter hour either side, and these sections:
 
 - Outcome: Status, Outcome, Account, Model, Canonical model when it differs from the model the client spelled, TTFB,
@@ -910,7 +912,8 @@ in place of the drawer over the clock minute that holds the request, its session
 quarter hour either side, with every other filter dropped, the page size kept and the link left out where the request
 has no session or no account.
 
-A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger."
+A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger." A failed read
+shows "Could not load the request" with the error and Try again, which reads the request again.
 
 ## Analytics
 

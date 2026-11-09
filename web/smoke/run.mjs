@@ -7113,6 +7113,59 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 
   {
+    // A reload of the range the dialog names that fails keeps the rows its earlier read drew (the 7-day `IDLE_REACHED`
+    // and `IDLE_RETURNED` seeds) and draws the error above them. A key write is the reload that keeps the range, and a
+    // stub answers the revoke so the story's keys stay for the later checks.
+    const page = await mount('/pools', { now: CLOCK_ORIGIN });
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await page.settle(300);
+    const dlg = page.container.querySelector('dialog[open]');
+    const fieldOf = () => [...(group(page.container.querySelector('dialog[open]'), 'Keepalive')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Return rate by idle age');
+    const before = fieldOf()?.querySelectorAll('.return-rate__row').length ?? 0;
+    const { getKeepaliveOverview, revokeKey } = api;
+    api.revokeKey = async () => undefined;
+    let revoked = false;
+    try {
+      for (const row of dlg?.querySelectorAll('.keys-table tbody tr') ?? []) {
+        row.querySelector('.menu__trigger')?.click();
+        await page.settle(120);
+        const item = [...row.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Revoke');
+        if (item === undefined) {
+          row.querySelector('.menu__trigger')?.click();
+          await page.settle(120);
+          continue;
+        }
+        item.click();
+        await page.settle(200);
+        failNextCall('getKeepaliveOverview', '/admin/keepalive/overview', 'ledger locked', { quiet: true });
+        buttonIn(openDialogs(page).pop(), 'Revoke')?.click();
+        await page.settle(600);
+        revoked = true;
+        break;
+      }
+    } finally {
+      api.revokeKey = revokeKey;
+      api.getKeepaliveOverview = getKeepaliveOverview;
+    }
+    const field = fieldOf();
+    const rows = [...(field?.querySelectorAll('.return-rate__row') ?? [])].map((r) => [...r.children].map((c) => (c.getAttribute('role') === 'meter' ? `meter ${c.getAttribute('aria-valuenow')}` : c.textContent?.trim())).join(' | '));
+    const read = {
+      above: field !== undefined && field.querySelector(':scope > p.muted + ul.return-rate__rows') !== null,
+      error: [...(field?.querySelectorAll(':scope > p.muted') ?? [])].map((e) => e.textContent?.trim()),
+      rows: [rows.length, rows[0], rows[9]],
+      value: field?.querySelector('label select')?.selectedOptions[0]?.textContent?.trim() ?? null,
+    };
+    results.push({
+      name: '/pools a failed reload of the return rate after a key write keeps the 7-day rows and draws its error above them',
+      ok:
+        revoked && before === 10 && read.value === '7 days' && JSON.stringify(read.rows) === JSON.stringify([10, '0 to 5m | 24 of 96 | meter 25', 'over 32h | 0 of 1 | meter 0']) && read.above &&
+        JSON.stringify(read.error) === JSON.stringify(['Could not load the return rate: ledger locked']),
+      missing: [revoked ? 'a key revoked' : 'no key to revoke', String(before), JSON.stringify(read)],
+    });
+    page.unmount();
+  }
+
+  {
     const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
     const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
     {
@@ -13011,6 +13064,41 @@ await forView('/requests', async () => {
   page.unmount();
 });
 
+// A drawer on a request the list does not hold draws the request's own read, so a failed read is the drawer's to draw,
+// and Try again reads the request again.
+await forView('/requests', async () => {
+  const name = '/requests a drawer whose read failed draws its error with Try again, and Try again draws the request';
+  const subject = requests.find((r) => r.keyId !== null && r.keyId !== 'laptop' && r.guardrails.length === 0);
+  if (!subject) {
+    results.push({ name, ok: false, missing: ['fixture'] });
+  } else {
+    failNextCall('getRequest', `/admin/requests/${subject.id}`, 'ledger locked', { quiet: true });
+    const page = await mount(`/requests/${subject.id}?keys=laptop`, { now: CLOCK_ORIGIN });
+    await page.settle(300);
+    const drawerOf = () => page.container.querySelector('.drawer');
+    const stateOf = () => ({
+      body: drawerOf()?.querySelector('.empty--error .empty__body')?.textContent?.trim() ?? null,
+      retry: buttonIn(drawerOf(), 'Try again') !== undefined,
+      sections: [...(drawerOf()?.querySelectorAll('.section-title') ?? [])].map((h) => h.textContent?.trim() ?? ''),
+      title: drawerOf()?.querySelector('.empty__title')?.textContent?.trim() ?? null,
+    });
+    const listed = [...page.container.querySelectorAll('.requests__table tbody tr .sub.mono')].some((s) => s.getAttribute('title') === subject.id);
+    const failed = stateOf();
+    buttonIn(drawerOf(), 'Try again')?.click();
+    await page.settle(300);
+    const retried = stateOf();
+    results.push({
+      name,
+      ok:
+        !listed &&
+        JSON.stringify(failed) === JSON.stringify({ body: 'ledger locked', retry: true, sections: [], title: 'Could not load the request' }) &&
+        JSON.stringify(retried) === JSON.stringify({ body: null, retry: false, sections: DRAWER_SECTIONS, title: null }),
+      missing: [`${subject.id} listed ${listed}`, JSON.stringify(failed), JSON.stringify(retried)],
+    });
+    page.unmount();
+  }
+});
+
 // Every row prints its date before the time whatever its age: the story's requests span the day before its clock, so
 // the 7-day range read at that clock holds its newest row within the day, and read a day and an hour later every row
 // is older than a day. A row is paired with the story's by the id under its time.
@@ -13369,10 +13457,24 @@ await forView('/requests', async () => {
   window.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
   await kept.settle();
   const escaped = state();
+  // Space opens the row as Enter does, and either key pressed again on the open row closes it.
+  const press = async (key) => {
+    kept.container.querySelector('.requests__table tbody tr')?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
+    await kept.settle();
+    return state();
+  };
+  const spaced = await press(' ');
+  const enterClosed = await press('Enter');
+  const reopened = await press(' ');
+  const spaceClosed = await press(' ');
+  const steps = [before, clicked, closed, entered, escaped, spaced, enterClosed, reopened, spaceClosed];
   results.push({
     name: drawerCheck,
-    ok: held(before) && /^\/requests\/[^?]+\?keys=laptop$/.test(details) && clicked.drawer && held(clicked) && !closed.drawer && held(closed) && entered.drawer && held(entered) && !escaped.drawer && held(escaped),
-    missing: [details, ...[before, clicked, closed, entered, escaped].map((s) => JSON.stringify({ ...s, keys: [...new Set(s.keys)] }))],
+    ok:
+      /^\/requests\/[^?]+\?keys=laptop$/.test(details) &&
+      steps.every(held) &&
+      JSON.stringify(steps.map((s) => s.drawer)) === JSON.stringify([false, true, false, true, false, true, false, true, false]),
+    missing: [details, ...steps.map((s) => JSON.stringify({ ...s, keys: [...new Set(s.keys)] }))],
   });
   kept.unmount();
 

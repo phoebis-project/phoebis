@@ -870,10 +870,11 @@ function ReturnRate({ buckets, error, loading, onRange, range }: ReturnRateProps
         </Select>
       </label>
       <p className="field__hint">Of the idle windows that reached each age in the last {range === '7d' ? 7 : 30} days, the ones whose next request continued the same prefix within it.</p>
-      {error !== null ? (
-        <p className="muted">Could not load the return rate: {error}</p>
-      ) : loading ? (
+      {error !== null && <p className="muted">Could not load the return rate: {error}</p>}
+      {loading ? (
         <Skeleton height={28} />
+      ) : buckets.length === 0 ? (
+        error === null && <p className="muted">No idle windows recorded yet</p>
       ) : buckets.every((b) => b.reached === 0) ? (
         <p className="muted">No idle windows recorded yet</p>
       ) : (
@@ -1194,9 +1195,9 @@ export function PoolDialog({
   // The pool's idle-age counters, empty for a new pool or one the overview does not list.
   const idleReturns: ReturnRateProps = {
     // The last answer outlives a pending or failed read, which after a pick is the other range's, so the dialog draws
-    // an answer read for the range it names, its loading or its error otherwise.
+    // an answer read for the range it names, a settled read's failure above it or alone, and its loading otherwise.
     buckets: (pool && answer?.pools.find((p) => p.poolId === pool.id)?.idleReturns) || [],
-    error: answer === null && !overview.loading ? overview.error : null,
+    error: overview.loading ? null : overview.error,
     loading: answer === null && overview.loading,
     onRange: setReturnRange,
     range: returnRange,

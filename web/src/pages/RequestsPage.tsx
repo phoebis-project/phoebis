@@ -19,7 +19,7 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton, SkeletonRows } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton, SkeletonRows, toggleRow } from '@/components/ui/primitives';
 import { accountHref, addressWindow, REQUEST_ORDER_OF, REQUEST_PAGE_SIZES, REQUEST_SORT_KEYS, requestHref, REQUESTS_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
 import { sentences, shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
@@ -423,11 +423,8 @@ export function RequestsPage() {
                         <tr
                           key={r.id}
                           className={[r.id === requestId ? 'is-selected' : '', fresh.has(r.id) ? 'is-new' : ''].filter(Boolean).join(' ')}
-                          onClick={() => navigate(detailTo(r.id))}
                           tabIndex={0}
-                          // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log
-                          // alone.
-                          onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate(detailTo(r.id))}
+                          {...toggleRow(() => (r.id === requestId ? navigate({ pathname: '/requests', search: location.search }) : navigate(detailTo(r.id))))}
                         >
                           {shown.has('time') && (
                             <td className="num requests__time col-fill" title={fmtAbsolute(r.at)}>
@@ -496,10 +493,10 @@ export function RequestsPage() {
                           {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
                           <td className="right col-fit">
                             <span className="requests__links">
-                              <Link to={routingLogHref(r, now)} onClick={(e) => e.stopPropagation()}>
+                              <Link to={routingLogHref(r, now)}>
                                 Routing
                               </Link>
-                              <Link to={detailTo(r.id)} onClick={(e) => e.stopPropagation()}>
+                              <Link to={detailTo(r.id)}>
                                 Details
                               </Link>
                             </span>
@@ -605,6 +602,8 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
       {!r ? (
         detail.loading ? (
           <Skeleton height={200} />
+        ) : detail.error !== null ? (
+          <ErrorState title="Could not load the request" body={detail.error} retry={detail.reload} />
         ) : (
           <EmptyState title="Request not found" body="It may have aged out of the ledger." />
         )
