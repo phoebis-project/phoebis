@@ -1,13 +1,17 @@
 # Browser pass
 
-`views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme. It logs in
-through the login screen, then for each theme visits the dashboard, quota, accounts (which lands on the first account
-through a client-side redirect, since `/accounts` carries no account id), pools, keys, guardrails, request logs,
-analytics (on its Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once
-more on its Cache warming tab and the Quota page once more on its Quota windows section. Before the dark theme it logs
-out through the top bar's Log out control and logs in again on the screen drawn in that theme. Per view it waits for one
-element, asserts the document title, records every console error and page error, and writes a full-page screenshot to
-`$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`. Further layout assertions ride along, one function each in `views.mjs`, in
+`views.mjs` drives a headless Chromium over every view of the console in the light and the dark theme, and in the mock
+pass under the default and the GitHub palette. It logs in through the login screen, then for each theme under each
+palette (the default palette first) visits the dashboard, quota, accounts (which lands on the first account through a
+client-side redirect, since `/accounts` carries no account id), pools, keys, guardrails, request logs, analytics (on its
+Traffic tab), sessions, settings, and the routing log, and in the mock pass the Analytics page once more on its Cache
+warming tab and the Quota page once more on its Quota windows section. Before each theme and palette after the first it
+logs out through the top bar's Log out control and logs in again on the screen drawn in that theme and palette, storing
+`phoebis.palette` beside `phoebis.theme`. Per view it waits for one element, asserts the document title, records every
+console error and page error, and writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png` under
+the default palette and to `<theme>-github/<view>.png` under the GitHub one, so the mock pass fills the four directories
+`light`, `dark`, `light-github` and `dark-github`. Each measurement and failure line leads with its directory's name,
+the bare theme or `<theme>-github`. Further layout assertions ride along, one function each in `views.mjs`, in
 the order the file defines them (the rail's two levels (the indent, the gaps, the hairlines, a parent's color at rest
 and under the pointer), the create marks with and without the refusal dots (a mark's size, weight and ink, 6 px after
 its label on the label's line and short of the dot, at the pass's viewport and in the 720 px strip), the expert view's
@@ -116,9 +120,9 @@ Non-companion timeout lines (the label's type and ink, the value's type, the row
 value's left edges of the Body capture line above them, each line's text and hover recorded), the Settings page's Unit
 row at 1280 and 400 px (the legend's button on the select's line, and its popover inside the viewport's width, at or
 below its button's bottom, uncovered, in the legend's 12 px type and closed by Escape), the Appearance card's Theme,
-Time format and Unit rows at 400 px (each control under its label), the cooling-down block's columns (Reason the fill),
-the Delete account button, the window bars on the dashboard and the Accounts page (each bar's line inside its bar, a
-compact bar's projection in its reset's place as two parts, its share and its horizon, a whole bar's reset and
+Palette, Time format and Unit rows at 400 px (each control under its label), the cooling-down block's columns (Reason
+the fill), the Delete account button, the window bars on the dashboard and the Accounts page (each bar's line inside its
+bar, a compact bar's projection in its reset's place as two parts, its share and its horizon, a whole bar's reset and
 projection as two parts, each part whole on its line, and a window the account does not carry named muted in its slot's
 share place, on the line and in the ink of the neighboring bar's label (its own label where the 400 px window stacks the
 slots), whole inside its slot with the window's words on its title, a whole slot drawing them and a compact one its
@@ -411,8 +415,9 @@ height, type size and weight), a finished session's line, found by its Status, t
 words against the detail's type (mock pass, on a load of its own under the finished filter once the session list's shot
 is taken), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
 Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's secret
-in the mock pass, on a load of its own), the login screen's Stay logged in row (on both logins, the light theme's and
-the dark one's after the Log out: the secret field's, the row's, its box's, its label's and its hint's edges inside the
+in the mock pass, on a load of its own), the login screen's palette and its Stay logged in row (on every login, the
+first one's and each one's after a Log out: the root's `data-palette` against the stored palette, since the theme script
+alone sets it on that screen, then the secret field's, the row's, its box's, its label's and its hint's edges inside the
 card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again before the view's
 shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the router pass and
 recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the Cost cell, wider
@@ -462,10 +467,12 @@ the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/anal
 session's open row on the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as
 `<theme>/sessions-phone.png`. Its views include the Analytics page's Cache warming tab as
 `<theme>/analytics-cache-warming.png` and the Quota page's Quota windows section as `<theme>/quota-windows.png`. The
-router's pass writes none of these: one shot per view it runs, which its test counts. The dashboard's remaining cards
-and its empty state are checked against the router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the
-mock's story has subscription accounts and no empty list on the dashboard. The subscription end editor needs the story's
-OAuth account, so against the router's seed that part stands down.
+mock pass writes each of these shots under both palettes, `<theme>/` for the default and `<theme>-github/` for the
+GitHub one, and the site's screenshots come from the default palette's directories. The router's pass writes none of
+these: one shot per view it runs, under the default palette alone, which its test counts. The dashboard's remaining
+cards and its empty state are checked against the router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them),
+since the mock's story has subscription accounts and no empty list on the dashboard. The subscription end editor needs
+the story's OAuth account, so against the router's seed that part stands down.
 
 ## Compare the computed styles
 

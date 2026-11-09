@@ -5,6 +5,7 @@ import { useLocalStorage, useMediaQuery } from '@/lib/hooks';
 import { positionOf, weekOf, type UnitPosition, type WeekPosition } from '@/lib/unit';
 
 export type ExpertChoice = 'off' | 'on';
+export type PaletteChoice = 'default' | 'github';
 export type ThemeChoice = 'dark' | 'light' | 'system';
 
 interface AppSettings {
@@ -15,9 +16,11 @@ interface AppSettings {
    * The cost model's two tier members, which every list of models orders by. The empty pair until the settings answer.
    */
   modelTiers: ModelTiers;
+  palette: PaletteChoice;
   resolvedTheme: 'dark' | 'light';
   setExpertView: (on: boolean) => void;
   setModelTiers: (tiers: ModelTiers) => void;
+  setPalette: (palette: PaletteChoice) => void;
   setTheme: (t: ThemeChoice) => void;
   setTimeFormat: (f: TimeFormat) => void;
   setUnit: (u: UnitPosition) => void;
@@ -37,9 +40,11 @@ const NO_TIERS: ModelTiers = { modelTier: {}, tierOrder: [] };
 const themeOf = (raw: string | null): ThemeChoice => (raw === 'dark' || raw === 'light' ? raw : 'system');
 const timeFormatOf = (raw: string | null): TimeFormat => (raw === '12h' ? raw : '24h');
 const expertOf = (raw: string | null): ExpertChoice => (raw === 'on' ? raw : 'off');
+const paletteOf = (raw: string | null): PaletteChoice => (raw === 'github' ? 'github' : 'default');
 
 export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [theme, setTheme] = useLocalStorage('phoebis.theme', themeOf);
+  const [palette, setPalette] = useLocalStorage('phoebis.palette', paletteOf);
   const [storedFormat, storeFormat] = useLocalStorage('phoebis.timeFormat', timeFormatOf);
   const [storedExpert, storeExpert] = useLocalStorage('phoebis.expertView', expertOf);
   const expertView = storedExpert === 'on';
@@ -58,7 +63,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', resolvedTheme);
-  }, [resolvedTheme]);
+    document.documentElement.setAttribute('data-palette', palette);
+  }, [palette, resolvedTheme]);
 
   // The module formatters have to answer in the new format before the context change re-renders the components below.
   const setTimeFormat = useCallback(
@@ -71,8 +77,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AppSettings>(
-    () => ({ expertView, formatVersion, modelTiers, resolvedTheme, setExpertView, setModelTiers, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
-    [expertView, formatVersion, modelTiers, resolvedTheme, setExpertView, setModelTiers, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
+    () => ({ expertView, formatVersion, modelTiers, palette, resolvedTheme, setExpertView, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
+    [expertView, formatVersion, modelTiers, palette, resolvedTheme, setExpertView, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -6,7 +6,7 @@ const ChartInkContext = createContext<ChartInk | null>(null);
 
 /** One read of the theme's chart colors for every chart under it, where each chart would read the properties itself. */
 export function ChartInkProvider({ children }: { children: ReactNode }) {
-  const { resolvedTheme } = useAppSettings();
+  const { palette, resolvedTheme } = useAppSettings();
   const [ink, setInk] = useState<ChartInk>(() => readChartInk());
   useEffect(() => {
     // The attribute flips in an effect upstream, so the read waits for paint, when the new variables apply. A read that
@@ -17,7 +17,7 @@ export function ChartInkProvider({ children }: { children: ReactNode }) {
       setInk((was) => (JSON.stringify(was) === JSON.stringify(next) ? was : next));
     });
     return () => cancelAnimationFrame(id);
-  }, [resolvedTheme]);
+  }, [palette, resolvedTheme]);
   return createElement(ChartInkContext.Provider, { value: ink }, children);
 }
 

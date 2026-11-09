@@ -167,11 +167,11 @@ function Block({ plan }: { plan: PopoverPlan }) {
  * One station's, leaf's or terminus's facts over the card. A fixed box in a portal, since the log's table wrap clips
  * anything absolute inside it: no taller than the window less 8 px above and below, scrolling what runs past that,
  * measured at the window's corner, then centered under its anchor 8 px below, kept 8 px inside the part of the card's
- * box on screen, moved above the anchor where it would pass the window's bottom, and kept 8 px inside the window, and
- * hidden until that placement is done. A strip redrawn for a record that no longer holds the anchor takes the anchor's
- * button away, and the popover closes with it. A key that opened it moves focus into it, and focus leaving it for
- * anything but its anchor closes it. Tab past its end moves on to the strip's next button and Shift+Tab before its
- * start back to the anchor.
+ * box on screen, moved above the anchor where it fits over it alone, onto the roomier side and capped to that room
+ * where it fits on neither side, and kept 8 px inside the window, and hidden until that placement is done. A strip
+ * redrawn for a record that no longer holds the anchor takes the anchor's button away, and the popover closes with it.
+ * A key that opened it moves focus into it, and focus leaving it for anything but its anchor closes it. Tab past its
+ * end moves on to the strip's next button and Shift+Tab before its start back to the anchor.
  */
 export function StripPopover({ anchor, bounds, focus, id, layout, onClose, pinned, plan }: { anchor: HTMLElement; bounds: HTMLElement; focus: boolean; id: string; layout: StripLayout; onClose: (returnFocus: boolean) => void; pinned: boolean; plan: PopoverPlan }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);

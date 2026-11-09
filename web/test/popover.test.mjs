@@ -99,7 +99,13 @@ test("the box flips above an anchor near the window's foot and keeps 8 px inside
   act(() => roots.pop().unmount());
   boxSize = { height: 784, width: 200 };
   render(h(Opened, { onClose() {}, rectOf: '40,700,60,30' }, content()));
-  assert.equal(box().style.top, '8px', 'a box as tall as the window over a low anchor starts 8 px under its top');
+  assert.deepEqual([box().style.top, box().style.maxHeight], ['8px', '684px'], 'a box as tall as the window over a low anchor takes the room above it, ending 8 px over the anchor');
+});
+
+test('a box that fits on neither side of a mid-window anchor hangs under it, capped to the room down to the foot', () => {
+  boxSize = { height: 397, width: 360 };
+  render(h(Opened, { onClose() {}, rectOf: '1191,374,28,28' }, content()));
+  assert.deepEqual([box().style.left, box().style.top, box().style.maxHeight], ['912px', '410px', '382px'], 'the 382 px under the anchor outrun the 358 px over it, so the box scrolls there rather than covering its anchor');
 });
 
 test('a PopoverHost above the box holds a menu on open and lets go on close and on unmount', () => {

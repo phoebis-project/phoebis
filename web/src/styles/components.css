@@ -360,7 +360,7 @@
 }
 
 .btn--danger:hover:not(:disabled) {
-  color: var(--on-accent);
+  color: var(--on-critical);
   background: var(--critical);
 }
 
@@ -737,7 +737,7 @@ textarea.input {
   left: 2px;
   width: 16px;
   height: 16px;
-  background: var(--surface);
+  background: var(--toggle-knob);
   border-radius: 50%;
   transition: transform var(--motion-base);
 }
@@ -2263,7 +2263,7 @@ textarea.input {
   padding: 0 6px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--on-serious);
   background: var(--serious);
   border-radius: var(--radius-pill);
 }

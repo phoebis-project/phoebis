@@ -478,11 +478,12 @@ card says which traffic the band applies to, and Plan rates' Regime control read
 reference](console.md#the-cost-reference)). The Settings page's About card lists the session expiry and the
 non-companion timeout, the two keys of the `sessions` block, each as a duration with its seconds beside it and its hover
 naming the key ([Settings](console.md#settings)). The Settings page's About card names the bootstrap's body capture
-limit beside its two retention lines ([Settings](console.md#settings)). A decision card's cache-map row folds a record
-of four entries or more to one chip per tier with the count and the depth range and the latest three depths, behind a
-control that lists every entry ([Routing log](console.md#routing-log)). An event panel's When reads in the viewer's
-zone, and a shedding round's Rewrite cell names the window as the cost figures do ([Routing
-log](console.md#routing-log)). A renewal after a hold carries the wait it followed on its card ([Routing
+limit beside its two retention lines ([Settings](console.md#settings)). The Settings page's Appearance card offers a
+Palette control, Default, the console's own palette, or GitHub, stored in the browser ([Settings](console.md#settings)).
+A decision card's cache-map row folds a record of four entries or more to one chip per tier with the count and the depth
+range and the latest three depths, behind a control that lists every entry ([Routing log](console.md#routing-log)). An
+event panel's When reads in the viewer's zone, and a shedding round's Rewrite cell names the window as the cost figures
+do ([Routing log](console.md#routing-log)). A renewal after a hold carries the wait it followed on its card ([Routing
 log](console.md#routing-log)). A guardrail's update records each changed field with its value before and after, as an
 account's, a key's or a pool's update does ([Routing log](console.md#routing-log)). A request refused before it resolved
 a model reads a dash in the Routing log's Model cell, as it does on the Requests view ([Routing

@@ -1,6 +1,6 @@
 import { api } from '@/api';
 import { effectiveLabel } from '@/api/decode';
-import { useAppSettings, type ThemeChoice } from '@/app/settings';
+import { useAppSettings, type PaletteChoice, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Card, CopyButton, ErrorState, KeyValue, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { UnitLegend, WeekSwitch } from '@/components/ui/UnitControls';
@@ -69,7 +69,7 @@ function SecretBadge({ configured }: { configured: boolean }) {
 
 export function SettingsPage() {
   const settings = useAsync(() => api.getSettings(), []);
-  const { theme, setTheme, timeFormat, setTimeFormat, unit, setUnit, week, setWeek } = useAppSettings();
+  const { theme, setTheme, palette, setPalette, timeFormat, setTimeFormat, unit, setUnit, week, setWeek } = useAppSettings();
   const now = useNow(60_000);
   const s = settings.data;
   const snippet = snippetFor(s?.listeners ?? null);
@@ -90,6 +90,21 @@ export function SettingsPage() {
               { value: 'light', label: <><IconSun size={14} /> Light</> },
               { value: 'dark', label: <><IconMoon size={14} /> Dark</> },
               { value: 'system', label: <><IconMonitor size={14} /> System</> },
+            ]}
+          />
+        </div>
+        <div className="setting-row">
+          <div>
+            <b>Palette</b>
+            <p className="muted">GitHub follows the colors of github.com.</p>
+          </div>
+          <Segmented<PaletteChoice>
+            ariaLabel="Palette"
+            value={palette}
+            onChange={setPalette}
+            options={[
+              { value: 'default', label: 'Default' },
+              { value: 'github', label: 'GitHub' },
             ]}
           />
         </div>

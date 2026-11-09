@@ -28187,7 +28187,7 @@ await forView('/settings', async () => {
 
 await forView('/settings', async () => {
 m = await mount('/settings', { now: CLOCK_ORIGIN });
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Palette', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
@@ -28283,6 +28283,12 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   dark?.click();
   await m.settle(100);
   results.push({ name: 'theme toggle -> dark', ok: document.documentElement.getAttribute('data-theme') === 'dark' && localStorage.getItem('phoebis.theme') === 'dark', missing: [document.documentElement.getAttribute('data-theme'), localStorage.getItem('phoebis.theme')] });
+}
+{
+  const github = [...m.container.querySelectorAll('.segmented[aria-label="Palette"] button')].find((b) => b.textContent?.trim() === 'GitHub');
+  github?.click();
+  await m.settle(100);
+  results.push({ name: 'palette toggle -> github', ok: document.documentElement.getAttribute('data-palette') === 'github' && localStorage.getItem('phoebis.palette') === 'github', missing: [document.documentElement.getAttribute('data-palette'), localStorage.getItem('phoebis.palette')] });
 }
 m.unmount();
 });

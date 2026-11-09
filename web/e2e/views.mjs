@@ -111,6 +111,19 @@ const VIEWS = [
   { path: '/meter', title: 'Meter', wait: '.meter-table', slug: 'meter', mockOnly: true },
 ];
 
+/**
+ * The key of a theme under a palette, which every measure leads its lines with and the shots' directory takes: the bare
+ * theme under the default palette, whose shots the site reads, and `<theme>-github` under the other.
+ */
+const keyOf = (theme, palette) => (palette === 'default' ? theme : `${theme}-${palette}`);
+/** The theme a key names, for a check against the theme the page drew. */
+const themeOf = (key) => key.split('-')[0];
+/**
+ * The pass's walks over the views, each theme under each palette and the default palette's first. The router's pass
+ * walks the default palette alone, since its test counts one shot per view and theme.
+ */
+const WALKS = (mock ? ['default', 'github'] : ['default']).flatMap((palette) => ['light', 'dark'].map((mode) => ({ key: keyOf(mode, palette), mode, palette })));
+
 /** How far the page's clock moves per step. */
 const CLOCK_STEP_MS = 100;
 /** Room for a view to load: the session check, the view's reads, and whatever those start in turn. */
@@ -278,7 +291,7 @@ async function groupedDialogFixture(theme) {
     await advance(LOAD_MS);
     await page.waitForSelector('dialog[open] .dialog-rail', { timeout: 15_000 });
     const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-    if (applied !== theme) say(`data-theme is ${applied}`);
+    if (applied !== themeOf(theme)) say(`data-theme is ${applied}`);
   };
   const choose = async (id) => {
     await page.locator(`.dialog-rail__group[data-group="${id}"]`).click();
@@ -622,7 +635,7 @@ async function attentionLine(theme) {
       await attentionList(theme);
       await attentionLineNarrow(theme);
     }
-  } else if (theme === 'light') {
+  } else if (themeOf(theme) === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
     say(`reads ${read.lead} over ${JSON.stringify(texts)}, neither the seeded exhaustion nor the quiet line`);
@@ -7689,8 +7702,8 @@ async function stickyStrip(theme, chipped = false) {
  * The Settings page's Unit row at 1280 and 400 px, the one way to the legend on a phone, where the top bar gives its
  * button up: the legend's button sits on the select's line to its right, its popover opens inside the viewport's width,
  * under its button or over it where the window's foot is near, with its two top corners and its middle uncovered and
- * its lines in the legend's 12 px type, and Escape closes it. At 400 px each of the Appearance card's Theme, Time
- * format and Unit rows puts its control under its label.
+ * its lines in the legend's 12 px type, and Escape closes it. At 400 px each of the Appearance card's Theme, Palette,
+ * Time format and Unit rows puts its control under its label.
  */
 async function settingsUnitLegend(theme) {
   const LEGEND = 'What the units mean';
@@ -7700,7 +7713,7 @@ async function settingsUnitLegend(theme) {
       await page.setViewportSize({ height: 800, width });
       await settle();
       if (width === 400) {
-        // Each row answers alone, since three rows that all keep their control beside the label would compare alike.
+        // Each row answers alone, since four rows that all keep their control beside the label would compare alike.
         const rows = await page.evaluate(() => {
           const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Appearance');
           const round = (px) => Math.round(px * 10) / 10;
@@ -7710,7 +7723,7 @@ async function settingsUnitLegend(theme) {
           });
         });
         measurements.push(`${theme} /settings appearance rows at ${width} px ${JSON.stringify(rows)}`);
-        for (const name of ['Theme', 'Time format', 'Unit']) {
+        for (const name of ['Theme', 'Palette', 'Time format', 'Unit']) {
           const row = rows.find((r) => r.name === name);
           if (row === undefined || row.controlTop === null || row.labelBottom === null) say(`the Appearance card draws no ${name} row with a label and a control`);
           // A pixel of slack, as `groupGeometry` allows a dialog field's label over its control.
@@ -8393,8 +8406,8 @@ async function planEndedLines(theme, path) {
   if (!read.sentence?.muted || !/^No window since the plan ended .+ ago$/.test(read.sentence.text)) say(`the plan-ended account's ${kind} reads ${JSON.stringify(read.sentence ?? null)} in its window bars' place, not the compact plan-ended sentence with its age, muted`);
   for (const what of compare(read.sentence, read.neighbor, ['fontSize', 'ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
   if (path === '/') {
-    const seat = 'contract: a usage-based seat';
-    const want = { '7d remaining': [seat], 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', seat] };
+    const seats = ['contract: a usage-based seat', 'zenith: a usage-based seat'];
+    const want = { '7d remaining': seats, 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', ...seats] };
     for (const ring of read.rings) if (JSON.stringify(ring.names) !== JSON.stringify(want[ring.title] ?? null)) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not ${JSON.stringify(want[ring.title] ?? null)}`);
     if (read.rings.length !== 2) say(`${read.rings.length} remaining cards, expected 7d and Fable week`);
   }
@@ -13254,13 +13267,17 @@ async function copyFallbackModal(theme) {
 /**
  * The login screen's Stay logged in row under the secret field, in the theme the screen drew: the field's, the row's,
  * its box's, its label's and its hint's edges inside the card's, recorded and asserting nothing, since no view of the
- * pass draws the screen.
+ * pass draws the screen. Before them the root's palette is held to the stored one, since the screen stands outside the
+ * settings provider and the theme script alone sets the attribute there.
  */
 async function loginStayRow(theme) {
   const drawn = await page.waitForSelector('.login__card .field--beside', { timeout: 15_000 }).then(
     () => true,
     () => false,
   );
+  const palette = await page.evaluate(() => ({ applied: document.documentElement.getAttribute('data-palette'), stored: localStorage.getItem('phoebis.palette') }));
+  measurements.push(`${theme} /login palette ${JSON.stringify(palette)}`);
+  if (palette.applied !== palette.stored) failures.push(`${theme} /login: the screen draws data-palette ${palette.applied}, not the stored ${palette.stored}`);
   if (!drawn) {
     measurements.push(`${theme} /login Stay logged in row not drawn`);
     return;
@@ -13298,14 +13315,21 @@ async function logOut() {
   await page.waitForSelector('.login__card', { timeout: 15_000 });
 }
 
+/** Stores the theme and the palette the next load draws in, as the Settings view does. */
+const storeAppearance = (theme, palette) =>
+  page.evaluate(([t, p]) => {
+    localStorage.setItem('phoebis.theme', t);
+    localStorage.setItem('phoebis.palette', p);
+  }, [theme, palette]);
+
 /**
- * Signs `page` in with the pass's secret on a login screen drawn under `theme`, measuring its Stay logged in row first
- * unless `measured` is false. The same pin the jsdom smoke run applies, over the timers as well as the date: `install`
- * alone keeps the clock running at the wall's pace, so a page's first login pauses it at the origin and a later one
- * sets it back there. From there `advance` moves it forward, and each view of the pass sets it back to the origin
- * before its load.
+ * Signs `page` in with the pass's secret on a login screen drawn under `theme` and `palette`, measuring its Stay logged
+ * in row first unless `measured` is false. The same pin the jsdom smoke run applies, over the timers as well as the
+ * date: `install` alone keeps the clock running at the wall's pace, so a page's first login pauses it at the origin and
+ * a later one sets it back there. From there `advance` moves it forward, and each view of the pass sets it back to the
+ * origin before its load.
  */
-async function logIn(theme, measured = true) {
+async function logIn(theme, palette, measured = true) {
   if (clocked.has(page)) {
     await page.clock.setSystemTime(clockOrigin);
   } else {
@@ -13316,12 +13340,12 @@ async function logIn(theme, measured = true) {
     // static file every page loads, which the browser draws as a text document with the head the pass's styles go into.
     await page.goto(`${base}/theme.js`);
   }
-  await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+  await storeAppearance(theme, palette);
   loginLoads.set(page, (loginLoads.get(page) ?? 0) + 1);
   await page.goto(`${base}/`);
   await booted();
   await advance(LOAD_MS);
-  if (measured) await loginStayRow(theme);
+  if (measured) await loginStayRow(keyOf(theme, palette));
   await page.getByLabel('Admin secret').fill(secret);
   await page.getByRole('button', { name: 'Log in' }).click();
   await advance(LOAD_MS);
@@ -13331,17 +13355,19 @@ async function logIn(theme, measured = true) {
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
-  await logIn('light');
+  await logIn('light', 'default');
 
-  for (const theme of ['light', 'dark']) {
-    // The login screen draws on no view, so the session ends before the second theme and the screen draws again in it.
-    if (theme !== 'light') {
+  // Each measure below takes the walk's key as its theme, leading its lines with it and writing its shots under it.
+  for (const [step, { key: theme, mode, palette }] of WALKS.entries()) {
+    // The login screen draws on no view, so the session ends before every walk after the first and the screen draws
+    // again in that walk's theme and palette.
+    if (step > 0) {
       at = `${theme} the login`;
       await logOut();
-      await logIn(theme);
+      await logIn(mode, palette);
     }
     mkdirSync(join(shots, theme), { recursive: true });
-    await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+    await storeAppearance(mode, palette);
     for (const view of VIEWS) {
       if (view.mockOnly && !mock) continue;
       at = `${theme} ${view.path}`;
@@ -13363,7 +13389,7 @@ try {
       const title = await page.title();
       if (title !== `${view.title} - Phoebis Router`) failures.push(`${theme} ${view.path}: title is ${JSON.stringify(title)}`);
       const applied = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
-      if (applied !== theme) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
+      if (applied !== mode) failures.push(`${theme} ${view.path}: data-theme is ${applied}`);
       if (view.path === '/') {
         await sidebarBrand(theme);
         await attentionLine(theme);
@@ -13640,12 +13666,14 @@ try {
   }
   // Only the mock bundle routes the fixture path.
   if (mock) {
-    for (const theme of ['light', 'dark']) {
+    for (const { key: theme, mode, palette } of WALKS) {
       at = `${theme} /fixtures/grouped-dialog`;
-      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+      await storeAppearance(mode, palette);
       await groupedDialogFixture(theme);
     }
   }
+  // The reads below run under the default palette alone, each in both themes.
+  await page.evaluate(() => localStorage.setItem('phoebis.palette', 'default'));
   for (const theme of ['light', 'dark']) {
     at = `${theme} /pools cost reference`;
     await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
@@ -13682,7 +13710,7 @@ try {
   const shown = await chromium.launch({ args: RASTER, ignoreDefaultArgs: ['--hide-scrollbars'] });
   try {
     page = await openPage(shown);
-    await logIn('light', false);
+    await logIn('light', 'default', false);
     await page.evaluate(() => localStorage.setItem('phoebis.theme', 'light'));
     await page.goto(`${base}/keys`);
     await booted();

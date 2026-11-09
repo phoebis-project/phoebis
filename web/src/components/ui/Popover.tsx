@@ -22,9 +22,10 @@ function stopAfter(anchor: HTMLElement, box: HTMLElement): HTMLElement | undefin
 }
 
 /**
- * Places a fixed box under its anchor, above it where it would pass the window's foot, no taller than the window less
- * `GAP` above and below and kept `GAP` inside it, then reveals it. `left` answers the box's left edge from its measured
- * box and the anchor's.
+ * Places a fixed box under its anchor, above it where it fits over the anchor alone, and on the roomier side where it
+ * fits on neither (under on a tie), capped to that side's room so it scrolls there rather than covering its anchor. A
+ * box is no taller than the window less `GAP` above and below and kept `GAP` inside it, then revealed. `left` answers
+ * the box's left edge from its measured box and the anchor's.
  */
 export function placeFixed(el: HTMLElement, anchor: HTMLElement, left: (box: DOMRect, at: DOMRect) => number): void {
   // A classic scrollbar stands inside the window's inner box but outside the fixed box's containing block.
@@ -37,9 +38,17 @@ export function placeFixed(el: HTMLElement, anchor: HTMLElement, left: (box: DOM
   const at = anchor.getBoundingClientRect();
   el.style.left = `${left(box, at)}px`;
   const below = at.bottom + GAP;
-  const top = below + box.height > tall - GAP ? at.top - GAP - box.height : below;
-  // A list as tall as the window over a low anchor starts at the window's top rather than above it.
-  el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
+  const under = tall - GAP - below;
+  const over = at.top - 2 * GAP;
+  if (box.height > under && box.height > over) {
+    const down = under >= over;
+    el.style.maxHeight = `${Math.max(0, down ? under : over)}px`;
+    el.style.top = `${down ? below : GAP}px`;
+  } else {
+    const top = box.height > under ? at.top - GAP - box.height : below;
+    // An anchor scrolled past the window's edge would carry the box out of the window with it.
+    el.style.top = `${Math.max(GAP, Math.min(top, tall - GAP - box.height))}px`;
+  }
   el.style.visibility = 'visible';
 }
 
@@ -86,10 +95,10 @@ export interface PopoverProps {
 
 /**
  * StripPopover's rules on any anchor: createPortal at position fixed, visibility hidden until placed, kept 8 px inside
- * the window, flipped above when it would pass the window's foot, placed again on resize and any scroll, closed once
- * its anchor has left the document or the layout, aria-modal false, focus moved to the first tabbable (else the box)
- * on open. Tab past the last stop moves on to the stop after the anchor and Shift+Tab before the first returns to the
- * anchor, each closing the box.
+ * the window, flipped above where it fits over its anchor alone and capped on the roomier side where it fits on neither
+ * (`placeFixed`), placed again on resize and any scroll, closed once its anchor has left the document or the layout,
+ * aria-modal false, focus moved to the first tabbable (else the box) on open. Tab past the last stop moves on to the
+ * stop after the anchor and Shift+Tab before the first returns to the anchor, each closing the box.
  */
 export function Popover({ anchor, children, className, id, label, labelledBy, onClose, open, placeKey, role = 'dialog' }: PopoverProps): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null);

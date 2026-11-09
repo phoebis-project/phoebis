@@ -50,10 +50,12 @@ router's version as `v{version}`. The top bar reads the open view's title (the d
 theme switch "Theme" with Light, Dark and System, stored under `phoebis.theme` (`system` until you pick one). When the
 router answers from a build other than the one the console's files were built from, a banner above the top bar reads
 `The router runs a newer build than this console. Reload to pick it up.` beside a "Reload" button, and it stays in view
-with the top bar until the page reloads. The time format lives under `phoebis.timeFormat` (`24h` by default). The theme,
-the time format, the unit and the week are browser preferences, which the Settings view's Appearance card also sets, and
-nothing in the shell changes a router setting. On a narrow window a menu button opens the sidebar over the view, and the
-top bar moves its controls onto a line of their own under the view title where the two do not fit side by side.
+with the top bar until the page reloads. The time format lives under `phoebis.timeFormat` (`24h` by default) and the
+palette, Default or GitHub, under `phoebis.palette` (`default` when unset), set on the Settings view's Palette row. The
+theme, the palette, the time format, the unit and the week are browser preferences, which the Settings view's Appearance
+card also sets, and nothing in the shell changes a router setting. On a narrow window a menu button opens the sidebar
+over the view, and the top bar moves its controls onto a line of their own under the view title where the two do not fit
+side by side.
 
 The Accounts, Analytics and Pools views load their code on first open. A view that fails to draw tells a bundle that
 changed under the tab ("This page could not load") from an error while drawing ("This page hit an error"), each with its
@@ -1323,14 +1325,15 @@ dialog shows an earlier entry under the Revision select.
 ![The Settings view: Appearance, About and the client block](assets/settings-dark.png#only-dark)
 
 "Appearance" ("Stored in this browser only.") sets the Theme, Light, Dark or System ("System follows the operating
-system preference."), the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), and the Unit, which
-mirrors the top bar's switch with the week select beside it, disabled under the dollar positions as the top bar's is,
-and a legend button of its own ("The unit every view prices a request in. Native reads a subscription request as a share
-of the chosen week and a billed request in dollars."), the four browser preferences the shell reads, and at a phone's
-width each row's control wraps under its label, the Unit row's position select, week select and legend button onto a
-second line. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path
-(each as the path or "not configured", then its table's entry in force, its revision count and the next date while one
-is pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
+system preference."), the Palette, Default or GitHub ("GitHub follows the colors of github.com."), Default until you
+pick GitHub, the Time format, 12h or 24h ("Applies to every timestamp and axis tick."), and the Unit, which mirrors the
+top bar's switch with the week select beside it, disabled under the dollar positions as the top bar's is, and a legend
+button of its own ("The unit every view prices a request in. Native reads a subscription request as a share of the
+chosen week and a billed request in dollars."), the five browser preferences the shell reads, and at a phone's width
+each row's control wraps under its label, the Unit row's position select, week select and legend button onto a second
+line. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path (each
+as the path or "not configured", then its table's entry in force, its revision count and the next date while one is
+pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
 cost model reports a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as
 `kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as `at most {n} hours`, the longest a pool
 or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long a session stays listed after its last

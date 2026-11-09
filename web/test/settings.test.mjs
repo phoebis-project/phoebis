@@ -31,3 +31,28 @@ test('a stored time format outside the union reads 24h', (t) => {
   act(() => root.render(h(AppSettingsProvider, null)));
   assert.equal(getTimeFormat(), '24h');
 });
+
+/** The palette the provider puts on the root, with `stored` under its key before the render, or the key unset. */
+function appliedPalette(t, stored) {
+  if (stored !== null) window.localStorage.setItem('phoebis.palette', stored);
+  const root = createRoot(document.body.appendChild(document.createElement('div')));
+  t.after(() => {
+    act(() => root.unmount());
+    window.localStorage.removeItem('phoebis.palette');
+    document.documentElement.removeAttribute('data-palette');
+  });
+  act(() => root.render(h(AppSettingsProvider, null)));
+  return document.documentElement.getAttribute('data-palette');
+}
+
+test('a browser with no stored palette draws the default palette', (t) => {
+  assert.equal(appliedPalette(t, null), 'default');
+});
+
+test('a stored github palette draws the GitHub palette', (t) => {
+  assert.equal(appliedPalette(t, 'github'), 'github');
+});
+
+test('a stored palette outside the union draws the default palette', (t) => {
+  assert.equal(appliedPalette(t, 'solarized'), 'default');
+});

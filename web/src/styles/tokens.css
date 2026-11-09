@@ -21,6 +21,11 @@
   --accent-soft: #ddf4ff;
   --accent-ring: rgba(9, 105, 218, 0.35);
   --on-accent: #ffffff;
+  /* The ink on the critical and serious fills and the toggle's knob keep their light values in the dark theme, where
+     the theme's own inks read lower on those fills, so no dark set redefines them. */
+  --on-critical: #ffffff;
+  --on-serious: #1f2328;
+  --toggle-knob: #ffffff;
 
   --mark-cell: #16181d;
   --mark-body: #e9b800;
@@ -159,6 +164,127 @@
   --ramp-5: #9ec5f4;
   --grid: #212830;
   --axis: #3d444d;
+
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
+/* The default palette, the console's own. A token this set leaves out keeps the value above under both palettes. */
+:root[data-palette='default'] {
+  --page: #f1efea;
+  --surface: #fbfaf8;
+  --surface-2: #f4f2ed;
+  --surface-3: #ebe8e1;
+  --hairline: #e3dfd6;
+  --hairline-strong: #cfcac0;
+  --ink: #1b1916;
+  --ink-2: #5b574f;
+  --ink-3: #8b867c;
+  --ink-inverse: #fbfaf8;
+
+  --accent: #b9501a;
+  --accent-ink: #9a4013;
+  --accent-soft: #f6e4d8;
+  --accent-ring: rgba(185, 80, 26, 0.35);
+  --on-accent: #ffffff;
+  --on-critical: #ffffff;
+  --on-serious: #1b1916;
+  --toggle-knob: #ffffff;
+
+  --good: #0ca30c;
+  --good-ink: #006300;
+  --good-soft: #e2f4e2;
+  --good-track: #cdebcd;
+  --warning: #fab219;
+  --warning-ink: #7a5200;
+  --warning-soft: #fdf0d2;
+  --warning-track: #fbe6b6;
+  --serious: #ec835a;
+  --serious-ink: #9b3f19;
+  --serious-soft: #fce6dc;
+  --critical: #d03b3b;
+  --critical-border: #e39c9c;
+  --critical-ink: #a12f2f;
+  --critical-soft: #f9dede;
+  --critical-track: #f3c9c9;
+
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-muted: #c3bfb5;
+  --ramp-1: #86b6ef;
+  --ramp-2: #5598e7;
+  --ramp-3: #2a78d6;
+  --ramp-4: #1c5cab;
+  --ramp-5: #104281;
+  --grid: #e6e2da;
+  --axis: #c3bfb5;
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --radius: 8px;
+  --radius-sm: 5px;
+  --radius-pill: 999px;
+  --sidebar-w: 232px;
+  --shadow-pop: 0 12px 32px rgba(27, 25, 22, 0.14), 0 1px 2px rgba(27, 25, 22, 0.08);
+}
+
+:root[data-palette='default'][data-theme='dark'] {
+  --page: #141311;
+  --surface: #1c1b18;
+  --surface-2: #22211d;
+  --surface-3: #2a2824;
+  --hairline: #2e2c27;
+  --hairline-strong: #3c3933;
+  --ink: #f2efe8;
+  --ink-2: #b9b4a8;
+  --ink-3: #857f73;
+  --ink-inverse: #1b1916;
+
+  --accent: #e5823f;
+  --accent-ink: #f0a06a;
+  --accent-soft: #3a2416;
+  --accent-ring: rgba(229, 130, 63, 0.4);
+  --on-accent: #1b1916;
+
+  --good: #0ca30c;
+  --good-ink: #5ed35e;
+  --good-soft: #17301a;
+  --good-track: #1f3d22;
+  --warning: #fab219;
+  --warning-ink: #f8c65a;
+  --warning-soft: #3a2d10;
+  --warning-track: #4a3a14;
+  --serious: #ec835a;
+  --serious-ink: #f3a17e;
+  --serious-soft: #3d2418;
+  --critical: #d03b3b;
+  --critical-border: #7a3a3a;
+  --critical-ink: #ef7b7b;
+  --critical-soft: #3c1c1c;
+  --critical-track: #4d2323;
+
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-muted: #4a4741;
+  --ramp-1: #184f95;
+  --ramp-2: #256abf;
+  --ramp-3: #3987e5;
+  --ramp-4: #6da7ec;
+  --ramp-5: #9ec5f4;
+  --grid: #2a2824;
+  --axis: #3c3933;
 
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
 }
