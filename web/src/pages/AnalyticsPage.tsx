@@ -21,13 +21,13 @@ import { FilterBar } from '@/components/FilterBar';
 import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
-import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsColumnOf, analyticsKeysOf, sortAddressOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
+import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
-import { fableWeekReadingOf, fableWeekScale, failed, fiveHourReadingOf, fiveHourScale, weekScale } from '@/lib/costs';
+import { bandFactor, fableWeekReadingOf, failed, fiveHourReadingOf, weekScale } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
@@ -164,7 +164,7 @@ const nativeCell = (cell: { main: string; sub: string; title: string }): ReactNo
  * tokens with the billed dollars per billed request and per 1k billed output tokens under it, a side with no rows left
  * out and a figure with no count a dash.
  */
-function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; figures: SortFigure[]; key: string; label: string } {
+function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, hint: string | null): { cells: ReactNode[]; figures: Partial<Record<string, SortFigure>>; key: string; label: string } {
   const sides = sidesOf(g);
   const figure = sides.equivalent === undefined ? null : g.costEquivalent;
   // Undefined leaves a side with no rows out of the cell, as the tiles leave it out.
@@ -175,7 +175,7 @@ function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, 
     cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(g.planRequests, g.requests, 1), ratio(g.planOutputTokens, g.tokens.output, 1000)],
     // The Cost key reads the plan rows' figure, 0 for a group of billed rows alone and null where a plan row priced
     // nothing, so an unpriced group files last under either direction.
-    figures: [g.requests, g.costEquivalent, per(figure, g.planRequests, 1), per(figure, g.planOutputTokens, 1000)],
+    figures: { cost: g.costEquivalent, per_1k_output: per(figure, g.planOutputTokens, 1000), per_request: per(figure, g.planRequests, 1), requests: g.requests },
     key: g.key,
     label: g.label,
   };
@@ -309,7 +309,7 @@ export function AnalyticsPage() {
   const tabKeys = analyticsKeysOf(sessionId !== null && tab === 'cost' ? null : tab, unit);
   const sort = tabKeys.some((k) => k.id === a.sort) ? a.sort : 'name';
   const dir = sortDirOf(tabKeys, { dir: sort === a.sort ? a.dir : '', sort });
-  const tableOrder = { column: analyticsColumnOf(tabKeys, sort), dir };
+  const tableOrder = { dir, key: sort };
 
   const agentGroups = useMemo(() => (groupBy === 'user_agent' && clientGroups.trim() ? clientGroups.split('\n').map((s) => s.trim()).filter(Boolean) : undefined), [clientGroups, groupBy]);
   const query = useMemo<AnalyticsQuery>(
@@ -666,7 +666,7 @@ export function AnalyticsPage() {
         >
           <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
           {/* A pick reorders the rows the page holds, so it writes the address alone and moves no window's end. */}
-          <SortControl disabled={tabKeys.length === 1} keys={tabKeys} onChange={(next) => rawUpdate(sortAddressOf(tabKeys, next))} title="This tab's tables keep their own order" value={{ dir, sort }} />
+          <SortControl disabledTitle={tabKeys.length === 1 ? "This tab's tables keep their own order" : undefined} keys={tabKeys} onChange={rawUpdate} value={{ dir: sort === a.sort ? a.dir : '', sort }} />
           {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
         </FilterBar>
         {log.current?.partial && (
@@ -760,7 +760,7 @@ export function AnalyticsPage() {
                 label: g.label,
                 // Search and Fetch count the server-tool calls the group's answers made, not tokens.
                 cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
-                figures: [g.requests, g.succeeded, g.rateLimited, g.failed, g.incomplete, g.exhausted, g.rejected, g.refused, errorRateOf(g), g.failovers, g.tokens.webSearch, g.tokens.webFetch],
+                figures: { error_rate: errorRateOf(g), exhausted: g.exhausted, failed: g.failed, failovers: g.failovers, fetch: g.tokens.webFetch, incomplete: g.incomplete, ok: g.succeeded, rate_limited: g.rateLimited, refused: g.refused, rejected: g.rejected, requests: g.requests, search: g.tokens.webSearch },
               }))}
             />
           </Section>
@@ -819,7 +819,7 @@ export function AnalyticsPage() {
                   fmtMs(g.percentiles.durationMs.p99),
                   g.percentiles.outputTps.p50 === null ? '-' : g.percentiles.outputTps.p50.toFixed(0),
                 ],
-                figures: [g.requests, g.percentiles.ttfbMs.p50, g.percentiles.ttfbMs.p99, g.percentiles.ttftMs.p99, g.percentiles.durationMs.p99, g.percentiles.outputTps.p50],
+                figures: { duration_p99: g.percentiles.durationMs.p99, requests: g.requests, tps_p50: g.percentiles.outputTps.p50, ttfb_p50: g.percentiles.ttfbMs.p50, ttfb_p99: g.percentiles.ttfbMs.p99, ttft_p99: g.percentiles.ttftMs.p99 },
               }))}
             />
           </Section>
@@ -1018,7 +1018,7 @@ export function AnalyticsPage() {
                     fmtUsd(per(g.costUsd, g.requests, 1) ?? 0),
                     fmtUsd(per(g.costUsd, g.tokens.output, 1000) ?? 0),
                   ],
-                  figures: [g.requests, g.costUsd, g.cost.input, g.cost.cacheRead, g.cost.cacheWrite, g.cost.output, per(g.costUsd, g.requests, 1) ?? 0, per(g.costUsd, g.tokens.output, 1000) ?? 0],
+                  figures: { cache_read: g.cost.cacheRead, cache_write: g.cost.cacheWrite, cost: g.costUsd, input: g.cost.input, output: g.cost.output, per_1k_output: per(g.costUsd, g.tokens.output, 1000) ?? 0, per_request: per(g.costUsd, g.requests, 1) ?? 0, requests: g.requests },
                 }))}
               />
             )}
@@ -1278,8 +1278,8 @@ function PctLabel({ text }: { text: string }) {
   );
 }
 
-/** A group table's order: by the label with `column` null, else by that column's figure. */
-type TableOrder = { column: number | null; dir: SortDir };
+/** A group table's order: by the label under `name`, else by the figure the rows hold under that sort key. */
+type TableOrder = { dir: SortDir; key: string };
 
 function BreakdownTable({
   title,
@@ -1302,12 +1302,12 @@ function BreakdownTable({
    *  passes none and keeps its rows' order. */
   order?: TableOrder;
   /** A row's `title` is its label cell's hover text, the label itself where none is given. `figures` holds a figure per
-   *  sort key, in the key list's order, for `order`, null where the cell has none to order by. */
-  rows: { cells: ReactNode[]; figures?: SortFigure[]; key: string; label: string; title?: string }[];
+   *  sort key id for `order`, null where the cell has none to order by. */
+  rows: { cells: ReactNode[]; figures?: Partial<Record<string, SortFigure>>; key: string; label: string; title?: string }[];
   subtitle?: string;
   title: string;
 }) {
-  const ordered = order === undefined ? rows : orderRows(rows, (r) => (order.column === null ? r.label : (r.figures?.[order.column] ?? null)), order.dir, (r) => r.label);
+  const ordered = order === undefined ? rows : orderRows(rows, (r) => (order.key === 'name' ? r.label : (r.figures?.[order.key] ?? null)), order.dir, (r) => r.label);
   return (
     <Card title={title} subtitle={subtitle} padded={false} className={className ? `card--table ${className}` : 'card--table'}>
       <div className="table-wrap">
@@ -1656,8 +1656,8 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
         label: g.label,
         // Expired between turns is no reason the Requests page filters by, so it stays plain.
         cells: [...reasons.map((reason) => cell(g, reason)), fmtInt(g.expiredBetweenTurns)],
-        // The figures follow the keys, the known reasons alone, so a reason the console does not know shifts no key.
-        figures: [...CACHE_MISS_REASONS.map((reason) => countOf(g.cacheMissReasons, reason)), g.expiredBetweenTurns],
+        // The known reasons alone, since a reason the console does not know has no sort key.
+        figures: { ...Object.fromEntries(CACHE_MISS_REASONS.map((reason) => [reason, countOf(g.cacheMissReasons, reason)])), expired_between_turns: g.expiredBetweenTurns },
       }))}
     />
   );
@@ -2301,8 +2301,17 @@ function BurnCharts({
   // Spend per minute and the colors read this fold's lines, and a line's unit follows the route's own figures, so while
   // the week's scale is out the points fold as answered. The plan card draws its skeleton then and reads none of it.
   const weekFold = useMemo(() => fold(weekFactor === null ? null : () => weekFactor), [fold, weekFactor]);
-  const fiveHourFold = useMemo(() => fold((at) => (costs === null ? null : fiveHourScale(costs, week, at))), [costs, fold, week]);
-  const fableWeekFold = useMemo(() => fold(() => (costs === null ? null : fableWeekScale(costs, week))), [costs, fold, week]);
+  const fiveHourFold = useMemo(
+    () =>
+      fold((at) => {
+        const base = readings.fiveHour.scale;
+        if (base === null || costs === null) return null;
+        const band = bandFactor(costs, 'five_hour', at);
+        return band === null ? null : base * band;
+      }),
+    [costs, fold, readings.fiveHour.scale],
+  );
+  const fableWeekFold = useMemo(() => fold(() => readings.fable.scale), [fold, readings.fable.scale]);
   const { lines, rows } = weekFold;
   // The points by bucket and group, for the tooltip's hint, which reads a bucket's one point of one account.
   const pointsAt = useMemo(() => groupInto(answer?.points ?? [], (p) => `${Date.parse(p.at)}|${p.group}`), [answer]);

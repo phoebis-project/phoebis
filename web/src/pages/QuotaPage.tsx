@@ -10,19 +10,19 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
-import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
+import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, slowedOf, soonestResetAt, sortByPace, sortByReset, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
-import { speedHover } from '@/lib/selection';
+import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { slowDownChip } from '@/lib/selection';
+import { orderRows, type SortFigure } from '@/lib/sort';
 import { DAY, HOUR } from '@/lib/time';
+import { windowTag, windowWord } from '@/lib/windows';
 
 const QUOTA_SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
   { id: 'quota-windows', label: 'Quota windows' },
 ] as const;
-
-const WINDOW_OF = { pace5h: '5h', pace7d: '7d', paceFable: '7d_fable', reset5h: '5h', reset7d: '7d', resetFable: '7d_fable' } as const;
 
 export function QuotaPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
@@ -45,7 +45,15 @@ export function QuotaPage() {
   const visible = useMemo(() => {
     const { sort } = filters;
     if (sort === 'default') return subscriptions;
-    return sort.startsWith('pace') ? sortByPace(subscriptions, WINDOW_OF[sort], now, dir) : sortByReset(subscriptions, WINDOW_OF[sort], now, dir);
+    const figures: Record<Exclude<QuotaAddress['sort'], 'default'>, (a: Account) => SortFigure> = {
+      pace5h: (a) => leadOf(a, '5h', now),
+      pace7d: (a) => leadOf(a, '7d', now),
+      paceFable: (a) => leadOf(a, '7d_fable', now),
+      reset5h: (a) => resetOf(a, '5h', now),
+      reset7d: (a) => resetOf(a, '7d', now),
+      resetFable: (a) => resetOf(a, '7d_fable', now),
+    };
+    return orderRows(subscriptions, figures[sort], dir, (a) => a.label);
   }, [subscriptions, filters, dir, now]);
 
   const total = subscriptions.length;
@@ -83,7 +91,7 @@ export function QuotaPage() {
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
           update={update}
         >
-          <SortControl keys={QUOTA_SORT_KEYS} onChange={(next) => update(sortAddressOf(QUOTA_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={QUOTA_SORT_KEYS} onChange={update} value={filters} />
           <Pill onClick={() => void refreshAll()} disabled={refreshing} title={refreshHint} icon={<IconRefresh size={13} className={refreshing ? 'spin' : ''} />}>
             Refresh all
           </Pill>
@@ -218,9 +226,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
-            <QuotaWindow name="5h" absent="no 5-hour window" window={w5} end={end} now={now} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
-            <QuotaWindow name="7d" absent="no 7-day window" window={w7} end={end} now={now} soon={soonest.includes('7d')} />
-            <QuotaWindow name="Fable" absent="no Fable window" window={account.fableWindow} end={end} now={now} soon={soonest.includes('7d_fable')} />
+            <QuotaWindow name={windowTag('5h')} absent={`no ${windowWord('5h')} window`} window={w5} end={end} now={now} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
+            <QuotaWindow name={windowTag('7d')} absent={`no ${windowWord('7d')} window`} window={w7} end={end} now={now} soon={soonest.includes('7d')} />
+            <QuotaWindow name={windowTag('7d_fable')} absent={`no ${windowWord('7d_fable')} window`} window={account.fableWindow} end={end} now={now} soon={soonest.includes('7d_fable')} />
           </div>
         )}
       </div>
@@ -324,7 +332,7 @@ function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon 
           {slowDown && (
             <>
               {' '}
-              <SpeedChip factor={slowDown.speed} hover={speedHover(slowDown, now)} />
+              <SpeedChip {...slowDownChip(slowDown, now)} />
             </>
           )}
         </span>

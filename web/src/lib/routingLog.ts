@@ -7,12 +7,13 @@ import { tierOrder } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtShare, fmtTime, fmtUsd, instant, listed, plural, shortModel, weekShort } from './format';
+import { ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL } from './kinds';
 import { isFastScope, MODEL_SCOPE_PREFIX, PLAN_WORD_LABEL, planLabel, POLL_OUTCOME_LABEL, scopeLabel, scopeModel } from './quota';
 import { speedWord } from './selection';
 import { ageWord, HOUR, MINUTE, span } from './time';
-import { knownWindowsFirst, WINDOW_KEYS, WINDOW_LABEL, windowKeyId, windowLabelOf, windowTag, windowTagOf } from './windows';
+import { knownWindowsFirst, WINDOW_KEYS, WINDOW_LABEL, windowEntry, windowLabelOf, windowTag, windowTagOf } from './windows';
 
-export { ageWord };
+export { ageWord, ALL_KINDS, DECISION_KIND_LABEL, EVENT_KIND_LABEL };
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
@@ -114,15 +115,6 @@ const PIN_REASON_LABEL: Record<PinReason, string> = {
   pinning_off: 'pinning off',
 };
 
-export const DECISION_KIND_LABEL: Record<DecisionKind, string> = {
-  exhausted: 'exhausted',
-  held: 'held',
-  moved: 'moved',
-  placed: 'placed',
-  refused: 'refused',
-  renewed: 'renewed',
-};
-
 export type VerdictTone = 'critical' | 'good' | 'neutral' | 'warning';
 
 export const DECISION_KIND_TONE: Record<DecisionKind, VerdictTone> = {
@@ -132,47 +124,6 @@ export const DECISION_KIND_TONE: Record<DecisionKind, VerdictTone> = {
   placed: 'good',
   refused: 'critical',
   renewed: 'good',
-};
-
-/** Every kind of the ledger's events table, in the console's words. */
-export const EVENT_KIND_LABEL: Record<string, string> = {
-  account_state_changed: 'account state changed',
-  budget_period_ended: 'budget period ended',
-  budget_reached: 'budget reached',
-  catalog_changed: 'catalog changed',
-  cooldown_cleared: 'cooldown cleared',
-  cooldown_set: 'cooldown set',
-  fast_credits_changed: 'fast credits changed',
-  ledger_gap: 'ledger gap',
-  mark_cleared: 'mark cleared',
-  model_permitted: 'model permitted',
-  model_rejected: 'model rejected',
-  overage_ended: 'overage ended',
-  overage_started: 'overage started',
-  pin_created: 'pin created',
-  pin_expired: 'pin expired',
-  pin_migrated: 'pin moved',
-  pin_released: 'pin released',
-  plan_ended: 'plan ended',
-  plan_restored: 'plan restored',
-  poll_backoff_ended: 'poll backoff ended',
-  poll_backoff_started: 'poll backoff started',
-  poll_failed: 'poll failed',
-  refresh_failed: 'refresh failed',
-  refresh_succeeded: 'refresh succeeded',
-  refresh_uncertain: 'refresh uncertain',
-  registry_changed: 'registry changed',
-  reservation_expired: 'reservation expired',
-  router_started: 'router started',
-  shedding_round: 'shedding round',
-  slow_down_ended: 'slow-down ended',
-  slow_down_started: 'slow-down started',
-  stream_interrupted: 'stream interrupted',
-  warm_prefix_expired: 'warm prefix expired',
-  wind_down_started: 'wind-down started',
-  window_cleared: 'window cleared',
-  window_reset: 'window reset',
-  window_spent: 'window spent',
 };
 
 /** A named set of kinds, which the Kinds list checks or unchecks in one click. */
@@ -193,20 +144,17 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'router life cycle', members: ['router_started', 'ledger_gap'] },
 ];
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 37 event kinds. */
-export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];
-
 /** A kind's word: "probe decisions" for the pseudo-kind, else its label. */
 export const kindWord = (kind: string): string => (kind === 'probe' ? 'probe decisions' : (lookup(DECISION_KIND_LABEL, kind) ?? lookup(EVENT_KIND_LABEL, kind) ?? kind));
 
 /**
  * The Kinds chip: one whole preset by its name, a union of whole presets and nothing else by their names in
- * KIND_PRESETS' order, else the kinds' words three then " +N", every word in the title. A set equal to every kind, or
- * empty, draws no chip (empty text).
+ * KIND_PRESETS' order, else the kinds' words three then " +N", every word in the title. An empty set draws no chip
+ * (empty text).
  */
 export function kindsChipText(kinds: readonly string[]): ChipText {
   const set = new Set(kinds);
-  if (set.size === 0 || (set.size === ALL_KINDS.length && ALL_KINDS.every((k) => set.has(k)))) return { text: '', title: '', values: '' };
+  if (set.size === 0) return { text: '', title: '', values: '' };
   const words = kinds.map(kindWord);
   // The presets share no kind, so whole presets that hold as many kinds as the set are the set.
   const whole = KIND_PRESETS.filter((p) => p.members.every((m) => set.has(m)));
@@ -1099,12 +1047,12 @@ function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
   const at = text.lastIndexOf(':');
   const name = at < 0 ? text : text.slice(at + 1);
   const id = at < 0 ? '' : text.slice(0, at);
-  const member = name === 'operator' || name === 'spent' ? memberOf(record, id) : undefined;
+  const member = memberOf(record, id);
   const { title, value } =
-    member !== undefined && name === 'operator'
+    name === 'operator' && member !== undefined
       ? operatorWords(member)
-      : member?.obstacle?.name === 'spent'
-        ? { title: spentHint(member.obstacle, now), value: obstacleWords(member, now) }
+      : name === 'spent' && member?.obstacle?.name === 'spent'
+        ? spentChip(member.obstacle, now)
         : { title: hintOf(name), value: wordOf(OBSTACLE_WORD, name) };
   return id === '' ? { label: 'obstacle', title, value } : { label: id, labelEntity: accountEntity(id), title, value };
 }
@@ -1377,9 +1325,14 @@ function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number)
   return `${cooledWords(o.reason, o.window)}${untilWords(o, now)}${scopeWords(o)}`;
 }
 
-/** A spent member's hover: the spend cap's reset, or the plan window's own where the obstacle names one. */
-const spentHint = (o: NonNullable<RecordCandidate['obstacle']>, now: number): string | undefined =>
-  o.window === SPEND_WINDOW ? `at its spend cap${untilWords(o, now)}` : o.window === null ? hintOf('spent') : `its ${windowTagWord(o.window)} window spent${untilWords(o, now)}`;
+/** A spent member's hover and words: the spend cap's reset, or the plan window's own where the obstacle names one. */
+const spentChip = (o: NonNullable<RecordCandidate['obstacle']>, now: number): { title: string | undefined; value: string } => {
+  const until = untilWords(o, now);
+  if (o.window === SPEND_WINDOW) return { title: `at its spend cap${until}`, value: `spend cap reached${until}` };
+  if (o.window === null) return { title: hintOf('spent'), value: `window spent${until}` };
+  const tag = windowTagWord(o.window);
+  return { title: `its ${tag} window spent${until}`, value: `${tag} spent${until}` };
+};
 
 /**
  * A failover's cause in one spelling for the event card and the record card: a cooldown's reason and window as
@@ -1423,8 +1376,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
     case 'operator':
       return operatorWords(c).value;
     case 'spent':
-      if (o.window === SPEND_WINDOW) return `spend cap reached${untilWords(o, now)}`;
-      return `${o.window !== null ? windowTagWord(o.window) : 'window'} spent${untilWords(o, now)}`;
+      return spentChip(o, now).value;
     default:
       return lookup(PARTITION_WORD, o.name) ?? wordOf(OBSTACLE_WORD, o.name);
   }
@@ -1436,7 +1388,7 @@ const FIT_CHIP: Record<string, { tone: VerdictTone; word: string }> = { ending: 
 /** The verdict cell's one chip, and the tone it carries where it names the destination's fit. */
 function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; tone: VerdictTone | null } {
   const untoned = (chip: Chip | null) => ({ chip, tone: null });
-  if (c.obstacle !== null) return untoned(c.obstacle.name === 'operator' ? operatorWords(c) : { title: c.obstacle.name === 'spent' ? spentHint(c.obstacle, now) : hintOf(c.obstacle.name), value: obstacleWords(c, now) });
+  if (c.obstacle !== null) return untoned(c.obstacle.name === 'operator' ? operatorWords(c) : c.obstacle.name === 'spent' ? spentChip(c.obstacle, now) : { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) });
   if (c.partition !== null) return untoned({ title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) });
   // The cap held the request on its member whatever that member's fit, so the cap explains the hold.
   if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return untoned(plain('at its cap'));
@@ -1455,7 +1407,7 @@ function placementChipOf(c: RecordCandidate): Chip | null {
 }
 
 /** A Pace window's word in the column header and in a cell's hover. A window the console does not know reads its id. */
-const paceWindowWord = (id: string): string => lookup(WINDOW_LABEL, windowKeyId(id) ?? '') ?? words(id);
+const paceWindowWord = (id: string): string => windowEntry(WINDOW_LABEL, id) ?? words(id);
 
 /**
  * A usage-based seat: the engine writes a paid source's pace with no hours, no deadline and no window whatever its

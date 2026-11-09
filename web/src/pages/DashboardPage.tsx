@@ -25,7 +25,7 @@ import { isFinished, lineTotals, sessionLines, withinExpiry } from '@/lib/keepal
 import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, glanceCellOf, requestCostUnit, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
-import { speedHover } from '@/lib/selection';
+import { slowDownChip } from '@/lib/selection';
 import { DAY } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
@@ -315,7 +315,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
             two kept together at the head's far end. */}
         {slowed ? (
           <span className="account-mini__status">
-            <SpeedChip factor={slowed.speed} hover={speedHover(slowed, now)} />
+            <SpeedChip {...slowDownChip(slowed, now)} />
             {status}
           </span>
         ) : (

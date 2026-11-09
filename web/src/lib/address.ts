@@ -6,8 +6,8 @@ import { clock } from './clock';
 import { lookup } from './counts';
 import { sameMembers } from './forms';
 import type { SessionFilters } from './keepalive';
+import { ALL_KINDS } from './kinds';
 import { ACCOUNT_STATUSES } from './quota';
-import { ALL_KINDS } from './routingLog';
 import { DAY, HOUR, MINUTE } from './time';
 import type { UnitPosition } from './unit';
 
@@ -73,6 +73,12 @@ export interface SortKey<K extends string = string> {
   label: string;
 }
 
+export interface SortFields<K extends string> {
+  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
+  dir: '' | SortDir;
+  sort: K;
+}
+
 /**
  * A view's `sort` and `dir` keys: `choice` keys with the view's default key as `sort`'s default and the empty value
  * as `dir`'s, which stands for the picked key's own default direction, so the address carries `dir` only where it
@@ -88,7 +94,7 @@ export const sortSpecs = <K extends string>(keys: readonly SortKey<K>[], default
  * The direction an address means: its `dir` where it names one, else the sort key's own default. A key with no
  * direction reads `asc` whatever the address says, since nothing orders by the figure and a typed `dir` on it is inert.
  */
-export const sortDirOf = <K extends string>(keys: readonly SortKey<K>[], address: { dir: '' | SortDir; sort: K }): SortDir => {
+export const sortDirOf = <K extends string>(keys: readonly SortKey<K>[], address: SortFields<K>): SortDir => {
   const own = keys.find((k) => k.id === address.sort)?.defaultDir;
   if (own === 'none') return 'asc';
   return address.dir !== '' ? address.dir : (own ?? 'asc');
@@ -96,7 +102,7 @@ export const sortDirOf = <K extends string>(keys: readonly SortKey<K>[], address
 
 /** The address fields of a pick: `dir` empty where it is the key's own default, so the address omits it, and always
  *  empty for a key with no direction. */
-export const sortAddressOf = <K extends string>(keys: readonly SortKey<K>[], next: { dir: SortDir; sort: K }): { dir: '' | SortDir; sort: K } => {
+export const sortAddressOf = <K extends string>(keys: readonly SortKey<K>[], next: SortFields<K>): SortFields<K> => {
   const own = keys.find((k) => k.id === next.sort)?.defaultDir;
   return { dir: own === 'none' || next.dir === own ? '' : next.dir, sort: next.sort };
 };
@@ -218,7 +224,7 @@ export function addressWindow(range: RangeValue, fallback: string, now: number):
 const list = (name: string): KeySpec => ({ kind: 'list', name });
 const text = (name: string): KeySpec => ({ kind: 'text', name });
 
-export interface RequestsAddress {
+export interface RequestsAddress extends SortFields<(typeof REQUEST_SORT_KEYS)[number]['id']> {
   accounts: string[];
   /** The user agent pattern. */
   agent: string;
@@ -228,8 +234,6 @@ export interface RequestsAddress {
   /** `client`, `client_off`, `-` for a request the marker does not hold. */
   classifiers: string[];
   client: string;
-  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: '' | SortDir;
   efforts: string[];
   /** `true` for the rows that presented a fallback token, `false` for the rest, empty for both. */
   fallback: '' | 'false' | 'true';
@@ -316,7 +320,7 @@ export const keyHref = (id: string): string => `/keys#${encodeURIComponent(id)}`
 /** One request's own page, where `requestsHref` opens the filtered list. */
 export const requestHref = (id: string): string => `/requests/${encodeURIComponent(id)}`;
 
-export interface AnalyticsAddress {
+export interface AnalyticsAddress extends SortFields<string> {
   accounts: string[];
   /** An agent of the session, which narrows the session's view to the agent's requests. */
   agentId: string;
@@ -324,8 +328,6 @@ export interface AnalyticsAddress {
   by: BurnGroup;
   /** The client patterns, any of which a request's client matches. */
   clients: string[];
-  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: '' | SortDir;
   /** The user agent groups, one pattern per line. */
   groups: string;
   /** A session's key lifetime, `<key id>@<generation>`. */
@@ -356,8 +358,8 @@ const column = (id: string, label: string): SortKey => ({ defaultDir: 'desc', id
 /** The known reasons alone, since the address's keys are fixed: a reason the console does not know draws its column
  *  with no key. */
 const MISS_REASON_KEYS: readonly SortKey[] = CACHE_MISS_REASONS.map((reason) => column(reason, missShort(reason)));
-/** The group table's keys per Analytics tab, in the table's column order, the Cost tab's per unit. A tab without a
- *  group table has none. */
+/** The group table's keys per Analytics tab, in the order the Sort control lists them, the Cost tab's per unit. A tab
+ *  without a group table has none. */
 const ANALYTICS_SORT_KEYS: Readonly<Record<'cache' | 'cost_dollars' | 'cost_native' | 'latency' | 'traffic', readonly SortKey[]>> = {
   cache: [...MISS_REASON_KEYS, column('expired_between_turns', 'Expired between turns')],
   cost_dollars: [
@@ -405,8 +407,6 @@ export const analyticsKeysOf = (tab: string | null, unit: UnitPosition): readonl
   const own = lookup(ANALYTICS_SORT_KEYS, tab === 'cost' ? (unit === 'native' ? 'cost_native' : 'cost_dollars') : tab);
   return [NAME_KEY, ...(own ?? [])];
 };
-/** The group table's column a key orders, null for Name. */
-export const analyticsColumnOf = (keys: readonly SortKey[], id: string): number | null => (id === 'name' ? null : keys.findIndex((k) => k.id === id) - 1);
 
 export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   session: text('session'),
@@ -427,7 +427,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
 });
 
 /** The routing log's filters as the address holds them. */
-export interface LogFilters {
+export interface LogFilters extends SortFields<(typeof ROUTING_LOG_SORT_KEYS)[number]['id']> {
   accounts: string[];
   agentId: string;
   /** `asc`, `desc` or empty for the time's own newest first, which the address omits. */
@@ -439,7 +439,6 @@ export interface LogFilters {
   range: RangeValue;
   request: string;
   session: string;
-  sort: (typeof ROUTING_LOG_SORT_KEYS)[number]['id'];
 }
 
 export const ROUTING_LOG_SORT_KEYS = [{ defaultDir: 'desc', id: 'time', label: 'Time' }] as const satisfies readonly SortKey[];
@@ -452,10 +451,8 @@ export const ROUTING_LOG_CODEC = codecOf<LogFilters>({
   accounts: list('accounts'),
   agentId: text('agent_id'),
   keys: list('keys'),
-  // An absent `kinds` reads every kind, so a list naming every kind is the empty one. The guard on an empty list keeps
-  // `ALL_KINDS` unread while the modules evaluate: routingLog.ts imports this module, so the list is initialized only
-  // after both have, and the empty list the defaults read at evaluation never reaches it.
-  kinds: { kind: 'list', name: 'kinds', normalize: (v) => (v.length > 0 && sameMembers(v, ALL_KINDS) ? [] : v) },
+  // An absent `kinds` reads every kind, so a list naming every kind is the empty one.
+  kinds: { kind: 'list', name: 'kinds', normalize: (v) => (sameMembers(v, ALL_KINDS) ? [] : v) },
   models: list('models'),
   pools: list('pools'),
   request: text('request'),
@@ -473,19 +470,16 @@ export const METER_CODEC = codecOf<MeterAddress>({ accounts: list('accounts') })
 /** The Meter view on one account's groups. */
 export const accountMeterHref = (accountId: string): string => `/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`;
 
-export interface KeysAddress {
-  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: '' | SortDir;
+export interface KeysAddress extends SortFields<(typeof KEY_SORT_KEYS)[number]['id']> {
   pools: string[];
   search: string;
-  sort: (typeof KEY_SORT_KEYS)[number]['id'];
   status: 'all' | KeyStatus;
 }
 
 const KEY_STATUSES: readonly ('all' | KeyStatus)[] = ['all', 'active', 'disabled', 'expired', 'revoked'];
 
 export const KEY_SORT_KEYS = [
-  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  NAME_KEY,
   { defaultDir: 'desc', id: 'created', label: 'Created' },
   { defaultDir: 'desc', id: 'lastUsed', label: 'Last used' },
   { defaultDir: 'desc', id: 'requests', label: 'Requests, 7d' },
@@ -504,12 +498,7 @@ export const KEYS_CODEC = codecOf<KeysAddress>({
 /** The Keys view on one pool's keys, every other filter at its default. */
 export const poolKeysHref = (poolId: string): string => `/keys?${KEYS_CODEC.toParams({ ...KEYS_CODEC.defaults, pools: [poolId] })}`;
 
-export interface QuotaAddress {
-  /** `asc`, `desc` or empty for the key's own direction. Default order has none, so its address carries no
-   *  `dir`. */
-  dir: '' | SortDir;
-  sort: (typeof QUOTA_SORT_KEYS)[number]['id'];
-}
+export type QuotaAddress = SortFields<(typeof QUOTA_SORT_KEYS)[number]['id']>;
 
 export const QUOTA_SORT_KEYS = [
   { defaultDir: 'none', id: 'default', label: 'Default order' },
@@ -524,7 +513,7 @@ export const QUOTA_SORT_KEYS = [
 export const QUOTA_CODEC = codecOf<QuotaAddress>(sortSpecs(QUOTA_SORT_KEYS, 'default'));
 
 export const POOL_SORT_KEYS = [
-  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  NAME_KEY,
   { defaultDir: 'asc', id: 'status', label: 'Status' },
   { defaultDir: 'desc', id: 'members', label: 'Members' },
   { defaultDir: 'desc', id: 'requests', label: 'Requests, 24h' },
@@ -532,25 +521,19 @@ export const POOL_SORT_KEYS = [
   { defaultDir: 'desc', id: 'pins', label: 'Active pins' },
 ] as const satisfies readonly SortKey[];
 
-export interface PoolsAddress {
-  dir: '' | SortDir;
-  sort: (typeof POOL_SORT_KEYS)[number]['id'];
-}
+export type PoolsAddress = SortFields<(typeof POOL_SORT_KEYS)[number]['id']>;
 
 export const POOLS_CODEC = codecOf<PoolsAddress>(sortSpecs(POOL_SORT_KEYS, 'name'));
 
 export const GUARDRAIL_SORT_KEYS = [
-  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  NAME_KEY,
   { defaultDir: 'asc', id: 'mode', label: 'Mode' },
   { defaultDir: 'desc', id: 'matches', label: 'Matches, 24h' },
   { defaultDir: 'desc', id: 'created', label: 'Created' },
   { defaultDir: 'desc', id: 'updated', label: 'Last updated' },
 ] as const satisfies readonly SortKey[];
 
-export interface GuardrailsAddress {
-  dir: '' | SortDir;
-  sort: (typeof GUARDRAIL_SORT_KEYS)[number]['id'];
-}
+export type GuardrailsAddress = SortFields<(typeof GUARDRAIL_SORT_KEYS)[number]['id']>;
 
 export const GUARDRAILS_CODEC = codecOf<GuardrailsAddress>(sortSpecs(GUARDRAIL_SORT_KEYS, 'name'));
 
@@ -561,16 +544,14 @@ export const EDIT_PARAMS = [EDIT_PARAM, GROUP_PARAM] as const;
  * The view at `path` with the dialog of item `id` opened once on `group`, which `useAddressEdit` reads. `search` is the
  * view's current query string, so its order and filters ride along and the dialog's close returns to the same list.
  */
-export const editHref = (path: string, id: string, group: string, search = ''): string => {
+export const editHref = (path: string, id: string, group: string, search: string): string => {
   const params = new URLSearchParams(search);
   params.set(EDIT_PARAM, id);
   params.set(GROUP_PARAM, group);
   return `${path}?${params}`;
 };
 
-export interface AccountsAddress {
-  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: '' | SortDir;
+export interface AccountsAddress extends SortFields<(typeof ACCOUNT_SORT_KEYS)[number]['id']> {
   search: string;
   /** The list's order: `name` the default, `reset5h`, `reset7d` and `resetFable` a window's reset, `usage` the most
    *  used, `status`. */
@@ -580,7 +561,7 @@ export interface AccountsAddress {
 }
 
 export const ACCOUNT_SORT_KEYS = [
-  { defaultDir: 'asc', id: 'name', label: 'Name' },
+  NAME_KEY,
   { defaultDir: 'asc', id: 'reset5h', label: '5-hour reset' },
   { defaultDir: 'asc', id: 'reset7d', label: '7-day reset' },
   { defaultDir: 'asc', id: 'resetFable', label: '7-day Fable reset' },
@@ -594,9 +575,7 @@ export const ACCOUNTS_CODEC = codecOf<AccountsAddress>({
   status: { default: 'all', kind: 'choice', name: 'status', values: ['all', ...ACCOUNT_STATUSES] },
 });
 
-export interface SessionsAddress extends SessionFilters {
-  /** `asc`, `desc` or empty for the sort key's own default direction, which the address omits. */
-  dir: '' | SortDir;
+export interface SessionsAddress extends SessionFilters, SortFields<(typeof SESSION_SORT_KEYS)[number]['id']> {
   /** `created` the default, `activity`, `cost` (the dollars of the session's requests) or `requests`. */
   sort: (typeof SESSION_SORT_KEYS)[number]['id'];
 }

@@ -11,7 +11,7 @@ import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { GUARDRAIL_SORT_KEYS, GUARDRAILS_CODEC, poolKeysHref, requestHref, sortAddressOf, sortDirOf, type GuardrailsAddress } from '@/lib/address';
+import { GUARDRAIL_SORT_KEYS, GUARDRAILS_CODEC, poolKeysHref, requestHref, sortDirOf, type GuardrailsAddress } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { fmtAbsolute, fmtDate, fmtInt, messageOf, plural } from '@/lib/format';
 import { derivedId, refusalsView, sameMembers, sameValues, saveStatus } from '@/lib/forms';
@@ -247,7 +247,7 @@ export function GuardrailsPage(): JSX.Element {
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: reload, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
           update={update}
         >
-          <SortControl keys={GUARDRAIL_SORT_KEYS} onChange={(next) => update(sortAddressOf(GUARDRAIL_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={GUARDRAIL_SORT_KEYS} onChange={update} value={filters} />
           <CreateMenu presets={presetList} onBlank={() => setDialog({ existing: null })} onPreset={(p) => setDialog({ existing: null, source: fromPreset(p) })} />
         </FilterBar>
         <p className="page-head__meta guardrails__lead">{LEAD}</p>

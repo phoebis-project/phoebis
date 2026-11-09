@@ -20,7 +20,7 @@ import { PopoverHost, useHold, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, Refusal, Segmented, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
+import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortDirOf } from '@/lib/address';
 import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
@@ -29,9 +29,9 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, slowedOf, sortByReset } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
-import { speedHover } from '@/lib/selection';
+import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
 import { MINUTE } from '@/lib/time';
 import { joinTrend } from '@/lib/trend';
@@ -83,11 +83,13 @@ export function AccountsPage() {
       const q = search.trim().toLowerCase();
       return !q || a.label.toLowerCase().includes(q) || (a.email ?? '').toLowerCase().includes(q) || (a.plan ?? '').toLowerCase().includes(q);
     });
-    if (sort === 'reset5h') return sortByReset(rows, '5h', now, dir);
-    if (sort === 'reset7d') return sortByReset(rows, '7d', now, dir);
-    if (sort === 'resetFable') return sortByReset(rows, '7d_fable', now, dir);
-    // Most used reads the plan windows alone, so the Fable week's share stays out of it.
-    const keyOf = (a: Account): SortFigure => (sort === 'usage' ? (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization))) : sort === 'status' ? a.status : a.label);
+    const keyOf = (a: Account): SortFigure => {
+      if (sort === 'reset5h') return resetOf(a, '5h', now);
+      if (sort === 'reset7d') return resetOf(a, '7d', now);
+      if (sort === 'resetFable') return resetOf(a, '7d_fable', now);
+      // Most used reads the plan windows alone, so the Fable week's share stays out of it.
+      return sort === 'usage' ? (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization))) : sort === 'status' ? a.status : a.label;
+    };
     return orderRows(rows, keyOf, dir, (a) => a.label);
   }, [accounts.data, dir, filters, now]);
 
@@ -147,7 +149,7 @@ export function AccountsPage() {
           refresh={{ intervalMs, onIntervalChange: setIntervalMs, onRefresh: refresh, paused: pauseCause, refreshTitle: 'Reads the list again now' }}
           update={update}
         >
-          <SortControl keys={ACCOUNT_SORT_KEYS} onChange={(next) => update(sortAddressOf(ACCOUNT_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={ACCOUNT_SORT_KEYS} onChange={update} value={filters} />
           <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setAddOpen(true)}>
             Add account
           </Button>
@@ -248,7 +250,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
           <span className="account-row__name">{account.label}</span>
           {account.plan && <Badge tone="neutral">{account.plan}</Badge>}
           {/* The compact 5-hour bar has no room for the speed chip beside its label, so the chip stands by the status. */}
-          {slowed && <SpeedChip factor={slowed.speed} hover={speedHover(slowed, now)} />}
+          <SpeedChip {...slowDownChip(slowed, now)} />
           <Badge tone={STATUS_TONE[account.status]} dot>
             {STATUS_LABEL[account.status]}
           </Badge>

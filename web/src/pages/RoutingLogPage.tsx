@@ -15,7 +15,7 @@ import { IconChevronRight } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Card, EmptyState, ErrorState, SkeletonRows, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { addressWindow, ROUTING_LOG_CODEC, ROUTING_LOG_SORT_KEYS, sortAddressOf, sortDirOf } from '@/lib/address';
+import { addressWindow, ROUTING_LOG_CODEC, ROUTING_LOG_SORT_KEYS, sortDirOf } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
 import { chipText, notLoadedReason, ROUTING_LOG_DIMENSIONS } from '@/lib/filterBar';
@@ -165,7 +165,7 @@ export function RoutingLogPage() {
           }}
           update={update}
         >
-          <SortControl keys={ROUTING_LOG_SORT_KEYS} onChange={(next) => update(sortAddressOf(ROUTING_LOG_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={ROUTING_LOG_SORT_KEYS} onChange={update} value={filters} />
         </FilterBar>
 
         {overrun !== null && (

@@ -2,7 +2,7 @@ import { isoOrNull, list, num, numOrNull, rec, strings } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
 import { accountMeterHref } from './address';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, listWords, messageOf, noun, percentText, plural } from './format';
+import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, joinPresent, listWords, messageOf, noun, percentText, plural } from './format';
 import { entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { windowTag } from './windows';
 
@@ -243,7 +243,7 @@ function conditionWords(item: AttentionItem, now: number): string {
       }
     }
   })();
-  return [what, ...(settings ? [settings] : []), sinceWords(item, now)].join(', ');
+  return joinPresent([what, settings, sinceWords(item, now)], ', ');
 }
 
 /**
@@ -256,7 +256,7 @@ function slowedWords(item: AttentionItem, now: number): string {
   const settings = settingWords(d, (n) => String(Math.round(n)));
   const barMs = numOrNull(d.bar_ms);
   const held = `held ${formatFact(num(d.held_ms), 'ms', now)} of the last 24 h${barMs === null ? '' : ` over ${formatFact(barMs, 'ms', now)}`}`;
-  return [held, `${plural(num(d.held), 'request')} held`, ...(settings ? [settings] : []), sinceWords(item, now)].join(', ');
+  return joinPresent([held, `${plural(num(d.held), 'request')} held`, settings, sinceWords(item, now)], ', ');
 }
 
 /** A ratio as the meter drift words print it: two decimals, one trailing zero dropped (`2.0`, `1.25`, `0.8`). */

@@ -7,14 +7,17 @@ import { has, lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
 import { byteOrder, fmtUsd, fmtWeek, plural, weekShort } from '@/lib/format';
 import { heldAccount, WAIT_REASON_WORD } from '@/lib/routingLog';
+import { compareFigures } from '@/lib/sort';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /** The route's order, newest first and the higher id first at one instant, which a poll's merge and the mock keep. */
 export const compareRequests = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || byteOrder(b.id, a.id);
 
 /** The route's order key read off the row, null where the row carries no figure. */
-function figureOf(r: RequestLog, order: Exclude<RequestOrderWord, 'received_at'>): number | null {
+function figureOf(r: RequestLog, order: RequestOrderWord): number | null {
   switch (order) {
+    case 'received_at':
+      return Date.parse(r.at);
     case 'attempts':
       return r.attempts.length;
     case 'duration_ms':
@@ -29,13 +32,8 @@ function figureOf(r: RequestLog, order: Exclude<RequestOrderWord, 'received_at'>
  * a row without one last under either direction, and on a tie the id in `dir`, as the route orders `id {dir}`.
  */
 export function requestOrder(order: RequestOrderWord, dir: SortDir): (a: RequestLog, b: RequestLog) => number {
-  if (order === 'received_at') return dir === 'desc' ? compareRequests : (a, b) => compareRequests(b, a);
   const flip = dir === 'desc' ? -1 : 1;
-  return (a, b) => {
-    const [x, y] = [figureOf(a, order), figureOf(b, order)];
-    if (x === null || y === null) return x === y ? flip * byteOrder(a.id, b.id) : x === null ? 1 : -1;
-    return flip * (x - y || byteOrder(a.id, b.id));
-  };
+  return (a, b) => compareFigures(figureOf(a, order), figureOf(b, order), dir) || flip * byteOrder(a.id, b.id);
 }
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */

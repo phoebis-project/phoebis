@@ -53,7 +53,7 @@ const mounted = (value, calls) => {
 const read = (button) => ({ expanded: button.getAttribute('aria-expanded'), label: button.getAttribute('aria-label'), text: button.textContent, title: button.getAttribute('title') });
 
 test('at rest the button reads the key, names itself Sort and holds the direction in its title, and a click opens the keys as radios with the picked one checked, a rule, then Ascending and Descending', () => {
-  const { button } = mounted({ dir: 'asc', sort: 'name' }, []);
+  const { button } = mounted({ dir: '', sort: 'name' }, []);
   assert.deepEqual(read(button), { expanded: 'false', label: 'Sort', text: 'Sort: Name', title: 'Sorted by Name, ascending' });
   assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
   assert.ok(box() === null, 'nothing is open at rest');
@@ -80,20 +80,20 @@ test('at rest the button reads the key, names itself Sort and holds the directio
 
 test("a key's pick sends the key in its own direction once, closes and puts the focus back on the button", () => {
   const calls = [];
-  const { button, render: again } = mounted({ dir: 'asc', sort: 'name' }, calls);
+  const { button, render: again } = mounted({ dir: '', sort: 'name' }, calls);
   click(button);
   click(radio('Most used'));
-  assert.deepEqual(calls, [{ dir: 'desc', sort: 'usage' }]);
+  assert.deepEqual(calls, [{ dir: '', sort: 'usage' }]);
   assert.equal(button.getAttribute('aria-expanded'), 'false');
   assert.ok(box() === null);
   assert.ok(document.activeElement === button, 'the focus is back on the button');
-  again({ dir: 'desc', sort: 'usage' });
+  again({ dir: '', sort: 'usage' });
   assert.deepEqual(read(button), { expanded: 'false', label: 'Sort', text: 'Sort: Most used', title: 'Sorted by Most used, descending' });
 });
 
 test("a direction's pick keeps the key, closes and puts the focus back on the button", () => {
   const calls = [];
-  const { button } = mounted({ dir: 'desc', sort: 'usage' }, calls);
+  const { button } = mounted({ dir: '', sort: 'usage' }, calls);
   click(button);
   assert.deepEqual(radios(box()?.querySelectorAll('[role="radiogroup"]')[1]), [
     ['Ascending', 'false'],
@@ -108,7 +108,7 @@ test("a direction's pick keeps the key, closes and puts the focus back on the bu
 
 test('Escape on the open popover closes it with the focus on the button and sends nothing', () => {
   const calls = [];
-  const { button } = mounted({ dir: 'asc', sort: 'name' }, calls);
+  const { button } = mounted({ dir: '', sort: 'name' }, calls);
   click(button);
   assert.ok(box()?.contains(document.activeElement), 'the focus opens inside the popover');
   press('Escape');
@@ -121,7 +121,7 @@ test('Escape on the open popover closes it with the focus on the button and send
 test('a key with no direction draws no arrow, names the key alone in its title and offers both directions disabled and unchecked, and a click on one sends nothing', () => {
   const calls = [];
   const keys = [{ defaultDir: 'none', id: 'default', label: 'Default order' }, ...KEYS];
-  const { container } = render(h(SortControl, { keys, onChange: (next) => calls.push(next), value: { dir: 'asc', sort: 'default' } }));
+  const { container } = render(h(SortControl, { keys, onChange: (next) => calls.push(next), value: { dir: '', sort: 'default' } }));
   const button = container.querySelector('button');
   assert.ok(button.querySelector('svg') === null, 'the button draws no arrow');
   assert.equal(button.getAttribute('title'), 'Sorted by Default order');
@@ -140,7 +140,7 @@ test('a key with no direction draws no arrow, names the key alone in its title a
 
 test('a disabled control carries its title and a click opens nothing', () => {
   const title = "This tab's tables keep their own order";
-  const { container } = render(h(SortControl, { disabled: true, keys: KEYS, onChange: () => {}, title, value: { dir: 'asc', sort: 'name' } }));
+  const { container } = render(h(SortControl, { disabledTitle: title, keys: KEYS, onChange: () => {}, value: { dir: '', sort: 'name' } }));
   const button = container.querySelector('button');
   assert.deepEqual([button.disabled, button.getAttribute('title')], [true, title]);
   click(button);

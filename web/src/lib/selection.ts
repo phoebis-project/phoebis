@@ -110,6 +110,10 @@ export function speedHover(slowDown: AccountSlowDown | null, now: number): strin
   return sentences([first, `The pool computed ${speedWord(slowDown.factor)}`, slowDown.ramp === null ? null : rampWords(slowDown.ramp, slowDown.factor), `The holds realized ${speedWord(slowDown.speed)}`]);
 }
 
+/** The speed chip of a slow-down: the speed the holds realized with `speedHover`'s words, nothing without one. */
+export const slowDownChip = (slowDown: AccountSlowDown | null, now: number): { factor: number | null; hover: string | null } =>
+  slowDown === null ? { factor: null, hover: null } : { factor: slowDown.speed, hover: speedHover(slowDown, now) };
+
 /**
  * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the speed
  * the holds realized as the pools route serves it on the member, with no hover. A loaded account draws none, whatever
@@ -118,8 +122,7 @@ export function speedHover(slowDown: AccountSlowDown | null, now: number): strin
  */
 export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { factor: number | null; hover: string | null } {
   if (account === null) return { factor: member.speed, hover: null };
-  const slowDown = slowedOf(account, now);
-  return slowDown === null ? { factor: null, hover: null } : { factor: slowDown.speed, hover: speedHover(slowDown, now) };
+  return slowDownChip(slowedOf(account, now), now);
 }
 
 /**

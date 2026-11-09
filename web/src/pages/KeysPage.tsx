@@ -15,7 +15,7 @@ import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, SkeletonRows } from '@/components/ui/primitives';
-import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortAddressOf, sortDirOf, type KeysAddress } from '@/lib/address';
+import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortDirOf, type KeysAddress } from '@/lib/address';
 import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
@@ -206,7 +206,7 @@ export function KeysPage() {
           }}
           update={update}
         >
-          <SortControl keys={KEY_SORT_KEYS} onChange={(next) => update(sortAddressOf(KEY_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={KEY_SORT_KEYS} onChange={update} value={filters} />
           <Button variant="primary" icon={<IconPlus size={14} />} onClick={() => setDialog({ initialGroup: null, key: null })}>
             Create key
           </Button>

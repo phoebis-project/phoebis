@@ -27,6 +27,7 @@ import {
   verdictChips,
   verdictSentence,
 } from '@/lib/routingLog';
+import { WINDOW_KEYS, windowTag } from '@/lib/windows';
 
 /**
  * A row with `more` draws its compact chips or its full list as `expanded` reads, the control after them on their line.
@@ -104,9 +105,9 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
                 <tr>
                   <th>Account</th>
                   <th>Tier</th>
-                  <th>5h</th>
-                  <th>7d</th>
-                  <th>Fable</th>
+                  {WINDOW_KEYS.map((k) => (
+                    <th key={k}>{windowTag(k)}</th>
+                  ))}
                   <th>Projection</th>
                   <th>Runway</th>
                   <th>In flight</th>

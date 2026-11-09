@@ -139,15 +139,22 @@ export const partsIn = (at: number, zone: string): { date: string; minute: numbe
   for (const part of formatterFor(zone).formatToParts(at)) p[part.type] = part.value;
   return { date: `${p.year}-${p.month}-${p.day}`, minute: Number(p.hour) * 60 + Number(p.minute), weekday: p.weekday ?? '' };
 };
+// A browser's zone data stays fixed while the page is open, so each zone is tried once.
+const readableZones = new Map<string, boolean>();
 /** Whether this browser's time zone data holds `zone`, which the router's bundled database may know and it may not. */
 const readable = (zone: string): boolean => {
   if (zone === '') return false;
-  try {
-    partsIn(0, zone);
-    return true;
-  } catch {
-    return false;
+  let known = readableZones.get(zone);
+  if (known === undefined) {
+    try {
+      partsIn(0, zone);
+      known = true;
+    } catch {
+      known = false;
+    }
+    readableZones.set(zone, known);
   }
+  return known;
 };
 
 /** Whether `at` falls inside the peak band's hours in its zone, on a weekday when the band covers weekdays alone; null
@@ -199,29 +206,19 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
  *  completing inside the band or outside it. Null where the model has no weight on the window. */
 export const equivalentIn = (costs: SubscriptionCosts, model: string, usage: Usage, inside: boolean): number | null => shareIn(costs, 'seven_day', anchorTier(costs), model, usage, inside);
 
+/** The anchor tier's 7-day capacity over the chosen tier's capacity on `window` times `divisor`, null where either
+ *  capacity is null. */
+const capacityRatio = (costs: SubscriptionCosts, week: WeekPosition, window: CostWindow, divisor = 1): number | null => {
+  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
+  const chosen = tierCapacity(costs, WEEK_TIER[week], window);
+  return anchor === null || chosen === null ? null : anchor / (chosen * divisor);
+};
+
 /** The chosen week's figure per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's in the
  *  revision `costs` is (the one in force at the read), 1 under Pro with no table, null where either side is null. */
 export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): number | null => {
   if (costs === null) return week === 'pro' ? 1 : null;
-  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
-  const chosen = tierCapacity(costs, WEEK_TIER[week], 'seven_day');
-  return anchor === null || chosen === null ? null : anchor / chosen;
-};
-
-/** The anchor tier's 7-day capacity over the chosen tier's 5-hour capacity, null where either side is null. */
-const fiveHourBase = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
-  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
-  const chosen = tierCapacity(costs, WEEK_TIER[week], 'five_hour');
-  return anchor === null || chosen === null ? null : anchor / chosen;
-};
-
-/** The chosen tier's 5-hour share per Pro-week figure at `at`: the anchor tier's 7-day capacity over the chosen
- *  tier's 5-hour capacity, weighed by the band's factor at that hour. Null where either capacity or the band's state
- *  is null. */
-export const fiveHourScale = (costs: SubscriptionCosts, week: WeekPosition, at: number): number | null => {
-  const base = fiveHourBase(costs, week);
-  const band = bandFactor(costs, 'five_hour', at);
-  return base === null || band === null ? null : base * band;
+  return capacityRatio(costs, week, 'seven_day');
 };
 
 /** The chosen tier's Fable-week share per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's,
@@ -230,14 +227,14 @@ export const fiveHourScale = (costs: SubscriptionCosts, week: WeekPosition, at: 
 export const fableWeekScale = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
   // Read off the model's own row rather than `pricedWindow`, which prices an absent model week as the whole 7-day one.
   const fable = lookup(costs.modelWindows, 'seven_day_fable');
-  const anchor = tierCapacity(costs, anchorTier(costs), 'seven_day');
-  const chosen = tierCapacity(costs, WEEK_TIER[week], 'seven_day');
-  return fable === undefined || fable.of !== 'seven_day' || anchor === null || chosen === null ? null : anchor / (chosen * fable.capacityFactor);
+  return fable === undefined || fable.of !== 'seven_day' ? null : capacityRatio(costs, week, 'seven_day', fable.capacityFactor);
 };
+
+const unpricedFor = (what: string, week: WeekPosition): string => `Unpriced: the cost model holds no ${what} for the ${planLabel(WEEK_TIER[week])} week`;
 
 /** The sentence where the chosen week's tier has no 7-day capacity to read a figure in. The dash's hover draws it bare,
  *  and the fleet note and the Dashboard ring card's empty line end it with a period. */
-export const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
+export const weekUnpricedTitle = (week: WeekPosition): string => unpricedFor('7-day capacity', week);
 
 /** A read's failure as a surface draws it, which a retry may clear, so it never reads unpriced. */
 export const failed = (e: string | null): WeekReading['failure'] => (e === null ? null : { text: e, unpriced: false });
@@ -252,25 +249,25 @@ export const weekReadingOf = (costs: SubscriptionCosts | null, error: string | n
   return { failure: { text: weekUnpricedTitle(week), unpriced: true }, scale, week };
 };
 
-/** The 5-hour card's reading, as `weekReadingOf` reads the week's. Its `scale` is the anchor tier's 7-day capacity over
- *  the chosen tier's 5-hour capacity without the band, since `fiveHourScale` weighs each bucket by the band at its
- *  hour. A table that sizes no 5-hour window for the chosen tier, or whose band zone this browser cannot read, reads
- *  unpriced, since a later read changes neither. */
-export const fiveHourReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
+const tableReading = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition, scaleOf: (c: SubscriptionCosts) => number | null, what: string): WeekReading => {
   if (costs === null) return { failure: failed(error), scale: null, week };
-  const scale = fiveHourBase(costs, week);
-  if (scale === null) return { failure: { text: `Unpriced: the cost model holds no 5-hour capacity for the ${planLabel(WEEK_TIER[week])} week`, unpriced: true }, scale, week };
-  if (!readable(costs.peak.zone)) return { failure: { text: `Unpriced: this browser does not know the peak band's zone ${costs.peak.zone}`, unpriced: true }, scale: null, week };
+  const scale = scaleOf(costs);
+  if (scale === null) return { failure: { text: unpricedFor(what, week), unpriced: true }, scale, week };
   return { failure: null, scale, week };
 };
 
-/** The Fable week card's reading, as `weekReadingOf` reads the week's, its `scale` `fableWeekScale`'s. */
-export const fableWeekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
-  if (costs === null) return { failure: failed(error), scale: null, week };
-  const scale = fableWeekScale(costs, week);
-  if (scale === null) return { failure: { text: `Unpriced: the cost model holds no Fable week for the ${planLabel(WEEK_TIER[week])} week`, unpriced: true }, scale, week };
-  return { failure: null, scale, week };
+/** The 5-hour card's reading, as `weekReadingOf` reads the week's. Its `scale` is the anchor tier's 7-day capacity over
+ *  the chosen tier's 5-hour capacity without the band, since the burn fold weighs each bucket by the band at its hour.
+ *  A table that sizes no 5-hour window for the chosen tier, or whose band zone this browser cannot read, reads
+ *  unpriced, since a later read changes neither. */
+export const fiveHourReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => {
+  const reading = tableReading(costs, error, week, (c) => capacityRatio(c, week, 'five_hour'), '5-hour capacity');
+  if (reading.failure === null && costs !== null && !readable(costs.peak.zone)) return { failure: { text: `Unpriced: this browser does not know the peak band's zone ${costs.peak.zone}`, unpriced: true }, scale: null, week };
+  return reading;
 };
+
+/** The Fable week card's reading, as `weekReadingOf` reads the week's, its `scale` `fableWeekScale`'s. */
+export const fableWeekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => fableWeekScale(c, week), 'Fable week');
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no
  *  Fable access, so the hint and the cost reference draw the week for these tiers alone. Each tier is listed in both

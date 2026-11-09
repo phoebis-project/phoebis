@@ -2,6 +2,7 @@ import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from 
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
+import { compareFigures } from './sort';
 import { HOUR } from './time';
 import { WINDOW_SHORT, windowKeyId } from './windows';
 
@@ -265,7 +266,7 @@ export function shedPreview(
       });
     type Pin = (typeof walked)[number];
     // A pin whose burn cannot be priced ranks after every priced pin of its group, as the router's round ranks it.
-    const pricedFirst = (a: number | null, b: number | null) => (a === null ? (b === null ? 0 : 1) : b === null ? -1 : b - a);
+    const pricedFirst = (a: number | null, b: number | null) => compareFigures(a, b, 'desc');
     const perRewrite = (p: Pin) => (p.order === null ? null : p.order / p.rewrite);
     const byRewrite = (a: Pin, b: Pin) => pricedFirst(perRewrite(a), perRewrite(b));
     const cold = walked.filter((p) => !p.warm).sort((a, b) => pricedFirst(a.order, b.order));
@@ -351,7 +352,7 @@ export interface SlowDownPreview {
  * the pools route serves on it. The threshold and the hold are the pool's as the dialog holds them.
  */
 export function slowDownPreview(
-  pool: Pick<Pool, 'slowDown' | 'slowDownHoldSeconds' | 'slowDownStretchSeconds'> & { members: { accountId: string; factor?: number | null; priority: number }[] },
+  pool: Pick<Pool, 'slowDown' | 'slowDownHoldSeconds' | 'slowDownStretchSeconds'> & { members: { accountId: string; factor: number | null; priority: number }[] },
   accounts: Account[],
 ): SlowDownPreview {
   const thresholdMs = pool.slowDownStretchSeconds * 1_000;
@@ -359,7 +360,7 @@ export function slowDownPreview(
   const read = pool.members
     .map((m) => {
       const account = byId.get(m.accountId);
-      if (account === undefined) return { factor: m.factor ?? null, label: m.accountId, priority: m.priority, stretchMs: null };
+      if (account === undefined) return { factor: m.factor, label: m.accountId, priority: m.priority, stretchMs: null };
       const slowDown = account.slowDown ?? null;
       return { factor: slowDown?.factor ?? null, label: account.label, priority: m.priority, stretchMs: slowDown?.stretchMs ?? null };
     })

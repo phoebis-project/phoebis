@@ -15,7 +15,7 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, KeyValue, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
-import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortAddressOf, sortDirOf, type SortDir } from '@/lib/address';
+import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortDirOf, type SortDir } from '@/lib/address';
 import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
@@ -455,7 +455,7 @@ export function SessionsPage() {
           update={update}
         >
           <ColumnsControl columns={SESSION_COLUMNS} visible={visible} onChange={setVisible} />
-          <SortControl keys={SESSION_SORT_KEYS} onChange={(next) => update(sortAddressOf(SESSION_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={SESSION_SORT_KEYS} onChange={update} value={filters} />
         </FilterBar>
         {firstFailed !== null && <ReadNotice className="sessions__notice" error={reads[firstFailed].error} name={firstFailed} retry={reads[firstFailed].reload} />}
         {failedFirst(accounts) && <ReadNotice className="sessions__notice" error={accounts.error} name="accounts" retry={accounts.reload} />}

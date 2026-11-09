@@ -20,7 +20,7 @@ import { IconChevronLeft, IconChevronRight, IconX } from '@/components/ui/icons'
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Input, KeyValue, Select, Skeleton, SkeletonRows, toggleRow } from '@/components/ui/primitives';
-import { accountHref, addressWindow, REQUEST_ORDER_OF, REQUEST_PAGE_SIZES, REQUEST_SORT_KEYS, requestHref, REQUESTS_CODEC, sortAddressOf, sortDirOf } from '@/lib/address';
+import { accountHref, addressWindow, REQUEST_ORDER_OF, REQUEST_PAGE_SIZES, REQUEST_SORT_KEYS, requestHref, REQUESTS_CODEC, sortDirOf } from '@/lib/address';
 import { sentences, shareHint, shareHintLines, type WeekReading } from '@/lib/analytics';
 import { autoModeLabel } from '@/lib/autoMode';
 import { bodyLines, bodyText, findHits } from '@/lib/bodies';
@@ -379,7 +379,7 @@ export function RequestsPage() {
           update={update}
         >
           <ColumnsControl columns={COLUMNS} visible={visible} onChange={setVisible} />
-          <SortControl keys={REQUEST_SORT_KEYS} onChange={(next) => update(sortAddressOf(REQUEST_SORT_KEYS, next))} value={{ dir, sort: filters.sort }} />
+          <SortControl keys={REQUEST_SORT_KEYS} onChange={update} value={filters} />
         </FilterBar>
         <div className="stack">
           {overrun !== null && (

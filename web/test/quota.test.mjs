@@ -209,31 +209,6 @@ test('a projection past the window without a burn reads no share left, and a win
   assert.equal(d.projectionWords({ ...full, projection: null }, now), null, 'a window without a projection');
 });
 
-test('a pace order reads the account furthest ahead of the window first and the ones without a lead on it last, ties by label', () => {
-  const now = Date.UTC(2026, 8, 16, 14, 30);
-  const win = (id, lead, resetsInMs = 2 * HOUR) => ({ id, label: id, lead, observedAt: new Date(now - 40_000).toISOString(), periodHours: id === '5h' ? 5 : 168, resetsAt: new Date(now + resetsInMs).toISOString(), utilization: 0.5 });
-  // The answer carries the model week apart from the account's windows, as the decoder splits it off.
-  const account = (label, windows, fableWindow = null) => ({ fableWindow, id: label, label, windows });
-  const order = (accounts, id) => d.sortByPace(accounts, id, now).map((a) => a.label);
-
-  const both = [account('primary', [win('5h', 0.2)]), account('secondary', [win('5h', -0.1)]), account('nightly', [win('5h', 0.05)])];
-  assert.deepEqual(order(both, '5h'), ['primary', 'nightly', 'secondary'], 'leads of 0.2, -0.1 and 0.05 read 0.2, 0.05, -0.1');
-  assert.deepEqual(
-    both.map((a) => a.label),
-    ['primary', 'secondary', 'nightly'],
-    'the list the page holds keeps its own order',
-  );
-  assert.deepEqual(order([account('weekly', [win('7d', 0.3)]), account('behind', [win('5h', -0.4)])], '5h'), ['behind', 'weekly'], 'an account without the window after one behind its pace');
-  assert.deepEqual(order([account('b', [win('5h', 0.1)]), account('a', [win('5h', 0.1)])], '5h'), ['a', 'b'], 'two equal leads by label');
-  assert.deepEqual(order([account('expired', [win('5h', 0.9, -HOUR)]), account('behind', [win('5h', -0.2)])], '5h'), ['behind', 'expired'], 'an expired window after a lead behind pace');
-  assert.deepEqual(order([account('unread', [win('7d', null)]), account('ahead', [win('7d', 0.1)])], '7d'), ['ahead', 'unread'], 'a window without a lead after one with');
-  assert.deepEqual(order([account('z', []), account('y', [win('5h', 0.4, -HOUR)]), account('x', [win('5h', null)])], '5h'), ['x', 'y', 'z'], 'the accounts without a lead read by label among themselves');
-
-  const weeks = [account('studio', [win('7d', 0.5)], win('7d_fable', -0.3)), account('nightly', [win('7d', -0.5)], win('7d_fable', 0.2)), account('legacy', [win('7d', 0.1)])];
-  assert.deepEqual(order(weeks, '7d_fable'), ['nightly', 'studio', 'legacy'], "the model week reads the account's Fable window, an account without one last");
-  assert.deepEqual(order(weeks, '7d'), ['studio', 'legacy', 'nightly'], 'the 7-day order reads the 7-day window beside it');
-});
-
 test("a short timeline cell's hour drops its leading zero and carries its period under the 12-hour setting, and reads two digits under the 24-hour one", () => {
   // Local hours, since the cells open on the viewer's midnight and every formatter prints in the browser's zone.
   const at = (hour) => new Date(2026, 8, 16, hour).toISOString();
@@ -318,20 +293,6 @@ test('the soonest reset reads the Fable window beside the others and names every
   assert.deepEqual(d.soonestResetAt(fableFirst, SPEND_NOW), { at: SPEND_NOW + HOUR, ids: ['7d_fable'] });
   const tied = planAccount('tied', [planWindow('5h', HOUR), planWindow('7d', HOUR)]);
   assert.deepEqual(d.soonestResetAt(tied, SPEND_NOW), { at: SPEND_NOW + HOUR, ids: ['5h', '7d'] }, 'two windows at one instant');
-});
-
-test("a recovery order reads its own window's reset, the soonest first, and files an account without it after every dated one by label, the usage-based seat among them", () => {
-  // The 5-hour account resets first of all, so an order over every window's soonest reset dates it under the Fable key.
-  const session = planAccount('session', [planWindow('5h', 30 * MINUTE)]);
-  const week = { ...planAccount('week', []), fableWindow: planWindow('7d_fable', HOUR) };
-  const accounts = [seatAccount(), session, week];
-  assert.deepEqual(d.sortByReset(accounts, '7d_fable', SPEND_NOW).map((a) => a.id), ['week', 'seat', 'session'], "the Fable order reads the account's Fable window");
-  assert.deepEqual(d.sortByReset(accounts, '5h', SPEND_NOW).map((a) => a.id), ['session', 'seat', 'week'], 'the 5-hour order reads the 5-hour window');
-});
-
-test('the pace orders put a usage-based seat last, with the accounts that carry no such window', () => {
-  const accounts = [seatAccount(), planAccount('behind', [planWindow('5h', 3_600_000, -0.3), planWindow('7d', 86_400_000, -0.2)])];
-  for (const id of ['5h', '7d', '7d_fable']) assert.deepEqual(d.sortByPace(accounts, id, SPEND_NOW).map((a) => a.id).slice(-1), ['seat'], id);
 });
 
 test("the timeline's input and its lanes take an account with a spend reading beside the plan accounts, under both zooms", () => {

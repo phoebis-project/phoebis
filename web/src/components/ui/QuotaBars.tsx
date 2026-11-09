@@ -1,7 +1,7 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
 import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
-import { speedHover } from '@/lib/selection';
+import { slowDownChip } from '@/lib/selection';
 import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
 import { SpeedChip } from './SpeedChip';
@@ -18,7 +18,7 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
     <div className="wbar">
       <div className="wbar__head">
         {showLabel && <span className="wbar__label ellipsis">{w.label}</span>}
-        {slowDown && <SpeedChip factor={slowDown.speed} hover={speedHover(slowDown, now)} />}
+        <SpeedChip {...slowDownChip(slowDown, now)} />
         <span className="wbar__pct num">{fmtPct(remaining)}</span>
       </div>
       <Meter value={remaining} tone={meterTone(remaining)} thin label={`${w.label} remaining`} />

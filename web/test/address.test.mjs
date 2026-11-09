@@ -82,9 +82,10 @@ test('a pick of Default order writes no direction to the Quota address, whatever
   assert.equal(write(d.QUOTA_CODEC, d.sortAddressOf(d.QUOTA_SORT_KEYS, { dir: 'desc', sort: 'default' })), '');
 });
 
-test("the Analytics Cost tab's keys follow the unit, so a key orders the column the unit's table draws", () => {
-  assert.equal(d.analyticsColumnOf(d.analyticsKeysOf('cost', 'native'), 'per_request'), 2);
-  assert.equal(d.analyticsColumnOf(d.analyticsKeysOf('cost', 'usd'), 'per_request'), 6);
+test("the Analytics Cost tab's keys follow the unit, so the native table offers no key for a column it does not draw", () => {
+  const ids = (unit) => d.analyticsKeysOf('cost', unit).map((k) => k.id);
+  assert.equal(ids('native').includes('input'), false, 'the native table draws no Input column');
+  assert.equal(ids('usd').includes('input'), true, 'the dollar table draws one');
 });
 
 test('every filter at its default leaves a bare address', () => {

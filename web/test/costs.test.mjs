@@ -79,14 +79,12 @@ test("the chosen week's scale is the anchor tier's 7-day capacity over the chose
   close(d.weekScale(halved, 'ultra'), 50 / 500, 'the 7-day window, not the 5-hour one');
 });
 
-test("the 5-hour scale is the anchor's 7-day capacity over the chosen tier's 5-hour one under the band's factor, and the Fable week's over its share of the chosen tier's week", () => {
-  // The fixture's anchor (Pro), band (weekdays 5 to 11 in Los Angeles at a 5-hour factor of 0.5) and Fable week (0.5 of
-  // the 7-day window) over three rows, Pro 5 and 50, Max 5x 25 and 250 and Ultra 100 and 1000.
+test("the 5-hour reading's scale is the anchor's 7-day capacity over the chosen tier's 5-hour one, and the Fable week's over its share of the chosen tier's week", () => {
+  // The fixture's anchor (Pro) and Fable week (0.5 of the 7-day window) over three rows, Pro 5 and 50, Max 5x 25 and
+  // 250 and Ultra 100 and 1000.
   const table = { ...costs, capacity: { default_claude_ai: { fiveHour: 5, sevenDay: 50 }, default_claude_max_5x: { fiveHour: 25, sevenDay: 250 }, [MAX_20X]: { fiveHour: 100, sevenDay: 1000 } } };
-  close(d.fiveHourScale(table, 'ultra', IN), (50 / 100) * 2, "Pro's week over Ultra's 5-hour window, inside the band");
-  close(d.fiveHourScale(table, 'ultra', OUT), 50 / 100, "Pro's week over Ultra's 5-hour window, outside the band");
+  close(d.fiveHourReadingOf(table, null, 'ultra').scale, 50 / 100, "Pro's week over Ultra's 5-hour window");
   close(d.fableWeekScale(table, 'max'), 50 / 125, "Pro's week over half Max 5x's week");
-  assert.equal(d.fiveHourScale({ ...table, peak: { ...table.peak, zone: 'Nowhere/Nowhere' } }, 'ultra', IN), null, "a band zone this browser cannot read leaves the hour's factor unknown");
   assert.equal(d.fableWeekScale({ ...table, modelWindows: {} }, 'max'), null, 'a model with no Fable week sizes no share of one');
 });
 
