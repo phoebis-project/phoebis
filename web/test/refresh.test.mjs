@@ -131,6 +131,7 @@ test('a loader that throws synchronously on one refresh leaves the guard clear, 
   assert.throws(() => clock.tick(30_000), /loader broke/, "the refresh's call throws out of its tick");
   act(() => clock.tick(30_000));
   assert.equal(load.calls, 3, 'the tick after the throw reads');
+  await settled();
 });
 
 test('a read the router never answers fails at the read deadline, and the next tick reads again', async () => {

@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { api } from '@/api';
 import type { AttentionItem } from '@/api/types';
 import { ATTENTION_LABEL, ATTENTION_TONE, attentionHref, attentionKey, attentionTitle, attentionWords } from '@/lib/attention';
-import { fmtInt, fmtRelative, messageOf } from '@/lib/format';
+import { fmtInt, fmtRelative, messageOf, noun } from '@/lib/format';
 import { useLatest, useResizeObserver } from '@/lib/hooks';
 import { Popover } from './Popover';
 import { Badge, BadgeLink, Pill, Skeleton } from './primitives';
@@ -150,7 +150,7 @@ export function AttentionLine({ error, items, loadedAt, now, refresh }: { error:
   return (
     <div ref={lineRef} className={wrapped ? 'attention-line is-wrapped' : 'attention-line'}>
       <span className="attention-line__lead">
-        {items.length} {items.length === 1 ? 'needs' : 'need'} attention
+        {items.length} {noun(items.length, 'needs', 'need')} attention
       </span>
       <span ref={rowRef} className="attention-line__items">
         {badges.map((b, i) => (

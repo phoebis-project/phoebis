@@ -1301,8 +1301,8 @@ function BreakdownTable({
   /** The rows' order through `orderRows`, a row with no figure in the column last. A table over a fixed dimension
    *  passes none and keeps its rows' order. */
   order?: TableOrder;
-  /** A row's `title` is its label cell's hover text, the label itself where none is given. `figures` holds a figure
-   *  per column for `order`, null where the cell has none to order by. */
+  /** A row's `title` is its label cell's hover text, the label itself where none is given. `figures` holds a figure per
+   *  sort key, in the key list's order, for `order`, null where the cell has none to order by. */
   rows: { cells: ReactNode[]; figures?: SortFigure[]; key: string; label: string; title?: string }[];
   subtitle?: string;
   title: string;
@@ -2311,7 +2311,7 @@ function BurnCharts({
   // A session id runs past any legend, so it shows cut as the Sessions view cuts it. Both charts' legend entries
   // and the spend chart's tooltip show the whole id on hover.
   const nameOf = (l: BurnLine) => (groupBy === 'session' && !l.other ? shortId(l.label, SESSION_CHARS) : l.label);
-  const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? (l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
+  const titleOf = (l: BurnLine) => (groupBy === 'request_class' ? upperFirst(l.key === 'conversation' ? CONVERSATION_HINT : OVERHEAD_HINT) : groupBy === 'session' && !l.other ? l.label : undefined);
   const axis = timeAxis((answer?.bucketSeconds ?? 3_600) * 1_000, ink);
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;

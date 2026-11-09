@@ -178,7 +178,7 @@ subscription accounts" and "A subscription account reports the window this card 
 the window the card reads "No account with a 7-day window." (or "No account with a Fable week.") over the named
 accounts, and where they carry it with none sized "No listed account's tier is sized for the 7-day window." (or "for the
 Fable week."). Under a chosen week whose tier has no 7-day capacity the card reads the week's unpriced sentence
-(`Unpriced: the cost model holds no 7-day capacity for the {plan} week`) in place of the tier sentence. Each account
+(`Unpriced: the cost model holds no 7-day capacity for the {plan} week.`) in place of the tier sentence. Each account
 keeps one color across the Dashboard, the Quota view and the Analytics, in the order of its id, the eight colors cycling
 past eight accounts, and an account the registry does not list draws muted.
 
@@ -825,19 +825,19 @@ however many attempts it took: Attempts reads `2 attempts` with the trail of acc
 request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
 account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
 its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
-or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two, `waited
-for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads `waited 1 s on
-{account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover naming what
-each kind of request reads under the position. Under Native a request a subscription window paid reads one figure in the
-chosen week, such as `0.0244% Ultra week`, with its hint and the dollar equivalent on hover. The hint names the
-account's plan, its display name where the account carries one, and its share of each window the account has, in the
-order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share that completed inside the band of the
-cost revision in force at its completion: "Ultra: 0.11% of the 7-day window, 0.22% of the Fable week". It names no
-window the account lacks, so an approved Ultra account reads no 5-hour share, and no Fable week on a Pro account. Under
-the Max and Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer. Where
-that read fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the same
-dash with the message leading its hover, and the split Refresh button's body reads the settings again. A request whose
-model has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model
+or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two,
+`waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads
+`waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover
+naming what each kind of request reads under the position. Under Native a request a subscription window paid reads one
+figure in the chosen week, such as `0.0244% Ultra week`, with its hint and the dollar equivalent on hover. The hint
+names the account's plan, its display name where the account carries one, and its share of each window the account has,
+in the order 5-hour, 7-day and the model week, with "(in the band)" after a 5-hour share that completed inside the band
+of the cost revision in force at its completion: "Ultra: 0.11% of the 7-day window, 0.22% of the Fable week". It names
+no window the account lacks, so an approved Ultra account reads no 5-hour share, and no Fable week on a Pro account.
+Under the Max and Ultra weeks the figure waits on the settings, so the cell draws its placeholder until they answer.
+Where that read fails, the cell draws a dash titled with the read's message, the drawer's Estimated cost row draws the
+same dash with the message leading its hover, and the split Refresh button's body reads the settings again. A request
+whose model has no weight in the cost model reads its dollar equivalent over `equivalent` with the hover "The cost model
 prices no share for this request". Under All in dollars and Dollar equivalent a subscription request reads its dollar
 equivalent over `equivalent` with the hint and the figure in the chosen week on hover, and under Billed dollars a dash
 with the hover "Nothing billed: a subscription request". An API-key, fast mode, overage or usage-based request reads
@@ -914,8 +914,9 @@ in place of the drawer over the clock minute that holds the request, its session
 quarter hour either side, with every other filter dropped, the page size kept and the link left out where the request
 has no session or no account.
 
-A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger." A failed read
-shows "Could not load the request" with the error and Try again, which reads the request again.
+A request the ledger does not hold reads "Request not found" with "It may have aged out of the ledger." A failed read of
+a request the list does not show draws "Could not load the request" with the error and Try again, which reads the
+request again.
 
 ## Analytics
 
@@ -949,13 +950,13 @@ for `claude-cli/2.1.310 (external, cli)`. The classifier grouping lists the requ
 The Sort control offers Name (ascending by default) and the open tab's group table columns in the table's order, each
 descending, and Name ascending is the order at rest on every source, the session view's tables included. Under either
 direction a group with no requests files last under Error rate and one with no sample last under a percentile. While the
-top bar's unit is Native, the Cost, Per request and Per 1k output keys order by the subscription requests' figure, with
-a group whose subscription requests priced nothing last under all three and a group of billed requests alone last under
-the two ratios. Under a dollar position they order by the dollars. A tab switch keeps a key the new tab's table has and
-reads Name otherwise, and the address keeps the key for the next tab whose table has it. On Burn, Cache warming and
-Accounts, and on the Cost tab of a session view, which draws no Cost table, the control stands disabled in its slot,
-titled "This tab's tables keep their own order". The tables over a fixed dimension (Cache by model, Cache warming by
-pool, Accounts in range) and every chart and card keep their own order.
+top bar's unit is Native, the Cost, Per request and Per 1k output keys order by the subscription requests' figure, and
+under either direction a group whose subscription requests priced nothing files last under all three and a group of
+billed requests alone last under the two ratios. Under a dollar position they order by the dollars. A tab switch keeps a
+key the new tab's table has and reads Name otherwise, and the address keeps the key for the next tab whose table has it.
+On Burn, Cache warming and Accounts, and on the Cost tab of a session view, which draws no Cost table, the control
+stands disabled in its slot, titled "This tab's tables keep their own order". The tables over a fixed dimension (Cache
+by model, Cache warming by pool, Accounts in range) and every chart and card keep their own order.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
 out of the page's address. At each interval, once a new bucket of the range has begun, it moves the window's end to now
@@ -993,8 +994,8 @@ and under a session filter every session's, which its subtitle then names, its l
 session, plain under a user agent filter as the Misses by reason counts are), Failovers, Migration rewrites with its
 moves (one bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each
 segment titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar
-per bucket of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`, `no
-request held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart),
+per bucket of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`,
+`no request held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart),
 Requests by speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key")
 with one row per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the
 range alone and no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched
@@ -1470,23 +1471,23 @@ draw chose among more than one. Verdict carries the one chip that decided it (`4
 `spend cap reached until 00:00`), whose hover says why the member was passed over, on a spent member with the reset it
 waits for (`its 5h window spent until 15:42`, `at its spend cap until 00:00`), and beside it a badge for a destination
 the gate read that did not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. A cooldown chip
-names the scope its words leave out after the reset, the model a 404 cooled, and the walk's exhausted line reads a spent
-member's chip as its row does. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads why: not
-looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and `Settings in force since {time}`
-(which a guardrail's attach to or detach from the pool moves too, since the fence re-reads the pool's settings), stay
-closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account it left, `shed from` after a
-shedding round and `failed over from` after a failover's landing, with the instant. The settings fold lists the pool's
-twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or `off`, Stretch and Hold as
-spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key and its pool had left the
-registry". A refused record, which no pool setting entered, draws no settings fold, a guardrail block's among them,
-whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as a second chip. A record
-written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling on a version 1 record and
-the five slow-down and return-to-plan settings on an older version 2 record, and a version 1 record lists after the
-twenty-four, each marked `(then)`, the three settings it carried that a later record does not. "Outcome" lists the pin
-written, the reservation (the account, the share per window and the expiry), the cache-map entries the answer wrote
-(`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold, reading
-`for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the chips
-`speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
+names the scope its words leave out after the reset, the model a cooldown holds, and the walk's exhausted line reads a
+spent member's chip as its row does. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads
+why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
+`Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence
+re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account
+it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The
+settings fold lists the pool's twenty-four settings in the card's order with Load shedding and Slow-down reading `on` or
+`off`, Stretch and Hold as spans, Return to plan as its word and Return dwell as a span or `at once` at 0, or "The key
+and its pool had left the registry". A refused record, which no pool setting entered, draws no settings fold, a
+guardrail block's among them, whose Admission line and Answer row carry `guardrail blocked` and the guardrail's name as
+a second chip. A record written before a setting existed reads `not recorded` for it, Load shedding and Window ceiling
+on a version 1 record and the five slow-down and return-to-plan settings on an older version 2 record, and a version 1
+record lists after the twenty-four, each marked `(then)`, the three settings it carried that a later record does not.
+"Outcome" lists the pin written, the reservation (the account, the share per window and the expiry), the cache-map
+entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the hold,
+reading `for the reset at {time}` where the request waited for a reset, or `for the slow-down until {time}` with the
+chips `speed 0.5x`, `stretch 42 min of 30 min`, `bound 2 min` and `cycle 20 s` where the slow-down held it, or
 `for the rewrite in flight of {request} until {time}` with `bound 2 min` where it waited for a moved pin's first head, a
 Cause on a failover's landing or a move with a cause (`429 on 5h` or `fast lane 429` for a cooldown,
 `re-auth required by credential refused` for a mark), the answer an exhaustion or a refusal gave, and the spend against

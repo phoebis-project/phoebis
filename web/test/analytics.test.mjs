@@ -241,7 +241,7 @@ test("a bucket's share is null when any row is unpriced, in either order", () =>
 test("the mock's burn fold sums the rows' own shares, prices only rows with tokens and nulls a window on any unpriced row, in either order", () => {
   // The shipped model the mock prices through, so a row's shares are the ones the share rule gives for it.
   const costs = d.decodeSettings(fixture('settings')).subscriptionCosts;
-  // The hour before the peak band opens in Los Angeles on Wednesday 2026-09-16. Primary is the story's Max 20x.
+  // The hour before the peak band opens in Los Angeles on Wednesday 2026-09-16. Primary is the story's Ultra account.
   const edge = d.bandNow(costs, Date.parse('2026-09-16T10:00:00Z')).at;
   const hour = edge - HOUR;
   const tier = 'default_claude_max_20x';
@@ -255,7 +255,7 @@ test("the mock's burn fold sums the rows' own shares, prices only rows with toke
   const priced = row('claude-opus-5-5', 1_000_000, edge + 60_000);
   const want = priced.shares.five_hour;
   const atTheHour = d.shareIn(costs, 'five_hour', tier, 'claude-opus-5-5', usageOf(1_000_000), d.inBand(costs, hour));
-  assert.ok(want !== null && atTheHour !== null && want > atTheHour, 'the shipped model prices Opus 5.5 on Max 20x, higher inside the band');
+  assert.ok(want !== null && atTheHour !== null && want > atTheHour, 'the shipped model prices Opus 5.5 on Ultra, higher inside the band');
   // A failed request on Sonnet 4.5, which the cost model has no weight for, carries no token.
   const failed = row('claude-sonnet-4-5', 0);
   for (const rows of [[priced, failed], [failed, priced]]) assert.ok(Math.abs(shareOf(rows) - want) < 1e-12, 'a row with no token leaves the priced share, the row\'s own and not its tokens\' at the hour');
@@ -467,7 +467,7 @@ test('the probe totals sum each group\'s held probes, and the mock holds a few o
 });
 
 test("the mock's client classifier group reads zero cache, saving and split figures over hours that read, wrote and kept warm", () => {
-  // A plan-funded hour on the story's Max 20x account lends the counters no share reads, and the case writes every
+  // A plan-funded hour on the story's Ultra account lends the counters no share reads, and the case writes every
   // member the share rule does read.
   const template = d.ALL_ROLLUPS.find((r) => r.accountId === 'primary' && r.funding === 'plan' && r.kind === 'inference' && r.classifier === '-');
   assert.ok(template, 'the story holds a plan-funded hour on primary');

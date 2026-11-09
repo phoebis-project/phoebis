@@ -283,5 +283,5 @@ test("a cost model without the chosen week's tier titles every dash with that we
   const title = 'Unpriced: the cost model holds no 7-day capacity for the Ultra week';
   assert.deepEqual(d.allowanceFigure(0.5, 'seven_day', MAX_5X, ultraless, 'ultra'), { kind: 'unpriced', text: '-', title });
   const rows = d.allowanceRows({ accounts: [accountOf('nightly', MAX_5X, [windowOf('seven_day', [0.5])])], from: iso(NOW - 29 * DAY), to: iso(NOW) }, ultraless, 'ultra');
-  assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(ultraless, 'ultra')), { fable: '-', note: title, sevenDay: '-' });
+  assert.deepEqual(d.fleetFigures(rows, 'ultra', d.weekScale(ultraless, 'ultra')), { fable: '-', note: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.', sevenDay: '-' });
 });

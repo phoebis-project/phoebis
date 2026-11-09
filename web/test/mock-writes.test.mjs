@@ -661,12 +661,12 @@ test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect 
 
 test("a disconnect keeps the row's last reading in its usage block, with no error and no poll", async () => {
   const api = await signedIn();
-  const connected = await storyAccount(api, 'legacy');
-  // Legacy's two windows hold one instant, its last clean poll's.
-  const newest = connected.windows.find((w) => w.id === '7d').observedAt;
+  // The 5-hour window, listed first, read twenty minutes before the 7-day one, so only the newest instant reads 11:30.
+  const legacy = api.accounts.find((a) => a.id === 'legacy');
+  legacy.windows = legacy.windows.map((w) => ({ ...w, observedAt: w.id === '5h' ? '2026-09-14T11:10:00.000Z' : '2026-09-14T11:30:00.000Z' }));
   await api.disconnectAccount('legacy');
   const { usage } = await storyAccount(api, 'legacy');
-  assert.deepEqual([usage.error, usage.fetchedAt, usage.poll], [null, newest, null]);
+  assert.deepEqual([usage.error, usage.fetchedAt, usage.poll], [null, '2026-09-14T11:30:00.000Z', null]);
 });
 
 test('a funding clear on a paused account leaves it paused', async () => {

@@ -1732,10 +1732,9 @@ const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCO
  * The move rule that takes a pin on `from` to the row's account in the engine's order, or null where none would. The
  * pin must be live on `from`, where an earlier request of the day left it. A spent window moves a standard request to
  * an account holding allowance outside plan overage, nightly's overage hands a standard request back to a plan-funded
- * subscription, and an API key's pin returns to one once it has sat its dwell there. The first rule whose reason
- * holds decides, so a move to an account
- * that rule would not take is no move. A drain needs a cold pin and a shed a mark, which no drawn pin carries, and a
- * token count follows its pin without walking the rules.
+ * subscription, and an API key's pin returns to one once it has sat its dwell there. The first rule whose reason holds
+ * decides, so a move to an account that rule would not take is no move. A drain needs a cold pin and a shed a mark,
+ * which no drawn pin carries, and a token count follows its pin without walking the rules.
  */
 function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   const pool = poolById.get(r.poolId ?? '');

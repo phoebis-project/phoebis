@@ -705,8 +705,8 @@ test('the candidate cells word every verdict and its chip', () => {
   const until = (h, m) => iso(ms(h, m));
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limit', scope: 'account', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', scope: 'account', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', 'rate limited until 15:42', 'in a cooldown'], 'the router spells its rate limit rate_limit alone');
-  // The scope names what the cooled words leave out, the model a 404 cools. The fast lane's two rows name the lane and
-  // its credits in their own words, whatever window the router filed them under.
+  // The scope names what the cooled words leave out, the model a cooldown holds. The fast lane's two rows name the lane
+  // and its credits in their own words, whatever window the router filed them under.
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'model_rejected', scope: 'model:claude-opus-5', until: until(15, 24), window: 'model_rejection' }, verdict: 'out' }), ['out', 'model 404 until 15:24 for claude-opus-5', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', scope: 'fast', until: until(14, 42), window: 'retry_after' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_credits', scope: 'fast_credits', until: until(15, 42), window: 'org_spend_cap_reached' }, verdict: 'out' }), ['out', 'fast credits until 15:42', 'in a cooldown']);
@@ -1068,7 +1068,7 @@ const DETAIL_EVENTS = {
   window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request']],
 };
 
-test('every event kind has its detail pairs starting with When, Account and Pool', () => {
+test('each event kind the detail table lists draws its pairs after When, Account and Pool', () => {
   for (const [kind, [detail, own]] of Object.entries(DETAIL_EVENTS)) {
     const row = event(kind, detail, { actor: 'admin', agentId: 'main', keyId: 'desktop', model: 'claude-haiku-4-5-20251001', poolId: 'all', requestId: 'req_1', sessionId: 's1-0000-4000' });
     const pairs = d.detailPairs(row, NOW, [], PRO, NO_TIERS);

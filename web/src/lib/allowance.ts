@@ -186,7 +186,7 @@ export function fleetFigures(rows: AllowanceRow[], week: WeekPosition, scale: nu
     return values.length === 0 ? '-' : weekShort(values.reduce((a, b) => a + b, 0), week);
   };
   // The rows' flags read each account's own pair, which would count accounts as priced over a column of dashes.
-  if (scale === null) return { fable: sum('seven_day_fable'), note: weekUnpricedTitle(week), sevenDay: sum('seven_day') };
+  if (scale === null) return { fable: sum('seven_day_fable'), note: `${weekUnpricedTitle(week)}.`, sevenDay: sum('seven_day') };
   const priced = rows.filter((r) => !r.unpriced).length;
   const unpriced = rows
     .filter((r) => r.unpriced)

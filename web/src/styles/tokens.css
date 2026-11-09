@@ -21,8 +21,10 @@
   --accent-soft: #ddf4ff;
   --accent-ring: rgba(9, 105, 218, 0.35);
   --on-accent: #ffffff;
-  /* The ink on the critical and serious fills and the toggle's knob keep their light values in the dark theme, where
-     the theme's own inks read lower on those fills, so no dark set redefines them. */
+  /* The inks on the critical and serious fills keep their light values in the dark theme, where the theme's own inks
+     read lower on those fills. The toggle's knob keeps its white there too, since a surface-colored knob nearly
+     vanishes on the dark off track, at a contrast of 1.50 under Default and 1.92 under GitHub. No dark set redefines
+     the three. */
   --on-critical: #ffffff;
   --on-serious: #1f2328;
   --toggle-knob: #ffffff;

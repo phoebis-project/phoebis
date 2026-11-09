@@ -347,8 +347,8 @@ interface CostContext extends WeekReading {
 export function SessionsPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
   const [pending, setPending] = useState<Row | null>(null);
-  // The Cost reference dialog and the bar's and the rows' menus hold the reads through the page's host, since an answer
-  // landing under a row's open menu could add or drop rows beneath it.
+  // Every dialog and the bar's and the rows' menus hold the reads through the page's host, since an answer landing
+  // under a row's open menu could add or drop rows beneath it.
   const { cause: pauseCause, host } = useHoldHost();
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a

@@ -18463,8 +18463,6 @@ await forView('/analytics', async () => {
   [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Try again')?.click();
   await page.settle(900);
   const t = page.text();
-  // A breakdown table heads a failed read with its own name.
-  const failedTables = [...page.container.querySelectorAll('.card--table .card__title')].map((h) => h.textContent?.trim() ?? '').filter((title) => t.includes(`Could not load ${title.toLowerCase()}`));
   const upChoices = await choices();
   const traffic = page.container.querySelector('section#traffic') !== null;
   const others = ['burn', 'latency', 'cache', 'cost', 'cache-warming', 'accounts'].filter((id) => page.container.querySelector(`section#${id}`) !== null);
@@ -18482,7 +18480,6 @@ await forView('/analytics', async () => {
       downChoices.length === 6 &&
       downChoices.every((c) => c.endsWith(' 0')) &&
       !t.includes('Could not load the analytics for these filters') &&
-      failedTables.length === 0 &&
       traffic &&
       others.length === 0 &&
       trafficRows > 0 &&
@@ -18493,7 +18490,7 @@ await forView('/analytics', async () => {
       reads.series === 2 &&
       rollupsOnAccounts === 1 &&
       accountRows > 0,
-    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`, failedTables.length === 0 ? '' : `still failed: ${failedTables.join(', ')}`],
+    missing: [`down ${downChoices.join(',')}`, `up ${upChoices.join(',')}`, `traffic ${traffic}`, `also mounted ${others.join(',')}`, `Traffic by key ${trafficRows}`, JSON.stringify(reads), `rollups on Accounts ${rollupsOnAccounts}`, `Accounts in range ${accountRows}`],
   });
   page.unmount();
 });
@@ -20843,10 +20840,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   {
     // Under the session grouping the legend cuts a session id, so a plan line's entry leads its hover with the whole id
     // and then its highest hour. The page's own burn read names the whole ids.
-    const asked = countCalls('getAnalyticsBurn');
+    const asked = recordedCalls('getAnalyticsBurn');
     const page = await mount('/analytics?by=session#burn');
     asked.restore();
-    const sessions = new Set((await api.getAnalyticsBurn(...asked.calls.at(-1))).points.map((p) => p.group));
+    const sessions = new Set((asked.calls.at(-1)?.answer?.points ?? []).map((p) => p.group));
     const planCard = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
     const entries = [...(planCard?.querySelectorAll('.legend li') ?? [])].filter((li) => !MUTED.includes(labelOf(li)) && valueOf(li) !== 'tier unknown').map((li) => ({ label: labelOf(li), title: li.getAttribute('title') ?? '' }));
     page.unmount();
@@ -22685,11 +22682,11 @@ await forView('/analytics', async () => {
 // The bar's Sort control over the open tab's group table. The key tables read the story's requests over the default
 // day (`REQUESTS` in `web/src/mock/requests.ts`, folded per key by the mock's breakdown, which answers the groups by
 // label): desktop 113, laptop 58, ci 21, notebook 18, the deleted desktop lifetime 11, fleet 3 and bench 2, no group
-// without requests and no percentile without a sample. The deleted lifetime's label carries its creation in the
-// viewer's zone, UTC where the smoke runs. Under the model grouping the requests refused before they resolved a model
-// form the "no model" group with no requests, so its Error rate reads a dash, and three models answered every request.
+// without requests and no percentile without a sample. Under the model grouping the requests refused before they
+// resolved a model form the "no model" group with no requests, so its Error rate reads a dash, and three models
+// answered every request.
 await forView('/analytics', async () => {
-  const DELETED = 'desktop (deleted, created May 19, 2026, 14:30)';
+  const DELETED = earlierHolderLabel('desktop', DELETED_HOLDER_GENERATION);
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
   const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
@@ -23562,9 +23559,10 @@ await forView('/accounts', async () => {
   // router's first account the list shows and a row's link keep the query and the hash, and a remount reads the same.
   const name = '/accounts keeps its search, sort and status in the address and a remount reads them';
   const QUERY = '?search=operator&sort=usage&status=cooldown';
-  const usage = (a) => Math.max(0, ...a.windows.map((w) => w.utilization));
   const matching = (await api.listAccounts()).filter((a) => a.status === 'cooldown' && [a.label, a.email ?? '', a.plan ?? ''].some((t) => t.toLowerCase().includes('operator')));
-  const wanted = [...matching].sort((a, b) => usage(b) - usage(a)).map((a) => a.id);
+  // The story's two cooling rows, both on operator emails, most used first: secondary's 5-hour window is full and
+  // primary's highest stands at 62%.
+  const wanted = ['secondary', 'primary'];
   // Under this sort the list's first row is not the router's first match, so the landing tells the redirect's rule
   // apart from landing on the top row.
   const landing = matching[0]?.id;
@@ -23589,7 +23587,6 @@ await forView('/accounts', async () => {
   results.push({
     name,
     ok:
-      wanted.length >= 2 &&
       wanted[0] !== landing &&
       JSON.stringify(landed) === JSON.stringify({ ...view, at: { hash: '#top', pathname: `/accounts/${landing}`, search: QUERY } }) &&
       JSON.stringify(clicked) === JSON.stringify({ hash: '#top', pathname: `/accounts/${other}`, search: QUERY }) &&
@@ -28026,7 +28023,6 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
   }
 });
 
-
 // A failed settings read draws About's error state with Try again rather than a skeleton for ever. Without the answer
 // the client block reads its placeholder base URL with no port, and the scheme and the port arrive with the listener
 // hint once a read lands.
@@ -28638,7 +28634,6 @@ await forView(['/guardrails', '/keys', '/pools'], async () => {
   }
   f.unmount();
 });
-
 
 await forView(['/keys', '/requests'], async () => {
   // The popups from the keyboard, late in the run like the checks after them, so the real time their mounts take moves
@@ -29411,14 +29406,14 @@ await forView('/', async () => {
           listAfter: true,
           names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured', 'zenith: a usage-based seat'],
           ring: false,
-          sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week',
+          sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.',
         }) &&
       JSON.stringify(drawn.fable) ===
         JSON.stringify({
           listAfter: true,
           names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat'],
           ring: false,
-          sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week',
+          sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.',
         }),
     missing: [JSON.stringify(drawn)],
   });

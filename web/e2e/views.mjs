@@ -7216,8 +7216,9 @@ async function barRow(theme, view) {
       await page.setViewportSize({ height, width });
       const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : [])];
       for (const [label, search, chipped] of cases) {
-        // The Requests bar's slots outrun the 1280 px content column, so its edge wraps under them, as the owner kept
-        // it. The chips' address lists no row, and its shorter count leaves the edge room beside the slots.
+        // The Requests bar's slots outrun the 1280 px content column, so its edge slot wraps to a second line where the
+        // count's text needs it. The chips' address lists no row, and its shorter count leaves the edge room beside the
+        // slots.
         const lines = view === '/requests' && width === 1280 && label !== 'with its chips' ? 2 : 1;
         await page.goto(`${base}${view}${search}`);
         await booted();
@@ -8655,7 +8656,7 @@ async function analyticsSortControl(theme) {
     const sort = row?.querySelector('button[aria-label="Sort"]') ?? null;
     return {
       neighbor: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === name)),
-      sort: sort === null ? null : { ...box(sort), arrow: sort.querySelector('svg') !== null, disabled: sort.disabled, text: sort.textContent?.trim() ?? '', title: sort.getAttribute('title') },
+      sort: sort === null ? null : { ...box(sort), arrow: sort.querySelector('svg path')?.getAttribute('transform') ?? null, disabled: sort.disabled, text: sort.textContent?.trim() ?? '', title: sort.getAttribute('title') },
     };
   };
   try {
@@ -8667,7 +8668,8 @@ async function analyticsSortControl(theme) {
       return;
     }
     for (const what of compare(rest.sort, rest.neighbor, ['fontSize', 'fontWeight', 'height', 'ink', 'top'], 'the Sort button against the Add filter button')) say(what);
-    if (rest.sort.text !== 'Sort: Name' || rest.sort.title !== 'Sorted by Name, ascending' || !rest.sort.arrow) say(`the button reads ${JSON.stringify(rest.sort.text)} titled ${JSON.stringify(rest.sort.title)} with ${rest.sort.arrow ? 'an' : 'no'} arrow on a bare address, not "Sort: Name" titled "Sorted by Name, ascending" with the arrow`);
+    // The arrow is IconArrowRight's stroke turned a quarter counterclockwise, up, for ascending.
+    if (rest.sort.text !== 'Sort: Name' || rest.sort.title !== 'Sorted by Name, ascending' || rest.sort.arrow !== 'rotate(-90 12 12)') say(`the button reads ${JSON.stringify(rest.sort.text)} titled ${JSON.stringify(rest.sort.title)} with the arrow at ${JSON.stringify(rest.sort.arrow)} on a bare address, not "Sort: Name" titled "Sorted by Name, ascending" with the up arrow`);
     await page.locator('.filter-bar button[aria-label="Sort"]').click();
     await advance(CLOCK_STEP_MS);
     const open = await page.evaluate(() => {
@@ -13672,7 +13674,7 @@ try {
       await groupedDialogFixture(theme);
     }
   }
-  // The reads below run under the default palette alone, each in both themes.
+  // The measures below read the bare theme, so their loops run under the default palette alone.
   await page.evaluate(() => localStorage.setItem('phoebis.palette', 'default'));
   for (const theme of ['light', 'dark']) {
     at = `${theme} /pools cost reference`;

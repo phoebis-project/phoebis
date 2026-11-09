@@ -168,7 +168,7 @@ const factorOf = (costs: SubscriptionCosts, window: string, inside: boolean): nu
 };
 
 /** The weight the band puts on a charge landing on `window` at `at`: the reciprocal of the priced window's capacity
- *  factor inside the band, else 1; null when the band's state at `at` cannot be read. */
+ *  factor inside the band, else 1. Null when the band's state at `at` cannot be read. */
 export const bandFactor = (costs: SubscriptionCosts, window: string, at: number): number | null => {
   const inside = inBand(costs, at);
   return inside === null ? null : factorOf(costs, window, inside);

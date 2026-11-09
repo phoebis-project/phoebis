@@ -84,6 +84,7 @@ export function useLeaveOnMove(active: boolean, target: RefObject<HTMLElement>, 
     };
   }, [active, latest, rest, target]);
 }
+
 const movedFrom = (target: RefObject<HTMLElement>, rest: RefObject<{ left: number; top: number }>): boolean => {
   const at = target.current?.getBoundingClientRect();
   return !at || !rest.current || at.top !== rest.current.top || at.left !== rest.current.left;

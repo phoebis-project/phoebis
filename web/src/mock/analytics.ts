@@ -171,7 +171,6 @@ interface WindowSum {
   unpriced: boolean;
 }
 
-
 const planRows = (list: HourlyRollup[]) => list.filter((r) => r.funding === 'plan');
 
 /**

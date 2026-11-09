@@ -2,8 +2,9 @@
 // palettes, against a baseline the same script writes. A rule section that moves between stylesheets, or a palette's
 // second token set, must leave every drawn value as it was, and the states reach past the views at rest at 1280 to the
 // narrow widths, a filter chip, the open popovers, menus and hover cards, and three dialogs. It exits 0 on no
-// difference, 1 on a difference and 2 on a refusal: a bad argument, a baseline inside the repository, a path two
-// elements share, a state a write could not draw, or a page that failed mid-walk.
+// difference, 1 on a difference and 2 on a refusal: a bad argument, a baseline inside the repository, a missing mock
+// bundle, a baseline line that is no state, a path two elements share, a state a write could not draw, or a server, a
+// browser, a page or a file that failed on the way.
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
@@ -96,8 +97,13 @@ function real(path) {
 
 // A baseline runs to hundreds of megabytes of one host's reads, so a path inside a worktree is refused before a blanket
 // add can take it into a commit.
-const place = real(dirname(baseline));
-const inside = repositoryRoots().map(real).find((root) => place === root || place.startsWith(root + sep));
+let inside;
+try {
+  const place = real(dirname(baseline));
+  inside = repositoryRoots().map(real).find((root) => place === root || place.startsWith(root + sep));
+} catch (error) {
+  refuse(error.message);
+}
 if (inside) refuse(`--baseline must lie outside the repository (${inside})`);
 
 const bundle = join(here, '..', 'dist-mock');
@@ -163,33 +169,42 @@ const STATES = [
   { open: [{ click: 'button', text: 'Create pool' }, { click: '.dialog-rail__group[data-group="members"]' }], path: '/pools', slug: 'pools-create-members', wait: 'dialog[open] .members-table', widths: [720, 1280] },
 ];
 
-const server = await serve(bundle);
-const base = `http://127.0.0.1:${server.port}`;
-// The browser pass's page, with its whole rasters, reduced motion, UTC and 1280 by 800 viewport, so a state reads as
-// the pass draws it.
-const browser = await chromium.launch({ args: ['--disable-partial-raster'] });
-const context = await browser.newContext({ reducedMotion: 'reduce', timezoneId: 'UTC', viewport: { height: 800, width: 1280 } });
-// No state is read mid-transition. Every duration and delay of an animation or a transition reads 0s under this
-// rule, so a change to one draws no difference.
-await context.addInitScript(() => {
-  document.addEventListener('DOMContentLoaded', () => {
-    const style = document.createElement('style');
-    style.textContent = [
-      '*, *::before, *::after {',
-      '  animation-duration: 0s !important; animation-delay: 0s !important;',
-      '  transition-duration: 0s !important; transition-delay: 0s !important;',
-      '}',
-    ].join('\n');
-    document.head.append(style);
+const messageOf = (error) => (error instanceof Error ? error.message : String(error));
+
+let server = null;
+let browser = null;
+let page = null;
+try {
+  server = await serve(bundle);
+  // The browser pass's page, with its whole rasters, reduced motion, UTC and 1280 by 800 viewport, so a state reads as
+  // the pass draws it.
+  browser = await chromium.launch({ args: ['--disable-partial-raster'] });
+  const context = await browser.newContext({ reducedMotion: 'reduce', timezoneId: 'UTC', viewport: { height: 800, width: 1280 } });
+  // No state is read mid-transition. Every duration and delay of an animation or a transition reads 0s under this
+  // rule, so a change to one draws no difference.
+  await context.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      const style = document.createElement('style');
+      style.textContent = [
+        '*, *::before, *::after {',
+        '  animation-duration: 0s !important; animation-delay: 0s !important;',
+        '  transition-duration: 0s !important; transition-delay: 0s !important;',
+        '}',
+      ].join('\n');
+      document.head.append(style);
+    });
   });
-});
-const page = await context.newPage();
+  page = await context.newPage();
+} catch (error) {
+  await stop(2, `the mock bundle's server or the browser did not start: ${messageOf(error)}`);
+}
+const base = `http://127.0.0.1:${server.port}`;
 
 /** Closes the browser and the server before the exit, so a refusal mid-walk leaves no process behind. */
 async function stop(code, message) {
   if (message) console.error(`styles: ${message}`);
-  await browser.close();
-  server.close();
+  await browser?.close();
+  server?.close();
   process.exit(code);
 }
 
@@ -359,14 +374,18 @@ const partial = `${baseline}.partial`;
 let out = null;
 let index = null;
 let fd = null;
-if (write) {
-  mkdirSync(dirname(baseline), { recursive: true });
-  out = createWriteStream(partial);
-} else {
-  index = await indexOf(baseline);
-  fd = openSync(baseline, 'r');
-  // A list left by an earlier run would read as this run's.
-  rmSync(differencesFile, { force: true });
+try {
+  if (write) {
+    mkdirSync(dirname(baseline), { recursive: true });
+    out = createWriteStream(partial);
+  } else {
+    // A list left by an earlier run would read as this run's, so it goes before the baseline's read, which can refuse.
+    rmSync(differencesFile, { force: true });
+    index = await indexOf(baseline);
+    fd = openSync(baseline, 'r');
+  }
+} catch (error) {
+  await stop(2, `${baseline}: ${messageOf(error)}`);
 }
 
 let list = null;
@@ -392,6 +411,12 @@ async function discard() {
     await once(stream, 'close');
   }
   rmSync(write ? partial : differencesFile, { force: true });
+}
+
+/** A throw on the way, from the page or from a file the run writes, is a refusal and never reads as a difference. */
+async function failed(where, error) {
+  await discard();
+  await stop(2, `${where}: ${messageOf(error)}`);
 }
 
 const palettes = options.palette === undefined ? PALETTES : [options.palette];
@@ -441,9 +466,7 @@ try {
     }
   }
 } catch (error) {
-  // A page that failed mid-walk is no difference, and the exit says so apart from one.
-  await discard();
-  await stop(2, `${reading}: ${error instanceof Error ? error.message : String(error)}`);
+  await failed(reading, error);
 }
 const seconds = Math.round((performance.now() - started) / 1000);
 
@@ -454,25 +477,35 @@ if (write) {
     for (const line of skipped) console.error(`styles: ${line}`);
     await stop(2, `${skipped.length} ${skipped.length === 1 ? 'state' : 'states'} skipped, so the write leaves ${baseline} as it was`);
   }
-  out.end();
-  await once(out, 'finish');
-  renameSync(partial, baseline);
+  try {
+    out.end();
+    await once(out, 'finish');
+    renameSync(partial, baseline);
+  } catch (error) {
+    await failed(`the write of ${baseline}`, error);
+  }
   console.log(`styles: wrote ${read} states in ${seconds} s to ${baseline} (${(statSync(baseline).size / 1e6).toFixed(1)} MB)`);
   await stop(0);
 }
 
-closeSync(fd);
-for (const key of index.keys()) {
-  if (visited.has(key) || !palettes.includes(key.split('/')[1])) continue;
-  await note(key, [`${key}: read in the baseline alone`]);
+try {
+  closeSync(fd);
+  for (const key of index.keys()) {
+    if (visited.has(key) || !palettes.includes(key.split('/')[1])) continue;
+    await note(key, [`${key}: read in the baseline alone`]);
+  }
+  if (list !== null) {
+    list.end();
+    await once(list, 'finish');
+  }
+} catch (error) {
+  await failed(`the list of ${differencesFile}`, error);
 }
 console.log(`styles: compared ${read} states in ${seconds} s against ${baseline}`);
 if (total === 0) {
   console.log('styles: no difference');
   await stop(0);
 }
-list.end();
-await once(list, 'finish');
 for (const line of counts) console.log(`styles: ${line}`);
 for (const line of first) console.log(`styles: ${line}`);
 console.log(`styles: ${total} ${total === 1 ? 'difference' : 'differences'} in ${counts.length} ${counts.length === 1 ? 'state' : 'states'}, the whole list in ${differencesFile}`);

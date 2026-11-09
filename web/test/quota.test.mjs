@@ -275,7 +275,7 @@ test('the plan-ended sentence reads its age in the long form and in the compact 
 });
 
 test("the priced tier is the stored one under the six tiered plan words while the cost table holds its row, and none with the gate's reason otherwise", () => {
-  // The table's own rows: Max 20x and Team held, Enterprise and Pro's tier not.
+  // The table's own rows: Ultra and Team held, Enterprise and Pro's tier not.
   const costs = { capacity: { default_claude_max_20x: { fiveHour: 100, sevenDay: 1_000 }, default_claude_team: { fiveHour: 10, sevenDay: 100 } } };
   const priced = (plan, tier) => d.pricedTier(plan, tier, costs);
   for (const plan of ['max', 'max_20x', 'max_5x', 'pro']) assert.deepEqual(priced(plan, 'default_claude_max_20x'), { tier: 'default_claude_max_20x' }, `${plan} on a held tier`);
@@ -310,7 +310,7 @@ test("the soonest reset of a usage-based seat is its spend window's, while that 
   assert.deepEqual(d.soonestResetAt(seatAccount(), SPEND_NOW)?.ids ?? null, ['spend'], 'the one reset the seat carries');
   assert.equal(d.soonestResetAt(seatAccount(spendReading({ resetsAt: new Date(SPEND_NOW - 60_000).toISOString() })), SPEND_NOW)?.ids ?? null, null, 'a reset already passed recovers nothing');
   assert.equal(d.soonestResetAt(seatAccount(null), SPEND_NOW)?.ids ?? null, null, 'a seat with no spend reading yet');
-  assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW)?.ids ?? null, ['5h'], 'a plan account reads its windows as before');
+  assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW)?.ids ?? null, ['5h'], 'a plan account reads its soonest window');
 });
 
 test('the soonest reset reads the Fable window beside the others and names every window that resets at that instant', () => {

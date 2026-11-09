@@ -56,7 +56,7 @@ test('at rest the button reads the key, names itself Sort and holds the directio
   const { button } = mounted({ dir: 'asc', sort: 'name' }, []);
   assert.deepEqual(read(button), { expanded: 'false', label: 'Sort', text: 'Sort: Name', title: 'Sorted by Name, ascending' });
   assert.equal(button.getAttribute('aria-haspopup'), 'dialog');
-  assert.equal(box(), null, 'nothing is open at rest');
+  assert.ok(box() === null, 'nothing is open at rest');
   click(button);
   assert.equal(button.getAttribute('aria-expanded'), 'true');
   const groups = [...(box()?.querySelectorAll('[role="radiogroup"]') ?? [])];
@@ -85,7 +85,7 @@ test("a key's pick sends the key in its own direction once, closes and puts the 
   click(radio('Most used'));
   assert.deepEqual(calls, [{ dir: 'desc', sort: 'usage' }]);
   assert.equal(button.getAttribute('aria-expanded'), 'false');
-  assert.equal(box(), null);
+  assert.ok(box() === null);
   assert.ok(document.activeElement === button, 'the focus is back on the button');
   again({ dir: 'desc', sort: 'usage' });
   assert.deepEqual(read(button), { expanded: 'false', label: 'Sort', text: 'Sort: Most used', title: 'Sorted by Most used, descending' });
@@ -102,7 +102,7 @@ test("a direction's pick keeps the key, closes and puts the focus back on the bu
   click(radio('Ascending'));
   assert.deepEqual(calls, [{ dir: 'asc', sort: 'usage' }]);
   assert.equal(button.getAttribute('aria-expanded'), 'false');
-  assert.equal(box(), null);
+  assert.ok(box() === null);
   assert.ok(document.activeElement === button, 'the focus is back on the button');
 });
 
@@ -112,7 +112,7 @@ test('Escape on the open popover closes it with the focus on the button and send
   click(button);
   assert.ok(box()?.contains(document.activeElement), 'the focus opens inside the popover');
   press('Escape');
-  assert.equal(box(), null);
+  assert.ok(box() === null);
   assert.equal(button.getAttribute('aria-expanded'), 'false');
   assert.ok(document.activeElement === button, 'the focus is back on the button');
   assert.deepEqual(calls, []);

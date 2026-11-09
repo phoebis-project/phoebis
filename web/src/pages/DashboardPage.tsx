@@ -252,7 +252,7 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, week, 
         // week whose tier holds no 7-day capacity the week is what lacks a size, so the card names the week.
         <>
           <p className="muted remaining__none">
-            {figures.carried ? (unsized ? weekUnpricedTitle(week) : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
+            {figures.carried ? (unsized ? `${weekUnpricedTitle(week)}.` : `No listed account's tier is sized for the ${RING_WINDOW[windowId]}.`) : `No account with a ${RING_WINDOW[windowId]}.`}
           </p>
           <LeftOut accounts={figures.leftOut} />
         </>

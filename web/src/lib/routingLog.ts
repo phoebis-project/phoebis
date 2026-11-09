@@ -1364,9 +1364,9 @@ function cooledWords(reason: string | null, window: string | null): string {
 const untilWords = (o: NonNullable<RecordCandidate['obstacle']>, now: number): string => (o.until === null ? '' : ` until ${formatFact(o.until, 'time', now)}`);
 
 /**
- * The scope a cooldown's words leave out, as the account page spells it: the model a 404 cools. It follows `for`, since
- * a chip holds one value and a comma would join two. The account scope is the default, and the cooled words of the fast
- * lane's two rows name the lane and its credits whatever window the router files them under.
+ * The scope a cooldown's words leave out, as the account page spells it: the model a cooldown holds. It follows `for`,
+ * since a chip holds one value and a comma would join two. The account scope is the default, and the cooled words of
+ * the fast lane's two rows name the lane and its credits whatever window the router files them under.
  */
 function scopeWords(o: NonNullable<RecordCandidate['obstacle']>): string {
   if (o.scope === null || o.scope === 'account' || isFastScope(o.scope)) return '';
