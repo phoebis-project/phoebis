@@ -523,8 +523,9 @@ out before a registration has been acknowledged. What each answer makes the mod 
   head of the queue and the whole queue is retried after 1, 2, 4, 8 and 16 seconds, then every 30 seconds.
 - An `agent_limit` on an `agent_start`: the start goes back and that agent's reports wait behind it, retried along the
   same backoff under the agent's own retry time, while the heartbeats and the other agents' reports go on.
-- A `401` or a `403`: the mod empties its queue and reports nothing more until a later start's check answers `200`
-  ([The start check](companion-mod.md#the-start-check)).
+- A `401` or a `403`: the mod empties its queue and reports nothing more until a later start's check no longer refuses
+  the key ([The start check](companion-mod.md#the-start-check)), and a `401` also leaves the allowance tool unconfigured
+  until such a start.
 - `agent_exists`: the mod drops the report, counts the agent as announced and registers again.
 - `agent_released` with a generation: the mod drops the report and adopts the generation, and the agent's next report
   starts it again with `agent_start`. Without a generation the mod drops the report and registers again.

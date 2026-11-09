@@ -110,9 +110,12 @@ error can carry the bearer.
 
 A reload of the plugin runs the start check again, with the tool's cache cleared first, so a reload under a changed URL
 or key never answers the earlier configuration's body, and registers the same tool under the same name, which replaces
-the registration without a second entry in the tool list. A reload or a later start whose check answers `200` clears the
-refusal an earlier `401` left and registers the session again under the corrected key, so a key fixed in the `/plugin`
-menu needs no restart.
+the registration without a second entry in the tool list. A reload or a later start whose check does not refuse the key
+clears the refusal an earlier `401` left and registers the session again, so a key fixed in the `/plugin` menu needs no
+restart. A `401` on the keepalive route also unconfigures the tool: until such a start, a call answers that the session
+has no usable router configuration, and sends no request. A `403` on the keepalive route empties the queue as a `401`
+does but leaves the tool reading: it comes from something in front of the router, so it refuses the request and not the
+key. It says nothing about whether the key may read the allowance, which the tool's own route answers.
 
 ## The allowance tool
 
