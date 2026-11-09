@@ -2292,7 +2292,7 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
             Some(wake),
             Some(deadline)
         ),
-        "{main:?}"
+        "the restored both park keeps its deadline and its wake: {main:?}"
     );
 }
 
