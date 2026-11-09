@@ -2645,14 +2645,13 @@ pub struct AgentStatus {
     pub cold: u32,
     pub counters_day: i64,
     pub credited_today: u64,
-    pub deadline: Option<i64>,
     pub failures: u32,
     pub idle_ticks: u64,
     pub in_flight: bool,
     pub last_activity: i64,
     pub migrations: u64,
     pub next_probe_at: Option<i64>,
-    pub park_kind: Option<ParkKind>,
+    pub park: Option<Park>,
     pub paused: bool,
     pub probe_usage: ProbeUsage,
     pub probes: u64,
@@ -2661,7 +2660,6 @@ pub struct AgentStatus {
     pub request_generation: u64,
     pub state: AgentState,
     pub unanswered: usize,
-    pub wake_at: Option<i64>,
 }
 
 /// The engine's bus task. Every event is handed to `observe` under the lock. Nothing here awaits while holding
@@ -2773,7 +2771,6 @@ impl Engine {
             &(key_id.to_string(), session_id.to_string()),
             agent_id,
         )?;
-        let park = agent.park.map(|held| held.park);
         Some(AgentStatus {
             account_id: agent.account.clone(),
             agent_id: agent.id.clone(),
@@ -2782,14 +2779,13 @@ impl Engine {
             cold: agent.cold,
             counters_day: agent.counters_day,
             credited_today: agent.credited_today,
-            deadline: park.and_then(|p| p.deadline),
             failures: agent.failures,
             idle_ticks: agent.idle_ticks,
             in_flight: agent.in_flight,
             last_activity: agent.last_activity,
             migrations: agent.migrations,
             next_probe_at: agent.next_probe_at(),
-            park_kind: park.map(|p| p.kind),
+            park: agent.park.map(|held| held.park),
             paused: agent.paused,
             probe_usage: agent.usage,
             probes: agent.probes,
@@ -2798,7 +2794,6 @@ impl Engine {
             request_generation: agent.generation,
             state: agent.state,
             unanswered: agent.unanswered.len() + agent.kept.len(),
-            wake_at: park.and_then(|p| p.wake_at),
         })
     }
 

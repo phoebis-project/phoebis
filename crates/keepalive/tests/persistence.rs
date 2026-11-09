@@ -13,7 +13,7 @@ use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::{Event as BusEvent, Outcome, Usage};
 use phoebis_keepalive::{
     Ack, AgentState, CompanionState, Engine, Event, EventError, EventReport, KeepaliveLimits,
-    KeepalivePolicy, KeepaliveTiming, ParkKind, Reason, LEASE_MS,
+    KeepalivePolicy, KeepaliveTiming, Park, ParkKind, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
 use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
@@ -2285,12 +2285,14 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
     second.wait_idle().await;
     let main = second.agent_status("desktop", "session", "main").unwrap();
     assert_eq!(
-        (main.state, main.park_kind, main.wake_at, main.deadline),
+        (main.state, main.park),
         (
             AgentState::Parked,
-            Some(ParkKind::Both),
-            Some(wake),
-            Some(deadline)
+            Some(Park {
+                deadline: Some(deadline),
+                kind: ParkKind::Both,
+                wake_at: Some(wake)
+            })
         ),
         "the restored both park keeps its deadline and its wake: {main:?}"
     );

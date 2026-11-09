@@ -2,7 +2,8 @@
 mod common;
 use common::*;
 use phoebis_keepalive::{
-    AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind, Reason, RecipeState,
+    AgentState, CompanionState, Event, EventError, KeepaliveLimits, Park, ParkKind, Reason,
+    RecipeState,
 };
 
 /// A real request on main of `session` under `key_id`, the first of which gives the session its slot.
@@ -127,8 +128,15 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .unwrap();
     assert_eq!(renewed.lease_expires_ms, r.now() + r.lease_ms());
     assert_eq!(
-        (r.agent("worker").state, r.agent("worker").park_kind),
-        (AgentState::Parked, Some(ParkKind::Background))
+        (r.agent("worker").state, r.agent("worker").park),
+        (
+            AgentState::Parked,
+            Some(Park {
+                deadline: None,
+                kind: ParkKind::Background,
+                wake_at: None
+            })
+        )
     );
     // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent
     // leaves the companion's own lease alone.

@@ -10,7 +10,8 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    keepalive_router, AgentState, CompanionState, Event, EventError, ParkKind, Reason, EVENTS_PATH,
+    keepalive_router, AgentState, CompanionState, Event, EventError, Park, ParkKind, Reason,
+    EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, RulesMode};
@@ -1324,12 +1325,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     };
     let park = |r: &Rig| {
         let status = r.status("main");
-        (
-            status.state,
-            status.park_kind,
-            status.wake_at,
-            status.deadline,
-        )
+        (status.state, status.park)
     };
     let background = state(
         2,
@@ -1340,9 +1336,11 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         park(&r),
         (
             AgentState::Parked,
-            Some(ParkKind::Background),
-            None,
-            Some(deadline)
+            Some(Park {
+                deadline: Some(deadline),
+                kind: ParkKind::Background,
+                wake_at: None
+            })
         )
     );
     let both = state(
@@ -1354,9 +1352,11 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         park(&r),
         (
             AgentState::Parked,
-            Some(ParkKind::Both),
-            Some(wake),
-            Some(deadline + 1)
+            Some(Park {
+                deadline: Some(deadline + 1),
+                kind: ParkKind::Both,
+                wake_at: Some(wake)
+            })
         )
     );
     assert_eq!(
@@ -1367,7 +1367,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     );
     assert_eq!(
         park(&r),
-        (AgentState::Idle, None, None, None),
+        (AgentState::Idle, None),
         "any state but parked clears the park"
     );
     for (fields, expected) in [
@@ -1393,7 +1393,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
     }
     assert_eq!(
         park(&r),
-        (AgentState::Idle, None, None, None),
+        (AgentState::Idle, None),
         "a refused park records nothing"
     );
     let scheduled = state(
@@ -1415,15 +1415,17 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         (
             status.last_activity,
             status.state,
-            status.park_kind,
-            status.wake_at,
+            status.park,
             status.idle_ticks
         ),
         (
             r.now(),
             AgentState::Parked,
-            Some(ParkKind::Scheduled),
-            Some(wake),
+            Some(Park {
+                deadline: None,
+                kind: ParkKind::Scheduled,
+                wake_at: Some(wake)
+            }),
             1
         ),
         "presence moves the idle clock and nothing else: the agent stays parked"
@@ -1471,13 +1473,8 @@ async fn a_scheduled_park_with_a_deadline_drops_the_deadline_when_its_wake_passe
     r.step().await;
     let worker = r.status("worker");
     assert_eq!(
-        (
-            worker.state,
-            worker.park_kind,
-            worker.wake_at,
-            worker.deadline
-        ),
-        (AgentState::Parked, None, None, None),
+        (worker.state, worker.park),
+        (AgentState::Parked, None),
         "the passed wake ends the scheduled park whole"
     );
     let again = post(
@@ -1528,17 +1525,14 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
     r.step().await;
     let worker = r.status("worker");
     assert_eq!(
-        (
-            worker.state,
-            worker.park_kind,
-            worker.wake_at,
-            worker.deadline
-        ),
+        (worker.state, worker.park),
         (
             AgentState::Parked,
-            Some(ParkKind::Scheduled),
-            Some(wake),
-            None
+            Some(Park {
+                deadline: None,
+                kind: ParkKind::Scheduled,
+                wake_at: Some(wake)
+            })
         ),
         "the passed deadline leaves the wake's part of the park"
     );
