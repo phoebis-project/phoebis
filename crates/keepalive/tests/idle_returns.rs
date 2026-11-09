@@ -1505,6 +1505,35 @@ async fn an_idle_report_and_a_prompt_inside_the_same_second_count_the_first_buck
     );
 }
 
+/// A park report opens the window as an idle report does, so a prompt inside the same second ends that window too.
+#[tokio::test]
+async fn a_park_report_and_a_prompt_inside_the_same_second_count_the_first_bucket_and_the_return() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let start = r.now();
+    let generation = r.status("main").request_generation;
+    r.event(Event {
+        event: "state".into(),
+        agent_id: Some("main".into()),
+        state: Some("parked".into()),
+        park_kind: Some("background".into()),
+        deadline: Some(start + 60 * MINUTE),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    activity(&mut r, "prompt");
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "no tick ran between the park report and the return"
+    );
+}
+
 /// A presence report starts the window over on purpose, so the floor the closed window left does not refuse a start
 /// that a backward clock step placed behind it. The park's end and a revival restart the window the same way.
 #[tokio::test]
