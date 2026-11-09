@@ -1,10 +1,13 @@
 // The computed-style comparison: the computed style of every element each state draws, in both themes and under both
 // palettes, against a baseline the same script writes. A rule section that moves between stylesheets, or a palette's
 // second token set, must leave every drawn value as it was, and the states reach past the views at rest at 1280 to the
-// narrow widths, a filter chip, the open popovers, menus and hover cards, and three dialogs.
+// narrow widths, a filter chip, the open popovers, menus and hover cards, and three dialogs. It exits 0 on no
+// difference, 1 on a difference and 2 on a refusal: a bad argument, a baseline inside the repository, a path two
+// elements share, a state a write could not draw, or a page that failed mid-walk.
+import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
-import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -37,6 +40,66 @@ if (!write && !existsSync(baseline)) refuse(`no baseline at ${baseline}, so writ
 const differencesFile = join(dirname(baseline), 'differences.txt');
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Every tree the baseline must stay out of, as `views.mjs` finds them for its screenshots. A checkout is several trees
+ * at once, and the walk up to the nearest Cargo.toml only ever finds the one this script runs from, so git names the
+ * rest. The walk is the fallback for a host without git, or a tree git does not recognize.
+ */
+function repositoryRoots() {
+  try {
+    const listed = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: here, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const roots = listed
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => resolve(line.slice('worktree '.length).trim()));
+    if (roots.length) return roots;
+  } catch {
+    // No git on the path, or nothing it recognizes here.
+  }
+  let root = here;
+  while (!existsSync(join(root, 'Cargo.toml')) && dirname(root) !== root) root = dirname(root);
+  return [root];
+}
+
+/** The kernel's own limit on how many links one lookup may follow, so a cycle of links ends here too. */
+const LINK_HOPS = 40;
+
+/**
+ * The path with its symlinks resolved. A directory that does not exist yet resolves as far as its nearest existing
+ * ancestor, so a baseline directory the write is about to create is compared as the place it will really land rather
+ * than as the name that points there. A link to a directory that does not exist yet is followed by hand, since it is
+ * the target that `mkdir` would create and write into.
+ */
+function real(path) {
+  const target = resolve(path);
+  const tail = [];
+  let at = target;
+  for (let hops = 0; hops < LINK_HOPS; hops += 1) {
+    try {
+      return join(realpathSync(at), ...tail);
+    } catch {
+      try {
+        at = resolve(dirname(at), readlinkSync(at));
+        continue;
+      } catch {
+        // Not a link either: this component simply does not exist.
+      }
+      const up = dirname(at);
+      if (up === at) return target;
+      tail.unshift(basename(at));
+      at = up;
+    }
+  }
+  throw new Error(`${path} is still a link after ${LINK_HOPS} hops, so it points into a cycle`);
+}
+
+// A baseline runs to hundreds of megabytes of one host's reads, so a path inside a worktree is refused before a blanket
+// add can take it into a commit.
+const place = real(dirname(baseline));
+const inside = repositoryRoots().map(real).find((root) => place === root || place.startsWith(root + sep));
+if (inside) refuse(`--baseline must lie outside the repository (${inside})`);
+
 const bundle = join(here, '..', 'dist-mock');
 if (!existsSync(join(bundle, 'index.html'))) refuse(`no mock bundle under ${bundle}, so run npm run build:mock first`);
 
@@ -188,10 +251,10 @@ async function draw(state, width) {
   }
   for (const step of state.open) {
     const selector = step.click ?? step.hover;
-    const target = page.locator(selector, step.text === undefined ? undefined : { hasText: exactly(step.text) }).first();
-    if ((await target.count()) === 0) return `the page draws no ${selector}${step.text === undefined ? '' : ` reading ${JSON.stringify(step.text)}`}`;
-    if (step.click) await target.click();
-    else await target.hover();
+    const opener = page.locator(selector, step.text === undefined ? undefined : { hasText: exactly(step.text) }).first();
+    if ((await opener.count()) === 0) return `the page draws no ${selector}${step.text === undefined ? '' : ` reading ${JSON.stringify(step.text)}`}`;
+    if (step.click) await opener.click();
+    else await opener.hover();
     await advance(LOAD_MS);
   }
   try {
@@ -321,51 +384,76 @@ async function note(key, lines) {
   }
 }
 
+/** Drops what a refused run wrote, so neither a partial baseline nor a partial list reads as a whole one. */
+async function discard() {
+  for (const stream of [out, list]) {
+    if (stream === null || stream.closed) continue;
+    stream.destroy();
+    await once(stream, 'close');
+  }
+  rmSync(write ? partial : differencesFile, { force: true });
+}
+
 const palettes = options.palette === undefined ? PALETTES : [options.palette];
 const visited = new Set();
+const skipped = [];
 let read = 0;
-await logIn();
-for (const theme of THEMES) {
-  for (const palette of palettes) {
-    await page.evaluate(([t, p]) => {
-      localStorage.setItem('phoebis.theme', t);
-      localStorage.setItem('phoebis.palette', p);
-    }, [theme, palette]);
-    for (const state of STATES) {
-      for (const width of state.widths) {
-        const key = `${theme}/${palette}/${state.slug}@${width}`;
-        const why = await draw(state, width);
-        if (why !== null) {
-          console.log(`styles: ${key} skipped, ${why}`);
-          continue;
+let reading = 'the login';
+try {
+  await logIn();
+  for (const theme of THEMES) {
+    for (const palette of palettes) {
+      await page.evaluate(([t, p]) => {
+        localStorage.setItem('phoebis.theme', t);
+        localStorage.setItem('phoebis.palette', p);
+      }, [theme, palette]);
+      for (const state of STATES) {
+        for (const width of state.widths) {
+          const key = `${theme}/${palette}/${state.slug}@${width}`;
+          reading = key;
+          const why = await draw(state, width);
+          if (why !== null) {
+            console.log(`styles: ${key} skipped, ${why}`);
+            skipped.push(`${key} skipped, ${why}`);
+            continue;
+          }
+          const answer = await page.evaluate(readStyles, [[...EXCLUDED.keys()], SEP]);
+          if (answer.duplicate !== undefined) {
+            await discard();
+            await stop(2, `${key}: two elements share the path ${answer.duplicate}`);
+          }
+          read += 1;
+          if (write) {
+            if (!out.write(`{"key":${JSON.stringify(key)},"elements":${answer.record}}\n`)) await once(out, 'drain');
+            continue;
+          }
+          visited.add(key);
+          const at = index.get(key);
+          if (at === undefined) {
+            await note(key, [`${key}: read in this run alone`]);
+            continue;
+          }
+          const line = Buffer.alloc(at.length);
+          readSync(fd, line, 0, at.length, at.offset);
+          await note(key, differencesOf(key, JSON.parse(line.toString('utf8')).elements, JSON.parse(answer.record)));
         }
-        const answer = await page.evaluate(readStyles, [[...EXCLUDED.keys()], SEP]);
-        if (answer.duplicate !== undefined) {
-          out?.destroy();
-          rmSync(partial, { force: true });
-          await stop(2, `${key}: two elements share the path ${answer.duplicate}`);
-        }
-        read += 1;
-        if (write) {
-          if (!out.write(`{"key":${JSON.stringify(key)},"elements":${answer.record}}\n`)) await once(out, 'drain');
-          continue;
-        }
-        visited.add(key);
-        const at = index.get(key);
-        if (at === undefined) {
-          await note(key, [`${key}: read in this run alone`]);
-          continue;
-        }
-        const line = Buffer.alloc(at.length);
-        readSync(fd, line, 0, at.length, at.offset);
-        await note(key, differencesOf(key, JSON.parse(line.toString('utf8')).elements, JSON.parse(answer.record)));
       }
     }
   }
+} catch (error) {
+  // A page that failed mid-walk is no difference, and the exit says so apart from one.
+  await discard();
+  await stop(2, `${reading}: ${error instanceof Error ? error.message : String(error)}`);
 }
 const seconds = Math.round((performance.now() - started) / 1000);
 
 if (write) {
+  // A state the write could not draw would leave every later comparison blind to it while reading no difference.
+  if (skipped.length > 0) {
+    await discard();
+    for (const line of skipped) console.error(`styles: ${line}`);
+    await stop(2, `${skipped.length} ${skipped.length === 1 ? 'state' : 'states'} skipped, so the write leaves ${baseline} as it was`);
+  }
   out.end();
   await once(out, 'finish');
   renameSync(partial, baseline);

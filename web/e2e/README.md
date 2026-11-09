@@ -486,13 +486,15 @@ The script serves the bundle, signs in with the mock's admin secret and sets the
 clock paused at `2026-09-16T14:30:00Z` and set back there before each state loads, the time zone UTC, animations and
 transitions cut. It walks the states in the light and the dark theme, each under the default and the GitHub palette,
 with `phoebis.palette` written beside `phoebis.theme`. The views of `VIEWS` are read at rest at 360, 375, 400, 720 and
-1280 px wide, and so is the routing log filtered on five kinds, at 360 and 1280, since no view at rest draws a filter
-chip and this one's values cut at the chip's width. The open surfaces are read at 1280: Add filter on the request log,
-the Sort control on Accounts, a Sessions row's menu, a routing log decision's strip popover, the pool chart's tooltip
-and the attempt trail's hover card. The Create guardrail, Create key and Create pool dialogs are read at 720, where a
+1280 px wide. The routing log filtered on five kinds is read at 360 and 1280, since no view at rest draws a filter chip
+and this one's values cut at the chip's width. The open surfaces are read at 1280: Add filter on the request log, the
+Sort control on Accounts, a Sessions row's menu, a routing log decision's strip popover, the pool chart's tooltip and
+the attempt trail's hover card. The Create guardrail, Create key and Create pool dialogs are read at 720, where a
 grouped dialog's rail turns into two strips, and at 1280. The pool dialog is read on its Members group, whose unchecked
 rows hold disabled fields. A state whose opener the page lacks, or whose surface never appears, is skipped with a
-printed note, and a comparison then lists it as read on one side alone. `views.mjs` runs its pass on import, so
+printed note. A write that skipped a state lists the skipped states, stops with exit 2 and leaves the baseline
+untouched, and a comparison lists such a state as read in the baseline alone. A page that fails mid-walk, such as a
+load or a click that times out, stops the run with exit 2 and names the state. `views.mjs` runs its pass on import, so
 `styles.mjs` keeps its own copy of the views' paths and waits, and a view added to `VIEWS` reaches no state until its
 row joins that copy.
 
@@ -506,8 +508,9 @@ time. It compares the states, the elements and each property's value as sets, so
 side alone is a difference, and a property an element's entry leaves out reads as its parent's value. A walk that
 yields one path for two elements stops with exit 2, since the second element would overwrite the first in both runs and
 hide a change on it. The baseline is taken from one tree on one host and only the runs around a change read it, so it
-lives outside the repository and is never committed. Keep it beside the screenshot directory rather than inside it, so
-clearing the shots between passes leaves it in place.
+lives outside the repository and is never committed: the script refuses a `--baseline` whose directory lies inside the
+repository with exit 2, as the pass refuses a screenshot directory there. Keep it beside the screenshot directory
+rather than inside it, so clearing the shots between passes leaves it in place.
 
 `--baseline <path>` is required and names the file to compare against or to write. `--write` writes the file, creating
 its directory, and always covers both palettes, so it takes no `--palette`. `--palette default` or `--palette github`
@@ -516,7 +519,8 @@ other word exits 2, since a filter that matches no state would compare two empty
 
 The script's exclusion list is empty, since two runs over one tree read every property alike. A property that two runs
 read apart joins the list with its reason. Under the cut, every animation and transition reads a duration and a delay
-of 0s, so a change to either draws no difference.
+of 0s, so a change to either draws no difference. The read covers elements and not their `::before`, `::after` and
+`::backdrop` pseudo-elements, so a rule whose declarations reach a pseudo-element alone draws no difference.
 
 ## The API reference page
 
