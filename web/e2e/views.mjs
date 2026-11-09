@@ -89,8 +89,9 @@ if (inside) {
 
 const VIEWS = [
   { path: '/', title: 'Dashboard', wait: '.stat-grid', slug: 'dashboard' },
-  // The router's seed holds no subscription account, so its Quota view draws no card and the wait is on the section.
-  { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', slug: 'quota' },
+  // The router's seed holds no subscription account, so its Quota view draws no card and its Accounts section is an
+  // empty grid of no height: the wait is on the section's presence, which a wait for a visible element never meets.
+  { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', attached: true, slug: 'quota' },
   // The page shows one section at a time, so the timeline's shot is a view of its own, and the mock pass's alone,
   // since the router's seed has no window to draw.
   { path: '/quota#quota-windows', title: 'Quota', wait: '.timeline', slug: 'quota-windows', mockOnly: true },
@@ -1529,8 +1530,8 @@ function phoneTopBar() {
  * so an Account cell that draws it beneath the account fails, and under 1420 px a row with a model that does not draw
  * it there fails. The bare log is read, then the log under the 7-day range on the state changes, where the mock story's
  * changes of two and three days back stand beside today's, and a Time cell that breaks over two lines fails. Every Time
- * cell prints its date whatever the row's age, so a 7-day page with no dated cell fails. The bare log loads again at
- * the pass's viewport after.
+ * cell prints its date whatever the row's age, so a 7-day page with no dated cell fails where it drew a row. The bare
+ * log loads again at the pass's viewport after.
  */
 async function routingLogColumns(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
@@ -1564,7 +1565,7 @@ async function routingLogColumns(theme) {
         const bar = width < 900 ? await page.evaluate(phoneTopBar) : undefined;
         measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify({ ...got, bar, dated: time.dated.length, split: time.split })}`);
         if (mock && got.rows === 0) say(`${where} no rows to measure`);
-        if (under !== '' && time.dated.length === 0) say(`${where} no Time cell prints its date, so the dated form is not measured`);
+        if (under !== '' && got.rows > 0 && time.dated.length === 0) say(`${where} no Time cell prints its date, so the dated form is not measured`);
         if (got.fact !== fact) say(`${where} the Fact column is ${got.fact}px, not ${fact}px`);
         if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
         if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
@@ -7122,18 +7123,19 @@ const MIDNIGHT = (origin) => {
  * on the Analytics sticky bar, whose 8 px of padding above and below and hairline add 17), every row child 32 px at one
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
  * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
- * ranged view, with a span across midnight, and the row against the first card's head. The Requests row at 1280 by 800
- * holds two lines at rest, where the count "25 shown, more available" takes the slots to 1275 px in the 992 px row and
- * wraps the edge alone onto the second line (the row and the bar 72 px), and across midnight, whose Custom pill takes
- * them to 1175 px (72 px). With its chips the address lists no row, so the "No rows" count's 164.7 px edge fits beside
- * the slots at 992 px: one line under the chip line, the bar 66 px. At 1440 by 900 every case holds one line. On a card
- * view the element after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths and
- * the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add
- * filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes
- * and the right edge, and the count where the view draws one, end inside the window. At 400 by 800, at rest on every
- * view, the bar and its row run no wider than their boxes and the Refresh button, and the count where the view draws
- * one, end inside the window. There with the view's chips, a chip the line folds draws no box. Records to
- * `measurements`.
+ * ranged view, with a span across midnight, and the row against the first card's head. Under the mock's story the
+ * Requests row at 1280 by 800 holds two lines at rest, where the count "25 shown, more available" takes the slots to
+ * 1275 px in the 992 px row and wraps the edge alone onto the second line (the row and the bar 72 px), and across
+ * midnight, whose Custom pill takes them to 1175 px (72 px). With its chips the address lists no row, so the "No rows"
+ * count's 164.7 px edge fits beside the slots at 992 px: one line under the chip line, the bar 66 px. Against another
+ * story the row holds two lines where its slots run past it and one otherwise. At 1440 by 900 every case holds one line
+ * under the mock. On a card view the element after the bar and the tiles stand under the bar's bottom. The row's
+ * `width`, its slots' widths and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the
+ * Group by select reads the Add filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row
+ * run no wider than their boxes and the right edge, and the count where the view draws one, end inside the window. At
+ * 400 by 800, at rest on every view, the bar and its row run no wider than their boxes and the Refresh button, and the
+ * count where the view draws one, end inside the window. There with the view's chips, a chip the line folds draws no
+ * box. Records to `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);
@@ -7216,15 +7218,15 @@ async function barRow(theme, view) {
       await page.setViewportSize({ height, width });
       const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : [])];
       for (const [label, search, chipped] of cases) {
-        // The Requests bar's slots outrun the 1280 px content column, so its edge slot wraps to a second line where the
-        // count's text needs it. The chips' address lists no row, and its shorter count leaves the edge room beside the
-        // slots.
-        const lines = view === '/requests' && width === 1280 && label !== 'with its chips' ? 2 : 1;
         await page.goto(`${base}${view}${search}`);
         await booted();
         await advance(LOAD_MS);
         await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
         const got = await read();
+        // Under the mock the Requests bar's slots outrun the 1280 px content column, so its edge slot wraps to a second
+        // line where the story's count needs it, and the chips' address lists no row, whose shorter count leaves the
+        // edge room beside the slots. Another count's text sets the line count by the slots the row measured.
+        const lines = mock ? (view === '/requests' && width === 1280 && label !== 'with its chips' ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped, lines);
         if (chipped) {
@@ -13383,7 +13385,7 @@ try {
       await booted();
       await advance(LOAD_MS);
       try {
-        await page.waitForSelector(view.wait, { timeout: 15_000 });
+        await page.waitForSelector(view.wait, { state: view.attached ? 'attached' : 'visible', timeout: 15_000 });
       } catch {
         failures.push(`${theme} ${view.path}: ${view.wait} never appeared`);
         continue;
