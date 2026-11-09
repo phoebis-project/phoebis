@@ -768,27 +768,28 @@ created", "Guardrail saved" and "Guardrail deleted". What the test evaluates and
 
 The filter bar holds the range, the search, Add filter, the Columns button, the Sort control, and at the right edge the
 split Refresh button and the count of rows shown ("25 shown, more available"), the right edge on a second line at 1280
-px. The range offers Last hour, Last 6 hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range
-with From and To, drawn as the pills 1h, 6h, 24h, 7d, 30d and Custom, the pressed pill naming its range and its end on
-hover. Custom opens From and To in a popover on the window the table shows, where Apply stays disabled under "End must
-be after start." while the pair is wrong, an end past now reads as now, and the pill prints an applied span ("13:00 to
-14:30", the date before each time across days). The search, "Search id, session, key, account, model, error, message
-id", matches the request id, the session, the key, the model, the error code, and an attempt's account, upstream request
-id or upstream message id, literally (`_` and `%` are characters), and applies 400 milliseconds after the last
-keystroke, on Enter, or when the field loses focus. Add filter opens a "Filter by" field over the filters in four
-groups: Routing (Account, Key, Model, Pool), Outcome (Cache miss reason, Fallback, Guardrail, Held only, Outcome,
-Refusal category, Status, Stop reason), Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed,
-Turn origin, User agent) and Subject (Agent, Request, Session). Choosing one opens its values: a list with a Select all
-row that applies on each click (checking it checks every option and unchecking it clears every check), a pattern field
-for Client and User agent (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash
-quoting either, and a value with no wildcard matching in full), an id field for Agent, Request and Session, which match
-the id exactly (an agent id is `main` or a subagent's id, carried in the address as `agent_id`), the Kind choices (Any
-kind, Inference, Count tokens, Probe) or the Fallback choices (Either, yes for the requests that presented a fallback
-credit token and no for the rest, the chip reading "fallback: yes" or "fallback: no"), while Held only applies at once.
-Classifier offers client classifier (`client`, the client's own auto-mode classifier call on the account its judged turn
-ended on), client classifier off (`client_off`, one that ran off that account or with no turn to judge) and `none` for
-every other request, its chip printing the word. Guardrail lists the registry's guardrails by name, then the ids of
-deleted guardrails the loaded rows still carry as `{id} (deleted)`, then `none` for a request no guardrail matched
+px where the count's text runs past the controls, as "25 shown, more available" does. The range offers Last hour, Last 6
+hours, Last 24 hours (the default), Last 7 days, Last 30 days or Custom range with From and To, drawn as the pills 1h,
+6h, 24h, 7d, 30d and Custom, the pressed pill naming its range and its end on hover. Custom opens From and To in a
+popover on the window the table shows, where Apply stays disabled under "End must be after start." while the pair is
+wrong, an end past now reads as now, and the pill prints an applied span ("13:00 to 14:30", the date before each time
+across days). The search, "Search id, session, key, account, model, error, message id", matches the request id, the
+session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id,
+literally (`_` and `%` are characters), and applies 400 milliseconds after the last keystroke, on Enter, or when the
+field loses focus. Add filter opens a "Filter by" field over the filters in four groups: Routing (Account, Key, Model,
+Pool), Outcome (Cache miss reason, Fallback, Guardrail, Held only, Outcome, Refusal category, Status, Stop reason),
+Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject
+(Agent, Request, Session). Choosing one opens its values: a list with a Select all row that applies on each click
+(checking it checks every option and unchecking it clears every check), a pattern field for Client and User agent
+(`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting either, and a value
+with no wildcard matching in full), an id field for Agent, Request and Session, which match the id exactly (an agent id
+is `main` or a subagent's id, carried in the address as `agent_id`), the Kind choices (Any kind, Inference, Count
+tokens, Probe) or the Fallback choices (Either, yes for the requests that presented a fallback credit token and no for
+the rest, the chip reading "fallback: yes" or "fallback: no"), while Held only applies at once. Classifier offers client
+classifier (`client`, the client's own auto-mode classifier call on the account its judged turn ended on), client
+classifier off (`client_off`, one that ran off that account or with no turn to judge) and `none` for every other
+request, its chip printing the word. Guardrail lists the registry's guardrails by name, then the ids of deleted
+guardrails the loaded rows still carry as `{id} (deleted)`, then `none` for a request no guardrail matched
 ([Guardrails](guardrails.md)). Stop reason lists the stop reasons the console names (`end_turn`, `max_tokens`,
 `model_context_window_exceeded`, `pause_turn`, `refusal`, `stop_sequence`, `tool_use`) and any other the loaded rows
 carry, Refusal category the categories it names (`cyber`) and any other the loaded rows carry, each list ending on
@@ -1104,16 +1105,16 @@ Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Wind
 windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,
 below behind, from the quota samples, before the router's burn projection", each account's hover adding its Pace score,
 the remaining share over the hours from the sample's instant to the window's reset. The table Accounts in range lists
-Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created,
-Migrated in and Migrated out. The section keeps reading the rollups under a session filter, since they carry no session,
-and its subtitle says so. The card "Unused allowance by account" follows Accounts in range, one row per subscription
-account with a weekly reset in the last four weeks under the Accounts filter whatever the range, with Resets, each
-weekly window's last and four weeks' figures in the chosen week (each week priced at the tier the account ran under at
-that reset, as the Accounts detail's "Allowance left at reset" prices it), sorted most left first on the four weeks'
-7-day figure, an unpriced account last, a row whose latest reset is a term's end reading "term ended {date}" under its
-account, and two fleet figures over the rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts'
-figures added with the unpriced accounts named. The card waits on the cost model, so a failed settings read draws its
-error state in place of the rows and the figures.
+Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created, Migrated in and Migrated out. The section
+keeps reading the rollups under a session filter, since they carry no session, and its subtitle says so. The card
+"Unused allowance by account" follows Accounts in range, one row per subscription account with a weekly reset in the
+last four weeks under the Accounts filter whatever the range, with Resets, each weekly window's last and four weeks'
+figures in the chosen week (each week priced at the tier the account ran under at that reset, as the Accounts detail's
+"Allowance left at reset" prices it), sorted most left first on the four weeks' 7-day figure, an unpriced account last,
+a row whose latest reset is a term's end reading "term ended {date}" under its account, and two fleet figures over the
+rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts' figures added with the unpriced accounts
+named. The card waits on the cost model, so a failed settings read draws its error state in place of the rows and the
+figures.
 
 ## Sessions
 

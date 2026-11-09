@@ -2267,8 +2267,8 @@ const isolatedDot = (values: (number | null)[], color: string) => {
  * The burn route's views of one grouping: the dollars per minute, and the plan cards in the chosen week, its tier's
  * 5-hour window and its Fable week. A line's color follows its group within the answer rather than its rank, so a range
  * that reorders the groups does not repaint them, and the account grouping keeps each account's page-wide color.
- * `account` is the one account the Accounts filter names, and `accounts` the accounts read beside the answer, which give
- * a tooltip's hint its plan and tier.
+ * `account` is the one account the Accounts filter names, and `accounts` the accounts read beside the answer, which
+ * give a tooltip's hint its plan and tier.
  */
 function BurnCharts({
   account,
@@ -2398,7 +2398,8 @@ function BurnCharts({
       );
     }
     // A line draws while a plan paid for its traffic, a group of billed rows alone reading zero, and where each group
-    // holds one account's rows only a line in the plan's unit draws: one the router sizes or whose points carry a figure.
+    // holds one account's rows only a line in the plan's unit draws: one the router sizes or whose points carry a
+    // figure.
     const planned = cardLines.map((l, i) => ({ i, l })).filter(({ l }) => !l.other && (!shared || l.unit === 'window_share') && (l.unpriced || (l.perHour !== null && l.perHour > 0)));
     const unknown = shared ? cardLines.filter((l) => !l.other && l.unit === 'unknown') : [];
     const scaled = cardRows.filter((r) => r.setsScale);

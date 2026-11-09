@@ -471,7 +471,7 @@ export interface PoolWarning {
   text: string;
 }
 
-/** A sum over both fundings, as a key's lifetime and week and a pool's day carry it. */
+/** A sum over both fundings, as a key's lifetime and week, a pool's day and the overview's day carry it. */
 export interface FundedSum {
   /** The rows no subscription window paid, in dollars. */
   billedUsd: number;

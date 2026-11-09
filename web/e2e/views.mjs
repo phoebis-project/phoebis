@@ -5765,8 +5765,8 @@ async function errorsSubtitle(theme) {
 }
 
 /**
- * The Burn tab's four cards at 1440 by 900, read under `search`: they sit two to a row on two top edges, each as wide as
- * half the grid's row less half its gap within 1 px, and none spans the row, where `.grid-2` alone would fit three
+ * The Burn tab's four cards at 1440 by 900, read under `search`: they sit two to a row on two top edges, each as wide
+ * as half the grid's row less half its gap within 1 px, and none spans the row, where `.grid-2` alone would fit three
  * columns. Each card's top edge, left edge and width go to the measurements, and the viewport, the address and the
  * Traffic tab are the pass's again after.
  */
@@ -8639,10 +8639,10 @@ const routingLogSortControl = (theme) => logSortControl(theme, '/routing-log');
 
 /**
  * The Analytics bar's sort control, called beside the bar's measure: on the bare Traffic tab its button reading "Sort:
- * Name" with the up arrow, titled "Sorted by Name, ascending", in the type size, weight, height, top edge and ink of the
- * Add filter button beside it, then opened: the popover inside the window under the button, and Escape closing it. On
- * the Burn tab, which has no group table, the button stands disabled with its title saying why. The measure loads its
- * addresses itself and leaves the bare view.
+ * Name" with the up arrow, titled "Sorted by Name, ascending", in the type size, weight, height, top edge and ink of
+ * the Add filter button beside it, then opened: the popover inside the window under the button, and Escape closing it.
+ * On the Burn tab, which has no group table, the button stands disabled with its title saying why. The measure loads
+ * its addresses itself and leaves the bare view.
  */
 async function analyticsSortControl(theme) {
   const say = (what) => failures.push(`${theme} /analytics sort control: ${what}`);

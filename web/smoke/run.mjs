@@ -20894,8 +20894,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   {
     // Under the Ultra week, the stored default, the 5-hour card's note says the Ultra tier's 5-hour row is assumed, and
-    // the Fable week card carries no note. Under the Max week the 5-hour card reads none. The page reads the week at its
-    // load, so the Max read mounts a page of its own.
+    // the Fable week card carries no note. Under the Max week the 5-hour card reads none. The page reads the week at
+    // its load, so the Max read mounts a page of its own.
     const [FIVE_HOUR, FABLE] = ['5-hour per hour', 'Fable week per hour'];
     const NOTE = "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window.";
     const ultra = { fable: subtitleOf(FABLE), fiveHour: subtitleOf(FIVE_HOUR) };
@@ -21118,7 +21118,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // anchor's 7-day capacity over the Ultra tier's 5-hour one, divided by the band's 5-hour capacity factor inside the
     // band, and the Fable week card the anchor's 7-day capacity over the Ultra tier's times the Fable week's capacity
     // factor, each read off the served cost model's capacity rows, its peak row and its seven_day_fable row. `primary`
-    // burns at 04:00 in Los Angeles, outside the band, and at 06:00, inside it, two hours the clock's origin has closed.
+    // burns at 04:00 in Los Angeles, outside the band, and at 06:00, inside it, two hours the clock's origin has
+    // closed.
     const hours = [Date.UTC(2026, 8, 16, 11), Date.UTC(2026, 8, 16, 13)];
     api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), equivalent: 0.002, fiveHourShare: 0.01, group: 'primary', modelWeekShare: 0.004, sevenDayShare: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
     await burnGroup('key');
