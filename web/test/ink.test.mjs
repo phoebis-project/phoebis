@@ -11,8 +11,8 @@ const INK3_ALLOWED = new Set([
   ".add-filter__row[aria-disabled='true']",
   '.chip--removable .chip__remove',
   '.dialog__close',
-  '.dialog-group .input:disabled',
   '.icon-btn',
+  '.input:disabled',
   '.input::placeholder',
   '.meter-spark__line',
   '.pct-label',
@@ -21,7 +21,6 @@ const INK3_ALLOWED = new Set([
   '.search > svg',
   '.select > svg',
   '.srow__chevron',
-  '.week-switch:disabled',
 ]);
 
 /**

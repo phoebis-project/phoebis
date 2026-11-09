@@ -1424,8 +1424,8 @@ textarea.input {
   color: var(--ink-2);
 }
 
-/* A disabled field stays drawn, so it reads as waiting rather than as editable: an account's field while its save
-   runs, a dialog's field that a switch or a preset holds and the week select under a dollar position. */
+/* A disabled field stays drawn, so it reads as waiting rather than as editable: such as an account's field while its
+   save runs, a dialog's field that a switch or a preset holds and the week select under a dollar position. */
 .input:disabled {
   color: var(--ink-3);
   cursor: not-allowed;
