@@ -206,11 +206,12 @@ builds at start for the shedding round take it at the first start after that dat
 wrong edits every entry that carries the row and adds no entry, since the correction says what was always true, while a
 provider's price change, a new model or a moved threshold adds one.
 
-The eleven rows of the shipped revision in force, in USD per million tokens, in the file's order (the three Opus models'
-fast cells are twice each figure):
+The twelve rows of the shipped revision in force, in USD per million tokens, in the file's order (the fast cells of
+Fable 5.2 and the three Opus models are twice each figure):
 
 | Model | Input | Cache read | Cache write 5m | Cache write 1h | Output |
 | --- | --- | --- | --- | --- | --- |
+| `claude-fable-5-2` | 8.00 | 0.20 | 10.00 | 16.00 | 40.00 |
 | `claude-fable-5-1` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
 | `claude-fable-5` | 10.00 | 1.00 | 12.50 | 20.00 | 50.00 |
 | `claude-opus-5-5` | 4.00 | 0.20 | 5.00 | 8.00 | 20.00 |
@@ -225,8 +226,8 @@ fast cells are twice each figure):
 | `claude-haiku-4-5` | 1.00 | 0.10 | 1.25 | 2.00 | 5.00 |
 
 `GET /admin/sessions/costs` adds a sixth figure per model, `reads_per_write_5m`, the 5-minute cache write price over
-the cache read price of the standard cells: 50 for `claude-fable-5-1`, 25 for `claude-opus-5-5` and
-`claude-sonnet-5-5`, and 12.5 for the other eight.
+the cache read price of the standard cells: 50 for `claude-fable-5-2` and `claude-fable-5-1`, 25 for `claude-opus-5-5`
+and `claude-sonnet-5-5`, and 12.5 for the other eight.
 
 A model that serves fast mode carries a second set of five cells at the fast rates under the same date. An attempt
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
@@ -336,6 +337,7 @@ on a Pro account, and of the Pro, Max and Ultra weeks, the figures the week cont
 
 | Model | Weight | Pro 5-hour, input per million | Pro week | Max week | Ultra week |
 | --- | --- | --- | --- | --- | --- |
+| `claude-fable-5-2` | 8 | 107% | 8.89% | 1.78% | 0.889% |
 | `claude-fable-5-1` | 10 | 133% | 11.1% | 2.22% | 1.11% |
 | `claude-fable-5` | 10 | 133% | 11.1% | 2.22% | 1.11% |
 | `claude-opus-5-5` | 2.2 | 29.3% | 2.44% | 0.489% | 0.244% |

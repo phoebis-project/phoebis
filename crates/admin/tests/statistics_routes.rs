@@ -285,15 +285,15 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (
             &serde_json::json!({
                 "path": null, "source": "shipped", "effective": shipped.effective,
-                "revisions": revisions.len(), "next": null,
+                "revisions": revisions.len(), "next": "2026-11-09",
             }),
             &serde_json::json!({
                 "path": null, "source": "shipped", "effective": cost_model.effective,
                 "revisions": loaded.revisions.len(), "next": null,
             })
         ),
-        "the harness configures neither path, so both tables are the shipped ones, and the clock is past every \
-         shipped entry, so neither holds a pending one: {system}"
+        "the harness configures neither path, so both tables are the shipped ones, and the clock sits before the \
+         price list's 2026-11-09 entry, its next one, and past every entry of the cost model: {system}"
     );
     assert_eq!(
         (

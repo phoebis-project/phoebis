@@ -50,9 +50,9 @@ pub const ACCOUNT_UUID: &str = "00000000-0000-4000-8000-000000000001";
 pub const API_KEY: &str = "sk-ant-api03-PLACEHOLDER";
 
 /// Unix milliseconds every clock in these tests reports, so no deadline moves under a test: 2026-10-11 12:16:40 UTC,
-/// inside the latest revision of both shipped price files, so the routes read the shipped tables in force and hold
-/// no pending revision. It sits off the hour boundary, so a 24-hour range touches 25 hour buckets and a seed an hour
-/// back lands in the hour before the clock's own.
+/// inside the price list's 2026-10-08 revision and the cost model's latest, so the routes read the shipped tables in
+/// force and hold the price list's 2026-11-09 revision as pending. It sits off the hour boundary, so a 24-hour range
+/// touches 25 hour buckets and a seed an hour back lands in the hour before the clock's own.
 pub const NOW: i64 = 1_791_721_000_000;
 
 /// The build every harness names, so the captured answers read the same commit on any head.
