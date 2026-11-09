@@ -90,7 +90,7 @@ test("the 5-hour scale is the anchor's 7-day capacity over the chosen tier's 5-h
   assert.equal(d.fableWeekScale({ ...table, modelWindows: {} }, 'max'), null, 'a model with no Fable week sizes no share of one');
 });
 
-test("a loaded table that sizes no week for the chosen tier reads unpriced, and with no table the reading waits or carries the read's failure", () => {
+test("a loaded table that sizes no window for the chosen tier, or whose band zone this browser cannot read, reads unpriced, and with no table the reading waits or carries the read's failure", () => {
   // Max 5x's week unsized while Pro's stays, so the Max week has no scale over a table that did load.
   const maxless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: 25, sevenDay: null } } };
   assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no 7-day capacity for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a loaded table never reads pending');

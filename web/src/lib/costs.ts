@@ -235,7 +235,8 @@ export const fableWeekScale = (costs: SubscriptionCosts, week: WeekPosition): nu
   return fable === undefined || fable.of !== 'seven_day' || anchor === null || chosen === null ? null : anchor / (chosen * fable.capacityFactor);
 };
 
-/** The dash's hover and the fleet's note where the chosen week's tier has no 7-day capacity to read a figure in. */
+/** The sentence where the chosen week's tier has no 7-day capacity to read a figure in. The dash's hover draws it bare,
+ *  and the fleet note and the Dashboard ring card's empty line end it with a period. */
 export const weekUnpricedTitle = (week: WeekPosition): string => `Unpriced: the cost model holds no 7-day capacity for the ${planLabel(WEEK_TIER[week])} week`;
 
 /** A read's failure as a surface draws it, which a retry may clear, so it never reads unpriced. */
