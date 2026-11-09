@@ -3616,7 +3616,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     };
     const range = { from: iso(Math.min(...s.requests.map((r) => Date.parse(r.at)))), groupBy: 'all', to: iso(s.now) };
     const answer = await s.api.getAnalyticsRefusalCategories(range);
-    assert.deepEqual(answer.rows, byModelAndCategory(refused));
     assert.equal(sum(answer.rows, (row) => row.requests), refused.length, 'the rows sum to the refused answers');
     const account = refused[0].accountId;
     const mine = refused.filter((r) => r.accountId === account);

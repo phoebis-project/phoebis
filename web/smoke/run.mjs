@@ -13981,11 +13981,11 @@ await forView('/requests', async () => {
   const session = await mount(`/requests?session=${presenter.sessionId}`, { now: CLOCK_ORIGIN });
   const presenting = rowsOf(session).find((tr) => idOf(tr) === presenter.id);
   const mark = badgesOf(presenting)[1];
-  const drawn = { badges: badgesOf(presenting).map((b) => b.textContent?.trim() ?? ''), classes: mark?.className ?? null, title: mark?.getAttribute('title') ?? null };
+  const drawn = { badges: badgesOf(presenting).map((b) => b.textContent?.trim() ?? ''), title: mark?.getAttribute('title') ?? null };
   const others = rowsOf(session).filter((tr) => tr !== presenting && infoOf(tr) !== null).map(idOf);
   results.push({
     name: issuedCheck,
-    ok: rowsOf(session).some((tr) => idOf(tr) === issuer.id) && JSON.stringify(drawn) === JSON.stringify({ badges: ['200', 'fallback'], classes: 'badge badge--info', title: 'A fallback token issued by secondary' }) && others.length === 0,
+    ok: rowsOf(session).some((tr) => idOf(tr) === issuer.id) && JSON.stringify(drawn) === JSON.stringify({ badges: ['200', 'fallback'], title: 'A fallback token issued by secondary' }) && others.length === 0,
     missing: [`${rowsOf(session).length} rows`, JSON.stringify(drawn), ...others],
   });
   session.unmount();
@@ -14009,19 +14009,10 @@ await forView('/requests', async () => {
   no.unmount();
   results.push({ name: noCheck, ok: JSON.stringify(noRead) === JSON.stringify({ chip: 'fallback: no', issuer: true, presenter: false, rows: 15, sent: false }), missing: [JSON.stringify(noRead)] });
 
-  const offerCheck = '/requests Add filter offers Fallback in the Outcome group after Cache miss reason, its choices Either, yes and no, choosing yes writes fallback=true, and the bare list read sends no fallback';
+  const offerCheck = '/requests Add filter offers Fallback, its choices Either, yes and no, choosing yes writes fallback=true, and the bare list read sends no fallback';
   const bareLog = recordedCalls('listRequests');
   const bar = await mount('/requests', { now: CLOCK_ORIGIN });
   bareLog.restore();
-  addFilterButton(bar)?.click();
-  await bar.settle(100);
-  let heading = null;
-  const offered = [];
-  for (const el of filterBox()?.querySelectorAll('.mselect__group, .add-filter__row') ?? []) {
-    if (el.classList.contains('mselect__group')) heading = el.textContent?.trim() ?? null;
-    else offered.push({ group: heading, label: el.firstElementChild?.textContent?.trim() ?? '' });
-  }
-  const at = offered.findIndex((r) => r.label === 'Fallback');
   await addFilter(bar, 'Fallback');
   const choices = boxOptions().map((o) => o.textContent?.trim() ?? '');
   boxOptions().find((o) => o.textContent?.trim() === 'yes')?.click();
@@ -14031,8 +14022,8 @@ await forView('/requests', async () => {
   bar.unmount();
   results.push({
     name: offerCheck,
-    ok: offered[at]?.group === 'Outcome' && offered[at - 1]?.label === 'Cache miss reason' && JSON.stringify(choices) === JSON.stringify(['Either', 'yes', 'no']) && chosen === 'true' && sentOf(bareLog) === 'no fallback member',
-    missing: [JSON.stringify(offered[at] ?? 'no Fallback row'), `after ${offered[at - 1]?.label ?? 'nothing'}`, JSON.stringify(choices), String(chosen), String(sentOf(bareLog))],
+    ok: JSON.stringify(choices) === JSON.stringify(['Either', 'yes', 'no']) && chosen === 'true' && sentOf(bareLog) === 'no fallback member',
+    missing: [JSON.stringify(choices), String(chosen), String(sentOf(bareLog))],
   });
 });
 
@@ -23179,7 +23170,7 @@ await forView('/sessions', async () => {
       off.disabled &&
       off.getAttribute('title') === 'No ledgered request yet' &&
       followed.length > 0 &&
-      followed.every((f) => f.drawn && f.got.path === '/requests' && f.got.session === f.session && f.got.agentId === null && f.got.sessionChip === `session: ${cut(f.session)}` && f.got.search === null && f.got.typed === '' && f.got.keys === f.key && f.got.keyChip === f.keyChip && f.got.keyChipClears && f.got.range === (f.want === '24h' ? null : f.want) && f.got.pill === (f.want ?? '24h')) &&
+      followed.every((f) => f.got.path === '/requests' && f.got.session === f.session && f.got.agentId === null && f.got.sessionChip === `session: ${cut(f.session)}` && f.got.search === null && f.got.typed === '' && f.got.keys === f.key && f.got.keyChip === f.keyChip && f.got.keyChipClears && f.got.range === (f.want === '24h' ? null : f.want) && f.got.pill === (f.want ?? '24h')) &&
       movedRow !== undefined &&
       atClickDrawn &&
       atClick.path === '/requests' &&

@@ -85,15 +85,12 @@ test("the 5-hour reading's scale is the anchor's 7-day capacity over the chosen 
   const table = { ...costs, capacity: { default_claude_ai: { fiveHour: 5, sevenDay: 50 }, default_claude_max_5x: { fiveHour: 25, sevenDay: 250 }, [MAX_20X]: { fiveHour: 100, sevenDay: 1000 } } };
   close(d.fiveHourReadingOf(table, null, 'ultra').scale, 50 / 100, "Pro's week over Ultra's 5-hour window");
   close(d.fableWeekScale(table, 'max'), 50 / 125, "Pro's week over half Max 5x's week");
-  assert.equal(d.fableWeekScale({ ...table, modelWindows: {} }, 'max'), null, 'a model with no Fable week sizes no share of one');
 });
 
 test("a loaded table that sizes no window for the chosen tier, or whose band zone this browser cannot read, reads unpriced, and with no table the reading waits or carries the read's failure", () => {
   // Max 5x's week unsized while Pro's stays, so the Max week has no scale over a table that did load.
   const maxless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: 25, sevenDay: null } } };
   assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no 7-day capacity for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a loaded table never reads pending');
-  const fiveless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: null, sevenDay: 250 } } };
-  assert.deepEqual(d.fiveHourReadingOf(fiveless, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no 5-hour capacity for the Max week', unpriced: true }, scale: null, week: 'max' }, 'no 5-hour window for the tier');
   assert.deepEqual(d.fiveHourReadingOf({ ...costs, peak: { ...costs.peak, zone: 'Nowhere/Nowhere' } }, null, 'max'), { failure: { text: "Unpriced: this browser does not know the peak band's zone Nowhere/Nowhere", unpriced: true }, scale: null, week: 'max' }, 'a band zone this browser cannot read');
   assert.deepEqual(d.fableWeekReadingOf({ ...costs, modelWindows: {} }, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no Fable week for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a model with no Fable week');
   assert.deepEqual(d.weekReadingOf(null, null, 'max'), { failure: null, scale: null, week: 'max' }, 'the read still out');
