@@ -106,6 +106,14 @@ test("a direction's pick keeps the key, closes and puts the focus back on the bu
   assert.ok(document.activeElement === button, 'the focus is back on the button');
 });
 
+test("a pick of the key's own direction sends an empty dir, so the address carries no redundant direction", () => {
+  const calls = [];
+  const { button } = mounted({ dir: '', sort: 'usage' }, calls);
+  click(button);
+  click(radio('Descending'));
+  assert.deepEqual(calls, [{ dir: '', sort: 'usage' }]);
+});
+
 test('Escape on the open popover closes it with the focus on the button and sends nothing', () => {
   const calls = [];
   const { button } = mounted({ dir: '', sort: 'name' }, calls);
