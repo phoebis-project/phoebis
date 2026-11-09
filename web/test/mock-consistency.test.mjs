@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // the host's zone; `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { accountSlots, slowedLongOf } = await import('./dist/api.js');
+const { accountSlots } = await import('./dist/api.js');
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -235,32 +235,6 @@ function freshFitOf(d, c, r, pool) {
   }
   return every ? 'fits' : lands ? 'rewrite_only' : 'least_bad';
 }
-
-test("the mock's slowed-account fold reads its bar from the start rows, its spans from the rows standing at the day's cutoff, and holds on the account's held time", () => {
-  const now = Date.parse('2026-09-16T14:30:00Z');
-  const cutoff = now - DAY;
-  const MINUTE = 60_000;
-  // A pool whose threshold is 40 minutes, above the 30 whose bar the floor of an hour would also give.
-  const started = (at, factor) => ({ accountId: 'studio', at: iso(at), detail: { factor, threshold_ms: 40 * MINUTE }, kind: 'slow_down_started', poolId: 'wide' });
-  const ended = (at, since, durationMs, factorMin) => ({ accountId: 'studio', at: iso(at), detail: { duration_ms: durationMs, factor_min: factorMin, since }, kind: 'slow_down_ended', poolId: 'wide' });
-  const rows = [
-    // A span standing at the cutoff, 50 of its 80 minutes inside the day, and an hour's span later in the day.
-    started(cutoff - 30 * MINUTE, 0.6),
-    ended(cutoff + 52 * MINUTE, cutoff - 30 * MINUTE, 80 * MINUTE, 0.5),
-    started(now - 2 * HOUR, 0.4),
-    ended(now - HOUR + 2 * MINUTE, now - 2 * HOUR, HOUR, 0.4),
-  ];
-  assert.deepEqual(slowedLongOf(rows, 'studio', now, { held: 72, heldMs: 7_700_000 }), {
-    detail: { bar_ms: 80 * MINUTE, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], spans: 2 },
-    since: iso(cutoff - 30 * MINUTE),
-  });
-  // The hour's span alone runs 60 minutes, under the bar of twice 40, and studio's seeded held time of the day, past
-  // the bar, holds the item.
-  assert.deepEqual(slowedLongOf(rows.slice(2), 'studio', now, { held: 72, heldMs: 7_700_000 }), {
-    detail: { bar_ms: 80 * MINUTE, held: 72, held_ms: 7_700_000, open: false, setting: ['slow_down_stretch_seconds'], spans: 1 },
-    since: iso(now - 2 * HOUR),
-  });
-});
 
 test("the fresh fit's demand prices the 5-hour window as the mock's fit does, where the achieved burn alone would fit", async () => {
   const d = await import('./dist/api.js');

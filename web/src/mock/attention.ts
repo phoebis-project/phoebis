@@ -125,7 +125,7 @@ const HELD_TODAY: Readonly<Record<string, { held: number; heldMs: number }>> = {
  * newest span's pool. Null where no span falls inside the day or it does not hold. `held` is the day's held count and
  * held time, which the ledger sums from the hourly rollups.
  */
-export function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number, held: { held: number; heldMs: number }): Pick<AttentionItem, 'detail' | 'since'> | null {
+function slowedLongOf(rows: readonly SpanRow[], accountId: string, now: number, held: { held: number; heldMs: number }): Pick<AttentionItem, 'detail' | 'since'> | null {
   const from = now - DAY;
   const spans: { open: boolean; pool: string; since: number; thresholdMs: number | null }[] = [];
   const count = (pool: string, since: number, end: number, open: boolean, thresholdMs: number | null) => {
