@@ -879,6 +879,8 @@ pub(crate) fn ceiling(
     }
     match agent.state {
         AgentState::Parked => {
+            // A park that passed leaves a worker parked with no park until the mod restates it, and a restored
+            // row with no kind lands here too: no rule says probe for a park that ended.
             let Some(held) = agent.park else {
                 return Verdict::End(Reason::ParkedLimit);
             };
