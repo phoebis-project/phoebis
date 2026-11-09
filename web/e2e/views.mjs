@@ -8510,13 +8510,13 @@ async function quotaSortControl(theme) {
       const button = row?.querySelector('button[aria-label="Sort"]') ?? null;
       return {
         refreshAll: box([...(row?.querySelectorAll(':scope > button') ?? [])].find((b) => b.textContent?.trim() === 'Refresh all')),
-        sort: button === null ? null : { ...box(button), arrow: button.querySelector('svg') !== null, text: button.textContent?.trim() ?? '', title: button.getAttribute('title') },
+        sort: button === null ? null : { ...box(button), arrow: button.querySelector('svg path')?.getAttribute('transform') ?? null, text: button.textContent?.trim() ?? '', title: button.getAttribute('title') },
       };
     });
     measurements.push(`${theme} /quota sort button ${JSON.stringify(rest)}`);
     for (const what of compare(rest.sort, rest.refreshAll, ['height', 'top'], 'the Sort button against the Refresh all pill')) say(what);
     if (rest.sort?.text !== 'Sort: Default order' || rest.sort?.title !== 'Sorted by Default order') say(`the button reads ${JSON.stringify(rest.sort?.text ?? null)} titled ${JSON.stringify(rest.sort?.title ?? null)} on a bare address, not "Sort: Default order" titled "Sorted by Default order"`);
-    if (rest.sort?.arrow !== false) say('the button draws an arrow on Default order, which has no direction');
+    if (rest.sort && rest.sort.arrow !== null) say(`the button draws the arrow at ${JSON.stringify(rest.sort.arrow)} on Default order, which has no direction`);
     await sort.click();
     await advance(CLOCK_STEP_MS);
     const open = await page.evaluate(() => {
