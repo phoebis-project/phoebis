@@ -257,8 +257,8 @@ const aheadOf = (at: string | null | undefined, now: number): number | null => {
 };
 
 /** The soonest future reset over every window the poll read and a seat's spend window, with every window at that
- *  instant, so the card marks each. Null where no reset lies ahead. */
-export function soonestResetAt(account: Account, now: number): { at: number; ids: WindowId[] } | null {
+ *  instant, so the card marks each. Empty where no reset lies ahead. */
+export function soonestResetAt(account: Account, now: number): WindowId[] {
   let at = Number.POSITIVE_INFINITY;
   let ids: WindowId[] = [];
   const take = (id: WindowId, resetsAt: string | null | undefined) => {
@@ -271,7 +271,7 @@ export function soonestResetAt(account: Account, now: number): { at: number; ids
   for (const w of readWindows(account)) take(w.id, w.resetsAt);
   // A usage-based seat recovers at its spend window's reset, the one reset it carries.
   take('spend', account.spend?.resetsAt);
-  return ids.length === 0 ? null : { at, ids };
+  return ids;
 }
 
 /** One window's future reset, or null where the window is absent, expired or carries none. `'7d_fable'` reads

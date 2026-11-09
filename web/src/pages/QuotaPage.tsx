@@ -168,7 +168,7 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
 }
 
 function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
-  const soonest = soonestResetAt(account, now)?.ids ?? [];
+  const soonest = soonestResetAt(account, now);
   const [localRefreshing, setLocalRefreshing] = useState(false);
   const busy = refreshing || localRefreshing;
   const onRefresh = async () => {

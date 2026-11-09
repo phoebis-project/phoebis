@@ -282,17 +282,17 @@ const seatAccount = (spend = spendReading()) => ({ fableWindow: null, id: 'seat'
 const planAccount = (id, windows) => ({ fableWindow: null, id, label: id, spend: null, usageBased: false, windows });
 
 test("the soonest reset of a usage-based seat is its spend window's, while that reset is ahead", () => {
-  assert.deepEqual(d.soonestResetAt(seatAccount(), SPEND_NOW)?.ids ?? null, ['spend'], 'the one reset the seat carries');
-  assert.equal(d.soonestResetAt(seatAccount(spendReading({ resetsAt: new Date(SPEND_NOW - 60_000).toISOString() })), SPEND_NOW)?.ids ?? null, null, 'a reset already passed recovers nothing');
-  assert.equal(d.soonestResetAt(seatAccount(null), SPEND_NOW)?.ids ?? null, null, 'a seat with no spend reading yet');
-  assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW)?.ids ?? null, ['5h'], 'a plan account reads its soonest window');
+  assert.deepEqual(d.soonestResetAt(seatAccount(), SPEND_NOW), ['spend'], 'the one reset the seat carries');
+  assert.deepEqual(d.soonestResetAt(seatAccount(spendReading({ resetsAt: new Date(SPEND_NOW - 60_000).toISOString() })), SPEND_NOW), [], 'a reset already passed recovers nothing');
+  assert.deepEqual(d.soonestResetAt(seatAccount(null), SPEND_NOW), [], 'a seat with no spend reading yet');
+  assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW), ['5h'], 'a plan account reads its soonest window');
 });
 
 test('the soonest reset reads the Fable window beside the others and names every window that resets at that instant', () => {
   const fableFirst = { ...planAccount('fable', [planWindow('5h', 2 * HOUR), planWindow('7d', DAY)]), fableWindow: planWindow('7d_fable', HOUR) };
-  assert.deepEqual(d.soonestResetAt(fableFirst, SPEND_NOW), { at: SPEND_NOW + HOUR, ids: ['7d_fable'] });
+  assert.deepEqual(d.soonestResetAt(fableFirst, SPEND_NOW), ['7d_fable']);
   const tied = planAccount('tied', [planWindow('5h', HOUR), planWindow('7d', HOUR)]);
-  assert.deepEqual(d.soonestResetAt(tied, SPEND_NOW), { at: SPEND_NOW + HOUR, ids: ['5h', '7d'] }, 'two windows at one instant');
+  assert.deepEqual(d.soonestResetAt(tied, SPEND_NOW), ['5h', '7d'], 'two windows at one instant');
 });
 
 test("the timeline's input and its lanes take an account with a spend reading beside the plan accounts, under both zooms", () => {
