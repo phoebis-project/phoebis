@@ -179,15 +179,20 @@ pub enum Reported {
         request_generation: Option<u64>,
     },
     Heartbeat,
+    /// A `parked` state, the one state that carries a park.
+    Parked {
+        agent_id: String,
+        park: Park,
+        request_generation: Option<u64>,
+    },
     SessionEnd,
     SessionStart {
         owner_id: Option<String>,
         previous_instance_id: Option<String>,
     },
-    /// A state, with the park a `parked` state alone carries.
+    /// Any state but `parked`.
     State {
         agent_id: String,
-        park: Option<Park>,
         request_generation: Option<u64>,
         state: AgentState,
     },
@@ -199,6 +204,7 @@ impl Reported {
         match self {
             Reported::Activity { agent_id, .. }
             | Reported::AgentStart { agent_id, .. }
+            | Reported::Parked { agent_id, .. }
             | Reported::State { agent_id, .. } => Some(agent_id),
             Reported::Heartbeat | Reported::SessionEnd | Reported::SessionStart { .. } => None,
         }
@@ -298,12 +304,22 @@ impl TryFrom<Event> for EventReport {
                 owner_id,
                 previous_instance_id,
             },
-            EventKind::State => Reported::State {
-                agent_id: agent_id.ok_or_else(required)?,
-                park,
-                request_generation,
-                state: state.ok_or_else(required)?,
-            },
+            EventKind::State => {
+                let agent_id = agent_id.ok_or_else(required)?;
+                let state = state.ok_or_else(required)?;
+                match park {
+                    Some(park) => Reported::Parked {
+                        agent_id,
+                        park,
+                        request_generation,
+                    },
+                    None => Reported::State {
+                        agent_id,
+                        request_generation,
+                        state,
+                    },
+                }
+            }
         };
         Ok(EventReport {
             session_id,
@@ -579,44 +595,47 @@ impl Inner {
                     agent.set_state(AgentState::Busy);
                 }
             }
-            Reported::State {
+            Reported::Parked {
                 park,
+                request_generation,
+                ..
+            } => {
+                let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
+                // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's start,
+                // which the parked ceiling counts from.
+                if agent.state != AgentState::Parked
+                    || agent.park.map(|p| p.kind) != Some(park.kind)
+                {
+                    agent.park_began = Some(now);
+                }
+                agent.set_state(AgentState::Parked);
+                agent.park = Some(*park);
+            }
+            Reported::State {
                 request_generation,
                 state,
                 ..
             } => {
                 let agent = self.reported_agent(&key, &agent_id, *request_generation)?;
                 let was = agent.state;
-                let (state, park) = (*state, *park);
-                if state == AgentState::Parked {
-                    // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
-                    // start, which the parked ceiling counts from.
-                    if was != AgentState::Parked
-                        || agent.park.map(|p| p.kind) != park.map(|p| p.kind)
-                    {
-                        agent.park_began = Some(now);
+                let state = *state;
+                // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports idle
+                // before or after the router's tick does: a park that ended without a request, which restarts the
+                // idle window. A request behind a busy report moves the window itself.
+                if was == AgentState::Parked && state == AgentState::Idle {
+                    agent.close_idle_episode();
+                    agent.idle_window_floor = None;
+                    agent.park_ended_at = Some(now);
+                } else if state == AgentState::Released {
+                    // A released main is the end of its session's window, as `session_end` is.
+                    agent.close_idle_episode();
+                } else if state == AgentState::Idle {
+                    // A prompt that sent no request, such as a local command: the window goes on.
+                    if let Some(episode) = agent.idle_episode.as_mut() {
+                        episode.prompt_at = None;
                     }
-                    agent.set_state(state);
-                    agent.park = park;
-                } else {
-                    // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports
-                    // idle before or after the router's tick does: a park that ended without a request, which
-                    // restarts the idle window. A request behind a busy report moves the window itself.
-                    if was == AgentState::Parked && state == AgentState::Idle {
-                        agent.close_idle_episode();
-                        agent.idle_window_floor = None;
-                        agent.park_ended_at = Some(now);
-                    } else if state == AgentState::Released {
-                        // A released main is the end of its session's window, as `session_end` is.
-                        agent.close_idle_episode();
-                    } else if state == AgentState::Idle {
-                        // A prompt that sent no request, such as a local command: the window goes on.
-                        if let Some(episode) = agent.idle_episode.as_mut() {
-                            episode.prompt_at = None;
-                        }
-                    }
-                    agent.set_state(state);
                 }
+                agent.set_state(state);
                 match state {
                     AgentState::Released => {
                         self.discard(
@@ -648,7 +667,11 @@ impl Inner {
         }
         // The window opens with the report that moves main to idle or parked, so a prompt inside the same second
         // still ends a window the tick would have opened later.
-        if matches!(report.event, Reported::State { .. }) && agent_id == MAIN_AGENT {
+        if matches!(
+            report.event,
+            Reported::Parked { .. } | Reported::State { .. }
+        ) && agent_id == MAIN_AGENT
+        {
             if let Some(main) = agent_mut(&mut self.sessions, &key, MAIN_AGENT) {
                 open_idle_episode(main, snapshot);
             }
