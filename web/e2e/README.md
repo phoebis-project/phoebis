@@ -263,26 +263,26 @@ and 83 px as the Analytics sticky bar, the Requests row at 1280 by 800 under the
 px, the count "25 shown, more available" taking the slots to 1275 px, so the edge wraps alone onto the second line) and
 across midnight (72 px, the slots 1175 px), and on one line with its chips (the bar 66 px, since that address lists no
 row and the "No rows" count fits its edge in 164.7 px), under another count on two lines where its slots run past the
-row and on one line otherwise, and on one line at 1440 by 900 in every case, each chip 26 px with its word in `--ink-2`
-and its values in `--ink`, the chip line on one line, the first card's head below the bar, on a card view the next
-element and the tiles below it, on Analytics the Group by select against Add filter, and on the routing log and
-Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by 800 on Analytics and
-Requests the bar's scroll width at most its client width with the count inside the window, the trailing slots wrapped,
-and at 400 by 800 on every view with a bar, at rest, the bar and the row no wider than their boxes with the count where
-the view draws one and the Refresh button inside the window), the Kinds list through Add filter on the routing log
-(Select all, the eight presets and the 44 kinds, its popover 8 px inside the window at 1280 by 800), the split Refresh
-button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it never moves), a
-late row on the request log (in the mock pass, after the view's shot, the story's late request landing below the first
-of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a top row's cells take
-under the same tint, apart from the fill of an untinted row of its own stripe and in the box of the untinted row above
-it, recorded as skipped in the router pass), the fresh tint on both logs (in the mock pass, after the view's shot, the
-row the story lands a few seconds after the load, the request log's late request on a page of 50 and the routing log's
-late event, drawn on the first auto reload at 5 s with every cell in `--accent-soft` over the surface, apart from the
-row's resting fill and in its box, the one row in the tint, recorded as skipped in the router pass), the traffic cards
-(Errors by code against Requests by outcome, the Refusals by category card against Refusals by code, Failovers beside
-Migration rewrites and Effort levels beside Requests by speed, and each Analytics check opens the tab it reads and
-returns to Traffic), the Refusals by category card under a client pattern (mock pass, on loads of its own: under
-`claude-code/cli` the first row's count against the next row's in font size, weight and right edge with its link
+row and on one line otherwise, and on one line at 1440 by 900 in every case under the mock, each chip 26 px with its
+word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below the bar, on a card
+view the next element and the tiles below it, on Analytics the Group by select against Add filter, and on the routing
+log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by 800 on Analytics
+and Requests the bar's scroll width at most its client width with the count inside the window, the trailing slots
+wrapped, and at 400 by 800 on every view with a bar, at rest, the bar and the row no wider than their boxes with the
+count where the view draws one and the Refresh button inside the window), the Kinds list through Add filter on the
+routing log (Select all, the eight presets and the 44 kinds, its popover 8 px inside the window at 1280 by 800), the
+split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it
+never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request landing
+below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a top row's
+cells take under the same tint, apart from the fill of an untinted row of its own stripe and in the box of the untinted
+row above it, recorded as skipped in the router pass), the fresh tint on both logs (in the mock pass, after the view's
+shot, the row the story lands a few seconds after the load, the request log's late request on a page of 50 and the
+routing log's late event, drawn on the first auto reload at 5 s with every cell in `--accent-soft` over the surface,
+apart from the row's resting fill and in its box, the one row in the tint, recorded as skipped in the router pass), the
+traffic cards (Errors by code against Requests by outcome, the Refusals by category card against Refusals by code,
+Failovers beside Migration rewrites and Effort levels beside Requests by speed, and each Analytics check opens the tab
+it reads and returns to Traffic), the Refusals by category card under a client pattern (mock pass, on loads of its own:
+under `claude-code/cli` the first row's count against the next row's in font size, weight and right edge with its link
 carrying the pattern as `client`, and under `claude-code/sdk*` a count below the bare page's, each read recorded beside
 the bare page's), the Client filter's typed field and a picked value's chip (mock pass, on an address with the Account
 filter: the field under the list's rows in their left edge and width with its top below the last row's bottom, and the
