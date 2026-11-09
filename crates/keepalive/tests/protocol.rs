@@ -1559,6 +1559,67 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
 }
 
 #[tokio::test]
+async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its_wake() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.observe("worker").await;
+    let base = r.sequence;
+    let app = keepalive_router(r.engine.clone());
+    let wake = r.now() + 10 * MINUTE;
+    let deadline = r.now() + 60 * MINUTE;
+    let park = report(
+        "state",
+        "session",
+        "instance",
+        base + 1,
+        json!({
+            "agent_id": "worker",
+            "state": "parked",
+            "park_kind": "both",
+            "wake_at": wake,
+            "deadline": deadline,
+            "request_generation": r.status("worker").request_generation
+        }),
+    );
+    assert_eq!(post(&app, park, Some(KEY)).await.status, 200);
+    r.advance(11 * MINUTE);
+    r.step().await;
+    let worker = r.status("worker");
+    assert_eq!(
+        (worker.state, worker.park),
+        (
+            AgentState::Parked,
+            Some(Park {
+                deadline: Some(deadline),
+                kind: ParkKind::Background,
+                wake_at: None
+            })
+        ),
+        "the passed wake leaves the deadline's part of the park"
+    );
+    let again = post(
+        &app,
+        report("session_start", "session", "instance", base + 2, json!({})),
+        Some(KEY),
+    )
+    .await;
+    assert_eq!(
+        (again.status, again.body["agents"][1].clone()),
+        (
+            200,
+            json!({
+                "agent_id": "worker",
+                "deadline": deadline,
+                "park_kind": "background",
+                "request_generation": worker.request_generation,
+                "state": "parked"
+            })
+        ),
+        "the registration answer carries the narrowed park without its wake"
+    );
+}
+
+#[tokio::test]
 async fn instance_conflict_names_an_ended_or_silent_holder_and_the_generation_refusals_name_the_current_one(
 ) {
     let r = rig(RigSpec::default()).await;
