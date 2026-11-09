@@ -15816,6 +15816,53 @@ await forView('/routing-log', async () => {
     });
     page.unmount();
   }
+  {
+    // The hour that ends two seconds before the story's renewal of req_e88f5d01-967, on the evening before the pinned
+    // clock, holds 25 rows: a full page with no next cursor under Ascending, its first page all rows the table knows.
+    // The renewal is the one row that arrives before the first poll.
+    const id = 'req_e88f5d01-967';
+    const renewal = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 24 * HOUR), limit: 25, request: id, to: iso(CLOCK_ORIGIN) })).rows.find((r) => r.type === 'decision');
+    const t = Date.parse(renewal?.at ?? '');
+    const page = await mount('/routing-log?dir=asc', { now: t - 2_000 });
+    const listed = { count: barCount(page), rows: trs(page).length };
+    await chooseInterval(page, '5 s');
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const drawn = trs(page);
+    const last = drawn.at(-1);
+    const landed = { count: barCount(page), dirs: polls.calls.map((c) => c[0]?.dir ?? null), isNew: last?.classList.contains('is-new') ?? false, last: last?.getAttribute('data-row') ?? null, rows: drawn.length, tinted: page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length };
+    results.push({
+      name: '/routing-log auto reload under Ascending on a full page with no next cursor reads newest first and lands the new row last in the accent tint',
+      ok:
+        renewal !== undefined && listed.rows === 25 && listed.count === '25 shown' &&
+        landed.dirs.length > 0 && landed.dirs.every((d) => d === 'desc') && landed.rows === 26 && landed.count === '26 shown' && landed.last === `${id}/1` && landed.isNew && landed.tinted === 1,
+      missing: [renewal ? renewal.at : 'no renewal in the story', JSON.stringify(listed), JSON.stringify(landed)],
+    });
+    page.unmount();
+  }
+  {
+    // The list's own read fails under Ascending, so the first poll stands in for the list's first page and reads it in
+    // the list's order, from the hour's oldest row.
+    failNextCall('listRoutingLog', '/admin/routing-log', 'ledger locked');
+    const page = await mount('/routing-log?dir=asc', { now: CLOCK_ORIGIN });
+    const failed = page.container.querySelector('.routing-log__table .empty--error .empty__title')?.textContent ?? null;
+    await chooseInterval(page, '5 s');
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    polls.restore();
+    const sent = polls.calls[0]?.[0] ?? {};
+    const answer = await api.listRoutingLog({ ...sent, dir: 'asc' });
+    const drawn = trs(page).map((tr) => tr.getAttribute('data-row'));
+    results.push({
+      name: "/routing-log an auto reload poll that stands in for a failed list read under Ascending draws the list's first page from the hour's oldest row",
+      ok: failed === 'Could not load the routing log' && polls.calls.length === 1 && sent.dir === 'asc' && answer.rows.length === 25 && JSON.stringify(drawn) === JSON.stringify(answer.rows.map(rowKeyOf)),
+      missing: [String(failed), JSON.stringify(polls.calls.map((c) => c[0]?.dir ?? null)), `drawn ${drawn.slice(0, 3).join(' ')}`, `the list's order ${answer.rows.slice(0, 3).map(rowKeyOf).join(' ')}`],
+    });
+    page.unmount();
+  }
   const tinted = (page) => page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length;
   const pagerButton = (page, label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
   {

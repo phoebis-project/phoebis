@@ -101,7 +101,10 @@ export function RoutingLogPage() {
     list: log.data,
     pagedTo,
     paused: holdCause !== null,
-    read: (c, to) => api.listRoutingLog({ ...query, cursor: c, to: iso(readEnd(custom, range.to, to)) }),
+    // The route carries no watermark, so a poll stops at its first page of known rows. Walking from the newest page
+    // makes that the first page the poll has seen whatever order the table shows, and `compare` merges in that order.
+    // With no list rows of this query the poll stands in for the list's first page, so it reads the list's order.
+    read: (c, to) => api.listRoutingLog({ ...query, cursor: c, dir: log.data === null || log.stale ? dir : 'desc', to: iso(readEnd(custom, range.to, to)) }),
     setPaging,
     stack,
     stale: log.stale,
