@@ -224,7 +224,7 @@ export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): 
 /** The chosen tier's Fable-week share per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's,
  *  scaled by the Fable week's capacity factor (half the window in the shipped model). Null where either capacity is
  *  null or the model holds no Fable week. */
-export const fableWeekScale = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
+const fableWeekScale = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
   // Read off the model's own row rather than `pricedWindow`, which prices an absent model week as the whole 7-day one.
   const fable = lookup(costs.modelWindows, 'seven_day_fable');
   return fable === undefined || fable.of !== 'seven_day' ? null : capacityRatio(costs, week, 'seven_day', fable.capacityFactor);

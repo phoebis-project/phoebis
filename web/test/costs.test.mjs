@@ -84,7 +84,7 @@ test("the 5-hour reading's scale is the anchor's 7-day capacity over the chosen 
   // 250 and Ultra 100 and 1000.
   const table = { ...costs, capacity: { default_claude_ai: { fiveHour: 5, sevenDay: 50 }, default_claude_max_5x: { fiveHour: 25, sevenDay: 250 }, [MAX_20X]: { fiveHour: 100, sevenDay: 1000 } } };
   close(d.fiveHourReadingOf(table, null, 'ultra').scale, 50 / 100, "Pro's week over Ultra's 5-hour window");
-  close(d.fableWeekScale(table, 'max'), 50 / 125, "Pro's week over half Max 5x's week");
+  close(d.fableWeekReadingOf(table, null, 'max').scale, 50 / 125, "Pro's week over half Max 5x's week");
 });
 
 test("a loaded table that sizes no window for the chosen tier, or whose band zone this browser cannot read, reads unpriced, and with no table the reading waits or carries the read's failure", () => {
