@@ -854,6 +854,31 @@ async fn both_kinds_are_active_while_any_rule_says_probe() {
 }
 
 #[tokio::test]
+async fn a_repeated_park_of_the_same_kind_keeps_the_parked_ceilings_start() {
+    // The repeat at 30 minutes moves the deadline alone, so the ceiling of 5,400 s still counts from the first park.
+    let mut r = rig(plan(policy(|p| p.max_parked_seconds = Some(5_400)))).await;
+    r.observe("main").await;
+    let start = r.now();
+    park(&mut r, "main", "background", Some(start + 3 * HOUR), None);
+    tick_to(&mut r, start + 30 * MINUTE).await;
+    park(
+        &mut r,
+        "main",
+        "background",
+        Some(start + 3 * HOUR + 30 * MINUTE),
+        None,
+    );
+    ends_at(
+        &mut r,
+        "main",
+        start + 90 * MINUTE,
+        Reason::ParkedLimit,
+        "parked_limit",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn a_subagents_park_follows_the_park_rules_and_no_idle_window_applies_to_it() {
     let mut r = rig(plan(policy(|_| {}))).await;
     r.event(Event {
