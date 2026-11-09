@@ -440,15 +440,16 @@ impl PersistedSession {
 
 impl PersistedAgent {
     fn of(agent: &Agent) -> PersistedAgent {
+        let (deadline, park_kind, wake_at) = Park::parts(agent.park.map(|held| held.park));
         PersistedAgent {
             id: agent.id.clone(),
             key_id: agent.key_id.clone(),
             key_generation: agent.key_generation,
             incarnation: agent.incarnation,
             state: agent.state,
-            deadline: agent.park.and_then(|held| held.park.deadline),
-            park_kind: agent.park.map(|held| held.park.kind),
-            wake_at: agent.park.and_then(|held| held.park.wake_at),
+            deadline,
+            park_kind,
+            wake_at,
             park_began: agent.park.map(|held| held.began),
             park_ended_at: agent.park_ended_at,
             idle_episode: agent.idle_episode.as_ref().map(|episode| PersistedEpisode {

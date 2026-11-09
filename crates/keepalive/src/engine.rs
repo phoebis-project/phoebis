@@ -135,6 +135,13 @@ impl Park {
             wake_at: self.wake_at.filter(|_| !wake_passed),
         })
     }
+
+    /// For the readers whose view or saved row keeps the deadline, the kind and the wake as members of their own.
+    pub(crate) fn parts(park: Option<Park>) -> (Option<i64>, Option<ParkKind>, Option<i64>) {
+        park.map_or((None, None, None), |park| {
+            (park.deadline, Some(park.kind), park.wake_at)
+        })
+    }
 }
 
 /// A park as the engine holds it: the reported value with the start the parked ceiling counts from, which no report

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
-use crate::engine::{Agent, AgentState, Engine, Guard, ParkKind, Reason, Wasted, MAIN_AGENT};
+use crate::engine::{Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, Wasted, MAIN_AGENT};
 use crate::events::{err, EventError};
 
 /// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
@@ -151,21 +151,21 @@ fn holds_recipe(agent: &Agent) -> bool {
 
 fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeView {
     let (probes_today, credited_today) = agent.counts_today(now);
-    let park = agent.park.map(|held| held.park);
+    let (deadline, park_kind, wake_at) = Park::parts(agent.park.map(|held| held.park));
     RecipeView {
         account_id: agent.account.clone(),
         agent_id: agent.id.clone(),
         agent_state: agent.state,
         cause: agent.reason,
         credited_today,
-        deadline: park.and_then(|p| p.deadline),
+        deadline,
         key_id: key_id.into(),
         last_guard: agent.last_guard,
         last_probe_at: agent.last_probe_at,
         last_request_at: agent.last_real_at,
         model: agent.canonical_model.clone(),
         next_probe_at: agent.next_probe_at(),
-        park_kind: park.map(|p| p.kind),
+        park_kind,
         pool_id: agent.pool_id.clone(),
         probes_today,
         session_id: session_id.into(),
@@ -179,7 +179,7 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeV
             state => state,
         },
         ttl_seconds: agent.ttl_ms / 1_000,
-        wake_at: park.and_then(|p| p.wake_at),
+        wake_at,
     }
 }
 
