@@ -3865,13 +3865,14 @@ async fn a_paid_probe_held_upstream(session_expiry: Duration) -> Rig {
     r
 }
 
-/// Lets the held probe's answer through and returns the rollups once its counts landed: the upstream served it, so
-/// it is paid for whatever the fence said, and a result whose recipe had stopped settles as one wasted probe under
-/// that stop.
+/// Lets the held probe's answer through and returns the rollups once the ledger landed everything the probe owes:
+/// the upstream served it, so it is paid for whatever the fence said, and a result whose recipe had stopped settles
+/// as one wasted probe under that stop. The ledger is drained, since the probe's request row arrives through the bus
+/// and its settlement directly, so the two can land in different batches.
 async fn served_probe_rows(r: &Rig) -> Vec<RollupRow> {
     r.up.release();
     r.engine.wait_idle().await;
-    rollups(r, |rows| tokens(probe_rows(rows).usage()) > 0).await
+    final_rollups(r).await
 }
 
 #[tokio::test]
