@@ -596,11 +596,23 @@ await forView('/', async () => {
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
-  // Counted by fill, so a cell drawn in a fixed color (which the theme toggle would not reach) or a dropped body
-  // square fails the check.
-  const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
-  const markBody = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-body)"]').length;
-  results.push({ name: 'the login view carries the mark, 26 cells and 5 body squares on the theme tokens, and the couplet', ok: markCells === 26 && markBody === 5 && login.text().includes('Place every request. Keep every session.'), missing: [`cells ${markCells}`, `body ${markBody}`] });
+  // Read paint by paint, so a shape or a gradient stop drawn in a fixed color, which the theme toggle would not reach,
+  // or a mark that draws nothing fails the check. A shape with no fill of its own or its group's paints black, and so
+  // does a stop with no color.
+  const mark = login.container.querySelector('.brand__mark svg');
+  const inside = mark ? [mark, ...mark.querySelectorAll('*')] : [];
+  const declared = (el, prop) => new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`).exec(el.getAttribute('style') ?? '')?.[1].trim() ?? el.getAttribute(prop);
+  const inherited = (el, prop) => (el === null || el === mark.parentElement ? null : declared(el, prop) ?? inherited(el.parentElement, prop));
+  const gradients = new Set(inside.filter((el) => /^(linear|radial)Gradient$/.test(el.tagName) && el.querySelector('stop') !== null).map((el) => el.id));
+  const themed = (paint) => paint === 'none' || /^var\(--[\w-]+\)$/.test(paint) || gradients.has(/^url\(#(.+)\)$/.exec(paint)?.[1]);
+  const shapes = inside.filter((el) => ['circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect'].includes(el.tagName));
+  const fixed = [
+    ...inside.flatMap((el) => ['fill', 'stroke', 'stop-color'].map((prop) => [el, prop, declared(el, prop)]).filter(([, , paint]) => paint !== null && !themed(paint)).map(([el, prop, paint]) => `${el.tagName} ${prop} ${paint}`)),
+    ...shapes.filter((el) => inherited(el, 'fill') === null).map((el) => `${el.tagName} with no fill`),
+    ...inside.filter((el) => el.tagName === 'stop' && declared(el, 'stop-color') === null).map(() => 'stop with no color'),
+  ];
+  const draws = shapes.some((el) => (inherited(el, 'fill') ?? 'black') !== 'none' || (inherited(el, 'stroke') ?? 'none') !== 'none');
+  results.push({ name: 'the login view carries the mark, drawn in the theme tokens alone, and the couplet', ok: draws && fixed.length === 0 && login.text().includes('Place every request. Keep every session.'), missing: [draws ? 'the mark draws' : 'the mark draws nothing', ...fixed] });
   const stay = login.container.querySelector('.login__card input[type="checkbox"]');
   const stayField = stay?.closest('.field') ?? null;
   // Read off the label that wraps the box, so a click on the words ticks it.

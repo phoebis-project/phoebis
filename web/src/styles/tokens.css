@@ -29,8 +29,11 @@
   --on-serious: #1f2328;
   --toggle-knob: #ffffff;
 
-  --mark-cell: #16181d;
-  --mark-body: #e9b800;
+  --mark-ink: #16181d;
+  --mark-wing-1: #f5c400;
+  --mark-wing-2: #f59e0b;
+  --mark-wing-3: #ec6a1c;
+  --mark-wing-shared: #ce3d2c;
 
   --good: #0ca30c;
   --good-ink: #006300;
@@ -126,8 +129,11 @@
   --accent-ring: rgba(68, 147, 248, 0.4);
   --on-accent: #0d1117;
 
-  --mark-cell: #f2f3f5;
-  --mark-body: #ffd23f;
+  --mark-ink: #f2f3f5;
+  --mark-wing-1: #ffd84a;
+  --mark-wing-2: #ffae2b;
+  --mark-wing-3: #ff7f2a;
+  --mark-wing-shared: #f0503c;
 
   --good-ink: #5ed35e;
   --good-soft: #17301a;

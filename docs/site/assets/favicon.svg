@@ -1,34 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Phoebis Router">
-<style>.c{fill:#16181D}.b{fill:#E9B800}@media (prefers-color-scheme: dark){.c{fill:#F2F3F5}.b{fill:#FFD23F}}</style>
-<rect x="18" y="6" width="10" height="10" rx="2.5" class="c"/>
-<rect x="66" y="6" width="10" height="10" rx="2.5" class="c"/>
-<rect x="30" y="18" width="10" height="10" rx="2.5" class="c"/>
-<rect x="54" y="18" width="10" height="10" rx="2.5" class="c"/>
-<rect x="6" y="30" width="10" height="10" rx="2.5" class="c"/>
-<rect x="18" y="30" width="10" height="10" rx="2.5" class="c"/>
-<rect x="42" y="30" width="10" height="10" rx="2.5" class="b"/>
-<rect x="66" y="30" width="10" height="10" rx="2.5" class="c"/>
-<rect x="78" y="30" width="10" height="10" rx="2.5" class="c"/>
-<rect x="6" y="42" width="10" height="10" rx="2.5" class="c"/>
-<rect x="18" y="42" width="10" height="10" rx="2.5" class="c"/>
-<rect x="30" y="42" width="10" height="10" rx="2.5" class="c"/>
-<rect x="42" y="42" width="10" height="10" rx="2.5" class="b"/>
-<rect x="54" y="42" width="10" height="10" rx="2.5" class="c"/>
-<rect x="66" y="42" width="10" height="10" rx="2.5" class="c"/>
-<rect x="78" y="42" width="10" height="10" rx="2.5" class="c"/>
-<rect x="6" y="54" width="10" height="10" rx="2.5" class="c"/>
-<rect x="18" y="54" width="10" height="10" rx="2.5" class="c"/>
-<rect x="30" y="54" width="10" height="10" rx="2.5" class="c"/>
-<rect x="42" y="54" width="10" height="10" rx="2.5" class="b"/>
-<rect x="54" y="54" width="10" height="10" rx="2.5" class="c"/>
-<rect x="66" y="54" width="10" height="10" rx="2.5" class="c"/>
-<rect x="78" y="54" width="10" height="10" rx="2.5" class="c"/>
-<rect x="18" y="66" width="10" height="10" rx="2.5" class="c"/>
-<rect x="30" y="66" width="10" height="10" rx="2.5" class="c"/>
-<rect x="42" y="66" width="10" height="10" rx="2.5" class="b"/>
-<rect x="54" y="66" width="10" height="10" rx="2.5" class="c"/>
-<rect x="66" y="66" width="10" height="10" rx="2.5" class="c"/>
-<rect x="30" y="78" width="10" height="10" rx="2.5" class="c"/>
-<rect x="42" y="78" width="10" height="10" rx="2.5" class="b"/>
-<rect x="54" y="78" width="10" height="10" rx="2.5" class="c"/>
+  <title>Phoebis Router</title>
+  <style>.ink{fill:#16181D}.ink-line{stroke:#16181D}.y1{stop-color:#F5C400}.y2{stop-color:#F59E0B}.y3{stop-color:#EC6A1C}.y4{fill:#CE3D2C}@media (prefers-color-scheme: dark){.ink{fill:#F2F3F5}.ink-line{stroke:#F2F3F5}.y1{stop-color:#FFD84A}.y2{stop-color:#FFAE2B}.y3{stop-color:#FF7F2A}.y4{fill:#F0503C}}</style>
+  <defs>
+    <linearGradient id="favicon-a" gradientUnits="userSpaceOnUse" x1="39.619" y1="47.612" x2="12.381" y2="76.946"><stop offset="0" class="y2"/><stop offset="1" class="y3"/></linearGradient>
+    <linearGradient id="favicon-b" gradientUnits="userSpaceOnUse" x1="6.095" y1="21.422" x2="39.619" y2="54.946"><stop offset="0" class="y1"/><stop offset="1" class="y2"/></linearGradient>
+    <linearGradient id="favicon-c" gradientUnits="userSpaceOnUse" x1="56.381" y1="47.612" x2="83.619" y2="76.946"><stop offset="0" class="y2"/><stop offset="1" class="y3"/></linearGradient>
+    <linearGradient id="favicon-d" gradientUnits="userSpaceOnUse" x1="89.905" y1="21.422" x2="56.381" y2="54.946"><stop offset="0" class="y1"/><stop offset="1" class="y2"/></linearGradient>
+  </defs>
+  <path d="M39.619 47.612L24.952 47.612A14.667 14.667 0 1 0 39.619 62.279Z" fill="url(#favicon-a)"/>
+  <path d="M39.619 54.946L39.619 37.136A17.81 17.81 0 1 0 21.81 54.946Z" fill="url(#favicon-b)"/>
+  <path d="M56.381 47.612L56.381 62.279A14.667 14.667 0 1 0 71.048 47.612Z" fill="url(#favicon-c)"/>
+  <path d="M56.381 54.946L74.19 54.946A17.81 17.81 0 1 0 56.381 37.136Z" fill="url(#favicon-d)"/>
+  <path d="M39.619 47.612L24.952 47.612A14.667 14.667 0 0 0 13.63 52.956A17.81 17.81 0 0 0 21.81 54.946L39.619 54.946Z" class="y4"/>
+  <path d="M56.381 47.612L56.381 54.946L74.19 54.946A17.81 17.81 0 0 0 82.37 52.956A14.667 14.667 0 0 0 71.048 47.612Z" class="y4"/>
+  <path d="M46.324 28.755Q44.857 16.184 36.476 12.517" fill="none" class="ink-line" stroke-width="5.238" stroke-linecap="round"/>
+  <circle cx="36.476" cy="12.517" r="4.4" class="ink"/>
+  <path d="M49.676 28.755Q51.143 16.184 59.524 12.517" fill="none" class="ink-line" stroke-width="5.238" stroke-linecap="round"/>
+  <circle cx="59.524" cy="12.517" r="4.4" class="ink"/>
+  <rect x="42.002" y="24.565" width="11.995" height="61.81" rx="5.998" class="ink"/>
 </svg>

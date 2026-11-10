@@ -1,34 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-label="Phoebis Router">
   <title>Phoebis Router</title>
-  <rect x="18" y="6" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="66" y="6" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="30" y="18" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="54" y="18" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="6" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="18" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="42" y="30" width="10" height="10" rx="2.5" fill="#E9B800"/>
-  <rect x="66" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="78" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="6" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="18" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="30" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="42" y="42" width="10" height="10" rx="2.5" fill="#E9B800"/>
-  <rect x="54" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="66" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="78" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="6" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="18" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="30" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="42" y="54" width="10" height="10" rx="2.5" fill="#E9B800"/>
-  <rect x="54" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="66" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="78" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="18" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="30" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="42" y="66" width="10" height="10" rx="2.5" fill="#E9B800"/>
-  <rect x="54" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="66" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="30" y="78" width="10" height="10" rx="2.5" fill="#16181D"/>
-  <rect x="42" y="78" width="10" height="10" rx="2.5" fill="#E9B800"/>
-  <rect x="54" y="78" width="10" height="10" rx="2.5" fill="#16181D"/>
+  <defs>
+    <linearGradient id="router-light-a" gradientUnits="userSpaceOnUse" x1="39.619" y1="47.612" x2="12.381" y2="76.946"><stop offset="0" stop-color="#F59E0B"/><stop offset="1" stop-color="#EC6A1C"/></linearGradient>
+    <linearGradient id="router-light-b" gradientUnits="userSpaceOnUse" x1="6.095" y1="21.422" x2="39.619" y2="54.946"><stop offset="0" stop-color="#F5C400"/><stop offset="1" stop-color="#F59E0B"/></linearGradient>
+    <linearGradient id="router-light-c" gradientUnits="userSpaceOnUse" x1="56.381" y1="47.612" x2="83.619" y2="76.946"><stop offset="0" stop-color="#F59E0B"/><stop offset="1" stop-color="#EC6A1C"/></linearGradient>
+    <linearGradient id="router-light-d" gradientUnits="userSpaceOnUse" x1="89.905" y1="21.422" x2="56.381" y2="54.946"><stop offset="0" stop-color="#F5C400"/><stop offset="1" stop-color="#F59E0B"/></linearGradient>
+  </defs>
+  <path d="M39.619 47.612L24.952 47.612A14.667 14.667 0 1 0 39.619 62.279Z" fill="url(#router-light-a)"/>
+  <path d="M39.619 54.946L39.619 37.136A17.81 17.81 0 1 0 21.81 54.946Z" fill="url(#router-light-b)"/>
+  <path d="M56.381 47.612L56.381 62.279A14.667 14.667 0 1 0 71.048 47.612Z" fill="url(#router-light-c)"/>
+  <path d="M56.381 54.946L74.19 54.946A17.81 17.81 0 1 0 56.381 37.136Z" fill="url(#router-light-d)"/>
+  <path d="M39.619 47.612L24.952 47.612A14.667 14.667 0 0 0 13.63 52.956A17.81 17.81 0 0 0 21.81 54.946L39.619 54.946Z" fill="#CE3D2C"/>
+  <path d="M56.381 47.612L56.381 54.946L74.19 54.946A17.81 17.81 0 0 0 82.37 52.956A14.667 14.667 0 0 0 71.048 47.612Z" fill="#CE3D2C"/>
+  <path d="M46.324 28.755Q44.857 16.184 36.476 12.517" fill="none" stroke="#16181D" stroke-width="2.724" stroke-linecap="round"/>
+  <circle cx="36.476" cy="12.517" r="2.891" fill="#16181D"/>
+  <path d="M49.676 28.755Q51.143 16.184 59.524 12.517" fill="none" stroke="#16181D" stroke-width="2.724" stroke-linecap="round"/>
+  <circle cx="59.524" cy="12.517" r="2.891" fill="#16181D"/>
+  <rect x="44.333" y="24.565" width="7.333" height="61.81" rx="3.667" fill="#16181D"/>
 </svg>

@@ -1,44 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 170" role="img" aria-label="Phoebis Router">
   <title>Phoebis Router</title>
 
-  <!-- Editable master; the wordmark needs Audiowide installed (SIL Open Font License, fonts.google.com/specimen/Audiowide)
-       and the tagline DejaVu Sans. Regenerate the self-contained copy the README uses:
+  <!-- Editable master. The wordmark needs Audiowide installed (SIL Open Font License,
+       fonts.google.com/specimen/Audiowide). The tagline needs DejaVu Sans. Regenerate the self-contained copy that the
+       README uses:
        rsvg-convert -f svg logo-light.svg -o ../logo-light.svg -->
-  <!-- The Pixel mark: a sulphur butterfly on a seven-by-seven grid of rounded cells, the body in the accent -->
-  <g transform="translate(96.8,8) scale(0.9)">
-    <rect x="18" y="6" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="66" y="6" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="30" y="18" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="54" y="18" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="6" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="18" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="42" y="30" width="10" height="10" rx="2.5" fill="#E9B800"/>
-    <rect x="66" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="78" y="30" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="6" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="18" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="30" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="42" y="42" width="10" height="10" rx="2.5" fill="#E9B800"/>
-    <rect x="54" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="66" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="78" y="42" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="6" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="18" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="30" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="42" y="54" width="10" height="10" rx="2.5" fill="#E9B800"/>
-    <rect x="54" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="66" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="78" y="54" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="18" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="30" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="42" y="66" width="10" height="10" rx="2.5" fill="#E9B800"/>
-    <rect x="54" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="66" y="66" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="30" y="78" width="10" height="10" rx="2.5" fill="#16181D"/>
-    <rect x="42" y="78" width="10" height="10" rx="2.5" fill="#E9B800"/>
-    <rect x="54" y="78" width="10" height="10" rx="2.5" fill="#16181D"/>
-  </g>
-
+  <!-- The mark: a sulphur butterfly seen from above. Each side has two wing lobes, and the region that they share takes
+       a third tone. -->
+  <defs>
+    <linearGradient id="router-light-a" gradientUnits="userSpaceOnUse" x1="132.457" y1="50.851" x2="107.943" y2="77.251"><stop offset="0" stop-color="#F59E0B"/><stop offset="1" stop-color="#EC6A1C"/></linearGradient>
+    <linearGradient id="router-light-b" gradientUnits="userSpaceOnUse" x1="102.286" y1="27.28" x2="132.457" y2="57.451"><stop offset="0" stop-color="#F5C400"/><stop offset="1" stop-color="#F59E0B"/></linearGradient>
+    <linearGradient id="router-light-c" gradientUnits="userSpaceOnUse" x1="147.543" y1="50.851" x2="172.057" y2="77.251"><stop offset="0" stop-color="#F59E0B"/><stop offset="1" stop-color="#EC6A1C"/></linearGradient>
+    <linearGradient id="router-light-d" gradientUnits="userSpaceOnUse" x1="177.714" y1="27.28" x2="147.543" y2="57.451"><stop offset="0" stop-color="#F5C400"/><stop offset="1" stop-color="#F59E0B"/></linearGradient>
+  </defs>
+  <path d="M132.457 50.851L119.257 50.851A13.2 13.2 0 1 0 132.457 64.051Z" fill="url(#router-light-a)"/>
+  <path d="M132.457 57.451L132.457 41.423A16.029 16.029 0 1 0 116.429 57.451Z" fill="url(#router-light-b)"/>
+  <path d="M147.543 50.851L147.543 64.051A13.2 13.2 0 1 0 160.743 50.851Z" fill="url(#router-light-c)"/>
+  <path d="M147.543 57.451L163.571 57.451A16.029 16.029 0 1 0 147.543 41.423Z" fill="url(#router-light-d)"/>
+  <path d="M132.457 50.851L119.257 50.851A13.2 13.2 0 0 0 109.067 55.661A16.029 16.029 0 0 0 116.429 57.451L132.457 57.451Z" fill="#CE3D2C"/>
+  <path d="M147.543 50.851L147.543 57.451L163.571 57.451A16.029 16.029 0 0 0 170.933 55.661A13.2 13.2 0 0 0 160.743 50.851Z" fill="#CE3D2C"/>
+  <path d="M138.491 33.88Q137.171 22.565 129.629 19.265" fill="none" stroke="#16181D" stroke-width="2.451" stroke-linecap="round"/>
+  <circle cx="129.629" cy="19.265" r="2.602" fill="#16181D"/>
+  <path d="M141.509 33.88Q142.829 22.565 150.371 19.265" fill="none" stroke="#16181D" stroke-width="2.451" stroke-linecap="round"/>
+  <circle cx="150.371" cy="19.265" r="2.602" fill="#16181D"/>
+  <rect x="136.7" y="30.108" width="6.6" height="55.629" rx="3.3" fill="#16181D"/>
   <text x="140" y="128" text-anchor="middle" font-family="Audiowide" font-size="30" fill="#16181D">Phoebis</text>
   <text x="140" y="152" text-anchor="middle" font-family="DejaVu Sans" font-size="12" letter-spacing="0.3" fill="#5C6370">Every request lands on the right account.</text>
 </svg>

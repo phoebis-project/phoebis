@@ -1,43 +1,28 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" role="img" aria-label="Phoebis Router">
   <title>Phoebis Router</title>
 
-  <!-- Editable master of the square lockup (the avatar and the social preview); the wordmark needs Audiowide
-       installed (SIL Open Font License, fonts.google.com/specimen/Audiowide). Regenerate the self-contained copy:
+  <!-- Editable master. The wordmark needs Audiowide installed (SIL Open Font License,
+       fonts.google.com/specimen/Audiowide). Regenerate the self-contained copy for a listing icon or a social preview:
        rsvg-convert -f svg lockup-dark.svg -o ../lockup-dark.svg -->
+  <!-- The mark: a sulphur butterfly seen from above. Each side has two wing lobes, and the region that they share takes
+       a third tone. -->
   <rect width="1000" height="1000" fill="#111318"/>
-  <g transform="translate(212 110) scale(6)">
-    <rect x="18" y="6" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="66" y="6" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="30" y="18" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="54" y="18" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="6" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="18" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="42" y="30" width="10" height="10" rx="2.5" fill="#FFD23F"/>
-    <rect x="66" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="78" y="30" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="6" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="18" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="30" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="42" y="42" width="10" height="10" rx="2.5" fill="#FFD23F"/>
-    <rect x="54" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="66" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="78" y="42" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="6" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="18" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="30" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="42" y="54" width="10" height="10" rx="2.5" fill="#FFD23F"/>
-    <rect x="54" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="66" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="78" y="54" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="18" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="30" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="42" y="66" width="10" height="10" rx="2.5" fill="#FFD23F"/>
-    <rect x="54" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="66" y="66" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="30" y="78" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-    <rect x="42" y="78" width="10" height="10" rx="2.5" fill="#FFD23F"/>
-    <rect x="54" y="78" width="10" height="10" rx="2.5" fill="#F2F3F5"/>
-  </g>
-
+  <defs>
+    <linearGradient id="router-dark-a" gradientUnits="userSpaceOnUse" x1="449.714" y1="395.674" x2="286.286" y2="571.674"><stop offset="0" stop-color="#FFAE2B"/><stop offset="1" stop-color="#FF7F2A"/></linearGradient>
+    <linearGradient id="router-dark-b" gradientUnits="userSpaceOnUse" x1="248.571" y1="238.531" x2="449.714" y2="439.674"><stop offset="0" stop-color="#FFD84A"/><stop offset="1" stop-color="#FFAE2B"/></linearGradient>
+    <linearGradient id="router-dark-c" gradientUnits="userSpaceOnUse" x1="550.286" y1="395.674" x2="713.714" y2="571.674"><stop offset="0" stop-color="#FFAE2B"/><stop offset="1" stop-color="#FF7F2A"/></linearGradient>
+    <linearGradient id="router-dark-d" gradientUnits="userSpaceOnUse" x1="751.429" y1="238.531" x2="550.286" y2="439.674"><stop offset="0" stop-color="#FFD84A"/><stop offset="1" stop-color="#FFAE2B"/></linearGradient>
+  </defs>
+  <path d="M449.714 395.674L361.714 395.674A88 88 0 1 0 449.714 483.674Z" fill="url(#router-dark-a)"/>
+  <path d="M449.714 439.674L449.714 332.817A106.857 106.857 0 1 0 342.857 439.674Z" fill="url(#router-dark-b)"/>
+  <path d="M550.286 395.674L550.286 483.674A88 88 0 1 0 638.286 395.674Z" fill="url(#router-dark-c)"/>
+  <path d="M550.286 439.674L657.143 439.674A106.857 106.857 0 1 0 550.286 332.817Z" fill="url(#router-dark-d)"/>
+  <path d="M449.714 395.674L361.714 395.674A88 88 0 0 0 293.78 427.738A106.857 106.857 0 0 0 342.857 439.674L449.714 439.674Z" fill="#F0503C"/>
+  <path d="M550.286 395.674L550.286 439.674L657.143 439.674A106.857 106.857 0 0 0 706.22 427.738A88 88 0 0 0 638.286 395.674Z" fill="#F0503C"/>
+  <path d="M489.943 282.531Q481.143 207.103 430.857 185.103" fill="none" stroke="#F2F3F5" stroke-width="16.343" stroke-linecap="round"/>
+  <circle cx="430.857" cy="185.103" r="17.349" fill="#F2F3F5"/>
+  <path d="M510.057 282.531Q518.857 207.103 569.143 185.103" fill="none" stroke="#F2F3F5" stroke-width="16.343" stroke-linecap="round"/>
+  <circle cx="569.143" cy="185.103" r="17.349" fill="#F2F3F5"/>
+  <rect x="478" y="257.389" width="44" height="370.857" rx="22" fill="#F2F3F5"/>
   <text x="500" y="830" text-anchor="middle" font-family="Audiowide" font-size="88" fill="#F2F3F5">Phoebis Router</text>
 </svg>
