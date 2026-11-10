@@ -247,8 +247,8 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
             .insert_api_key(&key(&store, "quiet", "main", "phoebis-quiet"), "test")
             .unwrap();
     }
-    // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column gone and
-    // the marker at 4, as the file's other migration test takes a file back to version 1.
+    // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column and the
+    // limit reset columns gone and the marker at 4, as the file's other migration test takes a file back to version 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
     seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
