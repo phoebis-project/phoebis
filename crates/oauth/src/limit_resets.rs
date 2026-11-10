@@ -104,8 +104,8 @@ pub fn parse_limit_resets(body: &[u8]) -> Result<Option<LimitResets>, OauthError
     }))
 }
 
-/// The grants of October carried no `type`, `gives_back_weekly` or `unavailable_reason`, so a grant without them
-/// still parses, each read as its default.
+/// Older grants carry no `type`, `gives_back_weekly` or `unavailable_reason`, so a grant without them still parses,
+/// each read as its default.
 fn parse_grant(value: &Value) -> Result<Grant, OauthError> {
     let grant = value.as_object().ok_or_else(|| malformed("grants"))?;
     let clears = required(grant, "clears", window_names)?;
@@ -252,6 +252,65 @@ pub fn resets_left(block: &LimitResets, now: i64) -> u32 {
         .iter()
         .filter(|grant| grant.ends_at > now)
         .fold(0, |sum, grant| sum.saturating_add(grant.resets_left))
+}
+
+/// What the upstream's answer to a claim states. Only `result` is required.
+#[derive(Clone, Debug)]
+pub struct ClaimAnswer {
+    /// The windows the answer names, in the router's names.
+    pub cleared: Vec<String>,
+    pub cooldown_until: Option<i64>,
+    pub reason: Option<String>,
+    pub resets_left: Option<u32>,
+    /// The upstream's word as sent, a word the router does not know included.
+    pub result: String,
+    pub weekly_resets_at: Option<i64>,
+}
+
+/// Reads a claim's answer. A member present with another type than its own fails the whole answer, as a member of the
+/// block does, so no count or instant is folded from an answer read in part.
+pub fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError> {
+    let root: Value =
+        serde_json::from_slice(body).map_err(|error| OauthError::UsageJson(error.to_string()))?;
+    let answer = root
+        .as_object()
+        .ok_or_else(|| OauthError::Malformed("claim answer is not an object".into()))?;
+    // `required` and `optional` refuse in the block's words, so the answer's refusal is written here.
+    let refused = |member: &'static str| {
+        move |_| {
+            OauthError::Malformed(format!(
+                "claim answer: {member} is absent or of another type"
+            ))
+        }
+    };
+    Ok(ClaimAnswer {
+        cleared: optional(answer, "cleared", window_names)
+            .map_err(refused("cleared"))?
+            .unwrap_or_default(),
+        cooldown_until: optional(answer, "cooldown_until", instant_ms)
+            .map_err(refused("cooldown_until"))?,
+        reason: optional(answer, "reason", as_string).map_err(refused("reason"))?,
+        resets_left: optional(answer, "resets_left", count).map_err(refused("resets_left"))?,
+        result: required(answer, "result", as_string).map_err(refused("result"))?,
+        weekly_resets_at: optional(answer, "weekly_resets_at", instant_ms)
+            .map_err(refused("weekly_resets_at"))?,
+    })
+}
+
+/// The block after a claim's answer for `grant_id`.
+pub(crate) fn fold_claim_answer(block: &mut LimitResets, grant_id: &str, answer: &ClaimAnswer) {
+    if let Some(grant) = block.grants.iter_mut().find(|grant| grant.id == grant_id) {
+        grant.resets_left = match (answer.result.as_str(), answer.resets_left) {
+            // The word says this grant's reset is gone, whatever count the answer names.
+            ("already_used", _) => 0,
+            (_, Some(left)) => left,
+            ("reset", None) => grant.resets_left.saturating_sub(1),
+            (_, None) => grant.resets_left,
+        };
+    }
+    if let Some(until) = answer.cooldown_until {
+        block.cooldown_until = Some(until);
+    }
 }
 
 #[cfg(test)]

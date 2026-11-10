@@ -15,7 +15,7 @@ use phoebis_ledger::{
     hourly_window_samples, latest_quota, lead_over_pace, HourlyWindowSample, LedgerConfig,
     LedgerDb, PlanTables, QuotaPoll, QuotaSampleRecord, SampleSource, Sampled, POLL_INTERVAL,
 };
-use phoebis_oauth::PollOutcome;
+use phoebis_oauth::{ClaimOutcome, PollOutcome};
 use phoebis_routing::{EvidenceSource, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, StorageKey,
@@ -2051,6 +2051,64 @@ async fn a_re_pair_between_two_passes_leaves_the_event_rule_at_one_read() {
         resets_asked(&up, A),
         2,
         "the same set at the next slot that reads no profile"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refused_claim_sends_one_limit_resets_read() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: LIMIT_RESETS_TARGET.into(),
+            respond: answering(500),
+        },
+        usage_rule(),
+        profile_rule(),
+        Rule {
+            path_prefix: "/api/organizations/".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"result":"not_limited"}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let usage = h
+        .usage
+        .clone()
+        .expect("the harness was built with the poll");
+    // The harness binds no organization id, and a claim's path carries one.
+    h.store
+        .set_identity(
+            "a",
+            &Identity {
+                account_uuid: "00000000-0000-4000-8000-000000000100".into(),
+                email: "a@example.invalid".into(),
+                organization_uuid: Some("00000000-0000-4000-8000-0000000000aa".into()),
+            },
+        )
+        .unwrap();
+    // Read at `NOW`, so no hour passes inside the test, and `USAGE` reads no window at its limit, so the mark alone
+    // can send a block read.
+    store_block(&h, "a", &stored_block(), NOW);
+    let row = h.store.account("a").unwrap().unwrap();
+    let claim = usage.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+    assert_eq!(claim.outcome, ClaimOutcome::Refused);
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        1,
+        "the slot after the refusal reads the block"
+    );
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        1,
+        "the read that went out ended the mark, though it failed"
     );
     up.shutdown().await;
 }

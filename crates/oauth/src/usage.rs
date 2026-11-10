@@ -9,14 +9,20 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
 use phoebis_store::{AccountRow, Store};
 use phoebis_transport::control::ControlClient;
+use phoebis_transport::TransportError;
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
 use crate::exchange::{
-    control_request, instant_ms, parse_profile, ControlKind, OauthError, ProfileResponse,
+    claim_request, control_request, instant_ms, parse_profile, ControlKind, OauthError,
+    ProfileResponse,
 };
-use crate::limit_resets::{parse_limit_resets, LimitResets, SEVEN_DAY_FABLE};
+use crate::limit_resets::{
+    fold_claim_answer, grant_states, parse_claim_answer, parse_limit_resets, ClaimAnswer,
+    GrantStatus, LimitResets, SEVEN_DAY_FABLE,
+};
 use crate::manager::{retry_after_ms, AcquireError, Clock, CredentialManager, LandedMark};
+use crate::random;
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
 // bookkeeping can no longer be trusted.
@@ -25,6 +31,14 @@ const LOCK_POISONED: &str = "usage service mutex poisoned by a prior panic";
 /// A usage response is a small JSON document, so 5 s covers a slow upstream without holding a concurrency
 /// slot for long.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The bound the client puts on a claim's request. Nothing sends a claim twice, so its one answer gets a longer wait
+/// than a read's.
+const CLAIM_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// How long an unsettled claim's request id goes out again for its grant, counted from the instant its outcome
+/// arrived, as the client keeps it.
+const REQUEST_ID_REUSE: Duration = Duration::from_secs(600);
 
 /// The longest an account waits out the usage endpoint, whether a `Retry-After` asked for more or the ladder
 /// reached it: fifteen minutes, the token refresh's own cap. A 429 that keeps coming keeps the account here
@@ -688,6 +702,9 @@ struct Inner {
     landed_marks: Mutex<HashMap<String, LandedMark>>,
     /// The limit resets read each account's poll slot decides by, beside the holder it was written for.
     resets_memory: Mutex<HashMap<String, (Identity, LimitResetsMemory)>>,
+    /// One lock over the kept request ids and the claims on their way, so `invalidate` and a claim's settling never
+    /// interleave.
+    claim_memory: Mutex<ClaimMemory>,
     on_backoff: Mutex<Option<BackoffHook>>,
     semaphore: Semaphore,
     manager: Arc<CredentialManager>,
@@ -744,6 +761,145 @@ pub struct LimitResetsMemory {
     pub last_sent_at: Option<i64>,
 }
 
+/// The router's class of a claim that left.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClaimOutcome {
+    Refused,
+    Unsettled,
+    Used,
+}
+
+impl ClaimOutcome {
+    /// `refused`, `unsettled` or `used`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Refused => "refused",
+            Self::Unsettled => "unsettled",
+            Self::Used => "used",
+        }
+    }
+}
+
+/// One claim that left, as the service answers it.
+#[derive(Clone, Debug)]
+pub struct Claim {
+    /// The answer where the upstream sent one that parsed and names a `result`.
+    pub answer: Option<ClaimAnswer>,
+    /// The instant the answer arrived or the request failed, on the service's clock.
+    pub at: i64,
+    /// The transport error's text for a claim with no answer.
+    pub error: Option<String>,
+    /// The grant's label in the stored block the claim was checked on.
+    pub label: String,
+    pub outcome: ClaimOutcome,
+    /// The request id the claim sent.
+    pub request_id: String,
+    /// The HTTP status, `None` where no head arrived.
+    pub status: Option<u16>,
+}
+
+/// Why a claim sent nothing.
+#[derive(Debug)]
+pub enum ClaimRefusal {
+    /// The account's row reads another holder than the one the caller confirmed.
+    AccountChanged,
+    /// A claim of the account is on its way.
+    InFlight,
+    /// The stored identity names no organization id of the form a request's path may carry.
+    NoOrganization,
+    /// The token could not be acquired, or the request cannot have reached the upstream, with the sentence.
+    NotSent(String),
+    /// The stored block does not read the grant usable at the service's clock: another state, a grant the block does
+    /// not list, or no stored block.
+    NotUsable,
+}
+
+/// A version 4 UUID in its lowercase form, as the client's `randomUUID` makes a claim's request id.
+fn new_request_id() -> String {
+    let mut bytes = [0u8; 16];
+    random::fill(&mut bytes);
+    // The version and the variant bits, as RFC 9562 sets them for a random UUID.
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
+}
+
+/// One holder's kept request ids by grant id, each with the instant its unsettled outcome arrived.
+type KeptIds = HashMap<String, (String, i64)>;
+
+#[derive(Default)]
+struct ClaimMemory {
+    /// The kept request ids by account id and grant id, with the holder they were kept under and the instant
+    /// the unsettled outcome arrived.
+    kept: HashMap<String, (Identity, KeptIds)>,
+    /// The accounts with a claim on its way, each with whether an `invalidate` crossed it.
+    on_their_way: HashMap<String, bool>,
+}
+
+/// Ends an account's claim on its way when the claim ends, however it ends.
+struct ClaimGuard<'a> {
+    account_id: String,
+    inner: &'a Inner,
+}
+
+impl Drop for ClaimGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut claims) = self.inner.claim_memory.lock() {
+            claims.on_their_way.remove(&self.account_id);
+        }
+    }
+}
+
+/// A claim whose head arrived, classed as the client classes it: a 401, 403 or 429 refuses with no answer, any other
+/// status but 200 and a 200 whose body does not parse leave the claim unsettled, and a parsed answer takes its class
+/// from its word.
+fn answered(
+    status: u16,
+    body: &[u8],
+    repeated: bool,
+    at: i64,
+    label: String,
+    request_id: String,
+) -> Claim {
+    let (outcome, answer) = match status {
+        401 | 403 | 429 => (ClaimOutcome::Refused, None),
+        200 => match parse_claim_answer(body) {
+            Ok(answer) => (class_of(&answer.result, repeated), Some(answer)),
+            Err(_) => (ClaimOutcome::Unsettled, None),
+        },
+        _ => (ClaimOutcome::Unsettled, None),
+    };
+    Claim {
+        answer,
+        at,
+        error: None,
+        label,
+        outcome,
+        request_id,
+        status: Some(status),
+    }
+}
+
+/// The class of a parsed answer's `result`. A word the router does not know leaves the claim unsettled, since it
+/// says nothing about whether the reset was spent.
+fn class_of(result: &str, repeated: bool) -> ClaimOutcome {
+    match result {
+        "reset" => ClaimOutcome::Used,
+        "already_used" | "ineligible" | "not_limited" => ClaimOutcome::Refused,
+        // A cooldown that answers a repeat can be the first attempt's own, which may have spent the reset.
+        "cooldown" if !repeated => ClaimOutcome::Refused,
+        _ => ClaimOutcome::Unsettled,
+    }
+}
+
 impl UsageService {
     pub fn new(
         manager: Arc<CredentialManager>,
@@ -760,6 +916,7 @@ impl UsageService {
                 resets_inflight: Mutex::new(HashMap::new()),
                 landed_marks: Mutex::new(HashMap::new()),
                 resets_memory: Mutex::new(HashMap::new()),
+                claim_memory: Mutex::new(ClaimMemory::default()),
                 on_backoff: Mutex::new(None),
                 semaphore: Semaphore::new(concurrency),
                 manager,
@@ -934,9 +1091,10 @@ impl UsageService {
         *self.inner.on_backoff.lock().expect(LOCK_POISONED) = Some(hook);
     }
 
-    /// Drops what the service holds for the account: the cached snapshot and the remembered limit resets read with its
-    /// limit set and its due mark. A pairing keeps the holder the memory is keyed by, and the remembered hour would
-    /// hold back the read that fills the block the pairing cleared.
+    /// Drops what the service holds for the account: the cached snapshot, the remembered limit resets read with its
+    /// limit set and its due mark, and the kept request ids. A pairing keeps the holder those are keyed by, so the
+    /// remembered hour would hold back the read that fills the block the pairing cleared, and a kept id would go out
+    /// for the next pairing. A claim on its way across the call keeps no id.
     pub fn invalidate(&self, account_id: &str) {
         self.inner
             .cache
@@ -948,6 +1106,12 @@ impl UsageService {
             .lock()
             .expect(LOCK_POISONED)
             .remove(account_id);
+        let mut claims = self.inner.claim_memory.lock().expect(LOCK_POISONED);
+        claims.kept.remove(account_id);
+        // A claim on its way went out under the pairing before this call, so its id is not kept for the next one.
+        if let Some(crossed) = claims.on_their_way.get_mut(account_id) {
+            *crossed = true;
+        }
     }
 
     async fn join_or_start(
@@ -1131,6 +1295,86 @@ impl UsageService {
         self.inner
             .mark_resets_due(&account.id, Identity::of(account));
     }
+
+    /// Claims `grant_id` for the holder of `account`, the row the caller read and confirmed the reset on. A grant id
+    /// repeats across accounts, so the claim never follows the id to another holder.
+    pub async fn claim_limit_reset(
+        &self,
+        account: &AccountRow,
+        grant_id: &str,
+    ) -> Result<Claim, ClaimRefusal> {
+        let inner = &self.inner;
+        let account_id = account.id.as_str();
+        // The caller confirmed this holder's reset. A grant id names a promotion and repeats across accounts, so
+        // an account created again under the id must not have its own spent.
+        let holder = Identity::of(account);
+        let row = inner
+            .store
+            .account(account_id)
+            .ok()
+            .flatten()
+            .filter(|row| Identity::of(row) == holder)
+            .ok_or(ClaimRefusal::AccountChanged)?;
+        let organization = row
+            .identity
+            .as_ref()
+            .and_then(|identity| identity.organization_uuid.as_deref())
+            // The id becomes a part of the request's path, so nothing but a UUID's characters reaches the target.
+            .filter(|id| id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'))
+            .ok_or(ClaimRefusal::NoOrganization)?;
+        // Two requests at once could spend two resets on one intent.
+        let _on_its_way = inner
+            .begin_claim(account_id)
+            .ok_or(ClaimRefusal::InFlight)?;
+        // Checked under the reservation, so a second click finds the count the first one's fold left, and matched
+        // whole against the stored block, so an id that reaches the upstream is one the upstream sent. The epoch
+        // comes from the same read: a pairing that lands before the answer moves it, and the fold writes nothing.
+        let (label, epoch) = inner
+            .usable_grant(account_id, grant_id)
+            .ok_or(ClaimRefusal::NotUsable)?;
+        let token = inner.manager.acquire(account_id).await.map_err(|error| {
+            inner.keep_landed_mark(account_id, &error);
+            ClaimRefusal::NotSent(format!("acquire: {error}"))
+        })?;
+        // The acquisition can wait on a refresh, long enough for the id to pass to another holder.
+        if inner.identity(account_id) != Some(holder) {
+            return Err(ClaimRefusal::AccountChanged);
+        }
+        let (request_id, repeated) = inner.request_id_for(account_id, holder, grant_id);
+        let request = claim_request(
+            inner.profile,
+            organization,
+            token.secret.expose(),
+            grant_id,
+            &request_id,
+        );
+        let sent = inner
+            .control
+            .send(request, inner.profile.control.usage.host, CLAIM_TIMEOUT)
+            .await;
+        let at = (inner.clock)();
+        let claim = match sent {
+            Err(TransportError::Unreachable(detail)) => return Err(ClaimRefusal::NotSent(detail)),
+            Err(error) => Claim {
+                answer: None,
+                at,
+                error: Some(error.to_string()),
+                label,
+                outcome: ClaimOutcome::Unsettled,
+                request_id,
+                status: None,
+            },
+            Ok((head, body)) => answered(head.status, &body, repeated, at, label, request_id),
+        };
+        inner.settle_request_id(account_id, holder, grant_id, &claim, repeated);
+        if let Some(answer) = &claim.answer {
+            inner.fold_claim(account_id, holder, epoch, grant_id, answer);
+        }
+        if claim.outcome == ClaimOutcome::Refused {
+            inner.mark_resets_due(account_id, holder);
+        }
+        Ok(claim)
+    }
 }
 
 impl Inner {
@@ -1209,7 +1453,10 @@ impl Inner {
             text.as_deref(),
             sent_at,
         ) {
-            Ok(true) => Ok(block),
+            Ok(true) => {
+                self.drop_settled_request_ids(account_id, holder, block.as_ref(), sent_at);
+                Ok(block)
+            }
             // A fold, a pairing or another holder came between the start and the answer. The read landed nothing,
             // and the instant remembered at its send would hold the next read back for an hour, so the read stays
             // due under the holder the row has now. The row holds what the caller should read.
@@ -1263,6 +1510,157 @@ impl Inner {
             *entry = (holder, LimitResetsMemory::default());
         }
         entry.1.due = true;
+    }
+
+    /// Reserves the account for one claim, `None` while another is on its way.
+    fn begin_claim(&self, account_id: &str) -> Option<ClaimGuard<'_>> {
+        let mut claims = self.claim_memory.lock().expect(LOCK_POISONED);
+        if claims.on_their_way.contains_key(account_id) {
+            return None;
+        }
+        claims.on_their_way.insert(account_id.to_string(), false);
+        Some(ClaimGuard {
+            account_id: account_id.to_string(),
+            inner: self,
+        })
+    }
+
+    /// The grant's label and the stored block's epoch where the block reads the grant usable at the service's
+    /// clock, `None` for another state, for a grant the block does not list and for a row with no block.
+    fn usable_grant(&self, account_id: &str, grant_id: &str) -> Option<(String, u64)> {
+        let extras = self.store.account_extras_of(account_id).ok().flatten()?;
+        let block: LimitResets = serde_json::from_value(extras.limit_resets?).ok()?;
+        let at = block.grants.iter().position(|grant| grant.id == grant_id)?;
+        let usable = grant_states(&block, (self.clock)())[at].state == GrantStatus::Usable;
+        usable.then(|| (block.grants[at].label.clone(), extras.limit_resets_epoch))
+    }
+
+    /// The holder's kept request id for the grant and `true` while it is younger than `REQUEST_ID_REUSE`, else a new
+    /// id and `false`.
+    fn request_id_for(&self, account_id: &str, holder: Identity, grant_id: &str) -> (String, bool) {
+        let now = (self.clock)();
+        let reuse = REQUEST_ID_REUSE.as_millis() as i64;
+        let claims = self.claim_memory.lock().expect(LOCK_POISONED);
+        let kept = claims
+            .kept
+            .get(account_id)
+            .filter(|(kept_under, _)| *kept_under == holder)
+            .and_then(|(_, ids)| ids.get(grant_id))
+            .filter(|(_, kept_at)| now - kept_at < reuse);
+        match kept {
+            Some((id, _)) => (id.clone(), true),
+            None => (new_request_id(), false),
+        }
+    }
+
+    /// Keeps the id of an unsettled claim that sent a new one, leaves a kept id as it is after an unsettled repeat, and
+    /// drops it once the claim settles.
+    fn settle_request_id(
+        &self,
+        account_id: &str,
+        holder: Identity,
+        grant_id: &str,
+        claim: &Claim,
+        repeated: bool,
+    ) {
+        let mut claims = self.claim_memory.lock().expect(LOCK_POISONED);
+        // An `invalidate` crossed the claim, so its id went out under the pairing before and is kept for no other.
+        if claims.on_their_way.get(account_id) == Some(&true) {
+            return;
+        }
+        match claim.outcome {
+            ClaimOutcome::Unsettled if repeated => {}
+            ClaimOutcome::Unsettled => {
+                let entry = claims
+                    .kept
+                    .entry(account_id.to_string())
+                    .or_insert_with(|| (holder, HashMap::new()));
+                if entry.0 != holder {
+                    *entry = (holder, HashMap::new());
+                }
+                entry
+                    .1
+                    .insert(grant_id.to_string(), (claim.request_id.clone(), claim.at));
+            }
+            ClaimOutcome::Refused | ClaimOutcome::Used => {
+                if let Some((kept_under, ids)) = claims.kept.get_mut(account_id) {
+                    if *kept_under == holder {
+                        ids.remove(grant_id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drops the holder's kept request ids that this block read settles: a grant the block no longer lists, or one it
+    /// does not read usable while no cooldown lies ahead. An id kept at or after `sent_at`, the instant the read's
+    /// request went out, stays, since that read says nothing about the attempt.
+    fn drop_settled_request_ids(
+        &self,
+        account_id: &str,
+        holder: Identity,
+        block: Option<&LimitResets>,
+        sent_at: i64,
+    ) {
+        let mut claims = self.claim_memory.lock().expect(LOCK_POISONED);
+        let Some((kept_under, ids)) = claims.kept.get_mut(account_id) else {
+            return;
+        };
+        if *kept_under != holder {
+            return;
+        }
+        let cooling = block
+            .and_then(|block| block.cooldown_until)
+            .is_some_and(|until| until > sent_at);
+        let states = block
+            .map(|block| grant_states(block, sent_at))
+            .unwrap_or_default();
+        ids.retain(|grant_id, (_, kept_at)| {
+            // A read sent at the instant the id was kept is not known to follow the attempt.
+            if *kept_at >= sent_at {
+                return true;
+            }
+            let listed =
+                block.and_then(|block| block.grants.iter().position(|grant| &grant.id == grant_id));
+            listed.is_some_and(|at| cooling || states[at].state == GrantStatus::Usable)
+        });
+    }
+
+    /// Folds a claim's answer into the stored block under the holder and the epoch the claim was checked on.
+    fn fold_claim(
+        &self,
+        account_id: &str,
+        holder: Identity,
+        epoch: u64,
+        grant_id: &str,
+        answer: &ClaimAnswer,
+    ) {
+        let folded = self.store.fold_limit_resets(
+            account_id,
+            holder.incarnation,
+            holder.lifecycle_generation,
+            epoch,
+            |stored| {
+                let mut block: LimitResets = serde_json::from_str(stored).ok()?;
+                fold_claim_answer(&mut block, grant_id, answer);
+                Some(serde_json::to_string(&block).expect("a block serializes"))
+            },
+        );
+        // The claim left, so its outcome stands whatever the store does with its answer.
+        match folded {
+            Ok(true) => {}
+            Ok(false) => tracing::warn!(
+                account = %account_id,
+                grant = %grant_id,
+                "the stored block took no fold of a limit reset claim's answer"
+            ),
+            Err(error) => tracing::warn!(
+                account = %account_id,
+                grant = %grant_id,
+                error = %error,
+                "the stored block took no fold of a limit reset claim's answer"
+            ),
+        }
     }
 
     fn identity(&self, account_id: &str) -> Option<Identity> {

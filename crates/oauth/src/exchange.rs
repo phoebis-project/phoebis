@@ -1,4 +1,4 @@
-//! Token endpoint bodies, the five control-plane request shapes, and the responses they return.
+//! Token endpoint bodies, the six control-plane request shapes, and the responses they return.
 
 use bytes::Bytes;
 use phoebis_profile::{ControlEndpoint, Profile};
@@ -19,8 +19,8 @@ pub enum OauthError {
     Malformed(String),
     #[error("control response is not valid JSON")]
     Json(#[from] serde_json::Error),
-    /// serde's message quotes the value it refused, which a usage body may show and a token body must not, so
-    /// the usage parse alone builds this variant.
+    /// serde's message quotes the value it refused, which a usage body or a claim's answer may show and a token body
+    /// must not, so the parses of those two alone build this variant.
     #[error("control response is not valid JSON: {0}")]
     UsageJson(String),
 }
@@ -140,6 +140,44 @@ pub fn control_request(
         },
         target: endpoint.target.to_string(),
         headers,
+        body,
+    }
+}
+
+/// The claim of a limit reset as the client sends it: a `POST` to the organization's `reset_rate_limits` on the
+/// usage endpoint's host, under the usage read's head with the body's length before `Accept-Encoding`.
+pub fn claim_request(
+    profile: &Profile,
+    organization_uuid: &str,
+    bearer: &str,
+    grant_id: &str,
+    request_id: &str,
+) -> RawRequest {
+    let body = Bytes::from(json_body(&[
+        ("program", "cedar_ember"),
+        ("grant_id", grant_id),
+        ("request_id", request_id),
+    ]));
+    let host = profile.control.usage.host;
+    let headers = [
+        ("Accept", ACCEPT.to_string()),
+        ("Content-Type", CONTENT_TYPE_JSON.to_string()),
+        ("User-Agent", profile.user_agent_cli.to_string()),
+        ("Authorization", format!("Bearer {bearer}")),
+        ("anthropic-beta", USAGE_BETA.to_string()),
+        // Where the client's HTTP library writes the length of a body: after the caller's last header.
+        ("Content-Length", body.len().to_string()),
+        ("Accept-Encoding", ACCEPT_ENCODING.to_string()),
+        ("Host", host.to_string()),
+        ("Connection", "close".to_string()),
+    ];
+    RawRequest {
+        method: "POST",
+        target: format!("/api/organizations/{organization_uuid}/reset_rate_limits"),
+        headers: headers
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value))
+            .collect(),
         body,
     }
 }

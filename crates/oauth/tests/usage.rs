@@ -198,9 +198,10 @@ fn a_null_alias_key_without_limits_yields_no_fable_window() {
 }
 
 mod service {
-    use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
+    use fake_upstream::{wait_for, FakeUpstream, RecordedRequest, Respond, Rule};
     use phoebis_oauth::{
-        BackoffEdge, BackoffEndCause, Clock, CredentialManager, PollFault, PollIssue, PollOutcome,
+        grant_states, parse_limit_resets, BackoffEdge, BackoffEndCause, ClaimOutcome, ClaimRefusal,
+        Clock, CredentialManager, GrantStatus, LimitResets, PollFault, PollIssue, PollOutcome,
         Refused, UsageError, UsageService,
     };
     use phoebis_profile::{
@@ -1982,6 +1983,692 @@ mod service {
         assert!(
             service.limit_resets_memory(&row).due,
             "a read that landed nothing stays due for the next slot"
+        );
+        up.shutdown().await;
+    }
+
+    /// The organization id `a`'s identity holds in the claims' rigs, invented.
+    const ORGANIZATION: &str = "00000000-0000-4000-8000-0000000000aa";
+
+    /// The prefix of every claim's target.
+    const CLAIM_PREFIX: &str = "/api/organizations/";
+
+    /// A block read in the client's shape whose grant `rg-a-1` holds two resets and waits for a limit.
+    const BLOCKED_BODY: &[u8] = br#"{"cedar_ember":{"eligible":true,"grants":[{"id":"rg-a-1","label":"Launch reset","clears":["seven_day_overage_included"],"gives_back_weekly":true,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2027-01-01T00:00:00Z","resets_left":2,"resets_total":2,"usable_now":false,"unavailable_reason":"needs_limit"}]}}"#;
+
+    /// `BLOCKED_BODY` with the grant usable.
+    const USABLE_BODY: &[u8] = br#"{"cedar_ember":{"eligible":true,"grants":[{"id":"rg-a-1","label":"Launch reset","clears":["seven_day_overage_included"],"gives_back_weekly":true,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2027-01-01T00:00:00Z","resets_left":2,"resets_total":2,"usable_now":true}]}}"#;
+
+    /// The client's shape of the usage read, the prefix of its rule.
+    const LIMIT_RESETS_PREFIX: &str = "/api/oauth/usage?cedar_ember=1&skip_spend=1";
+
+    /// `store_with_valid_bundle` with `organization` on `a`'s identity and `block` stored on its row.
+    fn store_for_claims(organization: &str, block: &LimitResets) -> Arc<Store> {
+        let store = store_with_valid_bundle();
+        store
+            .set_identity(
+                "a",
+                &phoebis_store::Identity {
+                    account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    email: "test@example.invalid".into(),
+                    organization_uuid: Some(organization.into()),
+                },
+            )
+            .unwrap();
+        store_block(&store, 1, block);
+        store
+    }
+
+    /// The typed block the parser answers for `BLOCK`, its grant `rg-a-1` at `left` resets of `total`.
+    fn block_with(left: u32, total: u32) -> LimitResets {
+        let mut block = parse_limit_resets(BLOCK).unwrap().unwrap();
+        block.grants[0].resets_left = left;
+        block.grants[0].resets_total = total;
+        block
+    }
+
+    /// Writes `block` on `a`'s row under the holder of `incarnation`, at the epoch of a row no fold moved, as a read
+    /// at the service's clock writes it.
+    fn store_block(store: &Store, incarnation: u64, block: &LimitResets) {
+        let text = serde_json::to_string(block).unwrap();
+        assert!(store
+            .set_limit_resets("a", incarnation, 1, 0, Some(&text), 1_000_000)
+            .unwrap());
+    }
+
+    fn claim_rule(respond: Respond) -> Rule {
+        Rule {
+            path_prefix: CLAIM_PREFIX.into(),
+            respond,
+        }
+    }
+
+    /// Answers every claim from the next one on with `respond`.
+    fn answer_claims(up: &FakeUpstream, respond: Respond) {
+        up.set_rule_after(0, CLAIM_PREFIX, respond);
+    }
+
+    fn claims_sent(up: &FakeUpstream) -> Vec<RecordedRequest> {
+        up.requests()
+            .into_iter()
+            .filter(|r| r.line.starts_with("POST /api/organizations/"))
+            .collect()
+    }
+
+    /// The `request_id` of each claim the fake read, in order.
+    fn request_ids(up: &FakeUpstream) -> Vec<String> {
+        claims_sent(up)
+            .iter()
+            .map(|claim| {
+                let body: serde_json::Value = serde_json::from_slice(&claim.body).unwrap();
+                body["request_id"].as_str().unwrap().to_string()
+            })
+            .collect()
+    }
+
+    /// Each grant's state at the service's clock and its count, in the block `a`'s row holds.
+    fn stored_grants(store: &Store) -> (Vec<GrantStatus>, Vec<u32>) {
+        let stored = store
+            .account_extras_of("a")
+            .unwrap()
+            .unwrap()
+            .limit_resets
+            .expect("the row holds a block");
+        let block: LimitResets = serde_json::from_value(stored).unwrap();
+        let states = grant_states(&block, 1_000_000)
+            .into_iter()
+            .map(|grant| grant.state)
+            .collect();
+        (
+            states,
+            block.grants.iter().map(|grant| grant.resets_left).collect(),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_claim_goes_out_as_the_client_sends_it() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            usage_body_rule(),
+            claim_rule(answering_with(200, br#"{"result":"reset"}"#)),
+        ])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        service.poll("a").await.unwrap();
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let requests = up.requests();
+        let usage = requests
+            .iter()
+            .find(|r| r.line.starts_with(USAGE_LINE))
+            .expect("the usage read went out");
+        let claims = claims_sent(&up);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(
+            claims[0].line,
+            "POST /api/organizations/00000000-0000-4000-8000-0000000000aa/reset_rate_limits HTTP/1.1"
+        );
+        let names: Vec<&str> = claims[0]
+            .headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Accept",
+                "Content-Type",
+                "User-Agent",
+                "Authorization",
+                "anthropic-beta",
+                "Content-Length",
+                "Accept-Encoding",
+                "Host",
+                "Connection"
+            ],
+            "the usage read's head with the body's length after the last header the caller sets"
+        );
+        let without_length: Vec<(String, String)> = claims[0]
+            .headers
+            .iter()
+            .filter(|(name, _)| name != "Content-Length")
+            .cloned()
+            .collect();
+        assert_eq!(
+            without_length, usage.headers,
+            "every other header is the usage read's, by name and value"
+        );
+        let id = &request_ids(&up)[0];
+        assert_eq!(id.len(), 36, "a UUID's text");
+        assert_eq!(
+            String::from_utf8(claims[0].body.clone()).unwrap(),
+            format!(r#"{{"program":"cedar_ember","grant_id":"rg-a-1","request_id":"{id}"}}"#)
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_unanswered_claim_repeats_its_request_id() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"cooldown"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 4);
+        assert_eq!(
+            ids[0], ids[1],
+            "the second click repeats the id of a first whose answer never arrived"
+        );
+        assert_ne!(
+            ids[2], ids[3],
+            "a cooldown that answers a new id settles the claim, so the next click sends another"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_times_out_is_sent_once() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::Gated(Box::new(answering_with(
+            200,
+            br#"{"result":"reset"}"#,
+        ))))])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let row = store.account("a").unwrap().unwrap();
+        let claiming = {
+            let service = service.clone();
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (claims_sent(&up).len() == 1).then_some(())
+        })
+        .await;
+        // The fake holds the whole request, so the bound lapses after the request was written.
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(25)).await;
+        tokio::time::resume();
+        let claim = claiming.await.unwrap().unwrap();
+        assert_eq!(
+            (claim.outcome, claim.status),
+            (ClaimOutcome::Unsettled, None)
+        );
+        assert_eq!(claims_sent(&up).len(), 1, "nothing sends the claim again");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_request_id_ends_after_ten_minutes() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        now.store(1_599_999, Ordering::SeqCst);
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        now.store(1_600_000, Ordering::SeqCst);
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            ids[0], ids[1],
+            "ten minutes less a millisecond after the first outcome"
+        );
+        assert_ne!(ids[2], ids[0], "ten minutes after it");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_500_keeps_the_request_id_and_a_403_drops_it() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering(500))]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        let first = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering(403));
+        let second = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(
+            (first.outcome, second.outcome),
+            (ClaimOutcome::Unsettled, ClaimOutcome::Refused)
+        );
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            ids[0], ids[1],
+            "the upstream may have taken the 500's claim"
+        );
+        assert_ne!(ids[2], ids[1], "the 403 settles the claim");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_block_read_drops_the_kept_request_id() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(answering_with(200, BLOCKED_BODY)),
+            claim_rule(Respond::CloseAfterRequest),
+        ])
+        .await;
+        up.set_rule_after(1, LIMIT_RESETS_PREFIX, answering_with(200, USABLE_BODY));
+        let store = store_for_claims(ORGANIZATION, &block_with(2, 2));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        // One millisecond after the outcome, the first instant a read goes out after the id was kept.
+        now.store(1_000_001, Ordering::SeqCst);
+        service.limit_resets("a").await.unwrap();
+        service.limit_resets("a").await.unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 2);
+        assert_ne!(
+            ids[0], ids[1],
+            "the read that shows the grant blocked with no cooldown settles the first claim"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_cooldown_after_a_repeat_stays_unsettled() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"cooldown"}"#));
+        let second = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(
+            second.outcome,
+            ClaimOutcome::Unsettled,
+            "a cooldown after a repeat can be the first attempt's own"
+        );
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            (&ids[1], &ids[2]),
+            (&ids[0], &ids[0]),
+            "the id stays kept for the third click"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_already_used_reset_is_not_offered_again() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering_with(
+            200,
+            br#"{"result":"already_used"}"#,
+        ))])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(1, 1));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        let claim = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(claim.outcome, ClaimOutcome::Refused);
+        assert_eq!(
+            stored_grants(&store),
+            (vec![GrantStatus::Used], vec![0]),
+            "the answer names no count, and its word says the reset is gone"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_grant_that_waits_is_not_claimed() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering_with(
+            200,
+            br#"{"result":"reset"}"#,
+        ))])
+        .await;
+        let mut block = block_with(1, 1);
+        let mut second = block.grants[0].clone();
+        second.id = "rg-a-2".into();
+        block.grants.push(second);
+        let store = store_for_claims(ORGANIZATION, &block);
+        assert_eq!(
+            stored_grants(&store).0,
+            vec![GrantStatus::Usable, GrantStatus::Waiting],
+            "both grants give the Fable week back, so they are of one kind"
+        );
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+
+        let waiting = service.claim_limit_reset(&row, "rg-a-2").await;
+        assert!(
+            matches!(waiting, Err(ClaimRefusal::NotUsable)),
+            "{waiting:?}"
+        );
+        assert_eq!(up.requests().len(), 0, "the waiting grant sends nothing");
+        let first = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        assert_eq!(first.outcome, ClaimOutcome::Used);
+        let claims = claims_sent(&up);
+        assert_eq!(claims.len(), 1);
+        let body: serde_json::Value = serde_json::from_slice(&claims[0].body).unwrap();
+        assert_eq!(body["grant_id"], "rg-a-1");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_organization_id_with_a_separator_sends_nothing() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering_with(
+            200,
+            br#"{"result":"reset"}"#,
+        ))])
+        .await;
+        let store = store_for_claims("a/../b", &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+
+        let refused = service.claim_limit_reset(&row, "rg-a-1").await;
+        assert!(
+            matches!(refused, Err(ClaimRefusal::NoOrganization)),
+            "{refused:?}"
+        );
+        assert_eq!(up.requests().len(), 0);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_second_claim_waits_for_no_first() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::Gated(Box::new(answering_with(
+            200,
+            br#"{"result":"reset"}"#,
+        ))))])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let row = store.account("a").unwrap().unwrap();
+        let claim = || {
+            let (service, row) = (service.clone(), row.clone());
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+        };
+        let first = claim();
+        wait_for(Duration::from_secs(5), || {
+            (claims_sent(&up).len() == 1).then_some(())
+        })
+        .await;
+        let second = claim();
+        // Either the second answers while the first is held, or it reaches the fake beside the first.
+        wait_for(Duration::from_secs(5), || {
+            (second.is_finished() || claims_sent(&up).len() == 2).then_some(())
+        })
+        .await;
+        up.release();
+
+        let (first, second) = (first.await.unwrap(), second.await.unwrap());
+        assert!(matches!(second, Err(ClaimRefusal::InFlight)), "{second:?}");
+        assert_eq!(first.unwrap().outcome, ClaimOutcome::Used);
+        assert_eq!(claims_sent(&up).len(), 1);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_claim_arms_no_hold() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![usage_body_rule(), claim_rule(answering(429))]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let snapshot = service.poll("a").await.unwrap();
+        assert_eq!(
+            (snapshot.error, requests_on(&up, USAGE_LINE)),
+            (None, 1),
+            "the next usage poll sends its request"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_hold_stops_no_claim() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            rate_limited("120"),
+            claim_rule(answering_with(200, br#"{"result":"reset"}"#)),
+        ])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        service.poll("a").await.unwrap();
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(
+            claims_sent(&up).len(),
+            1,
+            "the claim goes out while the usage reads wait out the 429"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_read_from_before_a_claim_does_not_bring_the_reset_back() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(Respond::Gated(Box::new(answering_with(200, BLOCK)))),
+            claim_rule(answering_with(200, br#"{"result":"reset"}"#)),
+        ])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(1, 1));
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let row = store.account("a").unwrap().unwrap();
+        let reading = {
+            let service = service.clone();
+            tokio::spawn(async move { service.limit_resets("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (requests_on(&up, LIMIT_RESETS_LINE) == 1).then_some(())
+        })
+        .await;
+        let claim = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        assert_eq!(claim.outcome, ClaimOutcome::Used);
+        up.release();
+        let read = reading
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("the row holds a block");
+
+        assert_eq!(
+            stored_grants(&store),
+            (vec![GrantStatus::Used], vec![0]),
+            "the held read's block, one reset left, lands nothing over the claim's fold"
+        );
+        assert_eq!(
+            read.grants[0].resets_left, 0,
+            "the held read answers the block the row holds"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_does_not_follow_an_id_to_another_holder() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering_with(
+            200,
+            br#"{"result":"reset"}"#,
+        ))])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let before = store.account("a").unwrap().unwrap();
+        store.delete_account("a", "test").unwrap();
+        store
+            .insert_account(&AccountRow {
+                identity: Some(phoebis_store::Identity {
+                    account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    email: "test@example.invalid".into(),
+                    organization_uuid: Some(ORGANIZATION.into()),
+                }),
+                ..AccountRow::for_tests("a", AccountKind::Oauth)
+            })
+            .unwrap();
+        let after = store.account("a").unwrap().unwrap();
+        store
+            .commit_credentials(
+                "a",
+                after.incarnation,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("rt")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+        store_block(&store, after.incarnation, &block_with(3, 3));
+
+        let refused = service.claim_limit_reset(&before, "rg-a-1").await;
+        assert!(
+            matches!(refused, Err(ClaimRefusal::AccountChanged)),
+            "{refused:?}"
+        );
+        assert_eq!(
+            up.requests().len(),
+            0,
+            "the new holder's reset is not spent on the deleted holder's confirmation"
+        );
+        let claim = service.claim_limit_reset(&after, "rg-a-1").await.unwrap();
+        assert_eq!(claim.outcome, ClaimOutcome::Used);
+        assert_eq!(claims_sent(&up).len(), 1);
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_re_pair_drops_the_kept_request_id() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service.invalidate("a");
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 2);
+        assert_ne!(
+            ids[0], ids[1],
+            "an id sent under the pairing before does not go out for the next one"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_crosses_a_re_pair_keeps_no_request_id() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up =
+            FakeUpstream::start(vec![claim_rule(Respond::Gated(Box::new(answering(500))))]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let row = store.account("a").unwrap().unwrap();
+        let claiming = {
+            let (service, row) = (service.clone(), row.clone());
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (claims_sent(&up).len() == 1).then_some(())
+        })
+        .await;
+        service.invalidate("a");
+        up.release();
+        let first = claiming.await.unwrap().unwrap();
+        // The gate stays open, so the second claim is answered 500 at once.
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(first.outcome, ClaimOutcome::Unsettled);
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 2);
+        assert_ne!(
+            ids[0], ids[1],
+            "the first claim went out under the pairing before the call, so its id is not kept"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_read_from_before_an_unsettled_claim_keeps_its_request_id() {
+        // The clock stays put, so the held read goes out at the instant the claim's outcome arrives.
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(Respond::Gated(Box::new(answering_with(200, BLOCKED_BODY)))),
+            claim_rule(Respond::CloseAfterRequest),
+        ])
+        .await;
+        up.set_rule_after(1, LIMIT_RESETS_PREFIX, answering_with(200, USABLE_BODY));
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let row = store.account("a").unwrap().unwrap();
+        let reading = {
+            let service = service.clone();
+            tokio::spawn(async move { service.limit_resets("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (requests_on(&up, LIMIT_RESETS_LINE) == 1).then_some(())
+        })
+        .await;
+        let first = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        up.release();
+        let held = reading
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("the held read answers a block");
+        let held: Vec<GrantStatus> = grant_states(&held, 1_000_000)
+            .into_iter()
+            .map(|grant| grant.state)
+            .collect();
+        assert_eq!(
+            held,
+            vec![GrantStatus::Blocked],
+            "the held read's write landed, and its block is one that drops an id"
+        );
+        service.limit_resets("a").await.unwrap();
+        let second = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(
+            (first.outcome, second.outcome),
+            (ClaimOutcome::Unsettled, ClaimOutcome::Unsettled)
+        );
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(
+            ids[0], ids[1],
+            "a read from before the outcome says nothing about what the attempt spent"
         );
         up.shutdown().await;
     }
