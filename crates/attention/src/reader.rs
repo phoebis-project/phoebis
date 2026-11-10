@@ -1,21 +1,22 @@
-//! The twenty conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs and the refresh token ends from the store, the parked records, the ledger's degraded state, the unpriced models
-//! its landing or a catalog listing saw, the routing conditions its hourly fold wrote and the expiries between turns
-//! its rollups count from the ledger, the routing state writer's and the listeners' pairs from the router, the bus gaps
-//! and the caps from the keepalive engine, the poll's standing from the usage service, and the exhaustions and drift
-//! refusals from the request outcomes the bus arm keeps.
+//! The twenty-one conditions, read fresh on every call: the account states, the pools and the stored limit resets from
+//! the registry, the refresh runs and the refresh token ends from the store, the parked records, the ledger's degraded
+//! state, the unpriced models its landing or a catalog listing saw, the routing conditions its hourly fold wrote and
+//! the expiries between turns its rollups count from the ledger, the routing state writer's and the listeners' pairs
+//! from the router, the bus gaps and the caps from the keepalive engine, the poll's standing from the usage service,
+//! and the exhaustions and drift refusals from the request outcomes the bus arm keeps.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
     polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, SHED_CAP_SETTING,
     SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS, WINDOW_CEILING_SETTING,
 };
-use phoebis_oauth::UsageService;
+use phoebis_oauth::{grant_states, resets_left, Grant, GrantStatus, LimitResets, UsageService};
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Settled, Store, StoreError,
+    AccountExtras, AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Settled, Store,
+    StoreError,
 };
 use serde_json::json;
 
@@ -67,17 +68,21 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
-/// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, an
-/// account's refresh token near its fixed end, the router's own certificate about to lapse, priced records the ledger
-/// file keeps until the next start or a replay lands them, a keepalive engine that missed bus events in the last day,
+/// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
+/// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
+/// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
+/// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, an account's
+/// refresh token near its fixed end, the router's own certificate about to lapse, an account's unused limit reset about
+/// to end, the fourth lapse with a date on it and the one whose miss stops no traffic, priced records the ledger file
+/// keeps until the next start or a replay lands them, a keepalive engine that missed bus events in the last day,
 /// windows that read stale, a model that served plan-funded traffic and prices nothing, while nothing is broken, and an
 /// account whose meter charged its windows off the cost model's figures. That last one names a pricing that is off and
 /// ranks above the four routing conditions, whose causes it can explain. Those four stop no traffic and rank under
 /// every kind that does, worst first among themselves: an account that reached its wall, a move whose destination was
 /// spent within the hour, a pool whose rounds found no destination with runway, and an account whose requests waited
 /// past twice its pool's stretch threshold in the day, a slow-down that worked for long. The keepalive engine's two
-/// warnings rank last: a cap filled to 90 percent or more, then cache entries that expired between turns on a pool
-/// that warms caches, under a key the keepalive may probe for.
+/// warnings rank last: a cap filled to 90 percent or more, then cache entries that expired between turns on a pool that
+/// warms caches, under a key the keepalive may probe for.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -89,6 +94,7 @@ pub enum Kind {
     RefreshFailed,
     PairingExpiring,
     CertificateExpiring,
+    LimitResetEnding,
     LedgerRecordParked,
     KeepaliveBusGaps,
     PollBackoff,
@@ -114,6 +120,7 @@ impl Kind {
             Kind::RefreshFailed => "refresh_failed",
             Kind::PairingExpiring => "pairing_expiring",
             Kind::CertificateExpiring => "certificate_expiring",
+            Kind::LimitResetEnding => "limit_reset_ending",
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::KeepaliveBusGaps => "keepalive_bus_gaps",
             Kind::PollBackoff => "poll_backoff",
@@ -146,6 +153,7 @@ impl Kind {
             | Kind::RefreshFailed
             | Kind::PairingExpiring
             | Kind::CertificateExpiring
+            | Kind::LimitResetEnding
             | Kind::LedgerRecordParked
             | Kind::KeepaliveBusGaps
             | Kind::PollBackoff
@@ -515,23 +523,53 @@ pub(crate) fn refresh_facts(
         .collect()
 }
 
+/// What the reset condition and the wall's join read beside the accounts: each account's stored extras and the
+/// warning's days.
+pub(crate) struct ResetFacts<'a> {
+    pub extras: &'a BTreeMap<String, AccountExtras>,
+    pub warning_days: u32,
+}
+
+impl ResetFacts<'_> {
+    /// Whether the poll asks the account, the set whose blocks the router reads.
+    fn asked(&self, account: &AccountRow) -> bool {
+        polled(account.kind, account.state)
+            && self
+                .extras
+                .get(&account.id)
+                .is_some_and(|extras| extras.term.plan_ended_at.is_none())
+    }
+
+    /// The stored block of an account the poll asks. A block that does not parse reads as none.
+    fn block(&self, account: &AccountRow) -> Option<LimitResets> {
+        let stored = self.extras.get(&account.id)?.limit_resets.clone()?;
+        self.asked(account)
+            .then(|| serde_json::from_value(stored).ok())
+            .flatten()
+    }
+}
+
+/// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
+/// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
 /// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
-/// `refresh_facts`, and the parked rows, before it takes the reader's state, and a read that fails fails the whole
-/// answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the parked rows, the
-/// fold's routing conditions and the expiries between turns of the last 24 hours by pool and key. It is `None` where no
-/// ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions (`wall_reached`,
-/// `destination_spent`, `shed_no_runway` and `slowed_long`) and `expired_between_turns` then has a series. Where one is
-/// built, `destination_spent` stops holding once a `window_cleared` followed its spent window. `pairs` is `None` where
-/// no listener is built, and neither certificate kind then has a series. `pairing_expiring` has a series for an OAuth
-/// account whose credential holds a refresh token end and for no other account. `unpriced` is the ledger's map, empty
-/// where no ledger is built.
+/// `refresh_facts` and their extras, and the parked rows, before it takes the reader's state, and a read that fails
+/// fails the whole answer, since a series answered without its evidence could clear a real alarm. `resets` carries
+/// those extras, whose stored limit resets `limit_reset_ending` and the wall's `reset` read, with the warning's days.
+/// `ledger` carries the parked rows, the fold's routing conditions and the expiries between turns of the last 24 hours
+/// by pool and key. It is `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four
+/// routing conditions (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and
+/// `expired_between_turns` then has a series. Where one is built, `destination_spent` stops holding once a
+/// `window_cleared` followed its spent window. `pairs` is `None` where no listener is built, and neither certificate
+/// kind then has a series. `pairing_expiring` has a series for an OAuth account whose credential holds a refresh token
+/// end and for no other account. `unpriced` is the ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
     accounts: &[AccountRow],
     refresh_facts: &HashMap<String, RefreshFacts>,
+    resets: &ResetFacts,
     router: &RouterHandle,
     ledger_degraded: bool,
     ledger: Option<&LedgerFacts>,
@@ -760,6 +798,15 @@ pub(crate) fn conditions(
                     "rate_limited_in_a_row": status.as_ref().map(|s| s.rate_limited_in_a_row),
                 }),
             ));
+            if resets.asked(account) {
+                let (holds, since, detail) = reset_ending(
+                    &account.id,
+                    resets.block(account).as_ref(),
+                    resets.warning_days,
+                    now,
+                );
+                out.push(condition(Kind::LimitResetEnding, holds, since, detail));
+            }
         }
     }
     // A model belongs to no pool card. A model a revision weighted keeps its entry, so its series reads 0.
@@ -777,7 +824,9 @@ pub(crate) fn conditions(
         ));
     }
     if let Some(rows) = ledger.map(|l| l.routing.as_slice()) {
-        out.extend(routing_conditions(&snapshot, &pools_of, accounts, rows));
+        out.extend(routing_conditions(
+            &snapshot, &pools_of, accounts, rows, resets, usage, now,
+        ));
     }
     // `bus_gaps` counts since the start, so the item reads the last gap's instant: on the counter alone it would
     // stand until a restart.
@@ -843,17 +892,54 @@ pub(crate) fn conditions(
     Ok(out)
 }
 
+/// Whether an unused reset of the block ends within the warning's days, since when, and the item's detail, which is
+/// about the grant that ends first.
+fn reset_ending(
+    account_id: &str,
+    block: Option<&LimitResets>,
+    warning_days: u32,
+    now: i64,
+) -> (bool, Option<i64>, serde_json::Value) {
+    let threshold = i64::from(warning_days) * DAY_MS;
+    let ending: Vec<&Grant> = block
+        .into_iter()
+        .flat_map(|block| &block.grants)
+        .filter(|g| g.resets_left > 0 && g.ends_at > now && g.ends_at <= now + threshold)
+        .collect();
+    // `min_by_key` answers the first of several that end together, which is the block's order.
+    let first = ending.iter().min_by_key(|g| g.ends_at);
+    let detail = json!({
+        "account": account_id,
+        "clears": first.map(|g| g.clears.clone()).unwrap_or_default(),
+        "days_left": first.map(|g| (g.ends_at - now).div_euclid(DAY_MS)),
+        "ends_at": first.map(|g| g.ends_at),
+        "ending": ending.iter().map(|g| g.resets_left).fold(0, u32::saturating_add),
+        "grant": first.map(|g| &g.id),
+        // Beside `account`, `label` is the account's label on this route, so the grant's has a name of its own.
+        "grant_label": first.map(|g| &g.label),
+        "resets_left": block.map_or(0, |block| resets_left(block, now)),
+    });
+    // Dated from the end, so a restart keeps the date, and never from before the grant existed.
+    let since = first.map(|g| g.starts_at.max(g.ends_at - threshold));
+    (first.is_some(), since, detail)
+}
+
 /// The five conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account for
 /// `meter_drift`, `wall_reached`, `destination_spent` and `slowed_long`, each holding where a row names its subject,
 /// with the row's `since` and its detail, so `destination_spent` ends where the fold read a `window_cleared` after the
-/// spent window. A row whose pool the snapshot holds gains `setting_values`, that pool's value
-/// of each setting the row's `setting` names, since the ledger reads no registry. A subject the registry no longer
-/// holds keeps its row's condition, labeled by its id and opening nothing, until the fold no longer writes the row.
+/// spent window. A row whose pool the snapshot holds gains `setting_values`, that pool's value of each setting the
+/// row's `setting` names, since the ledger reads no registry. A holding `wall_reached` of an account the registry holds
+/// gains `reset` from the account's stored limit resets and the snapshot `usage` holds for it. Both are joined at each
+/// read. A subject the registry no longer holds keeps its row's condition, labeled by its id and opening nothing, until
+/// the fold no longer writes the row.
 fn routing_conditions(
     snapshot: &RegistrySnapshot,
     pools_of: &HashMap<String, Vec<String>>,
     accounts: &[AccountRow],
     rows: &[RoutingCondition],
+    resets: &ResetFacts,
+    usage: Option<&UsageService>,
+    now: i64,
 ) -> Vec<Condition> {
     // The first row per kind and subject answers, as a scan in order finds it.
     let mut by_subject: HashMap<(RoutingKind, &str), &RoutingCondition> = HashMap::new();
@@ -965,6 +1051,21 @@ fn routing_conditions(
             .unwrap_or_default();
         for (kind, routing, cleared) in &account_kinds {
             let held = routing.and_then(|routing| row(routing, &account_id));
+            let mut detail = detail_of(held, cleared.clone());
+            if *kind == Kind::WallReached && held.is_some() {
+                // Joined at each read, as `setting_values` is: the fold writes the wall once an hour, so a member
+                // written there would offer a reset for up to an hour after it was used.
+                let reset = accounts
+                    .iter()
+                    .find(|a| a.id == account_id)
+                    .and_then(|account| {
+                        let reading = usage?.latest_for(account)?;
+                        wall_reset(&resets.block(account)?, &reading.windows_at_limit(), now)
+                    });
+                if let Some(reset) = reset {
+                    detail["reset"] = reset;
+                }
+            }
             out.push(account_condition(
                 *kind,
                 Subject::new(SubjectKind::Account, account_id.clone(), label.clone()),
@@ -972,9 +1073,32 @@ fn routing_conditions(
                 live,
                 held.is_some(),
                 held.map(|r| r.since),
-                detail_of(held, cleared.clone()),
+                detail,
             ));
         }
     }
     out
+}
+
+/// The wall's `reset` member: the first grant in the block's order that is usable now and clears a window that reads
+/// at its limit now, with those windows. The row's own `windows` name the day's spent windows whatever they read
+/// now, so the join reads none of them.
+fn wall_reset(
+    block: &LimitResets,
+    at_limit: &BTreeSet<String>,
+    now: i64,
+) -> Option<serde_json::Value> {
+    block
+        .grants
+        .iter()
+        .zip(grant_states(block, now))
+        .find_map(|(grant, state)| {
+            let clears: Vec<&String> = grant
+                .clears
+                .iter()
+                .filter(|window| at_limit.contains(*window))
+                .collect();
+            (state.state == GrantStatus::Usable && !clears.is_empty())
+                .then(|| json!({ "clears": clears, "grant": grant.id, "label": grant.label }))
+        })
 }

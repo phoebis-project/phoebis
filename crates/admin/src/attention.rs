@@ -36,13 +36,14 @@ pub(crate) struct AttentionItem {
     pub pools: Vec<String>,
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first exhaustion
     /// or refusal of a run, the oldest parked row, the refused certificate reload, 3 days before a refresh token's end,
-    /// 30 days before a certificate's end, the catalog listing that added an unpriced model or the first plan-funded
-    /// landing of its run, whichever came first, the `window_end` of the oldest window the detail's `windows` lists, or
-    /// the fold's instant where that end lies after it, for `meter_drift`, the oldest qualifying event of the trailing
-    /// 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down
-    /// span counted for `slowed_long`, which can predate the day for a span open from before it, or for the two account
-    /// states, a degraded writer, `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` the first read of
-    /// this process that saw the state.
+    /// 30 days before a certificate's end, the later of the grant's start and its end less the warning days for
+    /// `limit_reset_ending`, the catalog listing that added an unpriced model or the first plan-funded landing of its
+    /// run, whichever came first, the `window_end` of the oldest window the detail's `windows` lists, or the fold's
+    /// instant where that end lies after it, for `meter_drift`, the oldest qualifying event of the trailing 24 hours
+    /// for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down span counted
+    /// for `slowed_long`, which can predate the day for a span open from before it, or for the two account states, a
+    /// degraded writer, `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` the first read of this
+    /// process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`, or
@@ -51,18 +52,23 @@ pub(crate) struct AttentionItem {
     /// line) and `serving_since` (when the pair the listener still serves was loaded). `certificate_expiring` adds
     /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `pairing_expiring`
     /// carries `account`, `label`, `expires` (the refresh token's end) and `days_left` (whole days from the read,
-    /// negative once past). `model_unpriced` carries `model` and `requests` (the plan-funded requests its run served, 0
-    /// for a model a catalog listing added that no request has used yet). `meter_drift` carries `windows` (per window
-    /// whose newest reconciled row among those that ended in the last eight days with a rise of at least 0.05 read a
-    /// ratio under 0.8 or over 1.25 over a priced share of at least 0.05, so a newer row with a smaller rise leaves it
-    /// standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and `requests`), `source`
-    /// (`shipped` or `file`, where the cost model came from) and `effective` (the `effective` of the revision in force
-    /// as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`), and names no setting, since the
-    /// fix is the cost model file. The other routing conditions carry `setting`, the names of the settings they read
-    /// against: `wall_reached` with `walls`, `windows`, `projection_error` and `early_ms`, read off the newest shedding
-    /// round on the account on the wall's window inside the window's length before the wall (`projection_error` one
-    /// less a projection round's projection, `early_ms` after a stretch round the milliseconds the newest wall arrived
-    /// before its window's reset, 0 at or after it, each null after the other trigger's round and both null with none),
+    /// negative once past). `limit_reset_ending` carries `account`, `clears` (the windows the grant that ends first
+    /// clears), `days_left` (whole days from the read to that grant's end), `ends_at` (its end), `ending` (the resets
+    /// left on the grants that end inside the warning days), `grant` (that grant's id), `grant_label` (that grant's
+    /// label) and `resets_left` (the account's resets on grants that have not ended). `model_unpriced` carries `model`
+    /// and `requests` (the plan-funded requests its run served, 0 for a model a catalog listing added that no request
+    /// has used yet). `meter_drift` carries `windows` (per window whose newest reconciled row among those that ended in
+    /// the last eight days with a rise of at least 0.05 read a ratio under 0.8 or over 1.25 over a priced share of at
+    /// least 0.05, so a newer row with a smaller rise leaves it standing: `window`, `ratio`, `observed_rise`,
+    /// `predicted_share`, `window_end` and `requests`), `source` (`shipped` or `file`, where the cost model came from)
+    /// and `effective` (the `effective` of the revision in force as its file wrote it, a date `YYYY-MM-DD` or an
+    /// instant `YYYY-MM-DDTHH:MM:SSZ`), and names no setting, since the fix is the cost model file. The other routing
+    /// conditions carry `setting`, the names of the settings they read against: `wall_reached` with `walls`, `windows`,
+    /// `projection_error` and `early_ms`, read off the newest shedding round on the account on the wall's window inside
+    /// the window's length before the wall (`projection_error` one less a projection round's projection, `early_ms`
+    /// after a stretch round the milliseconds the newest wall arrived before its window's reset, 0 at or after it, each
+    /// null after the other trigger's round and both null with none) and `reset` (`clears`, `grant` and `label`),
+    /// present while a usable limit reset of the account clears a window that reads at its limit now,
     /// `destination_spent` with `moves`, `fits` (the moves' destination fits with counts) and `windows`,
     /// `shed_no_runway` with `rounds` and `accounts`, and `slowed_long` with `spans` (the slow-down spans counted),
     /// `held_ms` (the slow-down's waits of the day's requests, summed), `held` (the requests held), `bar_ms` (the bar
@@ -105,12 +111,14 @@ pub(crate) struct AttentionLink {
 ///
 /// Answers the operator conditions that hold now, worst first (`pool_exhausted`, `client_drift`, `writer_degraded`,
 /// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `pairing_expiring`,
-/// `certificate_expiring`, `ledger_record_parked`, `keepalive_bus_gaps`, `poll_backoff`, `model_unpriced`,
-/// `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long`, `keepalive_cap`,
-/// `expired_between_turns`) and the oldest first within a kind. `meter_drift`, `wall_reached`, `destination_spent`,
-/// `shed_no_runway` and `slowed_long` read the ledger: the reconciliation rows the hourly fold writes and the routing
-/// log of the trailing 24 hours. `expired_between_turns` reads the ledger's rollups of the trailing 24 hours. The same
-/// reader feeds the `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never disagree.
+/// `certificate_expiring`, `limit_reset_ending`, `ledger_record_parked`, `keepalive_bus_gaps`, `poll_backoff`,
+/// `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long`,
+/// `keepalive_cap`, `expired_between_turns`) and the oldest first within a kind. `meter_drift`, `wall_reached`,
+/// `destination_spent`, `shed_no_runway` and `slowed_long` read the ledger: the reconciliation rows the hourly fold
+/// writes and the routing log of the trailing 24 hours. `expired_between_turns` reads the ledger's rollups of the
+/// trailing 24 hours. `limit_reset_ending` reads the registry's stored limit resets, and the `reset` member of
+/// `wall_reached` reads them with the poll's snapshot. The same reader feeds the `phoebis_attention` gauge on the
+/// metrics listener, so a scrape and this answer never disagree.
 #[utoipa::path(
     get,
     path = "/admin/attention",

@@ -60,6 +60,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("funding_required", "direct".to_string(), false),
             ("keepalive_bus_gaps", "keepalive".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
+            ("limit_reset_ending", "business".to_string(), false),
             ("meter_drift", "business".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), false),
@@ -101,6 +102,7 @@ async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_n
             ("funding_required", "direct".to_string(), false),
             ("keepalive_bus_gaps", "keepalive".to_string(), false),
             ("ledger_record_parked", "main".to_string(), false),
+            ("limit_reset_ending", "business".to_string(), false),
             ("meter_drift", "business".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), false),
@@ -2249,6 +2251,7 @@ fn the_certificate_kinds_rank_among_the_others() {
         Kind::WriterDegraded,
         Kind::FundingRequired,
         Kind::ClientDrift,
+        Kind::LimitResetEnding,
     ];
     kinds.sort();
     assert_eq!(
@@ -2263,12 +2266,280 @@ fn the_certificate_kinds_rank_among_the_others() {
             "refresh_failed",
             "pairing_expiring",
             "certificate_expiring",
+            "limit_reset_ending",
             "ledger_record_parked",
             "poll_backoff",
             "model_unpriced",
             "meter_drift",
             "wall_reached",
         ]
+    );
+}
+
+/// A grant in the upstream's field names: one reset of one, usable now, that clears the Fable week from 2023-10-01 to
+/// `ends_at`.
+fn grant(id: &str, ends_at: &str) -> serde_json::Value {
+    json!({
+        "clears": ["seven_day_overage_included"],
+        "ends_at": ends_at,
+        "id": id,
+        "label": "Launch reset",
+        "resets_left": 1,
+        "resets_total": 1,
+        "starts_at": "2023-10-01T00:00:00Z",
+        "usable_now": true,
+    })
+}
+
+/// Stores `block` on `business` as the block read does: parsed from a usage body and written as its typed form under
+/// the row's holder and epoch, which a block write leaves as they are.
+fn store_resets(rig: &Rig, block: serde_json::Value) {
+    let body = json!({ "cedar_ember": block }).to_string();
+    let parsed = phoebis_oauth::parse_limit_resets(body.as_bytes())
+        .unwrap()
+        .expect("the body carries a block");
+    let stored = serde_json::to_string(&parsed).unwrap();
+    assert!(
+        rig.store
+            .set_limit_resets("business", 1, 1, 0, Some(&stored), NOW)
+            .unwrap(),
+        "the block lands on the rig's row"
+    );
+}
+
+/// The reset item of `business`, read under the rig's warning of five days.
+fn reset_item(attention: &Attention, at: i64) -> Condition {
+    find(&read(attention, at), Kind::LimitResetEnding, "business")
+        .cloned()
+        .expect("an account the poll asks carries the reset series")
+}
+
+#[tokio::test]
+async fn a_reset_holds_from_the_threshold_before_its_end() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+
+    store_resets(
+        &rig,
+        json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-20T22:13:20Z")] }),
+    );
+    let outside = reset_item(&attention, NOW);
+    assert_eq!(
+        (outside.holds, outside.since),
+        (false, None),
+        "an end six days out lies outside the five days"
+    );
+
+    store_resets(
+        &rig,
+        json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-18T22:13:20Z")] }),
+    );
+    let inside = reset_item(&attention, NOW);
+    assert_eq!(
+        (
+            inside.holds,
+            inside.since,
+            &inside.detail["days_left"],
+            &inside.detail["ends_at"]
+        ),
+        (
+            true,
+            Some(1_699_913_600_000),
+            &json!(4),
+            &json!(1_700_345_600_000_i64)
+        ),
+        "an end four days out holds, dated five days before the end and not from the read"
+    );
+
+    store_resets(
+        &rig,
+        json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-19T22:13:20Z")] }),
+    );
+    let edge = reset_item(&attention, NOW);
+    assert_eq!(
+        (
+            edge.holds,
+            edge.since,
+            &edge.detail["days_left"],
+            &edge.detail["ends_at"]
+        ),
+        (
+            true,
+            Some(1_700_000_000_000),
+            &json!(5),
+            &json!(1_700_432_000_000_i64)
+        ),
+        "an end exactly five days out holds, dated from the read"
+    );
+}
+
+#[tokio::test]
+async fn a_used_reset_ends_nothing() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let mut used = grant("rg-b-1", "2023-11-18T22:13:20Z");
+    used["resets_left"] = json!(0);
+    store_resets(&rig, json!({ "eligible": true, "grants": [used] }));
+    let item = reset_item(&attention, NOW);
+    assert_eq!(
+        (item.holds, item.since),
+        (false, None),
+        "a grant inside the five days with no reset left holds nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_reset_item_counts_the_resets_that_end_inside_the_threshold() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let mut two = grant("rg-b-1", "2023-11-17T22:13:20Z");
+    two["resets_left"] = json!(2);
+    two["resets_total"] = json!(2);
+    store_resets(
+        &rig,
+        json!({
+            "eligible": true,
+            "grants": [
+                two,
+                grant("rg-b-2", "2023-11-24T22:13:20Z"),
+                grant("rg-b-3", "2023-11-13T22:13:20Z"),
+            ],
+        }),
+    );
+    let item = reset_item(&attention, NOW);
+    assert_eq!(
+        (
+            item.holds,
+            &item.detail["ending"],
+            &item.detail["resets_left"],
+            &item.detail["grant"]
+        ),
+        (true, &json!(2), &json!(3), &json!("rg-b-1")),
+        "the two resets ending in three days count, the grant ten days out and the ended one do not, and the \
+         account's count leaves the ended grant out"
+    );
+}
+
+#[tokio::test]
+async fn a_reset_shorter_than_the_threshold_is_dated_from_its_start() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let mut short = grant("rg-b-1", "2023-11-16T22:13:20Z");
+    short["starts_at"] = json!("2023-11-12T22:13:20Z");
+    store_resets(&rig, json!({ "eligible": true, "grants": [short] }));
+    let item = reset_item(&attention, NOW);
+    assert_eq!(
+        (item.holds, item.since),
+        (true, Some(1_699_827_200_000)),
+        "a grant that began two days back and ends in two is dated from its start, never before it existed"
+    );
+}
+
+/// A usage body with the 5-hour window under its limit and the Fable week at `percent`.
+fn fable_week(percent: u32) -> fake_upstream::Respond {
+    fake_upstream::Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: json!({
+            "five_hour": { "utilization": 12.5, "resets_at": null },
+            "limits": [{
+                "kind": "weekly_scoped",
+                "scope": { "model": { "display_name": "Fable" } },
+                "percent": percent,
+                "resets_at": null,
+            }],
+        })
+        .to_string()
+        .into_bytes(),
+    }
+}
+
+#[tokio::test]
+async fn the_wall_offers_a_reset_only_for_a_window_at_its_limit_now() {
+    let up = fake_upstream::FakeUpstream::start(vec![fake_upstream::Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: fable_week(46),
+    }])
+    .await;
+    let rig = rig().await;
+    let usage = usage_over(&rig, &up);
+    let (attention, _arm) = rig.attention(Some(usage.clone()));
+    routing_event(
+        &rig,
+        NOW - HOUR,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "seven_day_fable", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    store_resets(
+        &rig,
+        json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-24T22:13:20Z")] }),
+    );
+
+    usage.poll("business").await.unwrap();
+    let under = read(&attention, NOW);
+    let wall = find(&under, Kind::WallReached, "business").unwrap();
+    assert_eq!(
+        (wall.holds, wall.detail.get("reset")),
+        (true, None),
+        "the row names the Fable week spent an hour ago, and the reading has it under its limit now"
+    );
+
+    up.set_rule_after(0, "/api/oauth/usage", fable_week(100));
+    rig.at(NOW + 5 * MINUTE);
+    usage.poll("business").await.unwrap();
+    let at_limit = read(&attention, NOW + 5 * MINUTE);
+    let wall = find(&at_limit, Kind::WallReached, "business").unwrap();
+    assert_eq!(
+        (wall.holds, wall.detail.get("reset")),
+        (
+            true,
+            Some(&json!({
+                "clears": ["seven_day_fable"],
+                "grant": "rg-b-1",
+                "label": "Launch reset",
+            }))
+        ),
+        "the reading has the Fable week at its limit, which the usable grant clears under the router's name"
+    );
+}
+
+#[tokio::test]
+async fn a_reset_on_a_cooldown_clears_no_wall() {
+    let up = fake_upstream::FakeUpstream::start(vec![fake_upstream::Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: fable_week(100),
+    }])
+    .await;
+    let rig = rig().await;
+    let usage = usage_over(&rig, &up);
+    let (attention, _arm) = rig.attention(Some(usage.clone()));
+    routing_event(
+        &rig,
+        NOW - HOUR,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "seven_day_fable", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    let mut waiting = grant("rg-b-1", "2023-11-24T22:13:20Z");
+    waiting["usable_now"] = json!(false);
+    waiting["unavailable_reason"] = json!("cooldown");
+    store_resets(
+        &rig,
+        json!({ "cooldown_until": "2023-11-15T22:13:20Z", "eligible": true, "grants": [waiting] }),
+    );
+
+    usage.poll("business").await.unwrap();
+    let conditions = read(&attention, NOW);
+    let wall = find(&conditions, Kind::WallReached, "business").unwrap();
+    assert_eq!(
+        (wall.holds, wall.detail.get("reset")),
+        (true, None),
+        "a grant whose reset waits out the block's cooldown clears no wall, though it has a reset left"
     );
 }
 

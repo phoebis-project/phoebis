@@ -95,6 +95,7 @@ impl Rig {
             clock: self.clock(),
             keepalive: keepalive.unwrap_or_else(|| Arc::new(Standing::idle())),
             ledger: Some(self.ledger.clone()),
+            limit_reset_warning_days: 5,
             router: self.router.clone(),
             store: self.store.clone(),
             tls,

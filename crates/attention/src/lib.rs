@@ -1,5 +1,6 @@
 //! The operator conditions as gauges: a stateless reader over the state the router already holds, fed the request
-//! outcomes off the bus. Nothing here is configured, delivered or recorded.
+//! outcomes off the bus. One threshold is configured, the days before an unused limit reset ends. Nothing here is
+//! delivered or recorded.
 
 mod reader;
 
@@ -83,13 +84,16 @@ pub struct AttentionParts {
     /// `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long` and
     /// `expired_between_turns` has a series.
     pub ledger: Option<Ledger>,
+    /// `usage.limit_reset_warning_days`: how many days before an unused limit reset ends `limit_reset_ending` holds, 0
+    /// for never.
+    pub limit_reset_warning_days: u32,
     pub router: RouterHandle,
     pub store: Arc<Store>,
     /// The router's loaded pairs; `None` where a harness builds no listeners, and then neither certificate kind has
     /// a series.
     pub tls: Option<Arc<dyn TlsPairs>>,
-    /// Where the poll's standing per account is read; `None` where a harness builds no usage service, and no account
-    /// then reads a backoff.
+    /// Where the poll's standing and the latest snapshot per account are read. It is `None` where a harness builds no
+    /// usage service, and no account then reads a backoff and no wall names a reset.
     pub usage: Option<Arc<UsageService>>,
 }
 
@@ -112,6 +116,7 @@ pub struct Attention {
     clock: Clock,
     keepalive: Arc<dyn KeepaliveFacts>,
     ledger: Option<Ledger>,
+    limit_reset_warning_days: u32,
     router: RouterHandle,
     state: Mutex<ReaderState>,
     store: Arc<Store>,
@@ -162,6 +167,7 @@ impl Attention {
         // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
+        let extras = self.store.account_extras()?;
         let refresh_facts = reader::refresh_facts(&self.store, &accounts)?;
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
@@ -178,6 +184,10 @@ impl Attention {
             &mut state,
             &accounts,
             &refresh_facts,
+            &reader::ResetFacts {
+                extras: &extras,
+                warning_days: self.limit_reset_warning_days,
+            },
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             ledger.as_ref(),
@@ -266,6 +276,7 @@ pub fn spawn(parts: AttentionParts) -> (Arc<Attention>, AttentionHandles) {
         clock: parts.clock,
         keepalive: parts.keepalive,
         ledger: parts.ledger,
+        limit_reset_warning_days: parts.limit_reset_warning_days,
         router: parts.router,
         state: Mutex::new(ReaderState::default()),
         store: parts.store,
