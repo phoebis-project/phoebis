@@ -119,6 +119,48 @@ export const FIXTURES: Record<string, Fixture> = {
           "observed_at": 1791720995000
         }
       },
+      "limit_resets": {
+        "cooldown_until": null,
+        "eligible": true,
+        "fable_week_share": null,
+        "grants": [
+          {
+            "blocking": [],
+            "clears": [
+              "seven_day_fable"
+            ],
+            "ends_at": 1796083200000,
+            "id": "rg-business-1",
+            "kind": "fable",
+            "label": "Launch reset",
+            "reason": null,
+            "resets_left": 1,
+            "resets_total": 1,
+            "starts_at": 1790812800000,
+            "state": "usable",
+            "used_at": null
+          },
+          {
+            "blocking": [],
+            "clears": [
+              "seven_day_fable"
+            ],
+            "ends_at": 1796083200000,
+            "id": "rg-business-2",
+            "kind": "fable",
+            "label": "Launch reset",
+            "reason": null,
+            "resets_left": 1,
+            "resets_total": 1,
+            "starts_at": 1790812800000,
+            "state": "waiting",
+            "used_at": null
+          }
+        ],
+        "ineligible_reason": null,
+        "left": 2,
+        "read_at": 1791721000000
+      },
       "extra_usage": {
         "currency": "USD",
         "disabled_reason": null,
@@ -175,6 +217,54 @@ export const FIXTURES: Record<string, Fixture> = {
       ],
       "fetched_at": 1791721000000,
       "error": null
+    }
+  },
+  "account_limit_resets": {
+    "route": "POST /admin/accounts/business/limit-resets/read",
+    "body": {
+      "error": null,
+      "limit_resets": {
+        "cooldown_until": null,
+        "eligible": true,
+        "fable_week_share": null,
+        "grants": [
+          {
+            "blocking": [],
+            "clears": [
+              "seven_day_fable"
+            ],
+            "ends_at": 1796083200000,
+            "id": "rg-business-1",
+            "kind": "fable",
+            "label": "Launch reset",
+            "reason": null,
+            "resets_left": 1,
+            "resets_total": 1,
+            "starts_at": 1790812800000,
+            "state": "usable",
+            "used_at": null
+          },
+          {
+            "blocking": [],
+            "clears": [
+              "seven_day_fable"
+            ],
+            "ends_at": 1796083200000,
+            "id": "rg-business-2",
+            "kind": "fable",
+            "label": "Launch reset",
+            "reason": null,
+            "resets_left": 1,
+            "resets_total": 1,
+            "starts_at": 1790812800000,
+            "state": "waiting",
+            "used_at": null
+          }
+        ],
+        "ineligible_reason": null,
+        "left": 2,
+        "read_at": 1791721000000
+      }
     }
   },
   "account_quota": {
@@ -406,6 +496,48 @@ export const FIXTURES: Record<string, Fixture> = {
               "observed_at": 1791720995000
             }
           },
+          "limit_resets": {
+            "cooldown_until": null,
+            "eligible": true,
+            "fable_week_share": null,
+            "grants": [
+              {
+                "blocking": [],
+                "clears": [
+                  "seven_day_fable"
+                ],
+                "ends_at": 1796083200000,
+                "id": "rg-business-1",
+                "kind": "fable",
+                "label": "Launch reset",
+                "reason": null,
+                "resets_left": 1,
+                "resets_total": 1,
+                "starts_at": 1790812800000,
+                "state": "usable",
+                "used_at": null
+              },
+              {
+                "blocking": [],
+                "clears": [
+                  "seven_day_fable"
+                ],
+                "ends_at": 1796083200000,
+                "id": "rg-business-2",
+                "kind": "fable",
+                "label": "Launch reset",
+                "reason": null,
+                "resets_left": 1,
+                "resets_total": 1,
+                "starts_at": 1790812800000,
+                "state": "waiting",
+                "used_at": null
+              }
+            ],
+            "ineligible_reason": null,
+            "left": 2,
+            "read_at": 1791721000000
+          },
           "extra_usage": {
             "currency": "USD",
             "disabled_reason": null,
@@ -463,6 +595,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "limit_resets": null,
           "extra_usage": null,
           "pool": {
             "pool_id": "main",
@@ -523,6 +656,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "limit_resets": null,
           "extra_usage": null,
           "pool": {
             "pool_id": "retired",
@@ -536,6 +670,228 @@ export const FIXTURES: Record<string, Fixture> = {
           "usage": {
             "error": null,
             "fetched_at": 1790770600000,
+            "held_until": null,
+            "poll": null
+          },
+          "usage_based": false,
+          "spend": null
+        },
+        {
+          "id": "reset-cooldown",
+          "companion_id": "830674b4",
+          "kind": "oauth",
+          "label": "Reset cooldown",
+          "enabled": true,
+          "canceled": false,
+          "plan_ended_at": null,
+          "state": "ready",
+          "funding_retry_at": null,
+          "identity": {
+            "email": "cooldown@example.invalid",
+            "account_uuid": "00000000-0000-4000-8000-000000000007",
+            "organization_uuid": "00000000-0000-4000-8000-000000000008"
+          },
+          "credential": {
+            "access_expires_at": 1791724600000,
+            "refresh_expires_at": null,
+            "generation": 1,
+            "last_refresh_at": null,
+            "last_error": null,
+            "quarantined": false
+          },
+          "lifecycle_generation": 1,
+          "revision": 4294967297,
+          "cooldowns": [],
+          "overage": null,
+          "profile": null,
+          "subscription": null,
+          "windows": [],
+          "slow_down": null,
+          "fast_lane": null,
+          "limit_resets": {
+            "cooldown_until": 1791806400000,
+            "eligible": true,
+            "fable_week_share": null,
+            "grants": [
+              {
+                "blocking": [],
+                "clears": [
+                  "seven_day_fable"
+                ],
+                "ends_at": 1796083200000,
+                "id": "rg-cooldown-1",
+                "kind": "weekly",
+                "label": "Launch reset",
+                "reason": null,
+                "resets_left": 1,
+                "resets_total": 1,
+                "starts_at": 1790812800000,
+                "state": "cooldown",
+                "used_at": null
+              }
+            ],
+            "ineligible_reason": null,
+            "left": 1,
+            "read_at": 1791721000000
+          },
+          "extra_usage": null,
+          "pool": null,
+          "requests": {
+            "last_24h": 0,
+            "last_7d": 0,
+            "lifetime": 0
+          },
+          "usage": {
+            "error": "the poll has not read this account yet",
+            "fetched_at": null,
+            "held_until": null,
+            "poll": null
+          },
+          "usage_based": false,
+          "spend": null
+        },
+        {
+          "id": "reset-ending",
+          "companion_id": "0ec2a8c0",
+          "kind": "oauth",
+          "label": "Reset ending",
+          "enabled": true,
+          "canceled": false,
+          "plan_ended_at": null,
+          "state": "ready",
+          "funding_retry_at": null,
+          "identity": {
+            "email": "ending@example.invalid",
+            "account_uuid": "00000000-0000-4000-8000-000000000009",
+            "organization_uuid": "00000000-0000-4000-8000-000000000010"
+          },
+          "credential": {
+            "access_expires_at": 1791724600000,
+            "refresh_expires_at": null,
+            "generation": 1,
+            "last_refresh_at": null,
+            "last_error": null,
+            "quarantined": false
+          },
+          "lifecycle_generation": 1,
+          "revision": 4294967297,
+          "cooldowns": [],
+          "overage": null,
+          "profile": null,
+          "subscription": null,
+          "windows": [],
+          "slow_down": null,
+          "fast_lane": null,
+          "limit_resets": {
+            "cooldown_until": null,
+            "eligible": true,
+            "fable_week_share": null,
+            "grants": [
+              {
+                "blocking": [],
+                "clears": [
+                  "seven_day_fable"
+                ],
+                "ends_at": 1791936000000,
+                "id": "rg-ending-1",
+                "kind": "weekly",
+                "label": "Launch reset",
+                "reason": null,
+                "resets_left": 1,
+                "resets_total": 1,
+                "starts_at": 1790812800000,
+                "state": "usable",
+                "used_at": null
+              }
+            ],
+            "ineligible_reason": null,
+            "left": 1,
+            "read_at": 1791721000000
+          },
+          "extra_usage": null,
+          "pool": null,
+          "requests": {
+            "last_24h": 0,
+            "last_7d": 0,
+            "lifetime": 0
+          },
+          "usage": {
+            "error": "the poll has not read this account yet",
+            "fetched_at": null,
+            "held_until": null,
+            "poll": null
+          },
+          "usage_based": false,
+          "spend": null
+        },
+        {
+          "id": "reset-used",
+          "companion_id": "eb3580d3",
+          "kind": "oauth",
+          "label": "Reset used",
+          "enabled": true,
+          "canceled": false,
+          "plan_ended_at": null,
+          "state": "ready",
+          "funding_retry_at": null,
+          "identity": {
+            "email": "used@example.invalid",
+            "account_uuid": "00000000-0000-4000-8000-000000000011",
+            "organization_uuid": "00000000-0000-4000-8000-000000000012"
+          },
+          "credential": {
+            "access_expires_at": 1791724600000,
+            "refresh_expires_at": null,
+            "generation": 1,
+            "last_refresh_at": null,
+            "last_error": null,
+            "quarantined": false
+          },
+          "lifecycle_generation": 1,
+          "revision": 4294967297,
+          "cooldowns": [],
+          "overage": null,
+          "profile": null,
+          "subscription": null,
+          "windows": [],
+          "slow_down": null,
+          "fast_lane": null,
+          "limit_resets": {
+            "cooldown_until": null,
+            "eligible": true,
+            "fable_week_share": null,
+            "grants": [
+              {
+                "blocking": [],
+                "clears": [
+                  "seven_day_fable"
+                ],
+                "ends_at": 1796083200000,
+                "id": "rg-used-1",
+                "kind": "weekly",
+                "label": "Launch reset",
+                "reason": null,
+                "resets_left": 0,
+                "resets_total": 1,
+                "starts_at": 1790812800000,
+                "state": "used",
+                "used_at": null
+              }
+            ],
+            "ineligible_reason": null,
+            "left": 0,
+            "read_at": 1791721000000
+          },
+          "extra_usage": null,
+          "pool": null,
+          "requests": {
+            "last_24h": 0,
+            "last_7d": 0,
+            "lifetime": 0
+          },
+          "usage": {
+            "error": "the poll has not read this account yet",
+            "fetched_at": null,
             "held_until": null,
             "poll": null
           },
@@ -588,6 +944,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "slow_down": null,
           "fast_lane": null,
+          "limit_resets": {
+            "cooldown_until": null,
+            "eligible": false,
+            "fable_week_share": null,
+            "grants": [],
+            "ineligible_reason": "seat",
+            "left": 0,
+            "read_at": 1791721000000
+          },
           "extra_usage": {
             "currency": "USD",
             "disabled_reason": null,
@@ -10433,6 +10798,32 @@ export const FIXTURES: Record<string, Fixture> = {
           }
         },
         {
+          "kind": "limit_reset_ending",
+          "subject": {
+            "type": "account",
+            "id": "reset-ending",
+            "label": "Reset ending"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "reset-ending"
+          },
+          "pools": [],
+          "since": 1791504000000,
+          "detail": {
+            "account": "reset-ending",
+            "clears": [
+              "seven_day_fable"
+            ],
+            "days_left": 2,
+            "ends_at": 1791936000000,
+            "ending": 1,
+            "grant": "rg-ending-1",
+            "grant_label": "Launch reset",
+            "resets_left": 1
+          }
+        },
+        {
           "kind": "ledger_record_parked",
           "subject": {
             "type": "pool",
@@ -16909,7 +17300,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "rows": [
         {
           "type": "event",
-          "id": 132,
+          "id": 135,
           "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
@@ -16933,7 +17324,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 94,
+          "id": 97,
           "at": 1791721000063,
           "kind": "registry_changed",
           "account_id": null,
@@ -16957,7 +17348,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 92,
+          "id": 95,
           "at": 1791721000062,
           "kind": "registry_changed",
           "account_id": null,
@@ -16981,7 +17372,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 89,
+          "id": 92,
           "at": 1791721000061,
           "kind": "registry_changed",
           "account_id": null,
@@ -17005,7 +17396,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 88,
+          "id": 91,
           "at": 1791721000060,
           "kind": "registry_changed",
           "account_id": null,
@@ -17039,7 +17430,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 87,
+          "id": 90,
           "at": 1791721000059,
           "kind": "registry_changed",
           "account_id": null,
@@ -18093,7 +18484,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 86,
+          "id": 89,
           "at": 1791721000058,
           "kind": "registry_changed",
           "account_id": null,
@@ -19147,7 +19538,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 85,
+          "id": 88,
           "at": 1791721000057,
           "kind": "registry_changed",
           "account_id": null,
@@ -19171,7 +19562,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 84,
+          "id": 87,
           "at": 1791721000056,
           "kind": "registry_changed",
           "account_id": null,
@@ -19195,7 +19586,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 83,
+          "id": 86,
           "at": 1791721000055,
           "kind": "registry_changed",
           "account_id": null,
@@ -19219,7 +19610,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 82,
+          "id": 85,
           "at": 1791721000054,
           "kind": "registry_changed",
           "account_id": null,
@@ -19243,7 +19634,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 81,
+          "id": 84,
           "at": 1791721000053,
           "kind": "registry_changed",
           "account_id": null,
@@ -19267,7 +19658,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 80,
+          "id": 83,
           "at": 1791721000052,
           "kind": "registry_changed",
           "account_id": null,
@@ -19291,7 +19682,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 79,
+          "id": 82,
           "at": 1791721000051,
           "kind": "registry_changed",
           "account_id": null,
@@ -19315,7 +19706,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 78,
+          "id": 81,
           "at": 1791721000050,
           "kind": "registry_changed",
           "account_id": null,
@@ -19339,7 +19730,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 77,
+          "id": 80,
           "at": 1791721000049,
           "kind": "registry_changed",
           "account_id": null,
@@ -19363,7 +19754,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 76,
+          "id": 79,
           "at": 1791721000048,
           "kind": "registry_changed",
           "account_id": null,
@@ -19387,7 +19778,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 75,
+          "id": 78,
           "at": 1791721000047,
           "kind": "registry_changed",
           "account_id": null,
@@ -19411,7 +19802,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 74,
+          "id": 77,
           "at": 1791721000046,
           "kind": "registry_changed",
           "account_id": null,
@@ -19435,7 +19826,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 73,
+          "id": 76,
           "at": 1791721000045,
           "kind": "registry_changed",
           "account_id": null,
@@ -19459,7 +19850,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 72,
+          "id": 75,
           "at": 1791721000044,
           "kind": "registry_changed",
           "account_id": null,
@@ -19483,7 +19874,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 71,
+          "id": 74,
           "at": 1791721000043,
           "kind": "registry_changed",
           "account_id": null,
@@ -19507,7 +19898,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 70,
+          "id": 73,
           "at": 1791721000042,
           "kind": "registry_changed",
           "account_id": null,
@@ -19531,7 +19922,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 69,
+          "id": 72,
           "at": 1791721000041,
           "kind": "registry_changed",
           "account_id": null,
@@ -19555,7 +19946,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 68,
+          "id": 71,
           "at": 1791721000040,
           "kind": "registry_changed",
           "account_id": null,
@@ -19579,7 +19970,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 67,
+          "id": 70,
           "at": 1791721000039,
           "kind": "registry_changed",
           "account_id": null,
@@ -19603,7 +19994,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 66,
+          "id": 69,
           "at": 1791721000038,
           "kind": "registry_changed",
           "account_id": null,
@@ -19627,7 +20018,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 65,
+          "id": 68,
           "at": 1791721000037,
           "kind": "registry_changed",
           "account_id": null,
@@ -19651,7 +20042,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 64,
+          "id": 67,
           "at": 1791721000036,
           "kind": "registry_changed",
           "account_id": null,
@@ -19675,7 +20066,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 63,
+          "id": 66,
           "at": 1791721000035,
           "kind": "registry_changed",
           "account_id": null,
@@ -19699,7 +20090,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 62,
+          "id": 65,
           "at": 1791721000034,
           "kind": "registry_changed",
           "account_id": null,
@@ -19723,7 +20114,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 61,
+          "id": 64,
           "at": 1791721000033,
           "kind": "registry_changed",
           "account_id": null,
@@ -19747,7 +20138,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 60,
+          "id": 63,
           "at": 1791721000032,
           "kind": "registry_changed",
           "account_id": null,
@@ -19771,7 +20162,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 59,
+          "id": 62,
           "at": 1791721000031,
           "kind": "registry_changed",
           "account_id": null,
@@ -19795,7 +20186,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 58,
+          "id": 61,
           "at": 1791721000030,
           "kind": "registry_changed",
           "account_id": null,
@@ -19819,7 +20210,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 57,
+          "id": 60,
           "at": 1791721000029,
           "kind": "registry_changed",
           "account_id": null,
@@ -19843,7 +20234,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 56,
+          "id": 59,
           "at": 1791721000028,
           "kind": "registry_changed",
           "account_id": null,
@@ -19867,7 +20258,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 55,
+          "id": 58,
           "at": 1791721000027,
           "kind": "registry_changed",
           "account_id": null,
@@ -19891,7 +20282,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 54,
+          "id": 57,
           "at": 1791721000026,
           "kind": "registry_changed",
           "account_id": null,
@@ -19915,7 +20306,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 53,
+          "id": 56,
           "at": 1791721000025,
           "kind": "registry_changed",
           "account_id": null,
@@ -19939,7 +20330,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 52,
+          "id": 55,
           "at": 1791721000024,
           "kind": "registry_changed",
           "account_id": null,
@@ -19963,7 +20354,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 51,
+          "id": 54,
           "at": 1791721000023,
           "kind": "registry_changed",
           "account_id": null,
@@ -19987,7 +20378,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 50,
+          "id": 53,
           "at": 1791721000022,
           "kind": "registry_changed",
           "account_id": null,
@@ -20011,7 +20402,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 49,
+          "id": 52,
           "at": 1791721000021,
           "kind": "registry_changed",
           "account_id": null,
@@ -20035,7 +20426,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 48,
+          "id": 51,
           "at": 1791721000020,
           "kind": "registry_changed",
           "account_id": null,
@@ -20059,7 +20450,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 47,
+          "id": 50,
           "at": 1791721000019,
           "kind": "registry_changed",
           "account_id": null,
@@ -20083,7 +20474,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 46,
+          "id": 49,
           "at": 1791721000018,
           "kind": "registry_changed",
           "account_id": null,
@@ -20107,7 +20498,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 45,
+          "id": 48,
           "at": 1791721000017,
           "kind": "registry_changed",
           "account_id": null,
@@ -20131,7 +20522,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 44,
+          "id": 47,
           "at": 1791721000016,
           "kind": "registry_changed",
           "account_id": null,
@@ -20155,7 +20546,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 43,
+          "id": 46,
           "at": 1791721000015,
           "kind": "registry_changed",
           "account_id": null,
@@ -20179,7 +20570,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 42,
+          "id": 45,
           "at": 1791721000014,
           "kind": "registry_changed",
           "account_id": null,
@@ -20203,7 +20594,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 41,
+          "id": 44,
           "at": 1791721000013,
           "kind": "registry_changed",
           "account_id": null,
@@ -20227,7 +20618,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 40,
+          "id": 43,
           "at": 1791721000012,
           "kind": "registry_changed",
           "account_id": null,
@@ -20251,7 +20642,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 39,
+          "id": 42,
           "at": 1791721000011,
           "kind": "registry_changed",
           "account_id": null,
@@ -20275,7 +20666,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 38,
+          "id": 41,
           "at": 1791721000010,
           "kind": "registry_changed",
           "account_id": null,
@@ -20299,7 +20690,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 37,
+          "id": 40,
           "at": 1791721000009,
           "kind": "registry_changed",
           "account_id": null,
@@ -20323,7 +20714,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 36,
+          "id": 39,
           "at": 1791721000008,
           "kind": "registry_changed",
           "account_id": null,
@@ -20347,7 +20738,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 35,
+          "id": 38,
           "at": 1791721000007,
           "kind": "registry_changed",
           "account_id": null,
@@ -20371,7 +20762,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 34,
+          "id": 37,
           "at": 1791721000006,
           "kind": "registry_changed",
           "account_id": null,
@@ -20395,7 +20786,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 33,
+          "id": 36,
           "at": 1791721000005,
           "kind": "registry_changed",
           "account_id": null,
@@ -20419,7 +20810,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 32,
+          "id": 35,
           "at": 1791721000004,
           "kind": "registry_changed",
           "account_id": null,
@@ -20443,7 +20834,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 31,
+          "id": 34,
           "at": 1791721000003,
           "kind": "registry_changed",
           "account_id": null,
@@ -20467,7 +20858,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 30,
+          "id": 33,
           "at": 1791721000002,
           "kind": "registry_changed",
           "account_id": null,
@@ -21333,7 +21724,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 112,
+          "id": 115,
           "at": 1791721000000,
           "kind": "window_cleared",
           "account_id": "business",
@@ -21355,7 +21746,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 105,
+          "id": 108,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "direct",
@@ -21376,7 +21767,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 104,
+          "id": 107,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
@@ -21397,7 +21788,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 103,
+          "id": 106,
           "at": 1791721000000,
           "kind": "cooldown_cleared",
           "account_id": "business",
@@ -21415,7 +21806,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 102,
+          "id": 105,
           "at": 1791721000000,
           "kind": "fast_credits_changed",
           "account_id": "business",
@@ -21440,7 +21831,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 101,
+          "id": 104,
           "at": 1791721000000,
           "kind": "overage_ended",
           "account_id": "business",
@@ -21457,7 +21848,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 99,
+          "id": 102,
           "at": 1791721000000,
           "kind": "pin_migrated",
           "account_id": "direct",
@@ -21481,7 +21872,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 98,
+          "id": 101,
           "at": 1791721000000,
           "kind": "window_spent",
           "account_id": "business",
@@ -21502,7 +21893,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 97,
+          "id": 100,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": "business",
@@ -21526,7 +21917,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 96,
+          "id": 99,
           "at": 1791721000000,
           "kind": "pin_migrated",
           "account_id": "direct",
@@ -21553,7 +21944,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 95,
+          "id": 98,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": "business",
@@ -21577,7 +21968,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 93,
+          "id": 96,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -21595,7 +21986,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 91,
+          "id": 94,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -21613,7 +22004,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 90,
+          "id": 93,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -21631,7 +22022,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 21,
+          "id": 24,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
@@ -21652,7 +22043,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 12,
+          "id": 15,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "direct",
@@ -21670,7 +22061,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 11,
+          "id": 14,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -21688,7 +22079,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 10,
+          "id": 13,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -21732,7 +22123,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 9,
+          "id": 12,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -21781,7 +22172,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 8,
+          "id": 11,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -21809,7 +22200,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 7,
+          "id": 10,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -21864,7 +22255,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 6,
+          "id": 9,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -21903,7 +22294,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 5,
+          "id": 8,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -21943,7 +22334,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 4,
+          "id": 7,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -22003,10 +22394,70 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 3,
+          "id": 6,
           "at": 1791721000000,
           "kind": "account_state_changed",
           "account_id": "usage-seat",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 5,
+          "at": 1791721000000,
+          "kind": "account_state_changed",
+          "account_id": "reset-used",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 4,
+          "at": 1791721000000,
+          "kind": "account_state_changed",
+          "account_id": "reset-ending",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 3,
+          "at": 1791721000000,
+          "kind": "account_state_changed",
+          "account_id": "reset-cooldown",
           "key_id": null,
           "pool_id": null,
           "session_id": null,
@@ -22063,7 +22514,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 100,
+          "id": 103,
           "at": 1791720940000,
           "kind": "overage_started",
           "account_id": "business",
@@ -22078,7 +22529,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 115,
+          "id": 118,
           "at": 1791719320000,
           "kind": "slow_down_ended",
           "account_id": "business",
@@ -22098,7 +22549,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 108,
+          "id": 111,
           "at": 1791718840000,
           "kind": "mark_cleared",
           "account_id": "business",
@@ -22123,7 +22574,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 109,
+          "id": 112,
           "at": 1791718480000,
           "kind": "reservation_expired",
           "account_id": "business",
@@ -22146,7 +22597,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 131,
+          "id": 134,
           "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
@@ -22174,7 +22625,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 130,
+          "id": 133,
           "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
@@ -22192,7 +22643,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 129,
+          "id": 132,
           "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
@@ -22210,7 +22661,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 128,
+          "id": 131,
           "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
@@ -22229,7 +22680,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 127,
+          "id": 130,
           "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
@@ -22249,7 +22700,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 126,
+          "id": 129,
           "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
@@ -22267,7 +22718,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 114,
+          "id": 117,
           "at": 1791718120000,
           "kind": "slow_down_started",
           "account_id": "business",
@@ -22288,7 +22739,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 125,
+          "id": 128,
           "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
@@ -22307,7 +22758,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 124,
+          "id": 127,
           "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
@@ -22328,7 +22779,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 123,
+          "id": 126,
           "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
@@ -22351,7 +22802,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 117,
+          "id": 120,
           "at": 1791717880000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -22371,7 +22822,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 107,
+          "id": 110,
           "at": 1791717820000,
           "kind": "mark_cleared",
           "account_id": "business",
@@ -22396,7 +22847,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 116,
+          "id": 119,
           "at": 1791717760000,
           "kind": "poll_backoff_started",
           "account_id": "business",
@@ -22417,7 +22868,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 113,
+          "id": 116,
           "at": 1791717700000,
           "kind": "window_reset",
           "account_id": "business",
@@ -22440,7 +22891,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 120,
+          "id": 123,
           "at": 1791717640000,
           "kind": "poll_failed",
           "account_id": "business",
@@ -22460,7 +22911,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 111,
+          "id": 114,
           "at": 1791717640000,
           "kind": "wind_down_started",
           "account_id": "business",
@@ -22479,7 +22930,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 122,
+          "id": 125,
           "at": 1791717580000,
           "kind": "plan_restored",
           "account_id": "business",
@@ -22499,7 +22950,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 110,
+          "id": 113,
           "at": 1791717580000,
           "kind": "warm_prefix_expired",
           "account_id": "direct",
@@ -22526,7 +22977,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 121,
+          "id": 124,
           "at": 1791717520000,
           "kind": "plan_ended",
           "account_id": "business",
@@ -22546,7 +22997,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 119,
+          "id": 122,
           "at": 1791717520000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -22566,7 +23017,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 106,
+          "id": 109,
           "at": 1791717520000,
           "kind": "shedding_round",
           "account_id": "business",
@@ -22633,7 +23084,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 118,
+          "id": 121,
           "at": 1791717460000,
           "kind": "poll_backoff_started",
           "account_id": "business",
@@ -22654,7 +23105,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 17,
+          "id": 20,
           "at": 1791717400900,
           "kind": "stream_interrupted",
           "account_id": "business",
@@ -22675,7 +23126,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 16,
+          "id": 19,
           "at": 1791717400350,
           "kind": "model_permitted",
           "account_id": "direct",
@@ -22698,7 +23149,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 15,
+          "id": 18,
           "at": 1791717400300,
           "kind": "model_rejected",
           "account_id": "business",
@@ -22718,7 +23169,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 14,
+          "id": 17,
           "at": 1791717400200,
           "kind": "pin_expired",
           "account_id": "business",
@@ -22739,7 +23190,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 13,
+          "id": 16,
           "at": 1791717400100,
           "kind": "pin_migrated",
           "account_id": "business",
@@ -24563,7 +25014,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "dead": [],
       "ledger": {
         "schema_version": 3,
-        "written": 64,
+        "written": 67,
         "dropped": 0,
         "write_failures": 0,
         "cache_map_orphans": 1,

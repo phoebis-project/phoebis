@@ -558,6 +558,65 @@ async fn every_route_is_captured_and_holds_its_shape() {
             trial_ends_at: None,
         },
     ).unwrap();
+    // Three accounts in no pool, each paired on the seed's two bound tokens, whose limit reset blocks the capture reads
+    // below: a reset on a cooldown, one that ends inside the warning's days and one used. No profile, no cancellation
+    // and no plan-ended flag, since either of the last two takes an account out of the set the poll asks, and its row
+    // then answers no block.
+    for (id, label, account_uuid, email, organization_uuid) in [
+        (
+            "reset-cooldown",
+            "Reset cooldown",
+            "00000000-0000-4000-8000-000000000007",
+            "cooldown@example.invalid",
+            "00000000-0000-4000-8000-000000000008",
+        ),
+        (
+            "reset-ending",
+            "Reset ending",
+            "00000000-0000-4000-8000-000000000009",
+            "ending@example.invalid",
+            "00000000-0000-4000-8000-000000000010",
+        ),
+        (
+            "reset-used",
+            "Reset used",
+            "00000000-0000-4000-8000-000000000011",
+            "used@example.invalid",
+            "00000000-0000-4000-8000-000000000012",
+        ),
+    ] {
+        parts
+            .store
+            .insert_account(&AccountRow {
+                label: label.into(),
+                identity: Some(Identity {
+                    account_uuid: account_uuid.into(),
+                    email: email.into(),
+                    organization_uuid: Some(organization_uuid.into()),
+                }),
+                state_cause: StateCause::Paired,
+                ..AccountRow::for_tests(id, AccountKind::Oauth)
+            })
+            .unwrap();
+        parts
+            .store
+            .commit_credentials(
+                id,
+                1,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new(access_token),
+                    refresh_token: Some(Secret::new(refresh_token)),
+                    issued_at: now,
+                    expires_at: now + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+    }
     // A free organization on the Pro tier, so the accounts fixtures carry the plan its type resolves to. It sits in a
     // pool of its own, apart from `main`, and shares the seed's two bound tokens as the seat does.
     parts
@@ -657,9 +716,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .store
         .set_plan_ended("free-org", free_end + 900_000)
         .unwrap());
-    // The mirror reads the accounts on its own tick, so the three pairings above land as transitions a tick later.
-    // No await stands among the pairings, so on the test's current-thread runtime no tick falls between them, and one
-    // tick carries all three in the order the store lists the accounts, by id. An await among them could split them
+    // The mirror reads the accounts on its own tick, so the six pairings above land as transitions a tick later. No
+    // await stands among the pairings, so on the test's current-thread runtime no tick falls between them, and one
+    // tick carries all six in the order the store lists the accounts, by id. An await among them could split them
     // across ticks and swap their ids. They are waited for ahead of the pool's create, so their rows take the routing
     // log's first ids and the `written` figure `system.json` holds counts them in every capture.
     fake_upstream::wait_for(Duration::from_secs(15), || {
@@ -674,7 +733,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 )?)
             })
             .unwrap();
-        (transitions == 3).then_some(())
+        (transitions == 6).then_some(())
     })
     .await;
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
@@ -2372,6 +2431,105 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .then_some(())
     })
     .await;
+    // Five limit reset blocks, each read through the service as a poll slot reads one. The five accounts hold the
+    // seed's one token, so the fake cannot tell their reads apart and is set to each block in turn. The reads follow
+    // the paired transitions, so no row of the routing log and no count of `system.json` waits on them.
+    let resets_answer = |block: &Value| fake_upstream::Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: j!({ "cedar_ember": block }).to_string().into_bytes(),
+    };
+    let business_resets = j!({
+        "eligible": true,
+        "grants": [
+            {
+                "clears": ["seven_day_overage_included"],
+                "ends_at": "2026-12-01T00:00:00Z",
+                "gives_back_weekly": true,
+                "id": "rg-business-1",
+                "label": "Launch reset",
+                "resets_left": 1,
+                "resets_total": 1,
+                "starts_at": "2026-10-01T00:00:00Z",
+                "usable_now": true,
+            },
+            {
+                "clears": ["seven_day_overage_included"],
+                "ends_at": "2026-12-01T00:00:00Z",
+                "gives_back_weekly": true,
+                "id": "rg-business-2",
+                "label": "Launch reset",
+                "resets_left": 1,
+                "resets_total": 1,
+                "starts_at": "2026-10-01T00:00:00Z",
+                "usable_now": true,
+            },
+        ],
+    });
+    for (id, block) in [
+        ("business", business_resets.clone()),
+        (
+            "reset-cooldown",
+            j!({
+                "cooldown_until": "2026-10-12T12:00:00Z",
+                "eligible": true,
+                "grants": [{
+                    "clears": ["seven_day_overage_included"],
+                    "ends_at": "2026-12-01T00:00:00Z",
+                    "id": "rg-cooldown-1",
+                    "label": "Launch reset",
+                    "resets_left": 1,
+                    "resets_total": 1,
+                    "starts_at": "2026-10-01T00:00:00Z",
+                    "unavailable_reason": "cooldown",
+                    "usable_now": false,
+                }],
+            }),
+        ),
+        (
+            "reset-ending",
+            j!({
+                "eligible": true,
+                "grants": [{
+                    "clears": ["seven_day_overage_included"],
+                    "ends_at": "2026-10-14T00:00:00Z",
+                    "id": "rg-ending-1",
+                    "label": "Launch reset",
+                    "resets_left": 1,
+                    "resets_total": 1,
+                    "starts_at": "2026-10-01T00:00:00Z",
+                    "usable_now": true,
+                }],
+            }),
+        ),
+        (
+            "reset-used",
+            j!({
+                "eligible": true,
+                "grants": [{
+                    "clears": ["seven_day_overage_included"],
+                    "ends_at": "2026-12-01T00:00:00Z",
+                    "id": "rg-used-1",
+                    "label": "Launch reset",
+                    "resets_left": 0,
+                    "resets_total": 1,
+                    "starts_at": "2026-10-01T00:00:00Z",
+                    "unavailable_reason": "unavailable",
+                    "usable_now": false,
+                }],
+            }),
+        ),
+        (
+            "usage-seat",
+            j!({ "eligible": false, "grants": [], "ineligible_reason": "seat" }),
+        ),
+    ] {
+        parts
+            .up
+            .set_rule_after(0, common::LIMIT_RESETS_PATH, resets_answer(&block));
+        let read = parts.usage.limit_resets(id).await.unwrap();
+        assert!(read.is_some(), "{id}: the fake answers its block");
+    }
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_catalog", "/admin/accounts/business/catalog"),
@@ -2456,6 +2614,27 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // The route reads the block again, so the fake answers `business`'s once more and the read lands the same block at
+    // the same instant, which leaves every capture after it as it was.
+    parts.up.set_rule_after(
+        0,
+        common::LIMIT_RESETS_PATH,
+        resets_answer(&business_resets),
+    );
+    let response = post(
+        app,
+        "/admin/accounts/business/limit-resets/read",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(response.status(), 200, "the limit resets read answers");
+    hold(
+        &planted,
+        "account_limit_resets",
+        "POST /admin/accounts/business/limit-resets/read",
+        json(response).await,
+    );
     // The pool's one captured row carries no request class, so the observing guardrail's answer holds an unmatched
     // verdict with its failing index, the shape the console's test panel reads.
     let response = post(

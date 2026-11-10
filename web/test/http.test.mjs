@@ -195,13 +195,19 @@ test('the accounts list carries the poll standing and no usage route is read', a
   const calls = stub(() => answer(200, body));
   const accounts = await new HttpApi().listAccounts();
   assert.deepEqual(calls.map((c) => [c.init.method ?? 'GET', c.url]), [['GET', '/admin/accounts']], 'one read of the list, no usage read per account');
-  // The seat's poll has not read it yet, so its row carries the sentence standing in for a snapshot. The free
-  // organization's row answers the reading the router holds from before its plan ended.
+  // No poll has read the three reset accounts or the seat yet, so their rows carry the sentence standing in for a
+  // snapshot. The free organization's row answers the reading the router holds from before its plan ended.
+  const cooldown = body.accounts.find((a) => a.id === 'reset-cooldown').usage;
+  const ending = body.accounts.find((a) => a.id === 'reset-ending').usage;
+  const used = body.accounts.find((a) => a.id === 'reset-used').usage;
   const seat = body.accounts.find((a) => a.id === 'usage-seat').usage;
   assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [
     ['business', 'clean'],
     ['direct', null],
     ['free-org', { accountId: 'free-org', error: null, fetchedAt: '2026-09-30T12:16:40.000Z', heldUntil: null, poll: null }],
+    ['reset-cooldown', { accountId: 'reset-cooldown', error: cooldown.error, fetchedAt: null, heldUntil: null, poll: null }],
+    ['reset-ending', { accountId: 'reset-ending', error: ending.error, fetchedAt: null, heldUntil: null, poll: null }],
+    ['reset-used', { accountId: 'reset-used', error: used.error, fetchedAt: null, heldUntil: null, poll: null }],
     ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null }],
   ]);
 });
@@ -750,6 +756,7 @@ test('the attention read is one GET, and its failures reach no toast, since the 
       ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
       // The console draws a kind it does not know as `unknown`, which opens nothing.
       ['unknown', 'usage-seat', null],
+      ['unknown', 'reset-ending', null],
       ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
       ['model_unpriced', 'claude-opus-99', null],
       ['meter_drift', 'business', { id: 'business', page: 'accounts' }],

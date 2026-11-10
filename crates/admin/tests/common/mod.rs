@@ -58,6 +58,10 @@ pub const NOW: i64 = 1_791_721_000_000;
 /// The build every harness names, so the captured answers read the same commit on any head.
 pub const FIXTURE_BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
+/// The prefix of the fake's rule for the usage read in the client's shape, which carries the limit resets. The plain
+/// usage read's rule keeps `/api/oauth/usage`, so a test switches either one alone.
+pub const LIMIT_RESETS_PATH: &str = "/api/oauth/usage?cedar_ember=1";
+
 /// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
 /// Spelled as a literal so the readers compare the relay's month arithmetic against a hand-computed instant.
 pub fn month_end() -> i64 {
@@ -1430,6 +1434,9 @@ async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {
             "/api/oauth/profile",
             as_account(control_response(ControlFixture::Profile), upstream_uuid),
         ),
+        // The fake answers the first rule whose prefix starts the target, so the client's shape stands ahead of the
+        // plain read, and it carries no block until a test or the capture sets one.
+        json_rule(LIMIT_RESETS_PATH, br#"{"cedar_ember":null}"#.to_vec()),
         json_rule(
             "/api/oauth/usage",
             control_response(ControlFixture::Usage).to_vec(),

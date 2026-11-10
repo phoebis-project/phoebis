@@ -248,7 +248,7 @@ test('extra usage the provider switched off keeps the reason it gave', () => {
 
 test('the account list folds state, enabled, and cooldowns onto one status', () => {
   const list = fixture('accounts').accounts.map(d.decodeAccount);
-  assert.deepEqual(list.map((a) => a.id), ['business', 'direct', 'free-org', 'usage-seat'], 'sorted by label');
+  assert.deepEqual(list.map((a) => a.id), ['business', 'direct', 'free-org', 'reset-cooldown', 'reset-ending', 'reset-used', 'usage-seat'], 'sorted by label');
   const direct = list.find((a) => a.id === 'direct');
   assert.equal(direct.kind, 'api_key');
   assert.equal(direct.subscription, null);

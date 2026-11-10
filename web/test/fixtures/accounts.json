@@ -112,6 +112,48 @@
             "observed_at": 1791720995000
           }
         },
+        "limit_resets": {
+          "cooldown_until": null,
+          "eligible": true,
+          "fable_week_share": null,
+          "grants": [
+            {
+              "blocking": [],
+              "clears": [
+                "seven_day_fable"
+              ],
+              "ends_at": 1796083200000,
+              "id": "rg-business-1",
+              "kind": "fable",
+              "label": "Launch reset",
+              "reason": null,
+              "resets_left": 1,
+              "resets_total": 1,
+              "starts_at": 1790812800000,
+              "state": "usable",
+              "used_at": null
+            },
+            {
+              "blocking": [],
+              "clears": [
+                "seven_day_fable"
+              ],
+              "ends_at": 1796083200000,
+              "id": "rg-business-2",
+              "kind": "fable",
+              "label": "Launch reset",
+              "reason": null,
+              "resets_left": 1,
+              "resets_total": 1,
+              "starts_at": 1790812800000,
+              "state": "waiting",
+              "used_at": null
+            }
+          ],
+          "ineligible_reason": null,
+          "left": 2,
+          "read_at": 1791721000000
+        },
         "extra_usage": {
           "currency": "USD",
           "disabled_reason": null,
@@ -169,6 +211,7 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "limit_resets": null,
         "extra_usage": null,
         "pool": {
           "pool_id": "main",
@@ -229,6 +272,7 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "limit_resets": null,
         "extra_usage": null,
         "pool": {
           "pool_id": "retired",
@@ -242,6 +286,228 @@
         "usage": {
           "error": null,
           "fetched_at": 1790770600000,
+          "held_until": null,
+          "poll": null
+        },
+        "usage_based": false,
+        "spend": null
+      },
+      {
+        "id": "reset-cooldown",
+        "companion_id": "830674b4",
+        "kind": "oauth",
+        "label": "Reset cooldown",
+        "enabled": true,
+        "canceled": false,
+        "plan_ended_at": null,
+        "state": "ready",
+        "funding_retry_at": null,
+        "identity": {
+          "email": "cooldown@example.invalid",
+          "account_uuid": "00000000-0000-4000-8000-000000000007",
+          "organization_uuid": "00000000-0000-4000-8000-000000000008"
+        },
+        "credential": {
+          "access_expires_at": 1791724600000,
+          "refresh_expires_at": null,
+          "generation": 1,
+          "last_refresh_at": null,
+          "last_error": null,
+          "quarantined": false
+        },
+        "lifecycle_generation": 1,
+        "revision": 4294967297,
+        "cooldowns": [],
+        "overage": null,
+        "profile": null,
+        "subscription": null,
+        "windows": [],
+        "slow_down": null,
+        "fast_lane": null,
+        "limit_resets": {
+          "cooldown_until": 1791806400000,
+          "eligible": true,
+          "fable_week_share": null,
+          "grants": [
+            {
+              "blocking": [],
+              "clears": [
+                "seven_day_fable"
+              ],
+              "ends_at": 1796083200000,
+              "id": "rg-cooldown-1",
+              "kind": "weekly",
+              "label": "Launch reset",
+              "reason": null,
+              "resets_left": 1,
+              "resets_total": 1,
+              "starts_at": 1790812800000,
+              "state": "cooldown",
+              "used_at": null
+            }
+          ],
+          "ineligible_reason": null,
+          "left": 1,
+          "read_at": 1791721000000
+        },
+        "extra_usage": null,
+        "pool": null,
+        "requests": {
+          "last_24h": 0,
+          "last_7d": 0,
+          "lifetime": 0
+        },
+        "usage": {
+          "error": "the poll has not read this account yet",
+          "fetched_at": null,
+          "held_until": null,
+          "poll": null
+        },
+        "usage_based": false,
+        "spend": null
+      },
+      {
+        "id": "reset-ending",
+        "companion_id": "0ec2a8c0",
+        "kind": "oauth",
+        "label": "Reset ending",
+        "enabled": true,
+        "canceled": false,
+        "plan_ended_at": null,
+        "state": "ready",
+        "funding_retry_at": null,
+        "identity": {
+          "email": "ending@example.invalid",
+          "account_uuid": "00000000-0000-4000-8000-000000000009",
+          "organization_uuid": "00000000-0000-4000-8000-000000000010"
+        },
+        "credential": {
+          "access_expires_at": 1791724600000,
+          "refresh_expires_at": null,
+          "generation": 1,
+          "last_refresh_at": null,
+          "last_error": null,
+          "quarantined": false
+        },
+        "lifecycle_generation": 1,
+        "revision": 4294967297,
+        "cooldowns": [],
+        "overage": null,
+        "profile": null,
+        "subscription": null,
+        "windows": [],
+        "slow_down": null,
+        "fast_lane": null,
+        "limit_resets": {
+          "cooldown_until": null,
+          "eligible": true,
+          "fable_week_share": null,
+          "grants": [
+            {
+              "blocking": [],
+              "clears": [
+                "seven_day_fable"
+              ],
+              "ends_at": 1791936000000,
+              "id": "rg-ending-1",
+              "kind": "weekly",
+              "label": "Launch reset",
+              "reason": null,
+              "resets_left": 1,
+              "resets_total": 1,
+              "starts_at": 1790812800000,
+              "state": "usable",
+              "used_at": null
+            }
+          ],
+          "ineligible_reason": null,
+          "left": 1,
+          "read_at": 1791721000000
+        },
+        "extra_usage": null,
+        "pool": null,
+        "requests": {
+          "last_24h": 0,
+          "last_7d": 0,
+          "lifetime": 0
+        },
+        "usage": {
+          "error": "the poll has not read this account yet",
+          "fetched_at": null,
+          "held_until": null,
+          "poll": null
+        },
+        "usage_based": false,
+        "spend": null
+      },
+      {
+        "id": "reset-used",
+        "companion_id": "eb3580d3",
+        "kind": "oauth",
+        "label": "Reset used",
+        "enabled": true,
+        "canceled": false,
+        "plan_ended_at": null,
+        "state": "ready",
+        "funding_retry_at": null,
+        "identity": {
+          "email": "used@example.invalid",
+          "account_uuid": "00000000-0000-4000-8000-000000000011",
+          "organization_uuid": "00000000-0000-4000-8000-000000000012"
+        },
+        "credential": {
+          "access_expires_at": 1791724600000,
+          "refresh_expires_at": null,
+          "generation": 1,
+          "last_refresh_at": null,
+          "last_error": null,
+          "quarantined": false
+        },
+        "lifecycle_generation": 1,
+        "revision": 4294967297,
+        "cooldowns": [],
+        "overage": null,
+        "profile": null,
+        "subscription": null,
+        "windows": [],
+        "slow_down": null,
+        "fast_lane": null,
+        "limit_resets": {
+          "cooldown_until": null,
+          "eligible": true,
+          "fable_week_share": null,
+          "grants": [
+            {
+              "blocking": [],
+              "clears": [
+                "seven_day_fable"
+              ],
+              "ends_at": 1796083200000,
+              "id": "rg-used-1",
+              "kind": "weekly",
+              "label": "Launch reset",
+              "reason": null,
+              "resets_left": 0,
+              "resets_total": 1,
+              "starts_at": 1790812800000,
+              "state": "used",
+              "used_at": null
+            }
+          ],
+          "ineligible_reason": null,
+          "left": 0,
+          "read_at": 1791721000000
+        },
+        "extra_usage": null,
+        "pool": null,
+        "requests": {
+          "last_24h": 0,
+          "last_7d": 0,
+          "lifetime": 0
+        },
+        "usage": {
+          "error": "the poll has not read this account yet",
+          "fetched_at": null,
           "held_until": null,
           "poll": null
         },
@@ -294,6 +560,15 @@
         "windows": [],
         "slow_down": null,
         "fast_lane": null,
+        "limit_resets": {
+          "cooldown_until": null,
+          "eligible": false,
+          "fable_week_share": null,
+          "grants": [],
+          "ineligible_reason": "seat",
+          "left": 0,
+          "read_at": 1791721000000
+        },
         "extra_usage": {
           "currency": "USD",
           "disabled_reason": null,

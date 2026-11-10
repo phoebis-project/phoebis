@@ -16,12 +16,13 @@ use axum::middleware::{from_fn_with_state, map_response, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
-use phoebis_ledger::{lead_over_pace, QuotaPoll};
+use phoebis_ledger::{lead_over_pace, polled, QuotaPoll};
 use phoebis_oauth::{
-    authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
-    parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
-    PairingError, PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus,
-    ProfileResponse, Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
+    authorization_url, control_request, ephemeral_port, exchange_body, grant_states,
+    loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput,
+    ControlKind, LimitResets, LoginKind, OauthError, PairingError, PairingSession, PairingStatus,
+    PendingIdentity, PollOutcome, PollStatus, ProfileResponse, Started, UsageSnapshot, UsageWindow,
+    FABLE_WINDOW_KEY,
 };
 use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
@@ -30,9 +31,9 @@ use phoebis_routing::{
     FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, ApiKeyRow,
-    CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember, PoolRow, Settled, StateCause,
-    StoreError,
+    answers_stamp_token, stamp_token, AccountExtras, AccountKind, AccountRow, AccountState,
+    ApiKeyRow, CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember, PoolRow, Settled,
+    StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -75,6 +76,7 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(resume))
         .routes(routes!(usage_latest))
         .routes(routes!(usage_refresh))
+        .routes(routes!(limit_resets_read))
         .routes(routes!(verify))
         .routes(routes!(analytics::accounts))
         .routes(routes!(analytics::breakdown))
@@ -809,7 +811,9 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
 /// Reads the endpoint now unless the account is backing off, through the same path as the scheduled poll: a clean
 /// reading is recorded to the ledger and handed to the router, so the account's windows change on it, and the Quota
 /// view's timeline when the reading's five-minute bucket holds no sample yet. The hold, the concurrency cap and the
-/// coalescing bound the read, so a held-down refresh makes one request per account per fetch.
+/// coalescing bound the read, so a held-down refresh makes one request per account per fetch. A reading the poll
+/// answered is followed by a read of the account's limit resets, unless that reading found the plan ended, and the
+/// route waits for the read, whose failure changes nothing in the answer.
 ///
 /// While the account's `plan_ended_at` is set, the profile is read first: a profile with a plan clears the flag and
 /// the usage endpoint is read as above, and with no plan no usage request goes out and the answer is the `GET`'s,
@@ -846,10 +850,90 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     }
     match state.quota_poll().poll_account(&row).await {
         Ok(snapshot) => {
+            // After the usage reading and under its hold, so the list the console loads next carries the block. The
+            // service logs a failed read, and this answer is the usage reading's either way.
+            let _ = read_limit_resets_after_poll(&state, &id).await;
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
         }
         Err(error) => failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+    }
+}
+
+/// Reads the account's limit resets after a call of the poll's path and answers whether the read landed. That poll
+/// can be the one that found the plan ended, and an account under that pause is sent no usage request, so the flag
+/// is read again first.
+async fn read_limit_resets_after_poll(state: &AdminState, id: &str) -> bool {
+    if QuotaPoll::plan_paused(&state.store, id) {
+        return false;
+    }
+    state.usage.limit_resets(id).await.is_ok()
+}
+
+const NOT_POLLED: &str = "the account's usage is not read, so its resets are not either";
+const NOT_SUBSCRIPTION: &str = "only a subscription account holds limit resets";
+
+/// Read an account's limit resets now.
+///
+/// Sends the usage read in the client's shape now, under the account's hold and the usage reads' permits, and two
+/// callers at once share one request. The Quota view's dialog calls it before it opens. The answer is the account's
+/// `limit_resets` member as it stands after the read: where the read failed or the hold refused it, the stored member
+/// with the read's error beside it.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/limit-resets/read",
+    operation_id = "account_limit_resets_read",
+    tag = "Accounts",
+    params(("id" = String, Path, description = "The account's id")),
+    responses(
+        (status = 200, description = "The account's `limit_resets` member after the read, with the read's error where it failed.", body = LimitResetsRead),
+        (status = 400, description = "`only a subscription account holds limit resets`", body = ErrorBody, example = json!({"error": "only a subscription account holds limit resets"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "`the account's usage is not read, so its resets are not either`",
+            headers(("x-phoebis-error-code" = String, description = "`limit_reset_not_polled`: the poll does not ask this account")),
+            body = ErrorBody, example = json!({"error": "the account's usage is not read, so its resets are not either"})),
+        (status = 500, response = StorageFailure),
+    ),
+)]
+async fn limit_resets_read(
+    State(state): State<Arc<AdminState>>,
+    Path(id): Path<String>,
+) -> Response {
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    if row.kind != AccountKind::Oauth {
+        return failure(StatusCode::BAD_REQUEST, NOT_SUBSCRIPTION);
+    }
+    let extras = match state.store.account_extras_of(&id) {
+        Ok(extras) => extras.unwrap_or_default(),
+        Err(error) => return store_failure(error),
+    };
+    if !asked(&row, &extras) {
+        return failure_with_code(StatusCode::CONFLICT, "limit_reset_not_polled", NOT_POLLED);
+    }
+    // A read that fails or that the hold refuses still opens the dialog, on the stored block and its age.
+    let error = state
+        .usage
+        .limit_resets(&id)
+        .await
+        .err()
+        .map(|error| error.to_string());
+    match state.store.account_extras_of(&id) {
+        Ok(extras) => Json(LimitResetsRead {
+            error,
+            limit_resets: limit_resets_view(
+                &state,
+                &row,
+                &extras.unwrap_or_default(),
+                (state.clock)(),
+            ),
+        })
+        .into_response(),
+        Err(error) => store_failure(error),
     }
 }
 
@@ -2198,6 +2282,10 @@ pub(crate) struct Account {
     pub slow_down: Option<AccountSlowDownView>,
     /// The whole object null until an answer to a fast request carried the fast headers.
     pub fast_lane: Option<FastLane>,
+    /// The account's limit resets. Null for an `api_key` account, for an account the poll does not ask (in the
+    /// `disconnected`, `reauth_required` or `unpaired` state, or flagged `plan_ended_at`), for one whose limit resets
+    /// were never read and for one whose last read carried none.
+    pub limit_resets: Option<AccountLimitResets>,
     pub extra_usage: Option<ExtraUsage>,
     pub pool: Option<PoolMembership>,
     pub requests: RequestCounts,
@@ -2355,6 +2443,67 @@ pub(crate) struct LaneReading {
     pub utilization: f64,
     pub resets_at: Option<i64>,
     pub observed_at: i64,
+}
+
+/// An account's one-time limit resets, as the block's last read and the claims since left them.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountLimitResets {
+    /// Epoch milliseconds: the block's cooldown while it lies after the route's clock, else null.
+    pub cooldown_until: Option<i64>,
+    /// As the block reads it.
+    pub eligible: bool,
+    /// The Fable week's used share of the 7-day window as a fraction of 1, from the cached snapshot, null where the
+    /// poll read none.
+    pub fable_week_share: Option<f64>,
+    /// In the block's order.
+    pub grants: Vec<AccountLimitResetGrant>,
+    /// As sent.
+    pub ineligible_reason: Option<String>,
+    /// The resets left on the grants that have not ended, at the route's clock.
+    pub left: u32,
+    /// Epoch milliseconds: the instant of the block's last read that answered 200.
+    pub read_at: i64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AccountLimitResetGrant {
+    /// The window names that block the grant, in the router's names, empty where none.
+    pub blocking: Vec<String>,
+    /// The window names the grant clears, in the router's names, an unknown one as sent.
+    pub clears: Vec<String>,
+    /// Epoch milliseconds: the grant's end.
+    pub ends_at: i64,
+    /// As sent.
+    pub id: String,
+    /// `fable`, `full`, `session`, `weekly` or the upstream's `type` as sent.
+    pub kind: String,
+    /// As sent.
+    pub label: String,
+    /// The upstream's `unavailable_reason` as sent for a `blocked` grant, null on every other state.
+    pub reason: Option<String>,
+    /// The grant's count, after the fold of a claim's answer.
+    pub resets_left: u32,
+    /// As sent.
+    pub resets_total: u32,
+    /// Epoch milliseconds: the grant's start.
+    pub starts_at: i64,
+    /// `blocked`, `cooldown`, `ended`, `paused`, `usable`, `used` or `waiting`.
+    pub state: String,
+    /// Epoch milliseconds: the use through this router, null on a grant with a reset left and on one used elsewhere.
+    pub used_at: Option<i64>,
+}
+
+/// What `POST /admin/accounts/{id}/limit-resets/read` answers.
+#[derive(serde::Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LimitResetsRead {
+    /// Null where the read landed, else the usage service's sentence for a read the hold refused or that failed, in
+    /// which case `limit_resets` is the stored member.
+    pub error: Option<String>,
+    /// The member as it stands after the call.
+    pub limit_resets: Option<AccountLimitResets>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2731,6 +2880,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
+        limit_resets: limit_resets_view(state, row, extras, now),
         // The amounts come from the newest polled row, since a head row carries none, the share from the newest row
         // that carries one, and the rest from the newest row of any source.
         extra_usage: ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| {
@@ -2764,6 +2914,58 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         usage_based: term.usage_based,
         spend: term.usage_based.then(|| spend_view(ctx, &row.id, now)),
     }
+}
+
+/// Whether the poll asks the account, the set whose limit resets the router reads, shows and uses.
+fn asked(row: &AccountRow, extras: &AccountExtras) -> bool {
+    polled(row.kind, row.state) && extras.term.plan_ended_at.is_none()
+}
+
+/// The row's `limit_resets` member at `now`: null for an account the poll does not ask and for one with no stored
+/// block.
+fn limit_resets_view(
+    state: &AdminState,
+    row: &AccountRow,
+    extras: &AccountExtras,
+    now: i64,
+) -> Option<AccountLimitResets> {
+    // Nothing refreshes the block of an account the poll does not ask, so no card offers a reset from it.
+    if !asked(row, extras) {
+        return None;
+    }
+    let block: LimitResets = serde_json::from_value(extras.limit_resets.clone()?).ok()?;
+    let grants = block
+        .grants
+        .iter()
+        .zip(grant_states(&block, now))
+        .map(|(grant, state)| AccountLimitResetGrant {
+            blocking: grant.blocking.clone(),
+            clears: grant.clears.clone(),
+            ends_at: grant.ends_at,
+            id: grant.id.clone(),
+            kind: grant.kind.clone(),
+            label: grant.label.clone(),
+            reason: state.reason,
+            resets_left: grant.resets_left,
+            resets_total: grant.resets_total,
+            starts_at: grant.starts_at,
+            state: state.state.as_str().into(),
+            used_at: None,
+        })
+        .collect();
+    Some(AccountLimitResets {
+        // Null once passed, so no page compares it with a clock to hide it.
+        cooldown_until: block.cooldown_until.filter(|until| *until > now),
+        eligible: block.eligible,
+        fable_week_share: state
+            .usage
+            .latest_for(row)
+            .and_then(|reading| reading.fable_week_share),
+        grants,
+        ineligible_reason: block.ineligible_reason.clone(),
+        left: resets_left(&block, now),
+        read_at: extras.limit_resets_read_at?,
+    })
 }
 
 /// A usage-based seat's spend window: the amounts from the newest polled row, the instant from the newest row of any

@@ -1322,7 +1322,7 @@ async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() 
     assert_eq!(
         (
             asked("/api/oauth/profile"),
-            asked("/api/oauth/usage"),
+            asked("/api/oauth/usage "),
             paused["poll"]["last_error"].as_str(),
             flag()
         ),
@@ -1345,7 +1345,7 @@ async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() 
     assert_eq!(
         (
             asked("/api/oauth/profile"),
-            asked("/api/oauth/usage"),
+            asked("/api/oauth/usage "),
             resumed["error"].as_str(),
             flag()
         ),
@@ -1366,6 +1366,336 @@ async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() 
             .as_deref()
             .is_some_and(|d| d.contains(r#""source":"profile""#)),
         "{restored:?}"
+    );
+}
+
+/// A grant in the upstream's field names: one reset of one, usable now, that gives the Fable week back, from
+/// 2026-10-01 to 2026-12-01.
+fn reset_grant(id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "clears": ["seven_day_overage_included"],
+        "ends_at": "2026-12-01T00:00:00Z",
+        "gives_back_weekly": true,
+        "id": id,
+        "label": "Launch reset",
+        "resets_left": 1,
+        "resets_total": 1,
+        "starts_at": "2026-10-01T00:00:00Z",
+        "usable_now": true,
+    })
+}
+
+/// Stores `block` on `business` as a block read at the rig's clock does: parsed from a usage body and written in its
+/// typed form under the row's holder and the epoch 0 the rig's pairing leaves.
+fn store_limit_resets(store: &phoebis_store::Store, block: serde_json::Value) {
+    let row = store.account("business").unwrap().unwrap();
+    let body = serde_json::json!({ "cedar_ember": block }).to_string();
+    let parsed = phoebis_oauth::parse_limit_resets(body.as_bytes())
+        .unwrap()
+        .expect("the body carries a block");
+    let stored = serde_json::to_string(&parsed).unwrap();
+    assert!(
+        store
+            .set_limit_resets(
+                "business",
+                row.incarnation,
+                row.lifecycle_generation,
+                0,
+                Some(&stored),
+                common::NOW
+            )
+            .unwrap(),
+        "the block lands on the rig's row"
+    );
+}
+
+/// The fake's answer to a usage read in the client's shape that carries `block`.
+fn limit_resets_answer(block: serde_json::Value) -> fake_upstream::Respond {
+    fake_upstream::Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: serde_json::json!({ "cedar_ember": block })
+            .to_string()
+            .into_bytes(),
+    }
+}
+
+#[tokio::test]
+async fn the_account_row_hides_limit_resets_the_poll_no_longer_refreshes() {
+    use common::{delete, get, json, login};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    let polled = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let member = &polled["limit_resets"];
+    assert_eq!(
+        (
+            member["grants"][0]["id"].as_str(),
+            member["grants"][0]["state"].as_str(),
+            member["left"].as_u64()
+        ),
+        (Some("rg-b-1"), Some("usable"), Some(1)),
+        "a polled account answers its stored block: {polled}"
+    );
+    assert_eq!(
+        delete(
+            &h.app,
+            "/admin/accounts/business/credentials",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    let disconnected = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            disconnected["state"].as_str(),
+            &disconnected["limit_resets"]
+        ),
+        (Some("disconnected"), &serde_json::Value::Null),
+        "nothing refreshes a disconnected account's block, so the row answers none: {disconnected}"
+    );
+}
+
+#[tokio::test]
+async fn a_block_with_no_grant_is_not_an_unread_block() {
+    use common::{get, json, login};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let unread = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        unread["limit_resets"],
+        serde_json::Value::Null,
+        "an account whose block was never read answers none: {unread}"
+    );
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": false, "grants": [], "ineligible_reason": "seat"}),
+    );
+    let read = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        read["limit_resets"],
+        serde_json::json!({
+            "cooldown_until": null,
+            "eligible": false,
+            "fable_week_share": null,
+            "grants": [],
+            "ineligible_reason": "seat",
+            "left": 0,
+            "read_at": common::NOW,
+        }),
+        "a block that lists no grant answers the member with an empty list: {read}"
+    );
+}
+
+#[tokio::test]
+async fn the_account_row_hides_limit_resets_once_the_plan_ended() {
+    use common::{get, json, login};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    let asked = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        asked["limit_resets"]["left"].as_u64(),
+        Some(1),
+        "an account the poll asks answers its stored block: {asked}"
+    );
+    assert!(h.store.set_plan_ended("business", common::NOW).unwrap());
+    let ended = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        ended["limit_resets"],
+        serde_json::Value::Null,
+        "the poll no longer asks an account whose plan ended, so the row answers none: {ended}"
+    );
+}
+
+#[tokio::test]
+async fn the_account_row_drops_a_cooldown_that_passed() {
+    use common::{get, json, login};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let cooled = |until: &str| {
+        serde_json::json!({
+            "cooldown_until": until,
+            "eligible": true,
+            "grants": [reset_grant("rg-b-1")],
+        })
+    };
+    // The rig's clock reads 2026-10-11T12:16:40Z.
+    store_limit_resets(&h.store, cooled("2026-10-11T12:16:41Z"));
+    let ahead = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        ahead["limit_resets"]["cooldown_until"].as_i64(),
+        Some(1_791_721_001_000),
+        "a cooldown one second after the clock reads as stored: {ahead}"
+    );
+    store_limit_resets(&h.store, cooled("2026-10-11T12:16:40Z"));
+    let passed = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        passed["limit_resets"]["cooldown_until"],
+        serde_json::Value::Null,
+        "a cooldown at the clock's own instant has passed: {passed}"
+    );
+}
+
+#[tokio::test]
+async fn the_read_route_answers_the_stored_block_where_the_read_fails() {
+    use common::{json, login, post, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let read = "/admin/accounts/business/limit-resets/read";
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        fake_upstream::Respond::Json {
+            status: 500,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"api_error","message":"Internal server error"}}"#
+                .to_vec(),
+        },
+    );
+    let failed = post(&h.app, read, "", Some(&cookie)).await;
+    assert_eq!(failed.status(), 200);
+    let failed = json(failed).await;
+    assert_eq!(
+        (
+            failed["limit_resets"]["grants"][0]["id"].as_str(),
+            failed["error"].is_string()
+        ),
+        (Some("rg-b-1"), true),
+        "a failed read answers the stored block beside its error: {failed}"
+    );
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        limit_resets_answer(
+            serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-2")]}),
+        ),
+    );
+    let landed = post(&h.app, read, "", Some(&cookie)).await;
+    assert_eq!(landed.status(), 200);
+    let landed = json(landed).await;
+    assert_eq!(
+        (
+            landed["limit_resets"]["grants"][0]["id"].as_str(),
+            &landed["error"]
+        ),
+        (Some("rg-b-2"), &serde_json::Value::Null),
+        "a read that lands answers the block it read: {landed}"
+    );
+}
+
+#[tokio::test]
+async fn the_cards_refresh_reads_the_limit_resets() {
+    use common::{get, json, login, post, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let mut needs_limit = reset_grant("rg-b-1");
+    needs_limit["usable_now"] = serde_json::json!(false);
+    needs_limit["unavailable_reason"] = serde_json::json!("needs_limit");
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [needs_limit]}),
+    );
+    let state = |account: &serde_json::Value| {
+        account["limit_resets"]["grants"][0]["state"]
+            .as_str()
+            .map(str::to_string)
+    };
+    let stored = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        state(&stored).as_deref(),
+        Some("blocked"),
+        "the stored block lists the grant as blocked: {stored}"
+    );
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        limit_resets_answer(
+            serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+        ),
+    );
+    let refreshed = post(
+        &h.app,
+        "/admin/accounts/business/usage/refresh",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refreshed.status(), 200);
+    let after = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        state(&after).as_deref(),
+        Some("usable"),
+        "the refresh read the block that lists the grant as usable: {after}"
+    );
+}
+
+#[tokio::test]
+async fn a_refresh_sends_no_limit_resets_read_to_a_plan_that_just_ended() {
+    use common::{json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 403,
+            headers: vec![("x-should-retry".into(), "false".into())],
+            body: br#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization","error_visibility":"user_facing"}}}"#
+                .to_vec(),
+        },
+    );
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#
+                .to_vec(),
+        },
+    );
+    let refreshed = post(
+        &h.app,
+        "/admin/accounts/business/usage/refresh",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refreshed.status(), 200);
+    let refreshed = json(refreshed).await;
+    let sent = |line: &str| {
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with(line))
+            .count()
+    };
+    let ended = h
+        .store
+        .subscription_term("business")
+        .unwrap()
+        .unwrap()
+        .plan_ended_at;
+    assert_eq!(
+        (
+            sent("GET /api/oauth/usage "),
+            ended.is_some(),
+            sent("GET /api/oauth/usage?cedar_ember=1")
+        ),
+        (1, true, 0),
+        "the refresh's poll found the plan ended, so no limit resets read follows it: {refreshed}"
     );
 }
 
@@ -2788,7 +3118,7 @@ async fn a_confirmed_pairing_polls_the_quota_at_once_and_a_refresh_records_its_r
     let asked = || {
         h.up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count()
     };
     // The endpoint records the poll's request and holds its answer, so the confirm's answer and the reads right
@@ -2924,7 +3254,7 @@ async fn a_confirm_says_its_first_poll_is_in_flight_and_the_list_row_lists_the_w
     let asked = || {
         h.up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count()
     };
     // The endpoint holds its answer, so the confirm answers while the poll it started is still waiting on it.
@@ -2994,7 +3324,7 @@ async fn the_usage_get_answers_the_polls_latest_snapshot_and_standing_without_a_
     let asked = || {
         h.up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count()
     };
     let before = json(get(&h.app, path, Some(&cookie)).await).await;
@@ -3135,7 +3465,7 @@ async fn a_refresh_whose_read_ends_after_the_clock_moved_answers_the_one_reading
     let asked = || {
         h.up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count()
     };
     let bucket = phoebis_ledger::bucket_of(NOW);
@@ -3553,7 +3883,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     let asked = || {
         h.up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count()
     };
     let polled = asked();

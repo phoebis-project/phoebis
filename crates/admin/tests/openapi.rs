@@ -28,6 +28,7 @@ const EXAMPLE_FILES: &[&str] = &[
     "accounts",
     "account",
     "account_catalog",
+    "account_limit_resets",
     "account_quota",
     "account_usage",
     "analytics_accounts",
@@ -80,6 +81,10 @@ const EXAMPLE_FILES: &[&str] = &[
 const CORPUS: &[(&str, Option<(&str, u16)>)] = &[
     ("account", Some(("account_show", 200))),
     ("account_catalog", Some(("account_catalog", 200))),
+    (
+        "account_limit_resets",
+        Some(("account_limit_resets_read", 200)),
+    ),
     ("account_quota", Some(("account_quota", 200))),
     ("account_usage", Some(("account_usage", 200))),
     ("accounts", Some(("accounts_list", 200))),
@@ -414,6 +419,7 @@ async fn every_operation_declares_one_success_and_its_refusals_as_error_bodies()
             assert!(shared || inline, "{id} {status}: the body is an ErrorBody");
             if status == "409" {
                 let coded = [
+                    "account_limit_resets_read",
                     "account_patch",
                     "guardrail_patch",
                     "key_patch",
@@ -424,7 +430,7 @@ async fn every_operation_declares_one_success_and_its_refusals_as_error_bodies()
                 assert_eq!(
                     response["headers"]["x-phoebis-error-code"].is_object(),
                     coded,
-                    "{id} 409: the code header on the four stale_edit sites and the pairing confirm alone"
+                    "{id} 409: the code header on the operations whose 409 carries a code, and on no other"
                 );
                 if id == "pairing_confirm" {
                     let code = response["headers"]["x-phoebis-error-code"]["description"]

@@ -110,6 +110,48 @@
         "observed_at": 1791720995000
       }
     },
+    "limit_resets": {
+      "cooldown_until": null,
+      "eligible": true,
+      "fable_week_share": null,
+      "grants": [
+        {
+          "blocking": [],
+          "clears": [
+            "seven_day_fable"
+          ],
+          "ends_at": 1796083200000,
+          "id": "rg-business-1",
+          "kind": "fable",
+          "label": "Launch reset",
+          "reason": null,
+          "resets_left": 1,
+          "resets_total": 1,
+          "starts_at": 1790812800000,
+          "state": "usable",
+          "used_at": null
+        },
+        {
+          "blocking": [],
+          "clears": [
+            "seven_day_fable"
+          ],
+          "ends_at": 1796083200000,
+          "id": "rg-business-2",
+          "kind": "fable",
+          "label": "Launch reset",
+          "reason": null,
+          "resets_left": 1,
+          "resets_total": 1,
+          "starts_at": 1790812800000,
+          "state": "waiting",
+          "used_at": null
+        }
+      ],
+      "ineligible_reason": null,
+      "left": 2,
+      "read_at": 1791721000000
+    },
     "extra_usage": {
       "currency": "USD",
       "disabled_reason": null,
