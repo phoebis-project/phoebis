@@ -1937,6 +1937,7 @@ fn a_usage_snapshot_becomes_a_sample_and_overage_evidence() {
         raw_keys: vec![],
         error: None,
         spend: None,
+        fable_week_share: None,
     };
     let (sample, overage) = sample_from_usage(&snapshot(100.0, 40.0, true), 1);
     assert_eq!(
@@ -5677,6 +5678,7 @@ fn credits_at(
         raw_keys: vec![],
         error: None,
         spend: None,
+        fable_week_share: None,
     };
     Report::Credits {
         account_id: "a".into(),
@@ -6743,6 +6745,7 @@ async fn a_seats_poll_reads_the_share_from_extra_usage_utilization_and_not_from_
         extra_usage,
         spend,
         raw_keys,
+        fable_week_share,
     } = phoebis_oauth::parse_usage(UNEQUAL_SEAT_USAGE).unwrap();
     let snapshot = UsageSnapshot {
         account_id: "a".into(),
@@ -6754,6 +6757,7 @@ async fn a_seats_poll_reads_the_share_from_extra_usage_utilization_and_not_from_
         raw_keys,
         error: None,
         spend,
+        fable_week_share,
     };
     handle
         .report(Report::Credits {

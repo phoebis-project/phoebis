@@ -3986,6 +3986,7 @@ fn a_seven_day_opus_reading_at_its_limit_is_kept_in_the_sample_and_drops_nothing
             raw_keys: Vec::new(),
             error: None,
             spend: None,
+            fable_week_share: None,
         },
         1,
     );

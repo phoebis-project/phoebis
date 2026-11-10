@@ -2,6 +2,7 @@
 
 mod authorize;
 mod exchange;
+mod limit_resets;
 mod manager;
 mod pkce;
 pub mod random;
@@ -12,6 +13,9 @@ pub use authorize::{authorization_url, ephemeral_port, loopback_redirect_uri, Lo
 pub use exchange::{
     control_request, exchange_body, parse_profile, parse_token_response, refresh_body, ControlKind,
     OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
+};
+pub use limit_resets::{
+    grant_states, parse_limit_resets, resets_left, Grant, GrantState, GrantStatus, LimitResets,
 };
 pub use manager::{AccessToken, AcquireError, Backoff, Clock, CredentialManager, LandedMark};
 pub use manager::{SERVER_ERROR_BACKOFF_MS, TRANSIENT_BACKOFF_MS};

@@ -936,6 +936,7 @@ mod tests {
             raw_keys: vec![],
             error: None,
             spend: None,
+            fable_week_share: None,
         };
         let (quota, extra) = samples_from_poll(&snapshot);
         assert_eq!(

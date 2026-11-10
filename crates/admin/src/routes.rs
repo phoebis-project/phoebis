@@ -2959,6 +2959,7 @@ fn compose_usage(
                 spend: latest.as_ref().and_then(|s| s.spend.clone()),
                 raw_keys: latest.map(|s| s.raw_keys).unwrap_or_default(),
                 error: None,
+                fable_week_share: None,
             }
         }
     };

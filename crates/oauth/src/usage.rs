@@ -1,6 +1,6 @@
 //! Parses the OAuth usage payload and caches it per account, coalescing concurrent fetches.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,6 +14,7 @@ use tokio::sync::Semaphore;
 use crate::exchange::{
     control_request, instant_ms, parse_profile, ControlKind, OauthError, ProfileResponse,
 };
+use crate::limit_resets::SEVEN_DAY_FABLE;
 use crate::manager::{retry_after_ms, AcquireError, Clock, CredentialManager, LandedMark};
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
@@ -186,12 +187,30 @@ pub struct UsageSnapshot {
     pub raw_keys: Vec<String>,
     pub error: Option<String>,
     pub spend: Option<SpendReading>,
+    pub fable_week_share: Option<f64>,
 }
 
 impl UsageSnapshot {
     /// Whether the snapshot holds a window, the Fable week's included.
     pub fn has_windows(&self) -> bool {
         !self.windows.is_empty() || self.fable_window.is_some()
+    }
+
+    /// The windows that read at their limit, under the router's names.
+    pub fn windows_at_limit(&self) -> BTreeSet<String> {
+        let at_limit =
+            |window: &&UsageWindow| window.utilization.is_some_and(|percent| percent >= 100.0);
+        let fable = self
+            .fable_window
+            .iter()
+            .filter(at_limit)
+            .map(|_| SEVEN_DAY_FABLE.to_string());
+        self.windows
+            .iter()
+            .filter(at_limit)
+            .map(|window| window.key.clone())
+            .chain(fable)
+            .collect()
     }
 }
 
@@ -310,21 +329,21 @@ pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
     };
     let spend = spend_reading(map.get("spend"), extra_usage.as_ref());
 
-    let fable_window = match map.get("limits") {
-        Some(limits) => {
-            let scoped = fable_from_limits(limits);
-            if scoped.is_some() {
+    let (fable_window, fable_week_share) = match map.get("limits") {
+        Some(limits) => match fable_from_limits(limits) {
+            Some((index, window)) => {
                 // The alias is the same quota under the name an older response used, so leaving it among the
                 // windows would show the operator one limit twice.
                 windows.retain(|window| !FABLE_KEY_ALIASES.contains(&window.key.as_str()));
+                (Some(window), fable_week_share(map, index))
             }
-            scoped
-        }
+            None => (None, None),
+        },
         None => {
             let alias = windows
                 .iter()
                 .position(|w| FABLE_KEY_ALIASES.contains(&w.key.as_str()));
-            alias.map(|index| windows.remove(index))
+            (alias.map(|index| windows.remove(index)), None)
         }
     };
 
@@ -334,6 +353,7 @@ pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
         extra_usage,
         spend,
         raw_keys,
+        fable_week_share,
     })
 }
 
@@ -383,8 +403,8 @@ fn window_from_value(key: &str, value: &Value) -> Option<UsageWindow> {
     })
 }
 
-fn fable_from_limits(limits: &Value) -> Option<UsageWindow> {
-    let entry = limits.as_array()?.iter().find(|item| {
+fn fable_from_limits(limits: &Value) -> Option<(usize, UsageWindow)> {
+    let (index, entry) = limits.as_array()?.iter().enumerate().find(|(_, item)| {
         item.get("kind").and_then(Value::as_str) == Some("weekly_scoped")
             && item
                 .get("scope")
@@ -393,11 +413,27 @@ fn fable_from_limits(limits: &Value) -> Option<UsageWindow> {
                 .and_then(Value::as_str)
                 .is_some_and(|name| name.starts_with("Fable"))
     })?;
-    Some(UsageWindow {
-        key: FABLE_WINDOW_KEY.to_string(),
-        utilization: entry.get("percent").and_then(Value::as_f64),
-        resets_at: entry.get("resets_at").and_then(instant_ms),
-    })
+    Some((
+        index,
+        UsageWindow {
+            key: FABLE_WINDOW_KEY.to_string(),
+            utilization: entry.get("percent").and_then(Value::as_f64),
+            resets_at: entry.get("resets_at").and_then(instant_ms),
+        },
+    ))
+}
+
+/// The Fable week's used share of the 7-day window as a fraction of 1, from the share entry that names the
+/// Fable week's place in `limits`.
+fn fable_week_share(map: &serde_json::Map<String, Value>, limit_index: usize) -> Option<f64> {
+    let entry = map
+        .get("weekly_scoped_shares")?
+        .as_array()?
+        .iter()
+        .find(|share| {
+            share.get("limit_index").and_then(Value::as_u64) == u64::try_from(limit_index).ok()
+        })?;
+    Some(entry.get("used_percent_of_weekly")?.as_f64()? / 100.0)
 }
 
 #[derive(Debug)]
@@ -407,6 +443,7 @@ pub struct ParsedUsage {
     pub extra_usage: Option<ExtraUsage>,
     pub spend: Option<SpendReading>,
     pub raw_keys: Vec<String>,
+    pub fable_week_share: Option<f64>,
 }
 
 /// Why a fetch did not produce a usable payload. Kept apart from `UsageError`, which surfaces only when the
@@ -466,6 +503,7 @@ fn empty_snapshot(
         raw_keys: Vec::new(),
         error: Some(error),
         spend: None,
+        fable_week_share: None,
     }
 }
 
@@ -1113,6 +1151,7 @@ impl Inner {
                     raw_keys: parsed.raw_keys,
                     error: None,
                     spend: parsed.spend,
+                    fable_week_share: parsed.fable_week_share,
                 };
                 let edge = cache.get(account_id).and_then(|entry| {
                     entry.backoff_since.map(|since| BackoffEdge::Ended {

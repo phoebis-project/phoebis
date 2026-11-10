@@ -12,6 +12,7 @@ fn the_synthetic_usage_body_parses_into_windows() {
         extra_usage: extra,
         spend,
         raw_keys: raw,
+        ..
     } = parse_usage(control_response(ControlFixture::Usage)).unwrap();
     let five = windows.iter().find(|w| w.key == "five_hour").unwrap();
     assert_eq!(five.utilization, Some(12.5));
@@ -64,6 +65,20 @@ fn the_fable_window_comes_from_limits_regardless_of_the_named_key() {
 }
 
 #[test]
+fn the_fable_weeks_share_is_the_one_under_its_limit_index() {
+    let body = br#"{"limits":[{"kind":"weekly_scoped","percent":10,"scope":{"model":{"display_name":"Opus"}}},{"kind":"weekly_scoped","percent":46,"scope":{"model":{"display_name":"Fable"}}}],"weekly_scoped_shares":[{"limit_index":0,"used_percent_of_weekly":7,"allowance_percent_of_weekly":50},{"limit_index":1,"used_percent_of_weekly":23,"allowance_percent_of_weekly":50}]}"#;
+    let parsed = parse_usage(body).unwrap();
+    assert_eq!(
+        (
+            parsed.fable_week_share,
+            parsed.fable_window.and_then(|window| window.utilization)
+        ),
+        (Some(0.23), Some(46.0)),
+        "the Fable week is the second limit, so its share is the one under limit_index 1"
+    );
+}
+
+#[test]
 fn the_seat_fixture_parses_into_no_window_and_a_spend_reading() {
     let ParsedUsage {
         windows,
@@ -71,6 +86,7 @@ fn the_seat_fixture_parses_into_no_window_and_a_spend_reading() {
         extra_usage: extra,
         spend,
         raw_keys: raw,
+        ..
     } = parse_usage(include_bytes!("fixtures/usage_based_seat.json")).unwrap();
     assert!(windows.is_empty(), "every window key is null");
     assert!(fable.is_none(), "limits is empty and the aliases are null");
