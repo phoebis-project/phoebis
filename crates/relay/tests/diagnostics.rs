@@ -2218,6 +2218,44 @@ async fn a_resumed_conversation_stamped_over_the_empty_prompt_relays() {
     up.shutdown().await;
 }
 
+/// A custom agent of a forked skill stamps its first request over the empty prompt on a conversation that resumes
+/// nothing, so the stamp reproduces from no text block of the body and the empty prompt alone admits it.
+#[tokio::test]
+async fn a_fresh_conversation_stamped_over_the_empty_prompt_relays() {
+    let mut text = String::from_utf8(body(BodyFixture::FirstParty).to_vec()).unwrap();
+    let open = r#""messages":["#;
+    let start = text.find(open).expect("the fixture carries messages") + open.len();
+    let end = text
+        .find(r#"],"system":"#)
+        .expect("the system blocks follow the messages");
+    // Units 4, 7 and 20 of this text are `r`, a space and `e`, so the block yields a suffix other than the fixture's
+    // `077`, the empty prompt's under 2.1.310. The fixture's own blocks would yield `077` and pass on their own.
+    text.replace_range(
+        start..end,
+        r#"{"role":"user","content":[{"type":"text","text":"a first prompt long enough to sample"}]}"#,
+    );
+    let native = phoebis_cch::sign(text.as_bytes()).expect("the fixture signs");
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_01"),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(first_party_request(&native, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status(), outcome(&resp).client_drift),
+        (StatusCode::OK, None)
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(up.requests().len(), 1, "the body reached the upstream");
+    up.shutdown().await;
+}
+
 /// The router reproduces a resumed stamp over the empty prompt, so a resumed suffix it cannot reproduce is a real
 /// non-reproduction: refused, with words and a warning that name the resume beside the re-pin.
 #[tokio::test]
@@ -2238,11 +2276,12 @@ async fn a_fresh_conversations_suffix_that_does_not_reproduce_names_the_anchors_
     let (message, warning) = drift_refusal(&stamped("abc", false), "version_suffix").await;
     assert_eq!(
         message,
-        "the client's version suffix does not reproduce from any text block of the first user message or the \
-         version the user agent names, the anchors this build tries for every request. Where the session's main \
-         turns pass, re-pinning the router does not help: the refused body shows where this client anchored the \
-         suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class \
-         and x-claude-code-agent-type headers, where the client sends them, tell a subagent's request apart"
+        "the client's version suffix does not reproduce from any text block of the first user message, the empty \
+         prompt or the version the user agent names, the anchors this build tries for every request. Where the \
+         session's main turns pass, re-pinning the router does not help: the refused body shows where this client \
+         anchored the suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, \
+         x-claude-code-request-class and x-claude-code-agent-type headers, where the client sends them, tell a \
+         subagent's request apart"
     );
     assert!(warning.contains(" resume=false"), "{warning}");
 }

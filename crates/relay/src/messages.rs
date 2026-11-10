@@ -3888,10 +3888,12 @@ impl Relay {
             .await
     }
 
-    /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
+    /// A client-drift refusal with its trigger, the warn that tells the operator whether a re-pin cures it, and the
     /// refusal's record as the request's one decision. The record is try-sent, so a full router queue drops it
-    /// rather than delaying the 403. A moved client is cured by the re-pin, and a resumed body warns `resume` and
-    /// its suffix refusal's words name the resume, so the operator sees the refused conversation was a resumed one.
+    /// rather than delaying the 403. A moved client is cured by the re-pin, so a hash drift and a resumed body's
+    /// suffix warn with it, and a suffix on a conversation that was not resumed warns with its refusal's condition,
+    /// that a re-pin does not help where the session's main turns pass. A resumed body warns `resume` and its suffix
+    /// refusal's words name the resume, so the operator sees the refused conversation was a resumed one.
     #[allow(clippy::too_many_arguments)]
     fn drift_refusal(
         &self,
@@ -3903,12 +3905,21 @@ impl Relay {
         identity: &RequestIdentity,
         client_version: Option<&str>,
     ) -> LocalRefusal {
+        let advice = match (kind, resumed) {
+            // The refusal built for this request says a re-pin does not help where the main turns pass, so the journal
+            // says the same.
+            (DriftKind::VersionSuffix, false) => {
+                "a caller stamped a billing line this build cannot reproduce. Where the session's main turns pass, \
+                 re-pinning the router does not help"
+            }
+            _ => "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
+        };
         tracing::warn!(
             drift = %kind.as_str(),
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
             resume = resumed,
-            "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
+            "{advice}",
         );
         self.router.record_refusal(
             RefusedRequest {

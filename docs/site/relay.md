@@ -183,17 +183,18 @@ origin it records when the line carries it.
 
 Two checks guard the restoration against a client build the router was not pinned to. The hash check refuses a stamped
 `cch=` hash this build's formula does not reproduce over the body, and the suffix check refuses, on a Claude Code
-inference request, a `cc_version` suffix that does not reproduce from the first user message and the version the user
-agent names. On a resumed conversation, whose first user message is the client's resume placeholder, the suffix also
-reproduces from the empty prompt, since the client stamps the request over a message of tool results alone and writes
-the placeholder afterwards. The hash goes first. A body carrying only the placeholder `cch=00000` passes, and a line
-with no `cc_version`, a bare version with no suffix, or a version other than the agent's is not the suffix drift: the
-first two carry nothing to check, and the third is the hash check's to judge. The suffix check reads the billing line as
-the tolerant parse carries it, a lone surrogate escape reading as the replacement character, so a line the strict
-decoder refuses for a lone surrogate escape is checked all the same. Both run once per request, after the key's client
-and model checks and before any account is chosen, so the refusal names no account and no leg ever meets a drift.
-The contract check runs before both, so a body without the line is a contract refusal and never a drift, and a request
-that fails the contract and a drift check is refused for the contract ([The required set](client.md#the-required-set)).
+inference request, a `cc_version` suffix that does not reproduce from any text block of the first user message, the
+empty prompt or the version the user agent names. The empty prompt is an anchor for every request: the client stamps a
+resumed conversation over a message of tool results alone and writes the resume placeholder afterwards, and a custom
+agent of a forked skill stamps its first request over the empty prompt. The hash goes first. A body carrying only the
+placeholder `cch=00000` passes, and a line with no `cc_version`, a bare version with no suffix, or a version other than
+the agent's is not the suffix drift: the first two carry nothing to check, and the third is the hash check's to judge.
+The suffix check reads the billing line as the tolerant parse carries it, a lone surrogate escape reading as the
+replacement character, so a line the strict decoder refuses for a lone surrogate escape is checked all the same. Both
+run once per request, after the key's client and model checks and before any account is chosen, so the refusal names no
+account and no leg ever meets a drift. The contract check runs before both, so a body without the line is a contract
+refusal and never a drift, and a request that fails the contract and a drift check is refused for the contract ([The
+required set](client.md#the-required-set)).
 
 Either refuses the request as `403` `permission_error` with the code `client_drift`, the headers
 `x-phoebis-error-code: client_drift` and `x-should-retry: false`, and the message of its kind ([refusal
@@ -202,24 +203,26 @@ codes](client.md#refusal-codes)):
 | Drift kind | Message |
 | --- | --- |
 | `hash` | `the client's billing hash does not reproduce under the Claude Code release this build is measured against. Re-pin the router to this client version` |
-| `version_suffix` | `the client's version suffix does not reproduce from any text block of the first user message or the version the user agent names, the anchors this build tries for every request. Where the session's main turns pass, re-pinning the router does not help: the refused body shows where this client anchored the suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and x-claude-code-agent-type headers, where the client sends them, tell a subagent's request apart` |
+| `version_suffix` | `the client's version suffix does not reproduce from any text block of the first user message, the empty prompt or the version the user agent names, the anchors this build tries for every request. Where the session's main turns pass, re-pinning the router does not help: the refused body shows where this client anchored the suffix, and its billing line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and x-claude-code-agent-type headers, where the client sends them, tell a subagent's request apart` |
 | `version_suffix`, resumed conversation | `the conversation was resumed, and the client's version suffix does not reproduce from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this client version` |
 
-The suffix check tries the same anchors for every request, each text block of the first user message and the version the
-user agent names, and the `version_suffix` message names them. A custom agent of Claude Code 2.1.318, captured in print
-mode, anchors its suffix on the last text block of the first wire user message, as the main turn does, so its suffix
-reproduces. The custom agents refused on 2026-10-30 (client 2.1.314, the `cli` entrypoint, the model `claude-fable-5-1`,
-with 10 and 40 tools) anchored theirs outside those blocks, and their case is open. The message also names the marks
-that tell a subagent's request apart from a moved client's: `cc_is_subagent` on the billing line, the
-`x-claude-code-agent-id` header, and the hint headers `x-claude-code-agent-type` and `x-claude-code-request-class` where
-the client sends them. The refused body shows where the client anchored the suffix, so the operator captures it. With
-[body capture](statistics.md#body-capture) on for the key or its pool, the ledger keeps the body of a request this check
-refuses, since the relay records the body before the check runs. A capture holds the requests observed after it is asked
-for, so the operator turns it on before the refusal recurs.
+The suffix check tries the same anchors for every request, each text block of the first user message, the empty prompt
+and the version the user agent names, and the `version_suffix` message names them. A custom agent of Claude Code
+2.1.318, captured in print mode, anchors its suffix on the last text block of the first wire user message, as the main
+turn does, so its suffix reproduces. A custom agent of a forked skill (Claude Code 2.1.319) stamps its suffix over the
+empty prompt, which no text block of its first user message yields, so its request passes on that anchor. The message
+also names the marks that tell a subagent's request apart from a moved client's: `cc_is_subagent` on the billing line,
+the `x-claude-code-agent-id` header, and the hint headers `x-claude-code-agent-type` and `x-claude-code-request-class`
+where the client sends them. The refused body shows where the client anchored the suffix, so the operator captures it.
+With [body capture](statistics.md#body-capture) on for the key or its pool, the ledger keeps the body of a request this
+check refuses, since the relay records the body before the check runs. A capture holds the requests observed after it is
+asked for, so the operator turns it on before the refusal recurs.
 
-The refusal logs `a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client` at
-warn level with the drift kind, the user agent and the profile name, and records itself as the request's one decision,
-of kind `client` with the code `drift` and the check as its reason, so the request log names which check refused.
+The refusal logs `a caller stamped a billing line this build cannot reproduce.` at warn level with the drift kind, the
+user agent and the profile name, followed by `Re-pin the router to that client` for a hash drift and for a resumed
+conversation's suffix, and by `Where the session's main turns pass, re-pinning the router does not help` for a suffix on
+a conversation that was not resumed. The refusal also records itself as the request's one decision, of kind `client`
+with the code `drift` and the check as its reason, so the request log names which check refused.
 
 The warning also carries `resume`, `true` where the first user message is the client's resume placeholder, and the
 suffix check's refusal of such a body names the resume in its message while it stays a real non-reproduction, since the

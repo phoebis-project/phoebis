@@ -79,8 +79,8 @@ pub enum AccountUuidEdit<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VersionCheck<'a> {
     pub client_version: &'a str,
-    /// One sample per text block of the first user message, plus the empty prompt's padding for a resumed body. The
-    /// suffix reproduces when any sample does.
+    /// One sample per text block of the first user message, followed by the empty prompt's padding. The suffix
+    /// reproduces when any sample does.
     pub prompt_units: &'a [[u16; 3]],
 }
 
@@ -619,11 +619,12 @@ pub(crate) fn drift_of(body: &[u8], stamp: Stamp) -> Result<Option<DriftKind>, R
 /// Whether the version suffix the client stamped reproduces from a text block of the body's first user message
 /// and the version its user agent names. The client anchors on its first non-meta user message, which the wire
 /// does not mark, so the check accepts any block of that message, and a foreign formula still fails with a
-/// handful of candidates against 4096 values. A resumed body's candidates add the empty prompt, which the client
-/// stamps before it writes the resume placeholder over a message of tool results. A line with no `cc_version`, a
-/// bare version with no suffix, or a version other than the agent's is not this drift: the first two carry nothing
-/// to check, and the third is the hash check's to judge. `cc_version` is the value as `BodyFacts` reads it off the
-/// tolerant parse, so a line holding a lone surrogate escape, which a strict decoder refuses, is checked all the same.
+/// handful of candidates against 4096 values. Every body's candidates add the empty prompt: the client stamps a
+/// resumed request before it writes the resume placeholder over a message of tool results, and a custom agent of a
+/// forked skill stamps its first request over the empty prompt. A line with no `cc_version`, a bare version with no
+/// suffix, or a version other than the agent's is not this drift: the first two carry nothing to check, and the third
+/// is the hash check's to judge. `cc_version` is the value as `BodyFacts` reads it off the tolerant parse, so a line
+/// holding a lone surrogate escape, which a strict decoder refuses, is checked all the same.
 pub(crate) fn version_drift(
     cc_version: Option<&str>,
     check: VersionCheck<'_>,
@@ -1520,7 +1521,11 @@ mod tests {
         };
         let anchored = body_with(&crate::billing::cc_version("2.1.292", units(blocks[2])));
         let facts = crate::facts::BodyFacts::read(&anchored);
-        assert_eq!(facts.prompt_units.len(), 5, "one candidate per text block");
+        assert_eq!(
+            facts.prompt_units.len(),
+            6,
+            "one candidate per text block and the empty prompt's"
+        );
         assert_eq!(
             version_drift(
                 facts.cc_version.as_deref(),

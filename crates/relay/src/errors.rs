@@ -402,10 +402,10 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 // request, so a subagent that anchored its suffix elsewhere is told apart from a client that moved.
                 (DriftKind::VersionSuffix, false) => {
                     "the client's version suffix does not reproduce from any text block of the first user \
-                     message or the version the user agent names, the anchors this build tries for every \
-                     request. Where the session's main turns pass, re-pinning the router does not help: \
-                     the refused body shows where this client anchored the suffix, and its billing line's \
-                     cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and \
+                     message, the empty prompt or the version the user agent names, the anchors this build \
+                     tries for every request. Where the session's main turns pass, re-pinning the router does \
+                     not help: the refused body shows where this client anchored the suffix, and its billing \
+                     line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and \
                      x-claude-code-agent-type headers, where the client sends them, tell a subagent's \
                      request apart"
                 }
