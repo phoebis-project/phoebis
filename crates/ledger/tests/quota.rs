@@ -65,6 +65,18 @@ fn limit_resets_rule() -> Rule {
     }
 }
 
+/// `usage_rule` with the Fable week at its limit.
+fn fable_limit_usage_rule() -> Rule {
+    Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: USAGE_AT_THE_FABLE_LIMIT.to_vec(),
+        },
+    }
+}
+
 fn profile_rule() -> Rule {
     Rule {
         path_prefix: "/api/oauth/profile".into(),
@@ -130,7 +142,9 @@ struct Paused {
 
 /// Pauses tokio's clock, spawns the poll's scheduler over the harness's usage service as the router's start
 /// does, and lets it take its first pass. Every polled account whose row holds no limit resets read reads as read at
-/// `NOW`, so a scheduler test meets no block read inside its first hour unless it stores an instant of its own first.
+/// `NOW`, so a scheduler test meets no block read inside its first hour unless it stores an instant of its own first:
+/// those tests pin the poll's cadence by every request and connection the fake sees, and a block read in an account's
+/// first slot would add one of each.
 async fn start_polling(h: &Harness, up: &FakeUpstream) -> Paused {
     for row in h.store.accounts().unwrap() {
         if phoebis_ledger::polled(row.kind, row.state) {
@@ -322,7 +336,8 @@ fn rate_limited_for(retry_after_seconds: &str) -> Respond {
 
 /// Pairs `id` into the store as the pairing flow leaves it: a ready OAuth row, its incarnation the store's
 /// next for the id, and a bundle far from expiry. Its row holds a limit resets read at `NOW`, as `start_polling`
-/// stamps one.
+/// stamps one, since a block read in the account's first slots would add a request and a connection to the counts
+/// that pin the poll's cadence.
 fn pair(store: &Store, id: &str, secret: &str) {
     store
         .insert_account(&AccountRow {
@@ -1868,14 +1883,7 @@ async fn the_limit_resets_are_read_once_an_hour() {
 async fn a_new_limit_sends_one_limit_resets_read() {
     let up = FakeUpstream::start(vec![
         limit_resets_rule(),
-        Rule {
-            path_prefix: "/api/oauth/usage".into(),
-            respond: Respond::Json {
-                status: 200,
-                headers: vec![],
-                body: USAGE_AT_THE_FABLE_LIMIT.to_vec(),
-            },
-        },
+        fable_limit_usage_rule(),
         profile_rule(),
     ])
     .await;
@@ -1902,14 +1910,7 @@ async fn a_new_limit_sends_one_limit_resets_read() {
 async fn a_new_limit_sends_no_limit_resets_read_without_a_reset() {
     let up = FakeUpstream::start(vec![
         limit_resets_rule(),
-        Rule {
-            path_prefix: "/api/oauth/usage".into(),
-            respond: Respond::Json {
-                status: 200,
-                headers: vec![],
-                body: USAGE_AT_THE_FABLE_LIMIT.to_vec(),
-            },
-        },
+        fable_limit_usage_rule(),
         profile_rule(),
     ])
     .await;
@@ -1992,6 +1993,64 @@ async fn a_re_pair_sends_the_next_slot_a_limit_resets_read() {
         resets_asked(&up, A),
         2,
         "the first slot after the pairing reads the block it cleared, five minutes into the hour"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_re_pair_between_two_passes_leaves_the_event_rule_at_one_read() {
+    let up = FakeUpstream::start(vec![
+        limit_resets_rule(),
+        fable_limit_usage_rule(),
+        profile_rule(),
+    ])
+    .await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let usage = h
+        .usage
+        .clone()
+        .expect("the harness was built with the poll");
+    store_block(&h, "a", &stored_block(), NOW);
+    let paused = start_polling(&h, &up).await;
+
+    // The 300 s slot finds the Fable week at its limit where the service remembers no set, so the event rule reads.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(resets_asked(&up, A), 1, "the event rule's read");
+
+    // A disconnect and a re-pair between two passes, as the admin's two routes leave them, each of which drops the
+    // service's state. The registry's ids and incarnations stay as they were, so the slot keeps the row it drew, one
+    // lifecycle generation behind the stored one.
+    h.store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    h.store
+        .commit_pairing(
+            "a",
+            1,
+            2,
+            None,
+            &NewBundle {
+                access_token: Secret::new(A),
+                refresh_token: Some(Secret::new(&format!("{A}-refresh"))),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.store
+        .set_state("a", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    usage.invalidate("a");
+
+    // The 600 s slot reads the block the pairing cleared, the 900 s slot reads the profile, and the 1 200 s slot finds
+    // the Fable week at its limit as the re-pair's read left it.
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(resets_asked(&up, A), 2, "the re-pair's read");
+    step_to(&h, &up, &paused, secs(1_202)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        2,
+        "the same set at the next slot that reads no profile"
     );
     up.shutdown().await;
 }

@@ -60,7 +60,8 @@ static PROFILE_2_1_310: Profile = Profile {
         authorize_claude_ai: "https://claude.com/cai/oauth/authorize",
         authorize_console: "https://platform.claude.com/oauth/authorize",
         client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-        // The client's own shape of the usage read: it fills the limit reset block and leaves the spend members null.
+        // The client's own shape of the usage read: the upstream fills the limit reset block for it and leaves the
+        // spend members null.
         limit_resets: ControlEndpoint {
             host: "api.anthropic.com",
             target: "/api/oauth/usage?cedar_ember=1&skip_spend=1",

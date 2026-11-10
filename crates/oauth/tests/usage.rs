@@ -1947,4 +1947,42 @@ mod service {
         );
         up.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn a_limit_resets_read_the_store_refuses_stays_due() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(Respond::Gated(Box::new(answering_with(200, BLOCK)))),
+            usage_body_rule(),
+        ])
+        .await;
+        let store = store_with_valid_bundle();
+        // A stored block for the fold below to rewrite, at the epoch 0 the read takes at its start.
+        let no_reset =
+            r#"{"cooldown_until":null,"eligible":false,"grants":[],"ineligible_reason":"tier"}"#;
+        assert!(store
+            .set_limit_resets("a", 1, 1, 0, Some(no_reset), 1_000_000)
+            .unwrap());
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let reading = {
+            let service = service.clone();
+            tokio::spawn(async move { service.limit_resets("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (requests_on(&up, LIMIT_RESETS_LINE) == 1).then_some(())
+        })
+        .await;
+        // A claim's fold lands while the read is out and moves the epoch, so the read's answer writes nothing.
+        assert!(store
+            .fold_limit_resets("a", 1, 1, 0, |block| Some(block.to_string()))
+            .unwrap());
+        up.release();
+        reading.await.unwrap().unwrap();
+        let row = store.account("a").unwrap().unwrap();
+        assert!(
+            service.limit_resets_memory(&row).due,
+            "a read that landed nothing stays due for the next slot"
+        );
+        up.shutdown().await;
+    }
 }

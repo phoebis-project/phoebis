@@ -244,7 +244,8 @@ pub struct PollFault {
     pub endpoint: &'static str,
     /// The status the endpoint answered, `None` on a transport failure.
     pub status: Option<u16>,
-    /// The error text the snapshot records for a usage fault, and the profile refresh's for a profile one.
+    /// The error text the snapshot records for a usage fault, the profile refresh's for a profile one, and the text
+    /// the limit resets read's warning logs for a limit resets one.
     pub text: String,
 }
 
@@ -669,7 +670,7 @@ fn ladder_step(in_a_row: u32) -> i64 {
 type FetchOutcome = Result<(UsageSnapshot, Option<PollIssue>), String>;
 type SharedFetch = Shared<BoxFuture<'static, FetchOutcome>>;
 
-/// Why a limit resets read answered no block. `Clone`, since every caller joined to the read takes a copy.
+/// Why a limit resets read failed. `Clone`, since every caller joined to the read takes a copy.
 #[derive(Clone, Debug)]
 enum ResetsFailure {
     Unavailable(String),
@@ -1051,8 +1052,9 @@ impl UsageService {
     }
 
     /// The account's limit resets, read now in the client's shape and stored on its row: the block as stored, `None`
-    /// where the body carried none. An answer that lands after a claim's fold or a pairing writes nothing, and the
-    /// caller reads what the row holds. Refused while the account waits out its hold, and a 429 counts on that hold.
+    /// where the body carried none. An answer that lands after a claim's fold or a pairing writes nothing, the read
+    /// stays due for the account's next poll slot, and the caller reads what the row holds. Refused while the account
+    /// waits out its hold, and a 429 counts on that hold.
     pub async fn limit_resets(&self, account_id: &str) -> Result<Option<LimitResets>, UsageError> {
         let now = (self.inner.clock)();
         if self.inner.next_attempt_at(account_id, now).is_some() {
@@ -1136,7 +1138,8 @@ impl Inner {
         &self,
         account_id: &str,
     ) -> Result<Option<LimitResets>, ResetsFailure> {
-        // Taken together before anything is sent: the store refuses the write of an answer that lands for
+        // Taken together before anything is sent, and before the token, so a token acquired before a pairing never
+        // writes its answer under the pairing's epoch: the store refuses the write of an answer that lands for
         // another holder, or after a claim's fold or a pairing moved the epoch.
         let holder = self
             .identity(account_id)
@@ -1156,8 +1159,8 @@ impl Inner {
             .await
             .expect("usage semaphore is never closed");
         let sent_at = (self.clock)();
-        // The due mark ends here, where the request goes out. Nothing below writes the memory, so a mark set
-        // while this read is out stands for the next slot.
+        // The due mark ends here, where the request goes out. No line below ends it, so a mark set while this
+        // read is out stands for the next slot.
         self.remember_resets_read(account_id, holder, sent_at);
         let request = control_request(
             self.profile,
@@ -1207,9 +1210,15 @@ impl Inner {
             sent_at,
         ) {
             Ok(true) => Ok(block),
-            // A fold, a pairing or another holder came between the start and the answer. The row holds what
-            // the caller should read, and the request still counts as sent.
-            Ok(false) => Ok(self.stored_limit_resets(account_id)),
+            // A fold, a pairing or another holder came between the start and the answer. The read landed nothing,
+            // and the instant remembered at its send would hold the next read back for an hour, so the read stays
+            // due under the holder the row has now. The row holds what the caller should read.
+            Ok(false) => {
+                if let Some(stored) = self.identity(account_id) {
+                    self.mark_resets_due(account_id, stored);
+                }
+                Ok(self.stored_limit_resets(account_id))
+            }
             Err(error) => Err(ResetsFailure::Unavailable(format!("store: {error}"))),
         }
     }

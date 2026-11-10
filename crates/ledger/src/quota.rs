@@ -799,7 +799,12 @@ impl QuotaPoll {
     /// Whether the slot reads the account's limit resets: the hour has passed since the last read, a claim's outcome
     /// marked the read due, or the account holds a reset and stands at another set of limits than at that read.
     fn limit_resets_due(&self, account: &AccountRow, reading: Option<&UsageSnapshot>) -> bool {
-        let memory = self.usage.limit_resets_memory(account);
+        // The memory is keyed by the holder, and the slot's row is the one its pass drew: a disconnect and a re-pair
+        // between two passes leave that row a lifecycle generation behind, under which the memory reads as empty.
+        let Some(stored) = self.store.account(&account.id).ok().flatten() else {
+            return false;
+        };
+        let memory = self.usage.limit_resets_memory(&stored);
         if memory.due {
             return true;
         }
