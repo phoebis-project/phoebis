@@ -795,6 +795,7 @@ fn settings_view(config: &Config) -> SettingsView {
             .as_ref()
             .map(|p| p.display().to_string()),
         ledger_path: config.stats.ledger_path.display().to_string(),
+        limit_reset_warning_days: config.usage.limit_reset_warning_days,
         metrics_listen: config.stats.metrics_listen.to_string(),
         proxy_listen: config.proxy.listen.to_string(),
         proxy_tls: config.proxy.tls.is_some(),

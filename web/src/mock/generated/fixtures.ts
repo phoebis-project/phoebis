@@ -24545,6 +24545,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           }
         ]
+      },
+      "usage": {
+        "limit_reset_warning_days": 5
       }
     }
   },

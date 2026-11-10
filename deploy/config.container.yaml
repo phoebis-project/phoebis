@@ -57,4 +57,5 @@ storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: /var/lib/phoebis/router.sqlite
 usage:
+  limit_reset_warning_days: 5
   refresh_concurrency: 2

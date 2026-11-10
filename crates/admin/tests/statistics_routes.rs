@@ -125,6 +125,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             "subscription_costs",
             &["content", "effective", "revisions", "source", "unit"],
         ),
+        ("usage", &["limit_reset_warning_days"]),
     ]
     .iter()
     .map(|(name, keys)| {

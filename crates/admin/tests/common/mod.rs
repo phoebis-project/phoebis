@@ -1273,6 +1273,7 @@ async fn build_app_bounded(
     let settings = Arc::new(SettingsView {
         api_prices_path: None,
         ledger_path: "test".into(),
+        limit_reset_warning_days: 5,
         metrics_listen: "127.0.0.1:9464".into(),
         proxy_listen: "test".into(),
         proxy_tls: tls,

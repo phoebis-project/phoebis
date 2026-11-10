@@ -24,6 +24,7 @@ pub(crate) struct Settings {
     pub storage: Storage,
     /// The subscription cost model's envelope as `GET /admin/pricing` answers it, its `unit` once at the top.
     pub subscription_costs: crate::pricing::SubscriptionCostsEnvelope,
+    pub usage: UsageSettings,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -84,6 +85,16 @@ pub(crate) struct Storage {
     pub subscription_costs_path: Option<String>,
 }
 
+/// The `usage` section's file settings, which the console shows and never edits.
+#[derive(serde::Serialize, ToSchema)]
+#[cfg_attr(test, derive(serde::Deserialize))]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UsageSettings {
+    /// `usage.limit_reset_warning_days`: how many days before an unused limit reset ends the Dashboard and the Quota
+    /// card warn, 0 for never. A file setting the console shows and never edits.
+    pub limit_reset_warning_days: u32,
+}
+
 /// Read the settings.
 #[utoipa::path(
     get,
@@ -131,6 +142,9 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
             subscription_costs_path: s.subscription_costs_path.clone(),
         },
         subscription_costs,
+        usage: UsageSettings {
+            limit_reset_warning_days: s.limit_reset_warning_days,
+        },
     })
     .into_response()
 }
@@ -151,6 +165,7 @@ mod tests {
         sessions: SessionsSettings,
         storage: Storage,
         subscription_costs: serde_json::Value,
+        usage: UsageSettings,
     }
 
     #[test]

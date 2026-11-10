@@ -187,6 +187,9 @@ pub struct StorageConfig {
 #[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct UsageConfig {
+    /// How many days before an unused limit reset ends the Dashboard and the Quota card warn, 0 to 30. 0 turns the
+    /// warning off.
+    pub limit_reset_warning_days: u32,
     /// How many accounts' usage and profile fetches run at once.
     pub refresh_concurrency: usize,
 }
@@ -353,6 +356,7 @@ impl Default for StatsConfig {
 impl Default for UsageConfig {
     fn default() -> UsageConfig {
         UsageConfig {
+            limit_reset_warning_days: 5,
             refresh_concurrency: 2,
         }
     }
@@ -378,6 +382,12 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
         config.usage.refresh_concurrency as u64,
         1,
         16,
+    )?;
+    within(
+        "usage.limit_reset_warning_days",
+        u64::from(config.usage.limit_reset_warning_days),
+        0,
+        30,
     )?;
     // The store creates the database under exactly this name, in the directory that holds it, so a path
     // that names one of the two and not the other is not a path it can honor.
@@ -995,6 +1005,11 @@ mod tests {
                 "usage:\n  refresh_concurrency: 17\n",
                 "usage.refresh_concurrency must be between 1 and 16, not 17",
             ),
+            (
+                "warning-days-high",
+                "usage:\n  limit_reset_warning_days: 31\n",
+                "usage.limit_reset_warning_days must be between 0 and 30, not 31",
+            ),
         ] {
             let error = load_unresolved(&file(dir.path(), name, body)).unwrap_err();
             assert_eq!(error.to_string(), expected, "{name}");
@@ -1007,6 +1022,14 @@ mod tests {
             ),
             ("concurrency-one", "usage:\n  refresh_concurrency: 1\n"),
             ("concurrency-sixteen", "usage:\n  refresh_concurrency: 16\n"),
+            (
+                "warning-days-zero",
+                "usage:\n  limit_reset_warning_days: 0\n",
+            ),
+            (
+                "warning-days-thirty",
+                "usage:\n  limit_reset_warning_days: 30\n",
+            ),
         ] {
             assert!(
                 load_unresolved(&file(dir.path(), name, body)).is_ok(),

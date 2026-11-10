@@ -713,6 +713,9 @@
           }
         }
       ]
+    },
+    "usage": {
+      "limit_reset_warning_days": 5
     }
   }
 }

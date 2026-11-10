@@ -151,6 +151,8 @@ impl AdminState {
 pub struct SettingsView {
     pub api_prices_path: Option<String>,
     pub ledger_path: String,
+    /// `usage.limit_reset_warning_days`, 0 for never.
+    pub limit_reset_warning_days: u32,
     pub metrics_listen: String,
     pub proxy_listen: String,
     /// Whether the proxy listener terminates TLS, the console's URL scheme.
