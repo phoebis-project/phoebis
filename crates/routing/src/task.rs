@@ -5618,7 +5618,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pins_price_adds_its_rows_fast_usage_under_usd_and_leaves_it_out_under_window_share() {
+    fn a_pins_price_adds_its_rows_fast_usage_under_usd() {
         let flat = |rate: f64| RateTable {
             fallback: crate::state::Rates::flat(rate),
             ..RateTable::unit()

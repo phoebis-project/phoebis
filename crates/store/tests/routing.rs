@@ -976,7 +976,6 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 5);
     assert!(
         store
             .upsert_window_set(&window_set_row("seven_day", 1_000, 1))

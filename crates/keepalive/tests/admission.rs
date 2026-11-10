@@ -122,7 +122,7 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
     assert_eq!(
         r.engine.reasons().get(&Reason::KeepaliveOff).copied(),
         Some(1),
-        "the same refusal counted once, not once at selection and again at completion"
+        "the refusal is counted once, at the arrival"
     );
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&RigSpec::default().policy).unwrap();

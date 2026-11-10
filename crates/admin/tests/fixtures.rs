@@ -398,6 +398,45 @@ const FIXTURE_SEED: u64 = 0x0123_4567_89ab_cdef;
 const FIXTURE_STORAGE_KEY: &str =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+/// The ledger mirror's tick under the capture, short so each wait for its copy of the seed's registry writes costs
+/// milliseconds where the default's tick costs 5 s.
+const MIRROR_POLL: Duration = Duration::from_millis(10);
+
+/// Waits until the ledger's mirror has copied the newest registry change past `baseline`, the store's newest change id
+/// when the rig built its parts. The mirror copies on a tick of its own, so without the wait the rows a later write
+/// lands take their ids from the host's speed. The newest change is matched by its `at`, `kind` and `target`, and the
+/// wait ends once the events hold as many rows of those three as the changes past `baseline` do, so an earlier change
+/// that shares them cannot end it early, and a `registry_changed` row the seed records by hand at another instant is
+/// not waited for.
+async fn mirror_caught_up(parts: &common::Full, baseline: u64) {
+    let changes = parts
+        .store
+        .registry_changes_after(baseline, usize::MAX >> 1)
+        .unwrap();
+    let Some(newest) = changes.last() else {
+        return;
+    };
+    let alike = changes
+        .iter()
+        .filter(|c| c.at == newest.at && c.kind == newest.kind && c.target == newest.target)
+        .count() as i64;
+    fake_upstream::wait_for(Duration::from_secs(15), || {
+        let mirrored = parts
+            .db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind = 'registry_changed' AND at = ?1 \
+                     AND json_extract(detail, '$.kind') = ?2 AND json_extract(detail, '$.target') = ?3",
+                    rusqlite::params![newest.at, newest.kind, newest.target],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+        (mirrored >= alike).then_some(())
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn every_route_is_captured_and_holds_its_shape() {
     // `StorageKey` reads a fixed key from a file alone.
@@ -407,7 +446,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // The private mode the key reader expects, so the read warns nothing.
     std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
     let key = StorageKey::from_file(&key_file).unwrap();
-    let parts = common::admin_parts_full_on(Arc::new(Store::open_in_memory(&key).unwrap())).await;
+    let parts = common::admin_parts_full_on_polled(
+        Arc::new(Store::open_in_memory(&key).unwrap()),
+        MIRROR_POLL,
+    )
+    .await;
+    // The mirror's own starting point, since the harness writes the registry before it spawns the ledger and never
+    // after.
+    let baseline = parts
+        .store
+        .newest_registry_change_id()
+        .unwrap()
+        .unwrap_or(0);
     // Ahead of the login, since the login mints the session id `session.json` reads. The seeded source is
     // process-wide, so the repeat holds while this case is the binary's one minting test: a second one running beside
     // it would draw from the same generator and move every id after its first mint.
@@ -570,6 +620,24 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .store
         .set_plan_ended("free-org", free_end + 900_000)
         .unwrap());
+    // The mirror reads the accounts on its own tick, so the three pairings above land as transitions a tick later.
+    // They are waited for ahead of the pool's create, so their rows take the routing log's first ids and the `written`
+    // figure `system.json` holds counts them in every capture.
+    fake_upstream::wait_for(Duration::from_secs(15), || {
+        let transitions = parts
+            .db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind = 'account_state_changed' \
+                     AND json_extract(detail, '$.cause') = 'paired'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+        (transitions == 3).then_some(())
+    })
+    .await;
     // A cap under a quarter, so the pool answers one warning and the console draws a non-empty list.
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"pace","affinity_ttl_seconds":600,"shed_cap":0.2,"members":[{"account_id":"business","priority":0,"budget_monthly_usd":30.0},{"account_id":"direct","priority":1,"budget_monthly_usd":50.0},{"account_id":"usage-seat","priority":2}],"keepalive":{"enabled":true},"body_capture_hours":24,"model_rules":[{"pattern":"claude-haiku-*","not":true}]}"#, Some(&cookie)).await;
     let created = json(post(app, "/admin/keys", r#"{"id":"desktop","label":"Desktop","pool_id":"main","model_rules":[{"pattern":"claude-opus-*","not":true}],"model_rules_mode":"extend"}"#, Some(&cookie)).await).await;
@@ -586,8 +654,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
     hold(&planted, "key_created", "POST /admin/keys", key_created);
     // The free organization past its term end alone in a second pool, so the pool fixtures carry the word of a member
     // past its subscription's end, with a label after Main's so `main` stays the list's first pool. It follows the
-    // key's create, since the ledger mirrors the change log on a wall-clock tick whose first lands around the main
-    // pool's reload, and a create beside that pool's reaches the routing log in one capture and not the next.
+    // key's create, which keeps the change log, and the routing log rows mirrored from it, in the order main, its key,
+    // then this pool.
     let response = post(app, "/admin/pools", r#"{"id":"retired","label":"Retired","strategy":"priority","members":[{"account_id":"free-org","priority":0}]}"#, Some(&cookie)).await;
     assert_eq!(response.status(), 201, "the second pool is created");
     // One guardrail observing on the pool and one enforcing on the key, so the matches the request rows below carry
@@ -603,6 +671,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     );
     let response = post(app, "/admin/guardrails", r#"{"id":"large-auxiliary","name":"Large auxiliary requests","description":"Auxiliary requests that ask for more than 4096 output tokens.","mode":"enforce","conditions":[{"subject":"request_class","operator":"equals","value":"auxiliary"},{"subject":"body","operator":"gt","path":"max_tokens","value":"4096"}],"keys":["desktop"]}"#, Some(&cookie)).await;
     assert_eq!(response.status(), 201, "the enforcing guardrail is created");
+    mirror_caught_up(&parts, baseline).await;
     // A real selection through the router, so `sessions.json` captures a pinned row and the trace below is the
     // shape `select` actually serializes, not a hand-built stand-in.
     let snapshot = parts.router.snapshot();
@@ -2075,23 +2144,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .then_some(())
     })
     .await;
-    // The ledger's mirror reads the accounts on its own tick, so the transition the pairing above made lands a tick
-    // later. It is waited for, so the `written` figure `system.json` holds counts it in every capture.
-    fake_upstream::wait_for(std::time::Duration::from_secs(15), || {
-        let transitions = parts
-            .db
-            .read_blocking(|c| {
-                Ok(c.query_row(
-                    "SELECT COUNT(*) FROM events WHERE kind = 'account_state_changed' \
-                     AND json_extract(detail, '$.cause') = 'paired'",
-                    [],
-                    |r| r.get::<_, i64>(0),
-                )?)
-            })
-            .unwrap();
-        (transitions > 0).then_some(())
-    })
-    .await;
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_catalog", "/admin/accounts/business/catalog"),
@@ -2293,7 +2345,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
 
     // The routing log's hour, seeded after every other capture so its stories leave those files as they were.
     drop(selected);
-    routing_stories(&parts, &cookie, key_generation).await;
+    routing_stories(&parts, &cookie, key_generation, baseline).await;
     let hour_start = jiff::Timestamp::from_millisecond(hour_ago).unwrap();
     // The clock the start row stepped, so the page holds that row.
     let hour_end = jiff::Timestamp::from_millisecond(
@@ -2552,7 +2604,7 @@ fn warmed(
 /// One decision of each kind through the harness's router, at the capture's instant, and one event of each kind the
 /// ledger writes inside the hour before it: the router's own where a report or an admin action provokes it, the rest
 /// recorded as their writers build them.
-async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64) {
+async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64, baseline: u64) {
     use phoebis_routing::{Report, RouterEvent, SelectRequest, SelectResult};
     let app = &parts.app;
     let now = common::NOW;
@@ -2579,6 +2631,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     // Placed by the static prefix: a session warms the shared static chain on business, and a fresh session lands
     // there by it. The pool places a main conversation by its warm prefix for this.
     patched(r#"{"session_placement":"by_warm_prefix"}"#).await;
+    mirror_caught_up(parts, baseline).await;
     let static_hash = "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f";
     let warm = parts
         .router
@@ -2659,6 +2712,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     // Renewed, then held: with a cap of one the renewal's slot stays taken while a fresh session asks for the same
     // account, and the placement after the wait takes it once freed.
     patched(r#"{"in_flight_cap":1}"#).await;
+    mirror_caught_up(parts, baseline).await;
     let busy = parts
         .router
         .select(asked(parts, key_generation, "r-renew", 1, Some("s-warm")))
@@ -2745,6 +2799,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     assert_eq!(account_of(&after_hold), "business");
     drop(after_hold);
     patched(r#"{"in_flight_cap":16}"#).await;
+    mirror_caught_up(parts, baseline).await;
 
     // A keepalive probe renews its pin.
     let probe = parts

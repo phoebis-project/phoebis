@@ -209,7 +209,7 @@ fn the_rate_on_a_model_week_and_on_a_smaller_tier_follows_share_at() {
 
 // The file lacks the enterprise tier, and Team holds no capacity on the week.
 #[test]
-fn a_model_of_no_weighted_tier_or_a_tier_without_capacity_prices_no_rate() {
+fn a_tier_the_file_lacks_or_a_tier_without_capacity_prices_no_rate() {
     let tables = first();
     for (window, tier) in [
         (FIVE_HOUR, "claude_enterprise"),

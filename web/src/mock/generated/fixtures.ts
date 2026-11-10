@@ -15804,7 +15804,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "rows": [
         {
           "type": "event",
-          "id": 58,
+          "id": 125,
           "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
@@ -15822,8 +15822,3566 @@ export const FIXTURES: Record<string, Fixture> = {
             "shedding_rounds_stale": 1,
             "windows_loaded": 2,
             "affinity_entries_loaded": 5,
-            "down_since": 1791721000000,
+            "down_since": 1791721000063,
             "holds_lost": true
+          }
+        },
+        {
+          "type": "event",
+          "id": 90,
+          "at": 1791721000063,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 1,
+                "to": 16
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 88,
+          "at": 1791721000062,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 16,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 85,
+          "at": 1791721000061,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "session_placement": {
+                "from": "by_strategy",
+                "to": "by_warm_prefix"
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 84,
+          "at": 1791721000060,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_members_set",
+            "target": "main",
+            "diff": {
+              "members": [
+                {
+                  "account_id": "business",
+                  "priority": 0,
+                  "budget_daily_usd": null,
+                  "budget_monthly_usd": 30
+                },
+                {
+                  "account_id": "direct",
+                  "priority": 1,
+                  "budget_daily_usd": null,
+                  "budget_monthly_usd": 50
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 83,
+          "at": 1791721000059,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "model_rules": {
+                "from": [
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  }
+                ],
+                "to": [
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 82,
+          "at": 1791721000058,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "model_rules": {
+                "from": [
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  }
+                ],
+                "to": [
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  },
+                  {
+                    "pattern": "claude-haiku-*",
+                    "not": true
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 81,
+          "at": 1791721000057,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_cap": {
+                "from": 1,
+                "to": 0.2
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 80,
+          "at": 1791721000056,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_cap": {
+                "from": 0.2,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 79,
+          "at": 1791721000055,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_cap": {
+                "from": 0.1,
+                "to": 0.2
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 78,
+          "at": 1791721000054,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_cap": {
+                "from": 0.2,
+                "to": 0.1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 77,
+          "at": 1791721000053,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "window_ceiling": {
+                "from": 1,
+                "to": 0.95
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 76,
+          "at": 1791721000052,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "window_ceiling": {
+                "from": 0.95,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 75,
+          "at": 1791721000051,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "window_ceiling": {
+                "from": 0.5,
+                "to": 0.95
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 74,
+          "at": 1791721000050,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "window_ceiling": {
+                "from": 0.95,
+                "to": 0.5
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 73,
+          "at": 1791721000049,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 4294967295,
+                "to": 16
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 72,
+          "at": 1791721000048,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 16,
+                "to": 4294967295
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 71,
+          "at": 1791721000047,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 1,
+                "to": 16
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 70,
+          "at": 1791721000046,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 16,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 69,
+          "at": 1791721000045,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "return_to_plan_dwell_seconds": {
+                "from": 86400,
+                "to": 900
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 68,
+          "at": 1791721000044,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "return_to_plan_dwell_seconds": {
+                "from": 900,
+                "to": 86400
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 67,
+          "at": 1791721000043,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "return_to_plan_dwell_seconds": {
+                "from": 0,
+                "to": 900
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 66,
+          "at": 1791721000042,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "return_to_plan_dwell_seconds": {
+                "from": 900,
+                "to": 0
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 65,
+          "at": 1791721000041,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "wind_down_minutes": {
+                "from": 10080,
+                "to": 30
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 64,
+          "at": 1791721000040,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "wind_down_minutes": {
+                "from": 30,
+                "to": 10080
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 63,
+          "at": 1791721000039,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "wind_down_minutes": {
+                "from": 0,
+                "to": 30
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 62,
+          "at": 1791721000038,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "wind_down_minutes": {
+                "from": 30,
+                "to": 0
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 61,
+          "at": 1791721000037,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "overage_move_grace_minutes": {
+                "from": 300,
+                "to": 30
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 60,
+          "at": 1791721000036,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "overage_move_grace_minutes": {
+                "from": 30,
+                "to": 300
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 59,
+          "at": 1791721000035,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "overage_move_grace_minutes": {
+                "from": 0,
+                "to": 30
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 58,
+          "at": 1791721000034,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "overage_move_grace_minutes": {
+                "from": 30,
+                "to": 0
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 57,
+          "at": 1791721000033,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "retry_in_place_seconds": {
+                "from": 300,
+                "to": 60
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 56,
+          "at": 1791721000032,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "retry_in_place_seconds": {
+                "from": 60,
+                "to": 300
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 55,
+          "at": 1791721000031,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "retry_in_place_seconds": {
+                "from": 0,
+                "to": 60
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 54,
+          "at": 1791721000030,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "retry_in_place_seconds": {
+                "from": 60,
+                "to": 0
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 53,
+          "at": 1791721000029,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_hold_seconds": {
+                "from": 300,
+                "to": 120
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 52,
+          "at": 1791721000028,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_hold_seconds": {
+                "from": 120,
+                "to": 300
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 51,
+          "at": 1791721000027,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_hold_seconds": {
+                "from": 1,
+                "to": 120
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 50,
+          "at": 1791721000026,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_hold_seconds": {
+                "from": 120,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 49,
+          "at": 1791721000025,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_stretch_seconds": {
+                "from": 18000,
+                "to": 9000
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 48,
+          "at": 1791721000024,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_stretch_seconds": {
+                "from": 9000,
+                "to": 18000
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 47,
+          "at": 1791721000023,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_stretch_seconds": {
+                "from": 60,
+                "to": 9000
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 46,
+          "at": 1791721000022,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "slow_down_stretch_seconds": {
+                "from": 9000,
+                "to": 60
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 45,
+          "at": 1791721000021,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_dwell_seconds": {
+                "from": 7200,
+                "to": 900
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 44,
+          "at": 1791721000020,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_dwell_seconds": {
+                "from": 900,
+                "to": 7200
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 43,
+          "at": 1791721000019,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_dwell_seconds": {
+                "from": 300,
+                "to": 900
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 42,
+          "at": 1791721000018,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "shed_dwell_seconds": {
+                "from": 900,
+                "to": 300
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 41,
+          "at": 1791721000017,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "burn_average_seconds": {
+                "from": 7200,
+                "to": 1800
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 40,
+          "at": 1791721000016,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "burn_average_seconds": {
+                "from": 1800,
+                "to": 7200
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 39,
+          "at": 1791721000015,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "burn_average_seconds": {
+                "from": 600,
+                "to": 1800
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 38,
+          "at": 1791721000014,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "burn_average_seconds": {
+                "from": 1800,
+                "to": 600
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 37,
+          "at": 1791721000013,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.scheduled_horizon_seconds": {
+                "from": 604800,
+                "to": null
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 36,
+          "at": 1791721000012,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.scheduled_horizon_seconds": {
+                "from": null,
+                "to": 604800
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 35,
+          "at": 1791721000011,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.scheduled_horizon_seconds": {
+                "from": 60,
+                "to": null
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 34,
+          "at": 1791721000010,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.scheduled_horizon_seconds": {
+                "from": null,
+                "to": 60
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 33,
+          "at": 1791721000009,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_parked_seconds": {
+                "from": 604800,
+                "to": null
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 32,
+          "at": 1791721000008,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_parked_seconds": {
+                "from": null,
+                "to": 604800
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 31,
+          "at": 1791721000007,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_parked_seconds": {
+                "from": 60,
+                "to": null
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 30,
+          "at": 1791721000006,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_parked_seconds": {
+                "from": null,
+                "to": 60
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 29,
+          "at": 1791721000005,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_idle_seconds": {
+                "from": 31536000,
+                "to": 3600
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 28,
+          "at": 1791721000004,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_idle_seconds": {
+                "from": 3600,
+                "to": 31536000
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 27,
+          "at": 1791721000003,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_idle_seconds": {
+                "from": 0,
+                "to": 3600
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 26,
+          "at": 1791721000002,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "keepalive.max_idle_seconds": {
+                "from": 3600,
+                "to": 0
+              }
+            }
           }
         },
         {
@@ -16611,7 +20169,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 38,
+          "id": 105,
           "at": 1791721000000,
           "kind": "window_cleared",
           "account_id": "business",
@@ -16633,7 +20191,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 32,
+          "id": 99,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "direct",
@@ -16654,7 +20212,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 31,
+          "id": 98,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
@@ -16675,7 +20233,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 30,
+          "id": 97,
           "at": 1791721000000,
           "kind": "pin_released",
           "account_id": "business",
@@ -16692,7 +20250,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 29,
+          "id": 96,
           "at": 1791721000000,
           "kind": "cooldown_cleared",
           "account_id": "business",
@@ -16710,7 +20268,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 28,
+          "id": 95,
           "at": 1791721000000,
           "kind": "fast_credits_changed",
           "account_id": "business",
@@ -16735,7 +20293,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 27,
+          "id": 94,
           "at": 1791721000000,
           "kind": "overage_ended",
           "account_id": "business",
@@ -16752,7 +20310,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 25,
+          "id": 92,
           "at": 1791721000000,
           "kind": "pin_migrated",
           "account_id": "direct",
@@ -16776,7 +20334,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 24,
+          "id": 91,
           "at": 1791721000000,
           "kind": "window_spent",
           "account_id": "business",
@@ -16797,7 +20355,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 23,
+          "id": 89,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -16815,7 +20373,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 22,
+          "id": 87,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -16833,7 +20391,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 21,
+          "id": 86,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -16851,7 +20409,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 16,
+          "id": 21,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
@@ -16872,7 +20430,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 7,
+          "id": 12,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "direct",
@@ -16890,7 +20448,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 6,
+          "id": 11,
           "at": 1791721000000,
           "kind": "pin_created",
           "account_id": "business",
@@ -16908,67 +20466,222 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
+          "id": 10,
+          "at": 1791721000000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "guardrail_created",
+            "target": "large-auxiliary",
+            "diff": {
+              "name": "Large auxiliary requests",
+              "description": "Auxiliary requests that ask for more than 4096 output tokens.",
+              "enabled": true,
+              "mode": "enforce",
+              "action": "block",
+              "conditions": [
+                {
+                  "subject": "request_class",
+                  "operator": "equals",
+                  "value": "auxiliary"
+                },
+                {
+                  "subject": "body",
+                  "operator": "gt",
+                  "value": "4096",
+                  "path": "max_tokens"
+                }
+              ],
+              "preset_id": null,
+              "preset_version": null,
+              "pools": [],
+              "keys": [
+                "desktop"
+              ]
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 9,
+          "at": 1791721000000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "guardrail_created",
+            "target": "subagent-status-summary",
+            "diff": {
+              "name": "Subagent status summary",
+              "description": "The status line fork the client sends for each running subagent.",
+              "enabled": true,
+              "mode": "observe",
+              "action": "block",
+              "conditions": [
+                {
+                  "subject": "request_class",
+                  "operator": "equals",
+                  "value": "auxiliary"
+                },
+                {
+                  "subject": "body",
+                  "operator": "present",
+                  "path": "tools"
+                },
+                {
+                  "subject": "message",
+                  "operator": "matches",
+                  "value": "^Describe your most recent action in 3-5 words",
+                  "selector": "last_user"
+                }
+              ],
+              "preset_id": "subagent-status-summary",
+              "preset_version": 1,
+              "pools": [
+                "main"
+              ],
+              "keys": []
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 8,
+          "at": 1791721000000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "retired",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_members_set",
+            "target": "retired",
+            "diff": {
+              "members": [
+                {
+                  "account_id": "free-org",
+                  "priority": 0,
+                  "budget_daily_usd": null,
+                  "budget_monthly_usd": null
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 7,
+          "at": 1791721000000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "retired",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_created",
+            "target": "retired",
+            "diff": {
+              "label": "Retired",
+              "enabled": true,
+              "strategy": "priority",
+              "affinity_ttl_seconds": 3600,
+              "overage_policy": "prefer_plan",
+              "window_ceiling": 0.95,
+              "model_rules": [],
+              "body_capture_hours": 0,
+              "prefer_subscription": true,
+              "shed_cap": 0.5,
+              "burn_average_seconds": 1800,
+              "shed_dwell_seconds": 900,
+              "load_shedding": true,
+              "migrate_when_spent": true,
+              "warm_sessions": "when_needed",
+              "slow_down": false,
+              "slow_down_stretch_seconds": 9000,
+              "slow_down_hold_seconds": 120,
+              "retry_in_place_seconds": 60,
+              "in_flight_cap": 16,
+              "overage_move_grace_minutes": 30,
+              "wind_down_minutes": 30,
+              "return_to_plan": "always",
+              "return_to_plan_dwell_seconds": 900,
+              "cache_ttl": {},
+              "cache_diagnostics": false,
+              "affinity_mode": "always",
+              "subagent_placement": "by_strategy",
+              "session_placement": "by_strategy",
+              "min_shared_prefix_tokens": 20000,
+              "auto_mode_server": true,
+              "keepalive.enabled": false,
+              "keepalive.max_idle_seconds": 3600,
+              "keepalive.max_parked_seconds": null,
+              "keepalive.scheduled_horizon_seconds": null
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 6,
+          "at": 1791721000000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "key_created",
+            "target": "desktop",
+            "diff": {
+              "label": "Desktop",
+              "pool_id": "main",
+              "enabled": true,
+              "expires_at": null,
+              "model_rules": [
+                {
+                  "pattern": "claude-opus-*",
+                  "not": true
+                }
+              ],
+              "model_rules_mode": "extend",
+              "long_context_twins": true,
+              "companion_permissions": [
+                "allowance",
+                "keepalive"
+              ],
+              "body_capture_hours": null,
+              "prefix": "KxtrG2cq",
+              "auto_mode_server": null
+            }
+          }
+        },
+        {
+          "type": "event",
           "id": 5,
-          "at": 1791721000000,
-          "kind": "account_state_changed",
-          "account_id": "usage-seat",
-          "key_id": null,
-          "pool_id": null,
-          "session_id": null,
-          "agent_id": null,
-          "model": null,
-          "request_id": null,
-          "actor": null,
-          "detail": {
-            "from": "unpaired",
-            "to": "ready",
-            "cause": "paired",
-            "detail": null
-          }
-        },
-        {
-          "type": "event",
-          "id": 4,
-          "at": 1791721000000,
-          "kind": "account_state_changed",
-          "account_id": "free-org",
-          "key_id": null,
-          "pool_id": null,
-          "session_id": null,
-          "agent_id": null,
-          "model": null,
-          "request_id": null,
-          "actor": null,
-          "detail": {
-            "from": "unpaired",
-            "to": "ready",
-            "cause": "paired",
-            "detail": null
-          }
-        },
-        {
-          "type": "event",
-          "id": 3,
-          "at": 1791721000000,
-          "kind": "account_state_changed",
-          "account_id": "business",
-          "key_id": null,
-          "pool_id": null,
-          "session_id": null,
-          "agent_id": null,
-          "model": null,
-          "request_id": null,
-          "actor": null,
-          "detail": {
-            "from": "unpaired",
-            "to": "ready",
-            "cause": "paired",
-            "detail": null
-          }
-        },
-        {
-          "type": "event",
-          "id": 2,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -17008,7 +20721,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 1,
+          "id": 4,
           "at": 1791721000000,
           "kind": "registry_changed",
           "account_id": null,
@@ -17068,7 +20781,67 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 26,
+          "id": 3,
+          "at": 1791721000000,
+          "kind": "account_state_changed",
+          "account_id": "usage-seat",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 2,
+          "at": 1791721000000,
+          "kind": "account_state_changed",
+          "account_id": "free-org",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 1,
+          "at": 1791721000000,
+          "kind": "account_state_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "paired",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 93,
           "at": 1791720940000,
           "kind": "overage_started",
           "account_id": "business",
@@ -17083,7 +20856,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 41,
+          "id": 108,
           "at": 1791719320000,
           "kind": "slow_down_ended",
           "account_id": "business",
@@ -17103,7 +20876,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 35,
+          "id": 102,
           "at": 1791718480000,
           "kind": "reservation_expired",
           "account_id": "business",
@@ -17126,7 +20899,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 57,
+          "id": 124,
           "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
@@ -17154,7 +20927,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 56,
+          "id": 123,
           "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
@@ -17172,7 +20945,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 55,
+          "id": 122,
           "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
@@ -17190,7 +20963,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 54,
+          "id": 121,
           "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
@@ -17209,7 +20982,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 53,
+          "id": 120,
           "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
@@ -17229,7 +21002,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 52,
+          "id": 119,
           "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
@@ -17247,7 +21020,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 40,
+          "id": 107,
           "at": 1791718120000,
           "kind": "slow_down_started",
           "account_id": "business",
@@ -17268,7 +21041,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 51,
+          "id": 118,
           "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
@@ -17287,7 +21060,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 50,
+          "id": 117,
           "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
@@ -17308,7 +21081,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 49,
+          "id": 116,
           "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
@@ -17331,7 +21104,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 43,
+          "id": 110,
           "at": 1791717880000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -17351,7 +21124,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 34,
+          "id": 101,
           "at": 1791717820000,
           "kind": "mark_cleared",
           "account_id": "business",
@@ -17375,7 +21148,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 42,
+          "id": 109,
           "at": 1791717760000,
           "kind": "poll_backoff_started",
           "account_id": "business",
@@ -17396,7 +21169,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 39,
+          "id": 106,
           "at": 1791717700000,
           "kind": "window_reset",
           "account_id": "business",
@@ -17419,7 +21192,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 46,
+          "id": 113,
           "at": 1791717640000,
           "kind": "poll_failed",
           "account_id": "business",
@@ -17439,7 +21212,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 37,
+          "id": 104,
           "at": 1791717640000,
           "kind": "wind_down_started",
           "account_id": "business",
@@ -17458,7 +21231,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 48,
+          "id": 115,
           "at": 1791717580000,
           "kind": "plan_restored",
           "account_id": "business",
@@ -17478,7 +21251,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 36,
+          "id": 103,
           "at": 1791717580000,
           "kind": "warm_prefix_expired",
           "account_id": "direct",
@@ -17505,7 +21278,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 47,
+          "id": 114,
           "at": 1791717520000,
           "kind": "plan_ended",
           "account_id": "business",
@@ -17525,7 +21298,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 45,
+          "id": 112,
           "at": 1791717520000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -17545,7 +21318,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 33,
+          "id": 100,
           "at": 1791717520000,
           "kind": "shedding_round",
           "account_id": "business",
@@ -17612,7 +21385,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 44,
+          "id": 111,
           "at": 1791717460000,
           "kind": "poll_backoff_started",
           "account_id": "business",
@@ -17633,7 +21406,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 12,
+          "id": 17,
           "at": 1791717400900,
           "kind": "stream_interrupted",
           "account_id": "business",
@@ -17654,7 +21427,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 11,
+          "id": 16,
           "at": 1791717400350,
           "kind": "model_permitted",
           "account_id": "direct",
@@ -17677,7 +21450,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 10,
+          "id": 15,
           "at": 1791717400300,
           "kind": "model_rejected",
           "account_id": "business",
@@ -17697,7 +21470,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 9,
+          "id": 14,
           "at": 1791717400200,
           "kind": "pin_expired",
           "account_id": "business",
@@ -17718,7 +21491,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 8,
+          "id": 13,
           "at": 1791717400100,
           "kind": "pin_migrated",
           "account_id": "business",
@@ -19414,7 +23187,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "dead": [],
       "ledger": {
         "schema_version": 3,
-        "written": 51,
+        "written": 56,
         "dropped": 0,
         "write_failures": 0,
         "cache_map_orphans": 1,

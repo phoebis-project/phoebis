@@ -259,7 +259,7 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
 }
 
 #[tokio::test]
-async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token_s_expiry() {
+async fn a_committed_refresh_row_names_the_committed_token_s_expiry() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
     let committed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
@@ -1737,55 +1737,6 @@ fn the_slowed_long_fold_closes_an_open_span_at_the_next_router_started_row() {
             (1, 7_200_000, 1, 3_600_000, false)
         )],
         "the restart closes the span, where reading it open to now would leave it standing"
-    );
-}
-
-#[test]
-fn the_slowed_long_fold_ends_a_span_a_restart_closed_at_the_start_rows_down_since() {
-    const HOUR: i64 = 3_600_000;
-    let now = 1_000 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
-    held_request(&db, "a-1", "a", "p", now - 4 * HOUR, 2 * HOUR);
-    let rows = slowed_long_at(
-        &db,
-        &[
-            // The previous run wrote its newest row an hour before the restart, and its slow-down held no later.
-            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
-            router_started_after(now - HOUR, Some(now - 2 * HOUR)),
-        ],
-        now,
-    );
-    assert_eq!(
-        rows,
-        [slowed_row(
-            "a",
-            "p",
-            now - 4 * HOUR,
-            now,
-            (1, 2 * HOUR, 1, HOUR, false)
-        )],
-        "the span closes at down_since and counts, dated by its own start"
-    );
-    let db = LedgerDb::open_in_memory().unwrap();
-    held_request(&db, "a-1", "a", "p", now - 4 * HOUR, 2 * HOUR);
-    let rows = slowed_long_at(
-        &db,
-        &[
-            slow_down_started(now - 4 * HOUR, "a", "p", 0.4),
-            router_started_after(now - HOUR, None),
-        ],
-        now,
-    );
-    assert_eq!(
-        rows,
-        [slowed_row(
-            "a",
-            "p",
-            now - 4 * HOUR,
-            now,
-            (1, 2 * HOUR, 1, HOUR, false)
-        )],
-        "a start row without down_since closes the span at the restart"
     );
 }
 

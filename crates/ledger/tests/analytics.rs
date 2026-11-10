@@ -3975,11 +3975,11 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_row
     );
 }
 
-/// A classifier call's plan row reads a zero Pro-week figure through the totals and zero shares and a zero figure
-/// through its session's series, while a plain row of the same counts on another account reads its figures there. The
-/// row's own price is the one reader that names why its shares read zero.
+/// A classifier call's plan row reads zero shares and a zero figure through its session's series, while a plain row of
+/// the same counts on another account reads its figures there. The row's own price is the one reader that names why
+/// its shares read zero.
 #[test]
-fn a_classifier_row_reads_zero_in_the_totals_and_session_series_and_its_price_names_the_reason() {
+fn a_classifier_row_reads_zero_in_the_session_series_and_its_price_names_the_reason() {
     let db = LedgerDb::open_in_memory().unwrap();
     let tables = share_tables();
     plant_share(
@@ -7542,9 +7542,8 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
 
 /// Two rows of one hour, account tier and model, one Opus 5.5 input token each, one from an entrypoint the test regime
 /// lists and one from an entrypoint it leaves out: each prices under its own regime, 2 / 200 and 2 / 100 of the Ultra
-/// 5-hour window, where one price over the group would read the base 0.04, and the Pro-week figure 2 / 62.5 and 2 / 50.
-/// A session attempt from the listed entrypoint reads the regime's share. 04:00 in Los Angeles, before the band, in the
-/// first cost entry.
+/// 5-hour window, where one price over the group would read the base 0.04. A session attempt from the listed
+/// entrypoint reads the regime's share. 04:00 in Los Angeles, before the band, in the first cost entry.
 #[test]
 fn a_group_mixing_two_clients_prices_each_rows_regime() {
     let costs = phoebis_ledger::test_tables::subscription_costs();
@@ -7595,10 +7594,10 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
     assert!(close(share, 0.01), "the attempt under the regime: {share}");
 }
 
-/// The dashboard's day, a pool's traffic and the totals read the billed rows' dollars apart and the plan rows in the
-/// Pro-week figure.
+/// The dashboard's day and its hour and a pool's traffic bucket read the billed rows' dollars apart and the plan rows
+/// in the Pro-week figure.
 #[tokio::test]
-async fn the_dashboard_the_traffic_and_the_totals_split_the_billed_dollars_from_the_plan_rows_equivalent(
+async fn the_dashboard_s_day_and_hour_and_the_pool_s_bucket_split_the_billed_dollars_from_the_plan_rows_equivalent(
 ) {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
     let plan = usage(1_000, 0);

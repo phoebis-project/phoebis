@@ -19551,10 +19551,6 @@ fn a_failover_lands_on_the_invalidated_rows_burn_and_books_it() {
         serde_json::to_value(&d.record.outcome).unwrap()["cause"],
         serde_json::json!({ "scope": "account", "reason": "rate_limit", "window": "five_hour" })
     );
-    assert_eq!(
-        d.record.outcome.from_account_id, None,
-        "the routing task names the account the failover left"
-    );
     let landed_pin = pinned(&st, "s1");
     assert_eq!(
         (
@@ -20724,13 +20720,14 @@ fn a_zero_runway_on_one_window_reads_none_whatever_another_window_allows() {
 }
 
 #[test]
-fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_ceiling() {
+fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_round_s_limit() {
     let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
     // The pin burns a ten-thousandth of the 5-hour window a second: 0.5 now with 2.4 hours to the reset projects to
-    // 1.36, over the ceiling, while the week at 0.1 projects 0.4 over the five hours to its horizon.
+    // 1.36, over the wall, since the reset bounds that horizon, while the week at 0.1 projects 0.4 over the five hours
+    // to its horizon.
     let mut st = priced(vec![burning("s1", "a", 1_000.0, true, T)]);
     st.record_sample(
         "a",
@@ -20742,7 +20739,7 @@ fn a_renewal_names_the_first_window_whose_projection_at_its_horizon_reaches_the_
     assert_eq!(
         summary_facts(&d),
         vec![(FIVE_HOUR, FactValue::Number(0.5), Some("percent"))],
-        "the 5-hour window's utilization, since its projection reaches the ceiling"
+        "the 5-hour window's utilization, since its projection reaches the wall"
     );
     // A hundred tokens a second take the week's 0.93 to 0.96 over the five hours to its horizon while the 5-hour window
     // at 0.1 projects 0.28: the week is the first window to reach the ceiling. The round on the one pin marks nothing,

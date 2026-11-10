@@ -86,7 +86,7 @@ fn rename(
 }
 
 #[test]
-fn a_version_one_registry_opens_at_five_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
+fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
@@ -165,7 +165,10 @@ fn a_version_one_registry_opens_at_five_with_the_new_columns_at_their_defaults_a
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 5);
+    assert_eq!(
+        store.schema_version().unwrap(),
+        phoebis_store::SCHEMA_VERSION
+    );
     assert!(
         store.load_keepalive().unwrap().2.is_empty(),
         "the all-time counters leave with their table"

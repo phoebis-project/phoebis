@@ -172,6 +172,29 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, Some(store)).await)
 }
 
+/// The full harness over a store the caller holds, its ledger's event mirror ticking every `event_poll` rather than
+/// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length.
+pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration) -> Full {
+    full_from(
+        build_app_routed(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            None,
+            None,
+            None,
+            None,
+            RouterConfig::default(),
+            LedgerConfig {
+                event_poll,
+                ..LedgerConfig::default()
+            },
+        )
+        .await,
+    )
+}
+
 /// The full harness pricing dollars through `prices` rather than the shipped table, over a fresh store.
 pub async fn admin_parts_full_priced(prices: PriceRevisions) -> Full {
     full_from(
