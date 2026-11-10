@@ -1,6 +1,6 @@
-//! The one source of the bytes the pairing and the admin listener mint: the key secrets, the pairing session's id,
-//! state, PKCE verifier and redirect port, the session compare key, and the session tokens. A test rig seeds it so two
-//! captures of the same registry read the same.
+//! The one source of the bytes the pairing, the admin listener and the usage service mint: the key secrets, the limit
+//! reset claim's request id, the pairing session's id, state, PKCE verifier and redirect port, the session compare key,
+//! and the session tokens. A test rig seeds it so two captures of the same registry read the same.
 
 use std::ops::RangeInclusive;
 #[cfg(any(test, feature = "test-support"))]

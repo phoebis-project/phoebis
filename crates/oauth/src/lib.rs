@@ -11,12 +11,12 @@ mod usage;
 
 pub use authorize::{authorization_url, ephemeral_port, loopback_redirect_uri, LoginKind};
 pub use exchange::{
-    claim_request, control_request, exchange_body, parse_profile, parse_token_response,
-    refresh_body, ControlKind, OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
+    control_request, exchange_body, parse_profile, parse_token_response, refresh_body, ControlKind,
+    OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
 };
 pub use limit_resets::{
-    grant_states, parse_claim_answer, parse_limit_resets, resets_left, ClaimAnswer, Grant,
-    GrantState, GrantStatus, LimitResets,
+    grant_states, parse_limit_resets, resets_left, ClaimAnswer, Grant, GrantState, GrantStatus,
+    LimitResets,
 };
 pub use manager::{AccessToken, AcquireError, Backoff, Clock, CredentialManager, LandedMark};
 pub use manager::{SERVER_ERROR_BACKOFF_MS, TRANSIENT_BACKOFF_MS};

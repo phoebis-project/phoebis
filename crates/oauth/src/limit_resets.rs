@@ -269,31 +269,30 @@ pub struct ClaimAnswer {
 
 /// Reads a claim's answer. A member present with another type than its own fails the whole answer, as a member of the
 /// block does, so no count or instant is folded from an answer read in part.
-pub fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError> {
+pub(crate) fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError> {
     let root: Value =
         serde_json::from_slice(body).map_err(|error| OauthError::UsageJson(error.to_string()))?;
     let answer = root
         .as_object()
         .ok_or_else(|| OauthError::Malformed("claim answer is not an object".into()))?;
-    // `required` and `optional` refuse in the block's words, so the answer's refusal is written here.
-    let refused = |member: &'static str| {
-        move |_| {
-            OauthError::Malformed(format!(
-                "claim answer: {member} is absent or of another type"
-            ))
-        }
+    // `required` and `optional` refuse in the block's words, so the answer's refusal is written here. An absent
+    // optional member reads as none, so only its type can refuse it.
+    let mistyped = |member: &'static str| {
+        move |_| OauthError::Malformed(format!("claim answer: {member} is of another type"))
     };
     Ok(ClaimAnswer {
         cleared: optional(answer, "cleared", window_names)
-            .map_err(refused("cleared"))?
+            .map_err(mistyped("cleared"))?
             .unwrap_or_default(),
         cooldown_until: optional(answer, "cooldown_until", instant_ms)
-            .map_err(refused("cooldown_until"))?,
-        reason: optional(answer, "reason", as_string).map_err(refused("reason"))?,
-        resets_left: optional(answer, "resets_left", count).map_err(refused("resets_left"))?,
-        result: required(answer, "result", as_string).map_err(refused("result"))?,
+            .map_err(mistyped("cooldown_until"))?,
+        reason: optional(answer, "reason", as_string).map_err(mistyped("reason"))?,
+        resets_left: optional(answer, "resets_left", count).map_err(mistyped("resets_left"))?,
+        result: required(answer, "result", as_string).map_err(|_| {
+            OauthError::Malformed("claim answer: result is absent or of another type".into())
+        })?,
         weekly_resets_at: optional(answer, "weekly_resets_at", instant_ms)
-            .map_err(refused("weekly_resets_at"))?,
+            .map_err(mistyped("weekly_resets_at"))?,
     })
 }
 

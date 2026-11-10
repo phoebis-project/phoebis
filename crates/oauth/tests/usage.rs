@@ -2005,6 +2005,12 @@ mod service {
     /// `store_with_valid_bundle` with `organization` on `a`'s identity and `block` stored on its row.
     fn store_for_claims(organization: &str, block: &LimitResets) -> Arc<Store> {
         let store = store_with_valid_bundle();
+        prepare_claims(&store, organization, block);
+        store
+    }
+
+    /// Puts `organization` on `a`'s identity and stores `block` on its row.
+    fn prepare_claims(store: &Store, organization: &str, block: &LimitResets) {
         store
             .set_identity(
                 "a",
@@ -2015,8 +2021,7 @@ mod service {
                 },
             )
             .unwrap();
-        store_block(&store, 1, block);
-        store
+        store_block(store, 1, block);
     }
 
     /// The typed block the parser answers for `BLOCK`, its grant `rg-a-1` at `left` resets of `total`.
@@ -2066,15 +2071,20 @@ mod service {
             .collect()
     }
 
-    /// Each grant's state at the service's clock and its count, in the block `a`'s row holds.
-    fn stored_grants(store: &Store) -> (Vec<GrantStatus>, Vec<u32>) {
+    /// The block `a`'s row holds.
+    fn stored_block(store: &Store) -> LimitResets {
         let stored = store
             .account_extras_of("a")
             .unwrap()
             .unwrap()
             .limit_resets
             .expect("the row holds a block");
-        let block: LimitResets = serde_json::from_value(stored).unwrap();
+        serde_json::from_value(stored).unwrap()
+    }
+
+    /// Each grant's state at the service's clock and its count, in the block `a`'s row holds.
+    fn stored_grants(store: &Store) -> (Vec<GrantStatus>, Vec<u32>) {
+        let block = stored_block(store);
         let states = grant_states(&block, 1_000_000)
             .into_iter()
             .map(|grant| grant.state)
@@ -2338,6 +2348,29 @@ mod service {
     }
 
     #[tokio::test]
+    async fn an_answer_that_names_a_count_and_a_cooldown_folds_both() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering_with(
+            200,
+            br#"{"result":"reset","resets_left":1,"cooldown_until":"1970-01-01T01:00:00Z"}"#,
+        ))])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        let claim = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        assert_eq!(claim.outcome, ClaimOutcome::Used);
+        let block = stored_block(&store);
+        assert_eq!(
+            (block.grants[0].resets_left, block.cooldown_until),
+            (1, Some(3_600_000)),
+            "the count and the cooldown the answer names, 1970-01-01T01:00:00Z being 3 600 000 ms"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn a_grant_that_waits_is_not_claimed() {
         let now = Arc::new(AtomicI64::new(1_000_000));
         let up = FakeUpstream::start(vec![claim_rule(answering_with(
@@ -2381,7 +2414,8 @@ mod service {
             br#"{"result":"reset"}"#,
         ))])
         .await;
-        let store = store_for_claims("a/../b", &block_with(3, 3));
+        // 36 characters, so only the character check refuses it.
+        let store = store_for_claims("00000000-0000-4000-8000/../000000000", &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
 
@@ -2616,6 +2650,53 @@ mod service {
         assert_ne!(
             ids[0], ids[1],
             "the first claim went out under the pairing before the call, so its id is not kept"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_claim_that_a_re_pair_crosses_before_it_leaves_sends_nothing() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/v1/oauth/token".into(),
+                respond: Respond::Gated(Box::new(Respond::Json {
+                    status: 200,
+                    headers: vec![],
+                    body: control_response(ControlFixture::Token).to_vec(),
+                })),
+            },
+            claim_rule(answering_with(200, br#"{"result":"reset"}"#)),
+        ])
+        .await;
+        // An expired access token, so the claim's acquisition waits on the refresh the fake holds.
+        let store = store_with_bundle_until(1);
+        prepare_claims(&store, ORGANIZATION, &block_with(3, 3));
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let row = store.account("a").unwrap().unwrap();
+        let claiming = {
+            let service = service.clone();
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            up.requests()
+                .iter()
+                .any(|r| r.line.starts_with("POST /v1/oauth/token"))
+                .then_some(())
+        })
+        .await;
+        service.invalidate("a");
+        up.release();
+        let refused = claiming.await.unwrap();
+
+        assert!(
+            matches!(refused, Err(ClaimRefusal::AccountChanged)),
+            "{refused:?}"
+        );
+        assert_eq!(
+            claims_sent(&up).len(),
+            0,
+            "the organization id and the confirmation were read under the pairing before"
         );
         up.shutdown().await;
     }

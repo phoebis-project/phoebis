@@ -840,8 +840,16 @@ struct ClaimMemory {
     /// The kept request ids by account id and grant id, with the holder they were kept under and the instant
     /// the unsettled outcome arrived.
     kept: HashMap<String, (Identity, KeptIds)>,
-    /// The accounts with a claim on its way, each with whether an `invalidate` crossed it.
+    /// The accounts with a claim on its way, each with whether an `invalidate` crossed it: a crossed claim whose
+    /// request has not left sends nothing, and one whose request left keeps no id.
     on_their_way: HashMap<String, bool>,
+}
+
+impl ClaimMemory {
+    /// Whether an `invalidate` crossed the account's claim on its way.
+    fn crossed(&self, account_id: &str) -> bool {
+        self.on_their_way.get(account_id) == Some(&true)
+    }
 }
 
 /// Ends an account's claim on its way when the claim ends, however it ends.
@@ -1094,7 +1102,8 @@ impl UsageService {
     /// Drops what the service holds for the account: the cached snapshot, the remembered limit resets read with its
     /// limit set and its due mark, and the kept request ids. A pairing keeps the holder those are keyed by, so the
     /// remembered hour would hold back the read that fills the block the pairing cleared, and a kept id would go out
-    /// for the next pairing. A claim on its way across the call keeps no id.
+    /// for the next pairing. A claim on its way across the call keeps no id, and where its request has not left yet it
+    /// sends none.
     pub fn invalidate(&self, account_id: &str) {
         self.inner
             .cache
@@ -1108,7 +1117,8 @@ impl UsageService {
             .remove(account_id);
         let mut claims = self.inner.claim_memory.lock().expect(LOCK_POISONED);
         claims.kept.remove(account_id);
-        // A claim on its way went out under the pairing before this call, so its id is not kept for the next one.
+        // A claim on its way was reserved under the pairing before this call, so it keeps no id for the next one, and
+        // where its request has not left yet it sends none.
         if let Some(crossed) = claims.on_their_way.get_mut(account_id) {
             *crossed = true;
         }
@@ -1336,8 +1346,15 @@ impl UsageService {
             inner.keep_landed_mark(account_id, &error);
             ClaimRefusal::NotSent(format!("acquire: {error}"))
         })?;
-        // The acquisition can wait on a refresh, long enough for the id to pass to another holder.
-        if inner.identity(account_id) != Some(holder) {
+        // The acquisition can wait on a refresh, long enough for the id to pass to another holder or for a pairing to
+        // land, and a pairing keeps the holder, so the reservation's flag tells of it.
+        if inner.identity(account_id) != Some(holder)
+            || inner
+                .claim_memory
+                .lock()
+                .expect(LOCK_POISONED)
+                .crossed(account_id)
+        {
             return Err(ClaimRefusal::AccountChanged);
         }
         let (request_id, repeated) = inner.request_id_for(account_id, holder, grant_id);
@@ -1370,7 +1387,9 @@ impl UsageService {
         if let Some(answer) = &claim.answer {
             inner.fold_claim(account_id, holder, epoch, grant_id, answer);
         }
-        if claim.outcome == ClaimOutcome::Refused {
+        // An account deleted and created again while the request was out has another holder, whose memory the mark
+        // would replace with an empty one.
+        if claim.outcome == ClaimOutcome::Refused && inner.identity(account_id) == Some(holder) {
             inner.mark_resets_due(account_id, holder);
         }
         Ok(claim)
@@ -1565,7 +1584,7 @@ impl Inner {
     ) {
         let mut claims = self.claim_memory.lock().expect(LOCK_POISONED);
         // An `invalidate` crossed the claim, so its id went out under the pairing before and is kept for no other.
-        if claims.on_their_way.get(account_id) == Some(&true) {
+        if claims.crossed(account_id) {
             return;
         }
         match claim.outcome {
