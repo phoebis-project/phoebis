@@ -72,8 +72,8 @@
         "path": null,
         "source": "shipped",
         "effective": "2026-10-08",
-        "revisions": 2,
-        "next": null
+        "revisions": 3,
+        "next": "2026-11-09"
       },
       "subscription_costs": {
         "path": null,
