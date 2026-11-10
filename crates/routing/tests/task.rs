@@ -3238,8 +3238,9 @@ async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_readi
         ))
         .await;
     assert!(
-        close(read(&handle, "a", FIVE_HOUR).await, 0.55),
-        "a reading observed after the request carries it, so the share is dropped"
+        close(read(&handle, "a", FIVE_HOUR).await, 0.56),
+        "a reading observed after the request carries it, so the share is dropped, and a head's percent from 0.55 \
+         bounds the router's 0.6 at 0.56"
     );
 }
 
@@ -10676,13 +10677,22 @@ async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_
         ));
     }
     // Every window of the answer falls together under its unchanged reset, as an account's one-time reset grant reads.
+    // The head's percent from 0.0 bounds each stored 1.0 at 0.01.
     handle.report(observed("a", read(2_000, 0.0))).await;
     handle.samples().await.unwrap();
     for (window, reset) in resets {
         let event = next_event(&mut events).await;
         assert_eq!(
             cleared_of(&event),
-            Some(("a", window, 1.0, 0.0, Some(reset), WindowSource::Poll, None)),
+            Some((
+                "a",
+                window,
+                1.0,
+                0.01,
+                Some(reset),
+                WindowSource::Poll,
+                None
+            )),
             "{event:?}"
         );
         assert!(matches!(
@@ -10739,6 +10749,7 @@ async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_
             RouterEvent::WindowSpent { window: spent, .. } if spent == window
         ));
     }
+    // The head's percent from 0.0 bounds the stored 1.0 at 0.01.
     handle.report(head(2_000, 0.0, "r-2")).await;
     handle.samples().await.unwrap();
     let event = next_event(&mut events).await;
@@ -10748,7 +10759,7 @@ async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_
             "a",
             FIVE_HOUR,
             1.0,
-            0.0,
+            0.01,
             five_hour,
             WindowSource::Head,
             Some("r-2")
@@ -10837,7 +10848,8 @@ async fn a_reading_at_the_limit_after_a_clear_emits_window_spent_again_under_the
             ..
         }
     ));
-    // The head that confirms the wall names the reset the prediction announced, and announces nothing.
+    // The head that confirms the wall names the reset the prediction announced, and announces nothing. The next head's
+    // percent from 0.0 bounds the stored 1.0 at 0.01.
     for (at, utilization, request_id) in [(3_000, 1.0, "r-2"), (4_000, 0.0, "r-3")] {
         now.store(at, Ordering::SeqCst);
         handle
@@ -10852,7 +10864,7 @@ async fn a_reading_at_the_limit_after_a_clear_emits_window_spent_again_under_the
             "a",
             FIVE_HOUR,
             1.0,
-            0.0,
+            0.01,
             Some(reset),
             WindowSource::Head,
             Some("r-3")
@@ -10929,6 +10941,8 @@ async fn a_head_under_the_limit_after_a_predicted_spent_edge_emits_window_cleare
         predicted >= 1.0,
         "the booking holds the prediction at {predicted}"
     );
+    // The booking counts in the prediction alone, so the router's own figure is the stored 0.99, which the head's
+    // percent from 0.5 bounds at 0.51.
     now.store(3_000, Ordering::SeqCst);
     handle
         .report(head_reading(3_000, 0.5, Some(reset), "r-2"))
@@ -10941,7 +10955,7 @@ async fn a_head_under_the_limit_after_a_predicted_spent_edge_emits_window_cleare
             "a",
             FIVE_HOUR,
             predicted,
-            0.5,
+            0.51,
             Some(reset),
             WindowSource::Head,
             Some("r-2")
@@ -10971,6 +10985,90 @@ async fn a_head_under_the_limit_after_a_predicted_spent_edge_emits_window_cleare
         ),
         other => panic!("the window spent anew, not {other:?}"),
     }
+}
+
+/// A charge that takes the prediction to the wall, then a head a point under it under the same reset: the router's own
+/// figure lies inside the head's percent, so the stored figure stays at the wall, and the recovery and the edges read
+/// that figure rather than the head's cut.
+#[tokio::test]
+async fn a_head_whose_percent_holds_the_predicted_wall_clears_neither_the_wall_nor_the_cooldown() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.995, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    now.store(1_500, Ordering::SeqCst);
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + 5 * HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
+    // 50 000 input tokens charge 0.005, which takes the 0.995 reading to the wall.
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 2_000,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 50_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    assert!(matches!(
+        next_window_edge(&mut events).await,
+        RouterEvent::WindowSpent {
+            source: WindowSource::Predicted,
+            ..
+        }
+    ));
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .report(head_reading(3_000, 0.99, Some(reset), "r-2"))
+        .await;
+    handle.samples().await.unwrap();
+    let after = drained(&mut events).await;
+    assert!(
+        after.is_empty(),
+        "the stored figure still reads the wall, so the head clears nothing: {after:?}"
+    );
+    assert!(
+        handle
+            .cooldowns()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.scope == CooldownScope::Account),
+        "the window still reads its limit, so the cooldown stands"
+    );
 }
 
 /// A reading below the wall that reads the announced reset passed leaves that cycle's announcement standing, and a
@@ -11047,19 +11145,15 @@ async fn a_clear_whose_reading_names_no_reset_carries_the_stored_reset() {
         .await;
     handle.samples().await.unwrap();
     let event = next_event(&mut events).await;
+    let (account, window, before, after, reset_named, source, request) =
+        cleared_of(&event).unwrap_or_else(|| panic!("a clear, not {event:?}"));
     assert_eq!(
-        cleared_of(&event),
-        Some((
-            "a",
-            FIVE_HOUR,
-            1.0,
-            0.4,
-            Some(reset),
-            WindowSource::Poll,
-            None
-        )),
+        (account, window, before, reset_named, source, request),
+        ("a", FIVE_HOUR, 1.0, Some(reset), WindowSource::Poll, None),
         "{event:?}"
     );
+    // Under the stored reset the head's percent from 0.4 bounds the stored 1.0 at 0.41.
+    assert!(close(Some(after), 0.41), "{event:?}");
     no_further_event(&mut events).await;
 }
 
@@ -11091,6 +11185,7 @@ async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear(
         next_event(&mut events).await,
         RouterEvent::WindowSpent { .. }
     ));
+    // The second head's percent from 0.0 bounds the stored 1.0 at 0.01.
     let event = next_event(&mut events).await;
     assert_eq!(
         cleared_of(&event),
@@ -11098,7 +11193,7 @@ async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear(
             "a",
             FIVE_HOUR,
             1.0,
-            0.0,
+            0.01,
             Some(2_000),
             WindowSource::Poll,
             None
@@ -11116,7 +11211,7 @@ async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear(
             ..
         } => assert_eq!(
             (utilization_before, reset_at, next_reset, observed, at),
-            (0.0, 2_000, None, "clock", 2_000)
+            (0.01, 2_000, None, "clock", 2_000)
         ),
         other => panic!("the tick's reset, not {other:?}"),
     }
@@ -12587,8 +12682,8 @@ async fn the_margin_is_two_points_and_a_thousandth_under_it_is_a_clear() {
         .await;
     assert_eq!(
         predicted_reading(&handle, FIVE_HOUR).await.utilization,
-        cleared,
-        "a thousandth under the bound lands as read"
+        0.989,
+        "a thousandth under the bound lands under the wall, the head's percent from 0.979 bounding the stored 1.0"
     );
     now.store(5_000, Ordering::SeqCst);
     handle
@@ -12698,6 +12793,7 @@ async fn a_head_under_the_margin_after_a_wall_lets_the_next_poll_announce_it_aga
     now.store(3_000, Ordering::SeqCst);
     handle.report(head_reading(3_000, 0.90, reset, "r-1")).await;
     handle.samples().await.unwrap();
+    // The head's percent from 0.90 bounds the stored 1.0 at 0.91.
     let event = next_window_edge(&mut events).await;
     assert_eq!(
         cleared_of(&event),
@@ -12705,7 +12801,7 @@ async fn a_head_under_the_margin_after_a_wall_lets_the_next_poll_announce_it_aga
             "a",
             FIVE_HOUR,
             1.0,
-            0.90,
+            0.91,
             reset,
             WindowSource::Head,
             Some("r-1")
@@ -12793,6 +12889,7 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == CooldownScope::Account && cause == "recovered" && at == 3_000)
     );
+    // The head's percent from 0.979 bounds the stored 1.0 at 0.989.
     let event = next_window_edge(&mut events).await;
     assert_eq!(
         cleared_of(&event),
@@ -12800,7 +12897,7 @@ async fn a_cooldown_set_at_the_wall_stands_through_a_head_within_the_margin() {
             "a",
             FIVE_HOUR,
             1.0,
-            1.0 - SPENT_MARGIN - 0.001,
+            0.989,
             reset,
             WindowSource::Head,
             Some("r-2")
@@ -12963,25 +13060,33 @@ async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later
     ));
     now.store(3_000, Ordering::SeqCst);
     handle.report(head_reading(3_000, 0.4, None, "r-1")).await;
+    // Under the stored reset the head's percent from 0.4 bounds the stored 1.0 at 0.41.
     let event = next_window_edge(&mut events).await;
+    let (account, window, before, after, reset_named, source, request) =
+        cleared_of(&event).unwrap_or_else(|| panic!("a clear, not {event:?}"));
     assert_eq!(
-        cleared_of(&event),
-        Some((
+        (account, window, before, reset_named, source, request),
+        (
             "a",
             FIVE_HOUR,
             1.0,
-            0.4,
             Some(reset),
             WindowSource::Head,
             Some("r-1")
-        )),
+        ),
         "{event:?}"
     );
+    assert!(close(Some(after), 0.41), "{event:?}");
     let cleared = predicted_reading(&handle, FIVE_HOUR).await;
     assert_eq!(
-        (cleared.utilization, cleared.reset),
-        (0.4, Some(reset)),
+        cleared.reset,
+        Some(reset),
         "the clear is stored under the stored reset"
+    );
+    assert!(
+        close(Some(cleared.utilization), 0.41),
+        "{}",
+        cleared.utilization
     );
     now.store(reset + 1_000, Ordering::SeqCst);
     handle
@@ -12996,10 +13101,13 @@ async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later
             next_reset,
             utilization_before,
             ..
-        } => assert_eq!(
-            (reset_at, next_reset, utilization_before),
-            (reset, Some(15 * HOUR), 0.4)
-        ),
+        } => {
+            assert_eq!((reset_at, next_reset), (reset, Some(15 * HOUR)));
+            assert!(
+                close(Some(utilization_before), 0.41),
+                "{utilization_before}"
+            );
+        }
         other => panic!("the stored reset reads passed, not {other:?}"),
     }
     handle.samples().await.unwrap();

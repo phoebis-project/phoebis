@@ -283,6 +283,9 @@ pub struct WindowReading {
     pub tier: Option<String>,
 }
 
+/// The width a head's figure is cut to: a head names the whole percent its window stands in.
+const HEAD_PERCENT: f64 = 0.01;
+
 /// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
 /// model suffix and neither `worst_bucket`'s prefixes nor the plan-window persistence match them.
 pub const FAST_INPUT: &str = "fast_input";
@@ -2371,13 +2374,16 @@ impl RoutingState {
 
     /// Folds `sample` in window by window. A reading lands only when it is newer than the one already stored for that
     /// name, so an api_key head that carries one model's buckets never erases another model's, and a shared window
-    /// the set lacks lands only from the poll that puts it back in the set. A moved plan window's charges observed at
-    /// or before the new reading are dropped, since the reading carries them. Past `MAX_BUCKETS_PER_ACCOUNT` bucket
-    /// windows the oldest readings leave, and a window that left is not reported as moved. Then, under `poll` with at
-    /// least one shared window in the sample and the sample newer than `polled_at`, drops each shared window the
-    /// sample lacks (its reading, its charges, and for the 5-hour window its slow-down entries, each span's `Ended`
-    /// edge closing where `purge_slow_downs` closes one) and sets `polled` to the shared windows the sample carries
-    /// and `polled_at` to its `observed_at`. A head, and a poll older than the set, drop nothing and write no set.
+    /// the set lacks lands only from the poll that puts it back in the set. A head's plan window that names the stored
+    /// reading's reset stores the stored reading plus the charges since where that figure lies inside the percent the
+    /// head's truncated figure opens, else the nearer edge of that percent, while a poll lands as read. A moved plan
+    /// window's charges observed at or before the new reading are dropped, since the reading carries them. Past
+    /// `MAX_BUCKETS_PER_ACCOUNT` bucket windows the oldest readings leave, and a window that left is not reported as
+    /// moved. Then, under `poll` with at least one shared window in the sample and the sample newer than `polled_at`,
+    /// drops each shared window the sample lacks (its reading, its charges, and for the 5-hour window its slow-down
+    /// entries, each span's `Ended` edge closing where `purge_slow_downs` closes one) and sets `polled` to the shared
+    /// windows the sample carries and `polled_at` to its `observed_at`. A head, and a poll older than the set, drop
+    /// nothing and write no set.
     pub fn record_sample(
         &mut self,
         account_id: &str,
@@ -2409,6 +2415,32 @@ impl RoutingState {
                 .get(&window)
                 .is_none_or(|existing| reading.observed_at > existing.observed_at);
             if newer {
+                // A head truncates the percent a poll rounds, so inside one reset it bounds the stored figure: the
+                // router's own figure stands where it lies in the head's percent, else the nearer edge of that percent.
+                let mut reading = reading;
+                if !sample.poll && !is_bucket_window(&window) {
+                    if let Some(existing) = current.windows.get(&window) {
+                        let one_reset = matches!(
+                            (existing.reset, reading.reset),
+                            (Some(stored), Some(named)) if crate::task::same_reset(stored, named)
+                        );
+                        if one_reset {
+                            let since: f64 = self
+                                .charges
+                                .get(account_id)
+                                .map_or(&[][..], |c| c.of(&window))
+                                .iter()
+                                .filter(|(at, _)| {
+                                    *at > existing.observed_at && *at <= reading.observed_at
+                                })
+                                .map(|(_, share)| share)
+                                .sum();
+                            let own = existing.utilization + since;
+                            reading.utilization =
+                                own.clamp(reading.utilization, reading.utilization + HEAD_PERCENT);
+                        }
+                    }
+                }
                 // Looked up rather than created: most of a sample's names (the api_key and fast buckets) are never
                 // charged.
                 if let Some(charges) = self
@@ -5237,8 +5269,9 @@ mod tests {
         );
         assert_eq!(moved.moved, vec![FIVE_HOUR.to_string()]);
         assert!(
-            (utilization(&state, FIVE_HOUR, 3_000) - 0.55).abs() < CLOSE,
-            "the newer reading carries the charge, so the charge is gone"
+            (utilization(&state, FIVE_HOUR, 3_000) - 0.56).abs() < CLOSE,
+            "the newer reading carries the charge, so the charge is gone, and a head's percent from 0.55 bounds the \
+             router's 0.6 at 0.56"
         );
         assert!(
             (utilization(&state, SEVEN_DAY, 3_000) - 0.4).abs() < CLOSE,
@@ -5246,7 +5279,7 @@ mod tests {
         );
         state.charge("a", 2_600, &[(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.1)]);
         assert!(
-            (utilization(&state, FIVE_HOUR, 3_000) - 0.65).abs() < CLOSE,
+            (utilization(&state, FIVE_HOUR, 3_000) - 0.66).abs() < CLOSE,
             "a charge after the reading reads on top of it"
         );
     }
@@ -6579,6 +6612,63 @@ mod tests {
             recorded.moved,
             [SEVEN_DAY],
             "the set's own window still lands"
+        );
+    }
+
+    #[test]
+    fn inside_one_reset_a_head_keeps_the_routers_own_figure_within_its_percent_and_a_poll_lands_as_read(
+    ) {
+        let five_hour = |utilization: f64, at: i64, poll: bool| {
+            UtilizationSample {
+                observed_at: at,
+                poll,
+                ..Default::default()
+            }
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization,
+                    reset: Some(HOUR_MS),
+                    observed_at: at,
+                    source: if poll {
+                        WindowSource::Poll
+                    } else {
+                        WindowSource::Head
+                    },
+                    plan: None,
+                    tier: None,
+                },
+            )
+        };
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample("a", five_hour(0.50, 1_000, true), 1_000);
+        state.record_sample("a", five_hour(0.49, 2_000, false), 2_000);
+        let read = utilization(&state, FIVE_HOUR, 2_000);
+        assert!(
+            (read - 0.50).abs() < CLOSE,
+            "the poll's 0.50 lies inside the head's percent from 0.49, so it stands, not {read}"
+        );
+
+        state.charge("a", 2_500, &[(FIVE_HOUR, 0.004)]);
+        state.record_sample("a", five_hour(0.50, 3_000, false), 3_000);
+        let read = utilization(&state, FIVE_HOUR, 3_000);
+        assert!(
+            (read - 0.504).abs() < CLOSE,
+            "the stored 0.50 plus the charge since lies inside the head's percent from 0.50, not {read}"
+        );
+
+        state.record_sample("a", five_hour(0.47, 4_000, false), 4_000);
+        let read = utilization(&state, FIVE_HOUR, 4_000);
+        assert!(
+            (read - 0.48).abs() < CLOSE,
+            "the router's 0.504 lies over the head's percent from 0.47, so its nearer edge stands, not {read}"
+        );
+
+        state.record_sample("a", five_hour(0.40, 5_000, true), 5_000);
+        let read = utilization(&state, FIVE_HOUR, 5_000);
+        assert!(
+            (read - 0.40).abs() < CLOSE,
+            "a poll under the same reset lands as read, not {read}"
         );
     }
 

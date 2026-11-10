@@ -4198,6 +4198,18 @@ impl Task {
                 // the window has already moved past.
                 let Recorded { moved, dropped } =
                     self.state.record_sample(&account_id, sample.clone(), now);
+                // The fold refines a head's figure as it stores it, so the recovery and the edges read the stored
+                // figure: the head's cut would release a cooldown and clear a wall that the stored figure still holds.
+                let mut sample = sample;
+                for window in moved.iter().filter(|window| is_plan_window(window)) {
+                    if let Some(reading) = self
+                        .state
+                        .sample(&account_id)
+                        .and_then(|stored| stored.reading(window))
+                    {
+                        sample.windows.insert(window.clone(), reading);
+                    }
+                }
                 let mut writes = Vec::new();
                 if !moved.is_empty() {
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
