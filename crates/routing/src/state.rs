@@ -342,7 +342,7 @@ pub struct Recorded {
 }
 
 impl UtilizationSample {
-    /// The stored reading as it arrived.
+    /// The reading the sample holds for `window`.
     pub fn reading(&self, window: &str) -> Option<WindowReading> {
         self.windows.get(window).cloned()
     }
@@ -2376,8 +2376,9 @@ impl RoutingState {
     /// name, so an api_key head that carries one model's buckets never erases another model's, and a shared window
     /// the set lacks lands only from the poll that puts it back in the set. A head's plan window that names the stored
     /// reading's reset stores the stored reading plus the charges since where that figure lies inside the percent the
-    /// head's truncated figure opens, else the nearer edge of that percent, while a poll lands as read. A moved plan
-    /// window's charges observed at or before the new reading are dropped, since the reading carries them. Past
+    /// head's truncated figure opens, else the nearer edge of that percent. A poll lands as read, and so does a head
+    /// that reads a stored figure at the wall, or more, the figure the hold raises a head inside the margin to. A moved
+    /// plan window's charges observed at or before the new reading are dropped, since the reading carries them. Past
     /// `MAX_BUCKETS_PER_ACCOUNT` bucket windows the oldest readings leave, and a window that left is not reported as
     /// moved. Then, under `poll` with at least one shared window in the sample and the sample newer than `polled_at`,
     /// drops each shared window the sample lacks (its reading, its charges, and for the 5-hour window its slow-down
@@ -2424,7 +2425,12 @@ impl RoutingState {
                             (existing.reset, reading.reset),
                             (Some(stored), Some(named)) if crate::task::same_reset(stored, named)
                         );
-                        if one_reset {
+                        // The hold raises a head inside the margin to a stored figure at the wall. The head's own
+                        // percent reaches the wall at most, so the hold's figure stands as the stored one: a head that
+                        // reads a stored figure at the wall, or more, lands as read.
+                        let at_the_wall = existing.utilization >= 1.0
+                            && reading.utilization >= existing.utilization;
+                        if one_reset && !at_the_wall {
                             let since: f64 = self
                                 .charges
                                 .get(account_id)
@@ -6669,6 +6675,39 @@ mod tests {
         assert!(
             (read - 0.40).abs() < CLOSE,
             "a poll under the same reset lands as read, not {read}"
+        );
+    }
+
+    #[test]
+    fn a_heads_bucket_reading_lands_as_read_under_one_reset() {
+        let bucket = |utilization: f64, at: i64| {
+            UtilizationSample {
+                observed_at: at,
+                ..Default::default()
+            }
+            .with(
+                "itpm:x",
+                WindowReading {
+                    utilization,
+                    reset: Some(60_000),
+                    observed_at: at,
+                    source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            )
+        };
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample("a", bucket(0.50, 1_000), 1_000);
+        state.record_sample("a", bucket(0.30, 2_000), 2_000);
+        let read = state
+            .sample("a")
+            .and_then(|sample| sample.reading("itpm:x"))
+            .expect("a stored reading")
+            .utilization;
+        assert!(
+            (read - 0.30).abs() < CLOSE,
+            "a bucket's figure is a ratio of counts and no truncated percent, not {read}"
         );
     }
 

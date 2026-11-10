@@ -11071,6 +11071,78 @@ async fn a_head_whose_percent_holds_the_predicted_wall_clears_neither_the_wall_n
     );
 }
 
+/// A head inside the margin over a stored wall is held at the wall's figure. Its own percent from 0.99 reaches the wall
+/// and no further, so the charge since the wall lifts nothing, the stored figure keeps the wall's and the charge leaves.
+#[tokio::test]
+async fn a_head_the_hold_raises_keeps_the_walls_figure_over_the_charges_since() {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million_written(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = 10 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 1.0, Some(reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // 50 000 input tokens charge 0.005 over the wall.
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 2_000,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 50_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: false,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .report(head_reading(3_000, 0.99, Some(reset), "r-2"))
+        .await;
+    let stored = handle
+        .reported_samples()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|(id, _)| id == "a")
+        .and_then(|(_, sample)| sample.reading(FIVE_HOUR))
+        .expect("a stored reading");
+    assert_eq!(
+        stored.utilization, 1.0,
+        "the held head keeps the wall's figure"
+    );
+    let after = drained(&mut events).await;
+    assert!(
+        after.is_empty(),
+        "the held head reads the wall, so it emits no edge: {after:?}"
+    );
+    assert_eq!(
+        predicted_reading(&handle, FIVE_HOUR).await.utilization,
+        1.0,
+        "the stored figure holds the charge, so the charge leaves with the fold"
+    );
+}
+
 /// A reading below the wall that reads the announced reset passed leaves that cycle's announcement standing, and a
 /// later head of the next cycle under the limit clears no wall of the cycle that already reset.
 #[tokio::test]

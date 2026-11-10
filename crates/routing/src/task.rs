@@ -1699,8 +1699,9 @@ impl RouterHandle {
     pub async fn samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::Samples { reply }).await
     }
-    /// One ask for every account's stored sample, each window as the poll or a head reported it with its own reset:
-    /// no charge added and no passed reset rolled, for a view that shows the reading itself.
+    /// One ask for every account's stored sample, each window as the router stores it, a poll's as read and a head's as
+    /// the fold refined or held it, with no charge since added and no passed reset rolled, for a view that shows the
+    /// reading itself.
     pub async fn reported_samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::ReportedSamples { reply }).await
     }

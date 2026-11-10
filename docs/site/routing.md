@@ -424,12 +424,12 @@ from two sources: every response head the account answers, and a poll of the usa
 account, each account on its own phase, backed off alone on a 429 ([Quota samples](statistics.md#quota-samples)).
 Between readings the router predicts: a reading stands until its window's reset, plus the share of the window the
 router's own requests consumed since the reading (priced through the subscription cost model on the account's tier). A
-head reports a plan window cut to the whole percent, so inside one window and one reset a head refines the stored
-figure: where the router's own figure at the head's instant, the stored reading plus the charges since, lies inside the
-percent the head names, the router keeps it, and otherwise it takes the nearer edge of that percent. A poll, and a head
-that names another reset, land as read, so the prediction does not fall inside a window by the head's cut. A window the
-cost model cannot price for the request adds nothing and holds its reading, and a shared window the account's set lacks
-takes no charge, since the account has no such window to spend. At the reset it reads zero and counts the requests
+window the cost model cannot price for the request adds nothing and holds its reading, and a shared window the account's
+set lacks takes no charge, since the account has no such window to spend. A head reports a plan window cut to the whole
+percent, so inside one window and one reset a head refines the stored figure: where the router's own figure at the
+head's instant, the stored reading plus the charges since, lies inside the percent the head names, the router keeps it,
+and otherwise it takes the nearer edge of that percent. A poll, and a head that names another reset, land as read, so
+the prediction does not fall inside a window by the head's cut. At the reset it reads zero and counts the requests
 since, a weekly window's reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A
 reading that names no reset, taken before the reset of the reading it replaces, stands under that reset and reads zero
 at it. One taken at or past that reset opens the next window and stands until the next reading, as does one where the
