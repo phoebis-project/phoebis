@@ -559,9 +559,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         },
     ).unwrap();
     // Three accounts in no pool, each paired on the seed's two bound tokens, whose limit reset blocks the capture reads
-    // below: a reset on a cooldown, one that ends inside the warning's days and one used. No profile, no cancellation
-    // and no plan-ended flag, since either of the last two takes an account out of the set the poll asks, and its row
-    // then answers no block.
+    // below: a reset on a cooldown, one that ends inside the warning's days and one used. No profile and no plan-ended
+    // flag, since the flag takes an account out of the set the poll asks, and its row then answers no block.
     for (id, label, account_uuid, email, organization_uuid) in [
         (
             "reset-cooldown",

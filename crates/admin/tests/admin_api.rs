@@ -1322,7 +1322,7 @@ async fn the_refresh_reads_the_profile_first_while_the_plan_ended_flag_stands() 
     assert_eq!(
         (
             asked("/api/oauth/profile"),
-            asked("/api/oauth/usage "),
+            asked("/api/oauth/usage"),
             paused["poll"]["last_error"].as_str(),
             flag()
         ),
@@ -1546,6 +1546,41 @@ async fn the_account_row_drops_a_cooldown_that_passed() {
 }
 
 #[tokio::test]
+async fn the_account_row_answers_the_fable_weeks_share() {
+    use common::{get, json, login};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.usage.poll("business").await.unwrap();
+    let unshared = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        unshared["limit_resets"]["fable_week_share"],
+        serde_json::Value::Null,
+        "the rig's usage body carries no Fable week: {unshared}"
+    );
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"limits":[{"kind":"weekly_scoped","percent":30,"scope":{"model":{"display_name":"Fable"}}}],"weekly_scoped_shares":[{"limit_index":0,"used_percent_of_weekly":50}]}"#
+                .to_vec(),
+        },
+    );
+    h.usage.poll("business").await.unwrap();
+    let shared = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        shared["limit_resets"]["fable_week_share"].as_f64(),
+        Some(0.5),
+        "a reading whose Fable week used half of the 7-day window answers the share: {shared}"
+    );
+}
+
+#[tokio::test]
 async fn the_read_route_answers_the_stored_block_where_the_read_fails() {
     use common::{json, login, post, LIMIT_RESETS_PATH};
     let h = common::admin_parts_polled().await;
@@ -1593,6 +1628,39 @@ async fn the_read_route_answers_the_stored_block_where_the_read_fails() {
         ),
         (Some("rg-b-2"), &serde_json::Value::Null),
         "a read that lands answers the block it read: {landed}"
+    );
+}
+
+#[tokio::test]
+async fn the_read_route_sends_nothing_to_a_plan_that_ended() {
+    use common::{login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    assert!(h.store.set_plan_ended("business", common::NOW).unwrap());
+    let refused = post(
+        &h.app,
+        "/admin/accounts/business/limit-resets/read",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    let code = refused
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    let sent =
+        h.up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage?cedar_ember=1"))
+            .count();
+    assert_eq!(
+        (refused.status().as_u16(), code.as_deref(), sent),
+        (409, Some("limit_reset_not_polled"), 0),
+        "the poll no longer asks an account whose plan ended, so the route sends it no read"
     );
 }
 
