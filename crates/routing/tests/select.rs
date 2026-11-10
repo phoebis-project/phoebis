@@ -14167,28 +14167,36 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
         ("nothing_to_mark", Some("last_pin"), Some("last_pin"))
     );
 
-    let mut st = rounding(vec![
-        burning("cold-1", "a", 1.0, false, T),
-        burning("warm-9", "a", 9.0, true, T),
-    ]);
-    over_a_fitting_b(&mut st, T - 500);
-    past_the_wait(&mut st, &s, "p", "a", T);
-    let d = decide(&mut st, &s, &auxiliary(&s, "cold-1", T), &mut rng());
+    // The cold pin beside warm-9's 9 tokens a second: at 1 it burns 0.01 of the round's 0.1 an hour, a tenth of the
+    // sum to the bit in these figures, so warm-9's mark leaves enough unmarked. At 0.9 it burns 0.009 of 0.099, under
+    // the tenth's 0.0099, so warm-9 stays, and the cold pin's own mark leaves warm-9's 0.09.
+    let beside_warm_9 = |cold: f64| {
+        let mut st = rounding(vec![
+            burning("cold", "a", cold, false, T),
+            burning("warm-9", "a", 9.0, true, T),
+        ]);
+        over_a_fitting_b(&mut st, T - 500);
+        past_the_wait(&mut st, &s, "p", "a", T);
+        let d = decide(&mut st, &s, &auxiliary(&s, "cold", T), &mut rng());
+        let round = d.shed_round.expect("the round ran").facts;
+        let rows: Vec<(String, bool, Option<&str>, Option<&str>)> = round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.clone(), p.marked, p.skip, p.note))
+            .collect();
+        (landed(d.result), rows, st)
+    };
+    let (landed_on, rows, mut st) = beside_warm_9(1.0);
     assert_eq!(
-        landed(d.result.clone()),
+        landed_on,
         ("a".into(), None),
         "the cold pin's burn is short of the target and warm-9's covers it, so the cold pin renews in place"
     );
-    let round = d.shed_round.expect("the round ran").facts;
     assert_eq!(
-        round
-            .pins
-            .iter()
-            .map(|p| (p.session_id.as_str(), p.marked, p.skip, p.note))
-            .collect::<Vec<_>>(),
+        rows,
         [
-            ("cold-1", false, None, Some("current")),
-            ("warm-9", true, None, Some("cheapest"))
+            ("cold".to_string(), false, None, Some("current")),
+            ("warm-9".to_string(), true, None, Some("cheapest"))
         ],
         "the pick at the cold pin's position marks the one pin whose burn covers the target"
     );
@@ -14196,11 +14204,25 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
         landed(select(&mut st, &s, &main_turn(&s, "warm-9", T + 1_000), &mut rng()).0),
         ("b".into(), Some(MigrateReason::Shed))
     );
+    let (landed_on, rows, _) = beside_warm_9(0.9);
+    assert_eq!(
+        landed_on,
+        ("b".into(), Some(MigrateReason::Shed)),
+        "warm-9 stays, so the order marks the cold pin, whose request moves"
+    );
+    assert_eq!(
+        rows,
+        [
+            ("cold".to_string(), true, None, Some("current")),
+            ("warm-9".to_string(), false, Some("last_pin"), None)
+        ],
+        "warm-9's mark would leave the cold pin under a tenth of the round's burn sum"
+    );
 
-    // An unpriced pin is never marked and still counts as one of the account's pins: last in the order, since the
-    // round's pricer prices the guess model at nothing, it is the last unmarked one, so the priced pin before it can be
-    // marked. A fast pin leaves the window-share round before the order, so the unpriced pin lists among the walked
-    // pins ahead of it.
+    // An unpriced pin is never marked, and its burn is unknown and not none: the round's pricer prices the guess model
+    // at nothing, so while it stands unmarked the burn guard refuses no mark and the priced pin before it can be marked
+    // though its mark leaves no priced burn. A fast pin leaves the window-share round before the order, so the unpriced
+    // pin lists among the walked pins ahead of it.
     let mut st = rounding(vec![
         burning("cold-5", "a", 5.0, false, T),
         PinRow {
@@ -14335,6 +14357,36 @@ fn a_round_never_marks_the_last_pin_and_skips_an_unpriced_one() {
     assert!(["cold-b", "cold-c", "cold-d"]
         .iter()
         .all(|session| !marked(&st, session)));
+}
+
+#[test]
+fn eleven_pins_of_equal_burn_each_under_a_tenth_of_the_sum_still_let_a_round_mark_one() {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // Each pin's 0.095 tokens a second burns 0.00095 of the window an hour, an eleventh of the round's 0.01045. a at
+    // 0.99 projects about 1.00045 at its reset, a target near 0.00045 under the cap's half of the sum, which one pin
+    // covers, and one pin's mark leaves ten elevenths of the sum unmarked.
+    let mut st = rounding(
+        [
+            "cold-a", "cold-b", "cold-c", "cold-d", "cold-e", "cold-f", "cold-g", "cold-h",
+            "cold-i", "cold-j", "cold-k",
+        ]
+        .into_iter()
+        .map(|session| burning(session, "a", 0.095, false, T))
+        .collect(),
+    );
+    over_a_fitting_b(&mut st, T - 500);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "cold-a", T), &mut rng());
+    let round = d.shed_round.expect("the round ran").facts;
+    assert!(
+        round.target < 0.00095,
+        "the target is under one pin's burn: {round:?}"
+    );
+    assert_eq!(
+        (round.outcome.as_str(), round.reason),
+        ("marked 1", None),
+        "no pin holds a tenth of the sum, and the ten a mark leaves hold over a tenth together"
+    );
 }
 
 #[test]
@@ -18517,9 +18569,9 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
     // light, whose rewrite stands.
     let mut st = rounding(vec![
         PinRow {
-            last_input_tokens: 400_000,
+            last_input_tokens: 60_000,
             last_classifier: true,
-            ..burning("heavy", "a", 20.0, true, T)
+            ..burning("heavy", "a", 3.0, true, T)
         },
         PinRow {
             last_input_tokens: 10_000,
@@ -18530,7 +18582,7 @@ fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
             ..burning("small", "a", 0.1, true, T)
         },
     ]);
-    st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.967, T + HOUR, T + 72 * HOUR, T - 500), 0);
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
@@ -20189,13 +20241,14 @@ fn a_request_holds_for_a_reset_once_per_source_and_moves_when_the_reset_moved_du
 fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none() {
     let s = tiered(gate_pool());
     let round = |b: f64, c: f64| {
-        // Two cold pins on a, so the round marks s1, the heavier, whose burn reads the siblings' runways.
+        // Two cold pins on a, s0's 60 tokens a second over a tenth of the pair's burn, so the round marks s1, the
+        // heavier, whose burn reads the siblings' runways.
         let mut st = priced(vec![
             PinRow {
                 last_input_tokens: 500_000,
                 ..burning("s1", "a", 100.0, false, T)
             },
-            burning("s0", "a", 1.0, false, T),
+            burning("s0", "a", 60.0, false, T),
         ]);
         st.record_sample("a", sample(0.9, 0.3, T - 500), 0);
         st.record_sample("b", refreshing(b, T + 3 * HOUR, T + 72 * HOUR, T - 500), 0);
@@ -20230,7 +20283,7 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
     assert_eq!(
         landed(d.result.clone()),
         ("a".into(), None),
-        "nothing fits the heavy pin, so it renews in place, and the light one burns under a tenth of the rest"
+        "nothing fits the heavy pin, so it renews in place, and nothing fits s0's move either"
     );
     let shed = line(&d.record, "move:shed");
     assert_eq!(shed.verdict, "no");
@@ -20239,12 +20292,12 @@ fn the_shed_rule_takes_the_fitting_destination_the_strategy_ranks_first_or_none(
         fact(shed, "skipped"),
         &FactValue::List(vec![
             "k/s1/main/claude-sonnet-5: no_runway".into(),
-            "k/s0/main/claude-sonnet-5: sliver".into(),
+            "k/s0/main/claude-sonnet-5: no_runway".into(),
         ])
     );
     assert!(
         !marked(&st, "s1") && !marked(&st, "s0"),
-        "no mark without a destination that fits the heavy pin, and none for a sliver"
+        "no mark without a destination that fits"
     );
     assert!(
         d.record.walk.iter().all(|w| w.step != "fit"),
@@ -20260,7 +20313,8 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
         members: vec![("a", 0), ("b", 1), ("c", 1)],
         ..gate_pool()
     });
-    // Three cold pins on a, so the round marks the two heavy ones and leaves the light one.
+    // Three cold pins on a, the light one's 25 tokens a second over a tenth of the three's burn, so the round marks the
+    // two heavy ones and leaves the light one.
     let heavy = |session: &str| PinRow {
         last_input_tokens: 500_000,
         ..burning(session, "a", 100.0, false, T)
@@ -20268,7 +20322,7 @@ fn under_round_robin_the_cursor_picks_and_the_runway_never_speaks() {
     let mut st = priced(vec![
         heavy("s1"),
         heavy("s2"),
-        burning("s0", "a", 10.0, false, T),
+        burning("s0", "a", 25.0, false, T),
     ]);
     st.record_sample("a", sample(0.9, 0.3, T - 500), 0);
     // b at 0.1 keeps the longer runway even once the first move books its rewrite and burn there, and c at 0.7 still
@@ -26117,14 +26171,14 @@ fn the_threshold_at_its_floor_moves_the_horizon_a_minute() {
     );
 }
 
-/// Three warm pins on `a` in the order's sequence by burn over prompt size: `heavy` burns 0.2 of the 5-hour window an
-/// hour over a prompt of 400 000 tokens, `light` 0.004 over 10 000 and `small` 0.001 over 10 000, so a rewrite of
-/// `heavy` costs forty times one of `light`.
+/// Three warm pins on `a` in the order's sequence by burn over prompt size: `heavy` burns 0.03 of the 5-hour window an
+/// hour over a prompt of 60 000 tokens, `light` 0.004 over 10 000 and `small` 0.001 over 10 000, so a rewrite of
+/// `heavy` costs six times one of `light`, and `heavy`'s mark leaves 0.005 of the 0.035 sum unmarked, over its tenth.
 fn heavy_light_small() -> RoutingState {
     rounding(vec![
         PinRow {
-            last_input_tokens: 400_000,
-            ..burning("heavy", "a", 20.0, true, T)
+            last_input_tokens: 60_000,
+            ..burning("heavy", "a", 3.0, true, T)
         },
         PinRow {
             last_input_tokens: 10_000,
@@ -26140,11 +26194,28 @@ fn heavy_light_small() -> RoutingState {
 #[test]
 fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // 0.797 plus the pins' 0.205 an hour over the hour to the reset projects 1.002, an excess of 0.002 an hour over the
-    // wall under the cap's half of the burn: the target, a hundredth of heavy's burn and half of light's, over small's.
+    // 0.967 plus the pins' 0.035 an hour over the hour to the reset projects 1.002, an excess of 0.002 an hour over the
+    // wall under the cap's half of the burn: the target, a fifteenth of heavy's burn and half of light's, over small's.
     let mut st = heavy_light_small();
-    st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("a", refreshing(0.967, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    // b's week at 0.7, which heavy's 0.005 of the week an hour takes to the move's line in about 47 hours, inside the
+    // week's reset 72 hours out and past its five-hour horizon, so heavy fits and the record shows the runway its gate
+    // read.
+    st.record_sample(
+        "b",
+        refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: 0.7,
+                reset: Some(T + 72 * HOUR),
+                observed_at: T - 500,
+                source: WindowSource::Poll,
+                plan: None,
+                tier: None,
+            },
+        ),
+        0,
+    );
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
@@ -26181,7 +26252,7 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
             .unwrap_or_else(|| panic!("the pick read {session}'s rewrite: {round:?}"))
     };
     assert!(
-        close(rewrite("heavy"), 400_000.0 / 60_000_000.0)
+        close(rewrite("heavy"), 60_000.0 / 60_000_000.0)
             && close(rewrite("light"), 10_000.0 / 60_000_000.0),
         "the record shows the rewrites the pick compared, each the Pro-week figure of the pin's rewrite: {} and {}",
         rewrite("heavy"),
@@ -26208,9 +26279,10 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
     assert!(marked(&st, "light") && !marked(&st, "heavy") && !marked(&st, "small"));
 
     // Under a cap of the whole burn with the excess past the three burns' sum, the target is the sum: no one pin covers
-    // what it asks, so the order marks heavy and light and small is the last pin. Only a line the reading already
-    // passes takes the excess past the burn, so a's reading names no reset: its horizon is the five-hour bound, whose
-    // line is the ceiling.
+    // what it asks, so the order marks heavy. light's mark would then leave small's 0.001 under a tenth of the 0.035
+    // sum, so light stays, and small's mark leaves light's 0.004, over it. Only a line the reading already passes takes
+    // the excess past the burn, so a's reading names no reset: its horizon is the five-hour bound, whose line is the
+    // ceiling.
     let whole = tiered(Pool {
         strategy: Strategy::Pace,
         members: vec![("a", 0), ("b", 1)],
@@ -26238,8 +26310,8 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
             .collect::<Vec<_>>(),
         [
             ("heavy", true, None, None),
-            ("light", true, None, None),
-            ("small", false, Some("last_pin"), Some("current")),
+            ("light", false, Some("last_pin"), None),
+            ("small", true, None, Some("current")),
         ]
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 2", None));
@@ -26248,21 +26320,21 @@ fn a_target_under_one_pins_burn_marks_the_cheapest_sufficient_pin() {
 #[test]
 fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // `wide` burns half the window an hour, which b at 0.9 cannot carry to its reset, and `narrow` 0.01. a at 0.51
-    // projects 1.02 at its reset, a target of 0.02 an hour over the wall: wide covers it and has no destination, narrow
-    // does not.
+    // `wide` burns half the window an hour, which b at 0.8 cannot carry to its reset, and `narrow` 0.06, over a tenth
+    // of the pair's 0.56, so wide's mark leaves enough unmarked. a at 0.51 projects 1.07 at its reset, a target of
+    // 0.07 an hour over the wall: wide covers it and has no destination, narrow does not, and b carries narrow.
     let mut st = rounding(vec![
         burning("wide", "a", 50.0, false, T),
-        burning("narrow", "a", 1.0, false, T),
+        burning("narrow", "a", 6.0, false, T),
     ]);
     st.record_sample("a", refreshing(0.51, T + HOUR, T + 72 * HOUR, T - 500), 0);
-    st.record_sample("b", refreshing(0.9, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    st.record_sample("b", refreshing(0.8, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &auxiliary(&s, "wide", T), &mut rng());
     assert_eq!(landed(d.result.clone()), ("a".into(), None));
     let round = d.shed_round.expect("the round ran").facts;
     assert!(
-        (round.target - 0.02).abs() < 1e-9,
+        (round.target - 0.07).abs() < 1e-9,
         "the excess sets the target: {round:?}"
     );
     assert_eq!(
@@ -26300,7 +26372,7 @@ fn a_covering_pin_without_a_destination_leaves_the_pick_to_the_order() {
 }
 
 #[test]
-fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_the_last_pin_count_while_any_burn_stays(
+fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_a_pin_with_almost_none_makes_no_neighbor_markable(
 ) {
     let s = tiered(shedding_pool(Shedding::default()));
     // `hot` burns a tenth of the window an hour, which takes a at 0.99 over the wall at its reset and covers the
@@ -26331,7 +26403,7 @@ fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_the_last_pin_count
     assert_eq!(
         landed_on,
         ("a".into(), None),
-        "with the classifier pin out of the count, hot is the account's last pin"
+        "with the classifier pin out of the walk, hot's mark would leave no burn unmarked"
     );
     assert_eq!(
         rows(&round),
@@ -26345,15 +26417,16 @@ fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_the_last_pin_count
         ("nothing_to_mark", Some("last_pin"))
     );
 
-    // A thousandth of a token a second is a burn, however far under the share floor, so the pin stays walked and
-    // counted, and hot is not the last pin.
+    // A thousandth of a token a second is a burn, however far under the share floor, so the pin stays walked. Its
+    // 0.00001 an hour is under a tenth of the round's 0.10001, so hot's mark would leave too little unmarked and hot
+    // stays, and idle relieves under a tenth of the target.
     let (landed_on, round) = round_beside(burning("idle", "a", 0.001, false, T));
-    assert_eq!(landed_on, ("b".into(), Some(MigrateReason::Shed)));
+    assert_eq!(landed_on, ("a".into(), None));
     assert_eq!(
         rows(&round),
         [
-            ("hot".to_string(), true, None, true),
-            ("idle".to_string(), false, None, true),
+            ("hot".to_string(), false, Some("last_pin"), true),
+            ("idle".to_string(), false, Some("sliver"), true),
         ]
     );
 }
@@ -26362,9 +26435,10 @@ fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_the_last_pin_count
 fn a_pin_marked_in_place_of_a_covering_one_needs_a_tenth_of_the_rest_so_a_warm_sliver_keeps_its_cache(
 ) {
     let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // The cold `wide` covers the target and b at 0.9 cannot carry it to its reset, so the walk reaches the warm
-    // `narrow` with the whole target left, the cap's half of the burn: a at 0.99 projects 1.19 at its reset, an excess
-    // of 0.19 an hour over the wall and over a target of 0.1. No pin from narrow on covers it, and b carries narrow.
+    // The cold `wide` covers the target, and its mark would leave narrow under a tenth of the round's burn sum, so the
+    // walk reaches the warm `narrow` with the whole target left, the cap's half of the burn: a at 0.99 projects 1.19 at
+    // its reset, an excess of 0.19 an hour over the wall and over a target of 0.1. No pin from narrow on covers it, and
+    // b at 0.9 carries narrow.
     let round_of = |wide: f64, narrow: f64| {
         let mut st = rounding(vec![
             burning("wide", "a", wide, false, T),
@@ -26532,7 +26606,7 @@ fn a_covering_pins_rewrite_reads_one_figure_whatever_the_destinations_tier() {
         );
         let mut st = heavy_light_small();
         st.set_share(two_tier_pricer());
-        st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("a", refreshing(0.967, T + HOUR, T + 72 * HOUR, T - 500), 0);
         st.record_sample(
             sibling,
             refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500),
@@ -26579,7 +26653,7 @@ fn a_covering_pin_planned_on_an_api_key_sibling_reads_its_figure() {
     // which fits every pin before any pricing.
     let run = |s: &RegistrySnapshot| {
         let mut st = heavy_light_small();
-        st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
+        st.record_sample("a", refreshing(0.967, T + HOUR, T + 72 * HOUR, T - 500), 0);
         st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
         past_the_wait(&mut st, s, "p", "a", T);
         decide(&mut st, s, &auxiliary(s, "small", T), &mut rng())
