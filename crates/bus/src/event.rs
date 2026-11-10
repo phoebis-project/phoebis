@@ -501,10 +501,11 @@ pub struct RequestComplete {
     /// `None` for a clean end, a client that left, a local answer, and a stream that carried an `error` event, whose
     /// code is the error's own type.
     pub interruption: Option<Interruption>,
-    /// `Some(ClientOff)` for a classifier call the router answered off on the leg that answered, and for a marked call
-    /// cut while a leg the router answered off ran, which the drop guard completes on that leg. `None` for every other
-    /// request, a marked call that ended before any leg answered among them. Neither a cut call nor one with no leg
-    /// has counts to price. The landing writes it over the observation's word.
+    /// `Some(ClientOff)` for a classifier call the router answered off on the leg that answered the client, the drop
+    /// guard's completion of a call cut once that leg answered among them. `None` for every other request, a marked
+    /// call that ended before a leg answered among them, whether the relay ended it or the client left while a leg
+    /// waited for its head. Neither a cut call nor one with no leg has counts to price. The landing writes it over the
+    /// observation's word.
     pub classifier: Option<Classifier>,
     pub finished_at: i64,
 }

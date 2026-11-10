@@ -78,13 +78,17 @@ pub struct ClientHints {
 /// The text the client writes in place of a tool result it dropped at a resume.
 pub const RESUME_PLACEHOLDER: &str = "[Orphaned tool result removed due to conversation resume]";
 
-/// The elements a body may hold, counted before any tree is built. A counting allocator over
-/// `phoebis_guardrails::parse_body` on the release target, with `serde_json`'s `preserve_order`, measured the dearest
-/// of four shapes, an array of chains of single-entry objects 100 deep (`{"a":{"a":...}}`, one count per level with
-/// no comma beside it), at 363 bytes per counted element (241 for small objects `{"a":1}`, 206 for one-element arrays,
-/// 88 for empty arrays), so a body at the bound builds at most about 346 MiB, under the default
-/// `proxy.body_budget_bytes`. The largest recorded client body holds 390 elements.
+/// The elements a body may hold, counted before any tree is built. At `TREE_BYTES_PER_ELEMENT` a body at the bound
+/// builds at most about 346 MiB of tree, under the default `proxy.body_budget_bytes`.
 pub const MAX_BODY_ELEMENTS: usize = 1_000_000;
+
+/// The bytes of parsed tree the body budget counts per element of a body, beside the body's own bytes, for as long as
+/// the relay holds the tree. A counting allocator over `phoebis_guardrails::parse_body` on the release target, with
+/// `serde_json`'s `preserve_order`, measured the dearest of four shapes, an array of chains of single-entry objects 100
+/// deep (`{"a":{"a":...}}`, one count per level with no comma beside it), at 363 bytes per counted element (230 for
+/// small objects `{"a":1}`, 192 for one-element arrays, 48 for empty arrays). The largest recorded client body holds
+/// 390 elements, about 141 KB of tree.
+pub const TREE_BYTES_PER_ELEMENT: u64 = 363;
 
 /// The body's elements, each `[`, `{` and `,` outside a string, stopping once the count passes `limit`.
 pub(crate) fn element_count(body: &[u8], limit: usize) -> usize {

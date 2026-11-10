@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderValue, Request};
 use common::*;
-use fake_upstream::{wait_for_async, FakeUpstream, Rule};
+use fake_upstream::{wait_for_async, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{
     Bus, Classifier, Delivery, Event, Outcome, RequestComplete, RequestObserved, Subscriber,
@@ -334,6 +334,87 @@ async fn a_classifier_call_off_its_judged_turns_account_is_reported_as_any_call_
             .filter(|utilization| (utilization - 0.502).abs() < 1e-9)
     })
     .await;
+    up.shutdown().await;
+}
+
+/// The completion of the one request `sub` carries once the client's future was aborted.
+async fn completion_after_abort(
+    call: tokio::task::JoinHandle<Result<axum::http::Response<Body>, std::convert::Infallible>>,
+    sub: &mut Subscriber,
+) -> RequestComplete {
+    call.abort();
+    assert!(call.await.unwrap_err().is_cancelled());
+    drain_until_complete(sub)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .expect("the guard completed the request")
+}
+
+#[tokio::test]
+async fn a_classifier_call_the_client_leaves_while_its_leg_waits_for_its_head_completes_with_no_off_word(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Gated(Box::new(ok_with_id("msg_1"))),
+    }])
+    .await;
+    let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
+    // s-2 holds no turn to judge, so the router answers its leg off, and the upstream holds that leg's head.
+    let app = h.app.clone();
+    let call = tokio::spawn(async move { app.oneshot(in_session("s-2", "auxiliary", true)).await });
+    wait_for(Duration::from_secs(5), || {
+        (credentials_seen(&up).len() == 1).then_some(())
+    })
+    .await;
+    let complete = completion_after_abort(call, &mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.classifier),
+        (Outcome::Canceled, None),
+        "a leg that never answered the client leaves the observation's word"
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+fn json_429_retry_after(seconds: &str) -> Respond {
+    Respond::Json {
+        status: 429,
+        headers: vec![("retry-after".into(), seconds.into())],
+        body: br#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#
+            .to_vec(),
+    }
+}
+
+#[tokio::test]
+async fn a_classifier_call_the_client_leaves_while_its_leg_waits_to_retry_in_place_completes_with_no_off_word(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok_with_id("msg_1"),
+    }])
+    .await;
+    // Far past any test's run, so the client leaves inside the wait the first head starts.
+    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("30"));
+    let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
+    let app = h.app.clone();
+    let call = tokio::spawn(async move { app.oneshot(in_session("s-2", "auxiliary", true)).await });
+    wait_for(Duration::from_secs(5), || {
+        std::iter::from_fn(|| sub.events.try_recv().ok())
+            .any(|event| matches!(event, Event::ResponseHead(head) if head.status == 429))
+            .then_some(())
+    })
+    .await;
+    let complete = completion_after_abort(call, &mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.classifier),
+        (Outcome::Canceled, None),
+        "the throttled head the relay retries never answered the client"
+    );
+    assert_eq!(credentials_seen(&up).len(), 1, "no retry went out");
     up.shutdown().await;
 }
 

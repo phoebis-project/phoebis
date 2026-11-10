@@ -51,6 +51,14 @@ impl KeyRefusal {
     }
 }
 
+/// A refused key with the id of its row, where the liveness check raised the refusal on a row it had in hand. `None`
+/// for every other refusal, a secret no row matches among them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefusedKey {
+    pub refusal: KeyRefusal,
+    pub key_id: Option<String>,
+}
+
 /// The registry as of one `load_registry`. Replaced whole on every write, never mutated, so a request sees one
 /// consistent registry from authentication to selection.
 pub struct RegistrySnapshot {
@@ -153,29 +161,42 @@ impl RegistrySnapshot {
         &self,
         presented: &str,
         now: i64,
-    ) -> Result<(&ApiKeyRow, Presented), KeyRefusal> {
+    ) -> Result<(&ApiKeyRow, Presented), RefusedKey> {
+        let unknown = || RefusedKey {
+            refusal: KeyRefusal::Unknown,
+            key_id: None,
+        };
+        let named = |key: &ApiKeyRow, refusal| RefusedKey {
+            refusal,
+            key_id: Some(key.id.clone()),
+        };
         let digest = digest_with(&self.digest_key, presented.as_bytes());
         if let Some(id) = self.keys_by_digest.get(&digest) {
-            let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
+            let key = self.keys.get(id).ok_or_else(unknown)?;
             if !bool::from(key.secret_digest.as_slice().ct_eq(&digest)) {
-                return Err(KeyRefusal::Unknown);
+                return Err(unknown());
             }
-            return self.live(key, now).map(|k| (k, Presented::Live));
+            return self
+                .live(key, now)
+                .map(|k| (k, Presented::Live))
+                .map_err(|refusal| named(key, refusal));
         }
         // The map hit narrows and the constant-time compare decides, as on the live path above; the stored
         // digest is the map's own key.
         let (stored, (id, until)) = self
             .retired_by_digest
             .get_key_value(&digest)
-            .ok_or(KeyRefusal::Unknown)?;
+            .ok_or_else(unknown)?;
         if !bool::from(stored.as_slice().ct_eq(&digest)) {
-            return Err(KeyRefusal::Unknown);
+            return Err(unknown());
         }
         if now >= *until {
-            return Err(KeyRefusal::Unknown);
+            return Err(unknown());
         }
-        let key = self.keys.get(id).ok_or(KeyRefusal::Unknown)?;
-        self.live(key, now).map(|k| (k, Presented::Retired))
+        let key = self.keys.get(id).ok_or_else(unknown)?;
+        self.live(key, now)
+            .map(|k| (k, Presented::Retired))
+            .map_err(|refusal| named(key, refusal))
     }
 
     /// The liveness half of `authenticate` for a key the relay already matched under an older snapshot, created at

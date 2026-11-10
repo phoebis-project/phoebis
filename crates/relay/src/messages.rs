@@ -69,7 +69,10 @@ use crate::errors::{
     UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_failure, exhaustion_response, pool_moved_failure};
-use crate::facts::{element_count, AttributionLine, BodyFacts, ClientHints, MAX_BODY_ELEMENTS};
+use crate::facts::{
+    element_count, AttributionLine, BodyFacts, ClientHints, MAX_BODY_ELEMENTS,
+    TREE_BYTES_PER_ELEMENT,
+};
 use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
@@ -648,14 +651,26 @@ impl Trace {
     }
 
     /// A no-op once the guard left the slot.
-    fn on_leg(&self, attempt: u8, account_id: Option<&str>, judged: Option<JudgedCharge>) {
+    fn on_leg(&self, attempt: u8, account_id: Option<&str>) {
         if let Some(guard) = self
             .completion
             .lock()
             .expect("completion lock poisoned")
             .as_mut()
         {
-            guard.on_leg(attempt, account_id, judged);
+            guard.on_leg(attempt, account_id);
+        }
+    }
+
+    /// A no-op once the guard left the slot.
+    fn on_head(&self, judged: Option<JudgedCharge>) {
+        if let Some(guard) = self
+            .completion
+            .lock()
+            .expect("completion lock poisoned")
+            .as_mut()
+        {
+            guard.on_head(judged);
         }
     }
 
@@ -885,8 +900,9 @@ struct CompletionGuard {
     /// outcome to read them from.
     key_id: Option<String>,
     pool_id: Option<String>,
-    /// The last leg a `Responding` named, `(attempt, account_id, judged)`, and `(0, None, None)` before the first. A
-    /// client that leaves between legs or during the `selected` fact's await is completed on it.
+    /// The last leg a `Responding` named, `(attempt, account_id, judged)`, and `(0, None, None)` before the first,
+    /// `judged` being that leg's charge answer once the leg answers the client and `None` until then. A client that
+    /// leaves between legs or during the `selected` fact's await is completed on it.
     leg: (u8, Option<String>, Option<JudgedCharge>),
     armed: bool,
 }
@@ -902,8 +918,14 @@ impl CompletionGuard {
         }
     }
 
-    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>, judged: Option<JudgedCharge>) {
-        self.leg = (attempt, account_id.map(str::to_string), judged);
+    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>) {
+        self.leg = (attempt, account_id.map(str::to_string), None);
+    }
+
+    /// The charge answer of the leg that now answers the client. A leg whose head never answered it leaves none, so a
+    /// call cut before then completes with the observation's word.
+    fn on_head(&mut self, judged: Option<JudgedCharge>) {
+        self.leg.2 = judged;
     }
 
     fn disarm(&mut self) {
@@ -1460,9 +1482,10 @@ impl Relay {
                     .await;
             }
         };
-        // A body of many tiny elements builds a tree far larger than itself, and the body budget does not count the
-        // tree, so the count is read off the bytes before the first parse.
-        if element_count(&raw, MAX_BODY_ELEMENTS) > MAX_BODY_ELEMENTS {
+        // A body of many tiny elements builds a tree far larger than itself, so the count is read off the bytes before
+        // the first parse.
+        let elements = element_count(&raw, MAX_BODY_ELEMENTS);
+        if elements > MAX_BODY_ELEMENTS {
             return self
                 .refused_before_body(
                     &trace,
@@ -1475,10 +1498,27 @@ impl Relay {
                 )
                 .await;
         }
+        // The parsed tree is held from here to the guardrail step, across the catalog's lookup, so the budget counts
+        // it before it is built and a budget that cannot grant it refuses here.
+        let tree_bytes = elements as u64 * TREE_BYTES_PER_ELEMENT;
+        if let Some(reservation) = &mut reservation {
+            if reservation.resize(raw.len() as u64 + tree_bytes).is_err() {
+                return self
+                    .refused_before_body(
+                        &trace,
+                        Some(&key),
+                        &parts.headers,
+                        capture_hours,
+                        retired,
+                        body_budget_exhausted(),
+                        client_version.as_deref(),
+                    )
+                    .await;
+            }
+        }
         // Each lookup below walks the raw body's top-level object itself and holds no table of its members.
         let members = phoebis_cch::TopLevelMembers::read(&raw);
-        // The tree lives to the guardrail step and no further: the body budget does not count it, and it is
-        // dropped before the observation waits on the bus.
+        // The tree lives to the guardrail step and no further: it is dropped before the observation waits on the bus.
         let (facts, tree) = BodyFacts::read_with_tree(&members);
         let auto_mode_server = snapshot.auto_mode_server(&key);
         let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
@@ -1518,6 +1558,10 @@ impl Relay {
             Ok(identity) => identity,
             Err(error) => {
                 drop(tree);
+                if let Some(reservation) = &mut reservation {
+                    let shrunk = reservation.resize(raw.len() as u64);
+                    debug_assert!(shrunk.is_ok(), "the body outgrew its reservation");
+                }
                 trace
                     .observed(
                         Some(&key),
@@ -1612,6 +1656,10 @@ impl Relay {
             evaluate_all(set.iter().map(Arc::as_ref), &request)
         };
         drop(tree);
+        if let Some(reservation) = &mut reservation {
+            let shrunk = reservation.resize(raw.len() as u64);
+            debug_assert!(shrunk.is_ok(), "the body outgrew its reservation");
+        }
         let guardrails: Vec<GuardrailMatch> = evaluation
             .matched
             .iter()
@@ -2701,9 +2749,7 @@ impl Relay {
                 )
                 .is_some();
             // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
-            admitted
-                .trace
-                .on_leg(*attempt, Some(&account.id), selection.judged);
+            admitted.trace.on_leg(*attempt, Some(&account.id));
             let responding = Responding {
                 account,
                 admitted,
@@ -2921,6 +2967,8 @@ impl Relay {
         outcome.overage_in_use = reading.unified.as_ref().and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
+        // The drop guard takes the word only at `Responding::answers`, since the leg may still retry or fail over past
+        // this head.
         outcome.judged = ctx.judged;
         self.report_overage(ctx.account, reading.unified.as_ref(), observed_at)
             .await;
@@ -2957,6 +3005,7 @@ impl Relay {
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
                     ctx.ending(TRANSPORT_ERROR);
+                    ctx.answers();
                     return Next::Respond(
                         self.unreadable(ctx.admitted.trace, &error, outcome).await,
                     );
@@ -2994,6 +3043,7 @@ impl Relay {
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
                     ctx.ending(TRANSPORT_ERROR);
+                    ctx.answers();
                     return Next::Respond(
                         self.unreadable(ctx.admitted.trace, &error, outcome).await,
                     );
@@ -3154,9 +3204,10 @@ impl Relay {
                                 Waited::Deadline => break (None, None, true),
                                 // The 401's head is this attempt's, published before the verdict.
                                 Waited::Canceled => {
+                                    ctx.answers();
                                     return Next::Respond(
                                         self.canceled_after_head(&ctx, head.status).await,
-                                    )
+                                    );
                                 }
                             }
                         }
@@ -3182,6 +3233,7 @@ impl Relay {
                 mark.map(|(state, _)| state) != Some(AccountState::ReauthRequired),
             ),
             Verdict::Commit => {
+                ctx.answers();
                 // A message request's success on a `funding_required` account is the retry that clears its mark. A
                 // token count is admitted under the same rule, but a counting answer says nothing about the
                 // balance, and neither does an error event the held stream committed on.
@@ -3399,6 +3451,7 @@ impl Relay {
                     auth_marked: ctx.auth_marked,
                 };
             }
+            ctx.answers();
             let guards = ctx.guards();
             return Next::Respond(
                 self.stream(Forward {
@@ -3428,6 +3481,8 @@ impl Relay {
                 auth_marked: ctx.auth_marked,
             };
         }
+        // A request bound to its account takes every head from here as its answer.
+        ctx.answers();
         if auth_failed {
             // A non-portable request keeps its account, so its authentication failure is the last word here.
             let release = moves_pin
@@ -4103,6 +4158,7 @@ impl Relay {
         head: &ResponseHead,
         written_at: i64,
     ) -> Response {
+        ctx.answers();
         ctx.admitted
             .trace
             .head(
@@ -4552,6 +4608,13 @@ impl Responding<'_> {
     /// its usage charges the window and its renewal folds as a standard answer.
     fn free_of_plan(&self) -> bool {
         self.judged == Some(JudgedCharge::On)
+    }
+
+    /// Called where this pass's head becomes the client's answer, never for one the leg strips, replays, retries in
+    /// place or fails over, so a client that leaves from here on completes on the charge answer the relay's own
+    /// completion of that answer carries.
+    fn answers(&self) {
+        self.admitted.trace.on_head(self.judged);
     }
 
     /// Both counts and the end report for a body that outlives the response half, so they are released when it

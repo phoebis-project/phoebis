@@ -579,11 +579,12 @@ Refused with:
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
 upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
-process holds at once, sized for a household whose keys carry agent tools that fan out (512 one-MiB bodies, or sixteen
-at the per-body bound), and a request that would pass it is refused with the router's own `503 body_budget_exhausted`.
-`key_body_reads` bounds the bodies one key has arriving at once, and a request past it is refused `429 key_body_reads`
-with `Retry-After: 1`. `body_read_seconds` is how long a body may take to arrive after authentication, under the
-stream's idle bound of 600 seconds, and a body that takes longer is answered `408 request_timeout`.
+process holds at once, with each body's parsed tree while the relay holds it, sized for a household whose keys carry
+agent tools that fan out (512 one-MiB bodies, or sixteen at the per-body bound), and a request that would pass it is
+refused with the router's own `503 body_budget_exhausted`. `key_body_reads` bounds the bodies one key has arriving at
+once, and a request past it is refused `429 key_body_reads` with `Retry-After: 1`. `body_read_seconds` is how long a
+body may take to arrive after authentication, under the stream's idle bound of 600 seconds, and a body that takes longer
+is answered `408 request_timeout`.
 
 `sign_cch_placeholder` signs a restored `cch=00000` with this build's formula instead of sending the placeholder, off
 until a server rejection of the placeholder proves it necessary.
@@ -845,6 +846,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records, `ledger_behind` at 2,048 queued, and an event or sample past it drops as a `ledger_gap`. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
+| Parsed tree bytes | 363 bytes per body element, counted against `proxy.body_budget_bytes` from before the parse until the relay drops the tree. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
 | Shutdown budget | 35 seconds for the whole stop, shared by its phases in order, with up to 30 of them for the drain of in-flight requests. A phase still running when it is spent is ended. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |

@@ -9,11 +9,12 @@ use phoebis_routing::{
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
     DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, HoldReason, KeyRefusal,
     LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented,
-    RateTable, Rates, Refusal, RefusalFacts, RefusedRequest, RegimeRates, ReloadError, RenewalEnd,
-    Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer, SelectRequest,
-    SelectResult, SharePricer, SpendResetSource, SpendWindow, UtilizationSample, WindowReading,
-    WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    RateTable, Rates, Refusal, RefusalFacts, RefusedKey, RefusedRequest, RegimeRates, ReloadError,
+    RenewalEnd, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer,
+    SelectRequest, SelectResult, SharePricer, SpendResetSource, SpendWindow, UtilizationSample,
+    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
@@ -279,7 +280,10 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
     assert!(
         matches!(
             handle.snapshot().authenticate("phoebis-secret", 1_002),
-            Err(KeyRefusal::Revoked)
+            Err(RefusedKey {
+                refusal: KeyRefusal::Revoked,
+                ..
+            })
         ),
         "a revoked key answers 401 at once"
     );
@@ -510,7 +514,10 @@ async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
     assert!(
         matches!(
             handle.snapshot().authenticate("phoebis-secret", 1_004),
-            Err(KeyRefusal::Revoked)
+            Err(RefusedKey {
+                refusal: KeyRefusal::Revoked,
+                ..
+            })
         ),
         "the next successful reload publishes the revocation"
     );

@@ -42,7 +42,7 @@ pub use select::{
     RATE_LIMIT_REASON, REFRESHING_CLASSES, RETRY_AFTER_WINDOW, SLOW_DOWN_MIN_HOLD_MS,
     SLOW_DOWN_WAIT_MS,
 };
-pub use snapshot::{paid_source, KeyRefusal, Presented, RegistrySnapshot};
+pub use snapshot::{paid_source, KeyRefusal, Presented, RefusedKey, RegistrySnapshot};
 pub use state::{
     budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds, is_plan_window,
     latest_full_reset, load_shedding, plan_windows, return_to_plan_dwell_ms, shed_cap,

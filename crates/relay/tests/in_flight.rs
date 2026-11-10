@@ -1446,6 +1446,106 @@ async fn a_declared_body_past_the_budget_is_refused_503_before_a_byte_is_read() 
     up.shutdown().await;
 }
 
+/// A Messages body that passes admission, 1,000 bytes long: the model, the account's `metadata.user_id`, `tools`
+/// as given (empty or a member with its trailing comma), and spaces inside the one message's text for the rest.
+fn thousand_byte_body(tools: &str) -> Vec<u8> {
+    let start = format!(
+        r#"{{"model":"{MODEL}","max_tokens":1,"stream":true,"metadata":{{"user_id":"{{\"device_id\":\"d\",\"account_uuid\":\"{ACCOUNT_UUID}\",\"session_id\":\"s1\"}}"}},{tools}"messages":[{{"role":"user","content":""#
+    );
+    let end = r#""}]}"#;
+    let mut out = start.into_bytes();
+    out.resize(1_000 - end.len(), b' ');
+    out.extend_from_slice(end.as_bytes());
+    out
+}
+
+/// `body` on the OAuth fixture head with its length declared, so the relay reserves the body's own bytes at the head.
+fn declared(body: &[u8], session: &str) -> Request<Body> {
+    let mut req = request_from_fixture(inference_head(FixtureKind::OauthNonFirstParty), body, KEY);
+    set_header(&mut req, "x-claude-code-session-id", session);
+    set_header(&mut req, "content-length", &body.len().to_string());
+    req
+}
+
+#[tokio::test]
+async fn the_budget_holds_a_body_s_parsed_tree_from_before_the_parse_until_the_relay_drops_it() {
+    let up = FakeUpstream::start(messages(Respond::Gated(Box::new(json_200())))).await;
+    // Each body declares its 1,000 bytes, which the head reserves, and the tree takes `TREE_BYTES_PER_ELEMENT`, 363
+    // bytes, per counted element. The plain body counts 9 elements (the root's `{`, the commas after `model`,
+    // `max_tokens`, `stream` and `metadata`, the `{` of `metadata`, the `[` of `messages`, its message's `{` and the
+    // comma after `role`), a tree of 3,267 bytes. The swollen one adds a tool of 100 empty arrays and counts 215 (the
+    // 9, then the `[` of `tools`, the tool's `{`, the comma after `name`, the `{` of `input_schema`, the comma after
+    // `type`, the `[` of `x`, 100 `[`, 99 commas and the comma before `messages`), a tree of 78,045 bytes. Under a
+    // budget of 7,000:
+    // (a) the swollen body's 1,000 bytes fit, and 1,000 + 78,045 = 79,045 do not,
+    // (b) the plain body's 1,000 + 3,267 = 4,267 fit,
+    // (c) with (b) held at the upstream on its 1,000 bytes once its tree is dropped, a second plain body's
+    //     1,000 + 1,000 + 3,267 = 5,267 fit, where 4,267 + 4,267 = 8,534 would not, had (b) kept its tree.
+    // The three hold for any figure per element from 278 to 555.
+    let h = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            body_budget_bytes: 7_000,
+            ..default_limits()
+        },
+    )
+    .await;
+    let plain = thousand_byte_body("");
+    let swollen_tool = format!(
+        r#""tools":[{{"name":"t","input_schema":{{"type":"object","x":[{}[]]}}}}],"#,
+        "[],".repeat(99)
+    );
+    let swollen = thousand_byte_body(&swollen_tool);
+
+    // Raced against the upstream's record, since a relayed body waits at the gate.
+    let app = h.app.clone();
+    let swollen_request = declared(&swollen, "s1");
+    let refused = tokio::spawn(async move { app.oneshot(swollen_request).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (posts(&up) == 1 || refused.is_finished()).then_some(())
+    })
+    .await;
+    assert_eq!(posts(&up), 0, "the swollen body never reached the upstream");
+    let refused = refused.await.unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "body_budget_exhausted"),
+        "a body whose tree the budget cannot hold is refused"
+    );
+    drain(refused).await;
+
+    let app = h.app.clone();
+    let first_plain = declared(&plain, "s2");
+    let first = tokio::spawn(async move { app.oneshot(first_plain).await.unwrap() });
+    wait_for(Duration::from_secs(5), || (posts(&up) == 1).then_some(())).await;
+
+    let app = h.app.clone();
+    let second_plain = declared(&plain, "s3");
+    let second = tokio::spawn(async move { app.oneshot(second_plain).await.unwrap() });
+    wait_for(Duration::from_secs(5), || {
+        (posts(&up) == 2 || second.is_finished()).then_some(())
+    })
+    .await;
+    assert_eq!(
+        posts(&up),
+        2,
+        "the second body fits beside the first one's bytes once the first tree was given back"
+    );
+
+    up.release();
+    for request in [first, second] {
+        let answered = request.await.unwrap();
+        assert_eq!(answered.status().as_u16(), 200);
+        drain(answered).await;
+    }
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry_after_1() {
     let up = FakeUpstream::start(messages(json_200())).await;

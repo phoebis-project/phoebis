@@ -76,11 +76,15 @@ pub(crate) fn resolve_key<'a>(
     now: i64,
 ) -> Result<(&'a ApiKeyRow, Presented), Failure> {
     let presented = presented_key(headers).map_err(|error| auth_failure(&error))?;
-    snapshot.authenticate(presented, now).map_err(|refusal| {
+    snapshot.authenticate(presented, now).map_err(|refused| {
         // Here rather than on each route, so a side route's 401 leaves the same trace on the host as the messages
-        // route's. The refusal names its reason alone, never the presented secret.
-        tracing::debug!(%refusal, "a presented key was refused");
-        key_refusal(&refusal)
+        // route's. The line names the key's id and the reason, never the presented secret.
+        tracing::debug!(
+            refusal = %refused.refusal,
+            key_id = refused.key_id.as_deref(),
+            "a presented key was refused"
+        );
+        key_refusal(&refused.refusal)
     })
 }
 

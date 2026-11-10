@@ -1,5 +1,5 @@
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
-use phoebis_routing::{CompiledGuardrails, KeyRefusal, Presented, RegistrySnapshot};
+use phoebis_routing::{CompiledGuardrails, KeyRefusal, Presented, RefusedKey, RegistrySnapshot};
 use phoebis_store::{
     digest_with, ApiKeyRow, AttachmentSubject, CompanionPermissions, GuardrailAttachment,
     GuardrailRow, PoolRow, RegistryLoad, RetiredSecret, RulesMode, Strategy, SubscriptionTerm,
@@ -59,7 +59,10 @@ fn a_retired_secret_authenticates_its_key_until_the_grace_ends() {
     assert_eq!(s.authenticate("one", 1_999).unwrap().1, Presented::Retired);
     assert!(matches!(
         s.authenticate("one", 2_000),
-        Err(KeyRefusal::Unknown)
+        Err(RefusedKey {
+            refusal: KeyRefusal::Unknown,
+            ..
+        })
     ));
     assert!(
         s.authenticate("two", 5_000).is_ok(),
@@ -68,7 +71,10 @@ fn a_retired_secret_authenticates_its_key_until_the_grace_ends() {
     assert_eq!(s.authenticate("two", 5_000).unwrap().1, Presented::Live);
     assert!(matches!(
         s.authenticate("three", 1_000),
-        Err(KeyRefusal::Unknown)
+        Err(RefusedKey {
+            refusal: KeyRefusal::Unknown,
+            ..
+        })
     ));
 }
 
@@ -77,7 +83,10 @@ fn a_retired_secret_of_a_revoked_key_is_refused_as_revoked() {
     let s = RegistrySnapshot::from_load(load(Some(1_500)), DIGEST_KEY, 0, 1);
     assert!(matches!(
         s.authenticate("one", 1_600),
-        Err(KeyRefusal::Revoked)
+        Err(RefusedKey {
+            refusal: KeyRefusal::Revoked,
+            ..
+        })
     ));
 }
 

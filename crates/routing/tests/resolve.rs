@@ -1,4 +1,4 @@
-use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
+use phoebis_routing::{resolve, Candidate, KeyRefusal, RefusedKey, RegistrySnapshot, ResolveError};
 use phoebis_store::{
     AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, ModelRule, PoolMember, PoolRow,
     RegistryLoad, RulesMode, Strategy,
@@ -233,15 +233,24 @@ fn keys_authenticate_by_digest_and_every_dead_key_is_refused() {
     );
     assert!(matches!(
         s.authenticate("phoebis-nope", 1_000),
-        Err(KeyRefusal::Unknown)
+        Err(RefusedKey {
+            refusal: KeyRefusal::Unknown,
+            ..
+        })
     ));
     assert!(matches!(
         s.authenticate("phoebis-gonesecret0000000", 1_000),
-        Err(KeyRefusal::Revoked)
+        Err(RefusedKey {
+            refusal: KeyRefusal::Revoked,
+            ..
+        })
     ));
     assert!(matches!(
         s.authenticate("phoebis-oldsecret00000000", 1_000),
-        Err(KeyRefusal::Expired)
+        Err(RefusedKey {
+            refusal: KeyRefusal::Expired,
+            ..
+        })
     ));
     assert_eq!(
         s.authenticate("phoebis-oldsecret00000000", 400)
@@ -252,7 +261,10 @@ fn keys_authenticate_by_digest_and_every_dead_key_is_refused() {
     );
     assert!(matches!(
         s.authenticate("phoebis-darksecret0000000", 1_000),
-        Err(KeyRefusal::PoolDisabled)
+        Err(RefusedKey {
+            refusal: KeyRefusal::PoolDisabled,
+            ..
+        })
     ));
 }
 
