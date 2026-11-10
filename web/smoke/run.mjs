@@ -596,22 +596,23 @@ await forView('/', async () => {
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
-  // Read paint by paint, so a shape or a gradient stop drawn in a fixed color, which the theme toggle would not reach,
-  // or a mark that draws nothing fails the check. A shape with no fill of its own or its group's paints black, and so
-  // does a stop with no color.
+  // The mark sets its paints as attributes, read here one by one, so a mark that draws nothing fails the check, and so
+  // does a shape or a gradient stop the theme toggle would not reach: a fixed color, no paint at all (black), or a token
+  // that the light or the dark block of tokens.css leaves undeclared, which paints black or one color in both themes.
   const mark = login.container.querySelector('.brand__mark svg');
   const inside = mark ? [mark, ...mark.querySelectorAll('*')] : [];
-  const declared = (el, prop) => new RegExp(`(?:^|;)\\s*${prop}\\s*:\\s*([^;]+)`).exec(el.getAttribute('style') ?? '')?.[1].trim() ?? el.getAttribute(prop);
-  const inherited = (el, prop) => (el === null || el === mark.parentElement ? null : declared(el, prop) ?? inherited(el.parentElement, prop));
+  const css = [...readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)];
+  const blocks = [':root', ":root[data-theme='dark']"].map((head) => [head, css.filter(([, h]) => h.trim() === head).flatMap(([, , body]) => [...body.matchAll(/(--[\w-]+)\s*:/g)].map((d) => d[1]))]);
   const gradients = new Set(inside.filter((el) => /^(linear|radial)Gradient$/.test(el.tagName) && el.querySelector('stop') !== null).map((el) => el.id));
-  const themed = (paint) => paint === 'none' || /^var\(--[\w-]+\)$/.test(paint) || gradients.has(/^url\(#(.+)\)$/.exec(paint)?.[1]);
   const shapes = inside.filter((el) => ['circle', 'ellipse', 'line', 'path', 'polygon', 'polyline', 'rect'].includes(el.tagName));
-  const fixed = [
-    ...inside.flatMap((el) => ['fill', 'stroke', 'stop-color'].map((prop) => [el, prop, declared(el, prop)]).filter(([, , paint]) => paint !== null && !themed(paint)).map(([el, prop, paint]) => `${el.tagName} ${prop} ${paint}`)),
-    ...shapes.filter((el) => inherited(el, 'fill') === null).map((el) => `${el.tagName} with no fill`),
-    ...inside.filter((el) => el.tagName === 'stop' && declared(el, 'stop-color') === null).map(() => 'stop with no color'),
-  ];
-  const draws = shapes.some((el) => (inherited(el, 'fill') ?? 'black') !== 'none' || (inherited(el, 'stroke') ?? 'none') !== 'none');
+  const fixed = inside.flatMap((el) => ['fill', 'stroke', 'stop-color'].flatMap((prop) => {
+    const paint = el.getAttribute(prop);
+    if (paint === null) return (prop === 'fill' && shapes.includes(el)) || (prop === 'stop-color' && el.tagName === 'stop') ? [`${el.tagName} with no ${prop}`] : [];
+    if (paint === 'none' || gradients.has(/^url\(#(.+)\)$/.exec(paint)?.[1])) return [];
+    const token = /^var\((--[\w-]+)\)$/.exec(paint)?.[1];
+    return token ? blocks.filter(([, names]) => !names.includes(token)).map(([head]) => `${token} missing from ${head}`) : [`${el.tagName} ${prop} ${paint}`];
+  }));
+  const draws = shapes.some((el) => el.getAttribute('fill') !== 'none' || (el.getAttribute('stroke') ?? 'none') !== 'none');
   results.push({ name: 'the login view carries the mark, drawn in the theme tokens alone, and the couplet', ok: draws && fixed.length === 0 && login.text().includes('Place every request. Keep every session.'), missing: [draws ? 'the mark draws' : 'the mark draws nothing', ...fixed] });
   const stay = login.container.querySelector('.login__card input[type="checkbox"]');
   const stayField = stay?.closest('.field') ?? null;
@@ -1097,7 +1098,7 @@ columnsMarked('/ the recent requests table marks Time as its fill column', m.con
   results.push({ name: "/ the recent requests table's id line under the time prints the whole id titled with it, and the Key cell reads its key whole in a fit column", ok: rows.length === 10 && off.length === 0, missing: [`${rows.length} rows`, ...off.map((r) => JSON.stringify({ ...r, want: r.want === undefined ? 'no such request' : r.want.keyId }))] });
 }
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
-results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg rect') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
+results.push({ name: 'the shell carries the mark beside the name and no couplet', ok: m.container.querySelector('.sidebar .brand__mark svg') !== null && m.container.querySelector('.sidebar .brand__name')?.textContent === 'Phoebis Router' && m.container.querySelector('.sidebar .brand__couplet') === null, missing: [] });
 {
   const named = [...m.container.querySelectorAll('.segmented[aria-label="Theme"] button')].map((b) => [b.getAttribute('aria-label'), b.getAttribute('title')]);
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
