@@ -2,6 +2,7 @@ use phoebis_store::{
     crypto, AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle,
     OutcomeWord, Secret, StateCause, StorageKey, Store, StoreError,
 };
+use serde_json::json;
 
 fn account(id: &str) -> AccountRow {
     AccountRow {
@@ -104,6 +105,147 @@ fn disconnect_revokes_both_credential_kinds() {
     assert!(
         store.open_refresh_attempt("a", 1, bumped, 0).is_ok(),
         "the refresh gate is clear again on the new lifecycle generation"
+    );
+}
+
+const BLOCK: &str = r#"{"eligible":true,"grants":[]}"#;
+
+/// Account `a`'s stored limit reset block and the instant of the read that wrote it.
+fn stored_block(store: &Store) -> (Option<serde_json::Value>, Option<i64>) {
+    let extras = store.account_extras_of("a").unwrap().unwrap();
+    (extras.limit_resets, extras.limit_resets_read_at)
+}
+
+#[test]
+fn a_pairing_clears_the_limit_resets_of_the_holder_before_it() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert!(store
+        .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 5_000)
+        .unwrap());
+    assert_eq!(stored_block(&store).1, Some(5_000));
+    store
+        .commit_pairing("a", 1, 1, None, &bundle("at-1"))
+        .unwrap();
+    assert_eq!(
+        stored_block(&store),
+        (None, None),
+        "the block was the earlier holder's"
+    );
+}
+
+#[test]
+fn a_block_read_for_a_replaced_holder_lands_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    let bumped = store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    assert!(
+        !store
+            .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 5_000)
+            .unwrap(),
+        "the read started under the lifecycle generation from before the disconnect"
+    );
+    assert_eq!(stored_block(&store), (None, None));
+    assert!(store
+        .set_limit_resets("a", 1, bumped, 0, Some(BLOCK), 6_000)
+        .unwrap());
+    assert_eq!(
+        stored_block(&store),
+        (Some(json!({"eligible": true, "grants": []})), Some(6_000))
+    );
+}
+
+#[test]
+fn a_block_write_from_before_a_fold_or_a_pairing_lands_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    assert!(store
+        .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 5_000)
+        .unwrap());
+    assert!(store
+        .fold_limit_resets("a", 1, 1, 0, |_| Some(
+            r#"{"eligible":false,"grants":[]}"#.to_owned()
+        ))
+        .unwrap());
+    assert!(
+        !store
+            .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 6_000)
+            .unwrap(),
+        "the read started before the fold, so its block would bring the used reset back"
+    );
+    assert_eq!(
+        stored_block(&store),
+        (Some(json!({"eligible": false, "grants": []})), Some(5_000))
+    );
+    store
+        .commit_pairing("a", 1, 1, None, &bundle("at-1"))
+        .unwrap();
+    assert!(
+        !store
+            .set_limit_resets("a", 1, 1, 1, Some(BLOCK), 7_000)
+            .unwrap(),
+        "the read started under the pairing before this one"
+    );
+    assert_eq!(stored_block(&store), (None, None));
+    assert!(store
+        .set_limit_resets("a", 1, 1, 2, Some(BLOCK), 8_000)
+        .unwrap());
+    assert_eq!(stored_block(&store).1, Some(8_000));
+}
+
+#[test]
+fn a_fold_from_before_a_pairing_folds_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store
+        .commit_pairing("a", 1, 1, None, &bundle("at-1"))
+        .unwrap();
+    assert!(store
+        .set_limit_resets("a", 1, 1, 1, Some(BLOCK), 5_000)
+        .unwrap());
+    assert!(
+        !store
+            .fold_limit_resets("a", 1, 1, 0, |_| Some(
+                r#"{"eligible":false,"grants":[]}"#.to_owned()
+            ))
+            .unwrap(),
+        "the claim started under the pairing before this one"
+    );
+    assert_eq!(
+        stored_block(&store).0,
+        Some(json!({"eligible": true, "grants": []}))
+    );
+}
+
+#[test]
+fn a_deleted_accounts_block_write_and_fold_land_nothing_on_the_slot_that_took_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store.delete_account("a", "test").unwrap();
+    store.insert_account(&account("a")).unwrap();
+    // The new row restarts its lifecycle generation at 1 and its epoch at 0, so only the incarnation tells the
+    // deleted holder's read and claim from the new account's.
+    assert!(
+        !store
+            .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 5_000)
+            .unwrap(),
+        "the read started under the deleted account"
+    );
+    assert_eq!(stored_block(&store), (None, None));
+    assert!(store
+        .set_limit_resets("a", 2, 1, 0, Some(BLOCK), 6_000)
+        .unwrap());
+    assert!(
+        !store
+            .fold_limit_resets("a", 1, 1, 0, |_| Some(
+                r#"{"eligible":false,"grants":[]}"#.to_owned()
+            ))
+            .unwrap(),
+        "the claim started under the deleted account"
+    );
+    assert_eq!(
+        stored_block(&store),
+        (Some(json!({"eligible": true, "grants": []})), Some(6_000))
     );
 }
 

@@ -3,7 +3,7 @@
 //! `guardrail_tombstones`, `guardrails`, `keepalive_agents`, `keepalive_idle_returns`, `keepalive_sessions`,
 //! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
-//! marker. Version 3 adds `usage_window_sets`.
+//! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -319,9 +319,18 @@ ALTER TABLE pins ADD COLUMN burn_unmetered_model TEXT;
 DELETE FROM keepalive_agents WHERE json_extract(payload, '$.reason') = 'released';
 "#;
 
+/// An account's limit reset block as the usage service last read it, with the instant of that read, so the cards
+/// and the conditions read a block across a restart. The epoch orders the block's writers: a claim's fold and a
+/// pairing advance it, and a read that started before either writes nothing.
+const V7: &str = r#"
+ALTER TABLE accounts ADD COLUMN limit_resets_json TEXT;
+ALTER TABLE accounts ADD COLUMN limit_resets_read_at INTEGER;
+ALTER TABLE accounts ADD COLUMN limit_resets_epoch INTEGER NOT NULL DEFAULT 0;
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5), (6, V6)];
+pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5), (6, V6), (7, V7)];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.

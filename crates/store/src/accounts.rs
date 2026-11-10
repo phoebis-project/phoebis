@@ -524,6 +524,62 @@ impl Store {
         Ok(())
     }
 
+    /// Writes an account's limit reset block (`None` where the read's body carried none) and the instant of the read
+    /// that answered it, for the holder and the epoch the read started under. Answers whether it wrote: a read that
+    /// was out across a delete, a new account under the id, a disconnect, a claim's fold or a pairing lands nothing.
+    /// Leaves the epoch as it is and bumps no `revision`, as `set_profile` bumps none.
+    pub fn set_limit_resets(
+        &self,
+        id: &str,
+        incarnation: u64,
+        lifecycle_generation: u64,
+        epoch: u64,
+        block: Option<&str>,
+        read_at: i64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let wrote = conn.execute(
+            "UPDATE accounts SET limit_resets_json = ?5, limit_resets_read_at = ?6 \
+             WHERE id = ?1 AND incarnation = ?2 AND lifecycle_generation = ?3 AND limit_resets_epoch = ?4",
+            params![id, incarnation as i64, lifecycle_generation as i64, epoch as i64, block, read_at],
+        )?;
+        Ok(wrote == 1)
+    }
+
+    /// Hands the stored block to `fold` and writes what it answers with the epoch advanced by one, in one
+    /// transaction, for the holder and the epoch the claim started under, leaving the read's instant as it was. The
+    /// advance refuses the write of a block read that started before the fold, which would bring a used reset back.
+    /// Answers whether it wrote: `false` for another holder, for an epoch a pairing moved, for a row with no stored
+    /// block and where `fold` answers `None`.
+    pub fn fold_limit_resets(
+        &self,
+        id: &str,
+        incarnation: u64,
+        lifecycle_generation: u64,
+        epoch: u64,
+        fold: impl FnOnce(&str) -> Option<String>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let stored: Option<Option<String>> = tx
+            .query_row(
+                "SELECT limit_resets_json FROM accounts \
+                 WHERE id = ?1 AND incarnation = ?2 AND lifecycle_generation = ?3 AND limit_resets_epoch = ?4",
+                params![id, incarnation as i64, lifecycle_generation as i64, epoch as i64],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(folded) = stored.flatten().and_then(|block| fold(&block)) else {
+            return Ok(false);
+        };
+        tx.execute(
+            "UPDATE accounts SET limit_resets_json = ?2, limit_resets_epoch = limit_resets_epoch + 1 WHERE id = ?1",
+            params![id, folded],
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Stages or clears an account's cancellation as the operator's edit does and bumps `revision`.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_canceled(&self, id: &str, cancellation: Cancellation) -> Result<(), StoreError> {
@@ -545,8 +601,8 @@ impl Store {
         subscription_term_in(&conn, id)
     }
 
-    /// Every account's profile document and term by account id, in one statement, so a list of accounts reads them
-    /// once where `account_extras_of` and `subscription_term` read one row each.
+    /// Every account's profile document, term and limit reset block by account id, in one statement, so a list of
+    /// accounts reads them once where `account_extras_of` and `subscription_term` read one row each.
     pub fn account_extras(&self) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
@@ -617,10 +673,11 @@ pub(crate) fn subscription_term_in(
         .map_err(StoreError::from)
 }
 
-// The columns `row_to_term` reads, in its order.
+// The columns `row_to_term` reads, in its order, then the ones `row_to_extras` alone reads.
 pub(crate) const TERM_COLUMNS: &str =
     "id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
-     subscription_tier, kind, profile_json, plan_ended_at";
+     subscription_tier, kind, profile_json, plan_ended_at, \
+     limit_resets_json, limit_resets_read_at, limit_resets_epoch, created_at";
 
 static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
@@ -633,7 +690,19 @@ pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
 fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
     let profile = profile_of(row)?;
     let term = term_of(row, profile.as_ref())?;
-    Ok((term.account_id.clone(), AccountExtras { profile, term }))
+    let limit_resets: Option<String> = row.get(9)?;
+    let extras = AccountExtras {
+        created_at: row.get(12)?,
+        // A document that does not parse reads as absent, as the profile does.
+        limit_resets: limit_resets
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok()),
+        limit_resets_epoch: row.get::<_, i64>(11)? as u64,
+        limit_resets_read_at: row.get(10)?,
+        profile,
+        term,
+    };
+    Ok((extras.term.account_id.clone(), extras))
 }
 
 /// The profile document of a `TERM_COLUMNS` row, parsed once so the term's class, its plan and the extras share it. A
@@ -679,10 +748,20 @@ impl SubscriptionTerm {
     }
 }
 
-/// What `Store::account_extras` answers for one account: the stored `profile_json` document, parsed, and what
-/// `subscription_term` answers for it.
+/// What `Store::account_extras` answers for one account: the stored `profile_json` document, parsed, what
+/// `subscription_term` answers for it, the stored limit reset block with its read's instant and its epoch, and when
+/// the row was created.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountExtras {
+    /// When the row was created, in epoch milliseconds: a new account under a deleted id starts over here.
+    pub created_at: i64,
+    /// The stored limit reset block, `None` without one and for a document that does not parse.
+    pub limit_resets: Option<serde_json::Value>,
+    /// Advanced by a claim's fold and by a pairing's clear. A block read writes only under the epoch it started
+    /// under, so an answer that lands after either cannot bring the older block back.
+    pub limit_resets_epoch: u64,
+    /// The instant of the last limit reset read that answered 200, in epoch milliseconds.
+    pub limit_resets_read_at: Option<i64>,
     /// `None` without a stored document and for one that does not parse.
     pub profile: Option<serde_json::Value>,
     pub term: SubscriptionTerm,

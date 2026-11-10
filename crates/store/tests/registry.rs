@@ -86,6 +86,17 @@ fn rename(
     })
 }
 
+/// The seventh step taken back on a file this build wrote, which every case that takes a file back past version 7
+/// runs first, since the step refuses its columns as duplicates on reopen.
+fn seventh_step_taken_back(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "ALTER TABLE accounts DROP COLUMN limit_resets_json;
+         ALTER TABLE accounts DROP COLUMN limit_resets_read_at;
+         ALTER TABLE accounts DROP COLUMN limit_resets_epoch;",
+    )
+    .unwrap();
+}
+
 /// The sixth step taken back on a file this build wrote, which every case that takes a file back past version 6
 /// runs before its own statements.
 fn sixth_step_taken_back(conn: &rusqlite::Connection) {
@@ -98,12 +109,13 @@ fn sixth_step_taken_back(conn: &rusqlite::Connection) {
     .unwrap();
 }
 
-/// A registry as a version-5 build left it: the build's own file with the sixth step taken back through
-/// `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case stands at version 5 before its
-/// reopen. Each of the step's column changes keeps its take-back. Its delete needs none, since a row it removed is
-/// seeded here, after the take-back.
+/// A registry as a version-5 build left it: the build's own file with the seventh and sixth steps taken back through
+/// `seventh_step_taken_back` and `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case
+/// stands at version 5 before its reopen. Each of the sixth step's column changes keeps its take-back. Its delete
+/// needs none, since a row it removed is seeded here, after the take-back.
 fn at_version_five(path: &std::path::Path, seed: &str) {
     let conn = rusqlite::Connection::open(path).unwrap();
+    seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
     conn.execute_batch("UPDATE meta SET value = '5' WHERE key = 'schema_version';")
         .unwrap();
@@ -170,6 +182,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
     // The file as a version-1 build left it: the steps' columns and tables taken back, the counters' table in the
     // baseline's shape with an all-time row, and the marker at 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
     conn.execute_batch(
         "ALTER TABLE pins DROP COLUMN auxiliary_only;
@@ -237,6 +250,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
     // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column gone and
     // the marker at 4, as the file's other migration test takes a file back to version 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
     conn.execute_batch(
         "ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;

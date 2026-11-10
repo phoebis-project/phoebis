@@ -577,7 +577,8 @@ impl Store {
     /// `commit_credentials` for a pairing: the credential write, the supersession of the pending and uncertain
     /// rows and the pairing's own resolved `committed` attempt (`detail = 'pairing'`) in one transaction, so a
     /// commit refused by its fences or its write records no success. The attempt is what ends a run of failed
-    /// refreshes for the attention reader when nothing was pending to supersede.
+    /// refreshes for the attention reader when nothing was pending to supersede. The transaction also clears the
+    /// limit reset block and advances its epoch.
     pub fn commit_pairing(
         &self,
         account_id: &str,
@@ -601,6 +602,13 @@ impl Store {
             None,
             bundle,
             now,
+        )?;
+        // The block was read under the pairing before this one, and the poll's next slots read it again. A
+        // pairing leaves the holder as it is, so the epoch moves to refuse a read that was out across it.
+        tx.execute(
+            "UPDATE accounts SET limit_resets_json = NULL, limit_resets_read_at = NULL, \
+             limit_resets_epoch = limit_resets_epoch + 1 WHERE id = ?1",
+            params![account_id],
         )?;
         record_pairing_attempt(
             &tx,
