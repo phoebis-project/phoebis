@@ -1767,6 +1767,642 @@ async fn a_refresh_sends_no_limit_resets_read_to_a_plan_that_just_ended() {
     );
 }
 
+/// The use of `business`'s grant `rg-b-1`.
+const USE_RESET: &str = "/admin/accounts/business/limit-resets/rg-b-1/use";
+
+/// The fake's 200 to a limit reset claim with `body`.
+fn claim_answer(body: &str) -> fake_upstream::Respond {
+    fake_upstream::Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: body.as_bytes().to_vec(),
+    }
+}
+
+/// The fake's 500 with the upstream's error body.
+fn upstream_failure() -> fake_upstream::Respond {
+    fake_upstream::Respond::Json {
+        status: 500,
+        headers: vec![],
+        body: br#"{"type":"error","error":{"type":"api_error","message":"Internal server error"}}"#
+            .to_vec(),
+    }
+}
+
+/// How many requests the fake read whose line starts with `line`.
+fn sent(up: &fake_upstream::FakeUpstream, line: &str) -> usize {
+    up.requests()
+        .iter()
+        .filter(|r| r.line.starts_with(line))
+        .count()
+}
+
+/// The routing log's `limit_reset_claimed` rows once `ready` takes them: the ledger's writer lands an event a batch
+/// after it was handed over.
+async fn claimed_rows(
+    app: &axum::Router,
+    cookie: &str,
+    ready: impl Fn(&[serde_json::Value]) -> bool,
+) -> Vec<serde_json::Value> {
+    let rows = |page: &serde_json::Value| page["rows"].as_array().cloned().unwrap_or_default();
+    let page = common::wait_json(
+        app,
+        "/admin/routing-log?kinds=limit_reset_claimed",
+        cookie,
+        |page| ready(&rows(page)),
+    )
+    .await;
+    rows(&page)
+}
+
+/// A claim the upstream answered with `result` at `at`, as the service answers one, for the event's builder.
+fn claimed(result: &str, outcome: phoebis_oauth::ClaimOutcome, at: i64) -> phoebis_oauth::Claim {
+    phoebis_oauth::Claim {
+        answer: Some(phoebis_oauth::ClaimAnswer {
+            cleared: vec![],
+            cooldown_until: None,
+            reason: None,
+            resets_left: Some(0),
+            result: result.into(),
+            weekly_resets_at: None,
+        }),
+        at,
+        error: None,
+        label: "Launch reset".into(),
+        outcome,
+        request_id: "00000000-0000-4000-8000-0000000000a1".into(),
+        status: Some(200),
+    }
+}
+
+/// `reset_grant` with no reset left, as a block reads one that was used.
+fn spent_grant(id: &str) -> serde_json::Value {
+    let mut grant = reset_grant(id);
+    grant["resets_left"] = serde_json::json!(0);
+    grant["usable_now"] = serde_json::json!(false);
+    grant
+}
+
+#[tokio::test]
+async fn a_claim_outlives_the_caller_that_went_away() {
+    use common::{login, post, CLAIM_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(
+        0,
+        CLAIM_PATH,
+        fake_upstream::Respond::Gated(Box::new(claim_answer(r#"{"result":"reset"}"#))),
+    );
+    let caller = tokio::spawn({
+        let (app, cookie) = (h.app.clone(), cookie.clone());
+        async move { post(&app, USE_RESET, "", Some(&cookie)).await }
+    });
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (sent(&h.up, "POST /api/organizations/") == 1).then_some(())
+    })
+    .await;
+    caller.abort();
+    assert!(
+        caller.await.unwrap_err().is_cancelled(),
+        "the caller went away while the fake held the claim"
+    );
+    h.up.release();
+    let rows = claimed_rows(&h.app, &cookie, |rows| !rows.is_empty()).await;
+    let read: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["detail"]["result"].as_str(),
+                row["detail"]["outcome"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        read,
+        vec![(Some("reset"), Some("used"))],
+        "the claim the caller left still lands its answer's row: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_reading_after_a_claim_is_one_sent_after_it() {
+    use common::{get, json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    let five_hour = |utilization: u32| fake_upstream::Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: format!(
+            r#"{{"five_hour":{{"utilization":{utilization},"resets_at":"2026-10-11T15:00:00Z"}}}}"#
+        )
+        .into_bytes(),
+    };
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Gated(Box::new(five_hour(100))),
+    );
+    let held = tokio::spawn({
+        let usage = h.usage.clone();
+        async move { usage.poll("business").await }
+    });
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (sent(&h.up, "GET /api/oauth/usage ") == 1).then_some(())
+    })
+    .await;
+    h.up.set_rule_after(1, "/api/oauth/usage", five_hour(0));
+    h.clock_cell
+        .fetch_add(1_000, std::sync::atomic::Ordering::SeqCst);
+    let used = tokio::spawn({
+        let (app, cookie) = (h.app.clone(), cookie.clone());
+        async move { post(&app, USE_RESET, "", Some(&cookie)).await }
+    });
+    // The claim's task writes its row before its poll, which then joins the held read.
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "limit_reset_claimed")
+    })
+    .await;
+    h.up.release();
+    let used = used.await.unwrap();
+    assert_eq!(used.status(), 200);
+    let used = json(used).await;
+    held.await.unwrap().unwrap();
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let five_hour_now = account["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|window| window["id"] == "five_hour")
+        .and_then(|window| window["utilization"].as_f64());
+    assert_eq!(
+        (
+            used["outcome"].as_str(),
+            sent(&h.up, "GET /api/oauth/usage "),
+            five_hour_now
+        ),
+        (Some("used"), 2, Some(0.0)),
+        "the reading the claim joined was sent before its answer, so a second one is the router's: {account}"
+    );
+}
+
+#[tokio::test]
+async fn a_used_reset_stays_used_when_every_read_after_it_fails() {
+    use common::{get, json, login, post, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let mut two = reset_grant("rg-b-1");
+    two["resets_left"] = serde_json::json!(2);
+    two["resets_total"] = serde_json::json!(2);
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [two]}),
+    );
+    h.up.set_rule_after(0, "/api/oauth/usage", upstream_failure());
+    h.up.set_rule_after(0, LIMIT_RESETS_PATH, upstream_failure());
+    let used = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let status = used.status().as_u16();
+    let used = json(used).await;
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            status,
+            used["limit_resets"]["grants"][0]["resets_left"].as_u64(),
+            account["limit_resets"]["grants"][0]["resets_left"].as_u64()
+        ),
+        (200, Some(1), Some(1)),
+        "a reset answer with no count takes one of two off, whatever the reads after it do: {used}"
+    );
+}
+
+#[tokio::test]
+async fn an_open_outcome_is_read_from_the_upstream() {
+    use common::{get, json, login, post, CLAIM_PATH, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(0, CLAIM_PATH, fake_upstream::Respond::CloseAfterRequest);
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        limit_resets_answer(
+            serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1")]}),
+        ),
+    );
+    let open = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let code = open
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    let status = open.status().as_u16();
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let grant = &account["limit_resets"]["grants"][0];
+    assert_eq!(
+        (
+            status,
+            code.as_deref(),
+            grant["state"].as_str(),
+            grant["resets_left"].as_u64()
+        ),
+        (502, Some("limit_reset_unanswered"), Some("used"), Some(0)),
+        "the read after an open outcome shows the reset the attempt spent: {account}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_read_of_an_open_outcome_is_due_in_the_next_slot() {
+    use common::{login, post, CLAIM_PATH, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(0, CLAIM_PATH, fake_upstream::Respond::CloseAfterRequest);
+    h.up.set_rule_after(0, LIMIT_RESETS_PATH, upstream_failure());
+    let open = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let code = open
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    assert_eq!(
+        (
+            open.status().as_u16(),
+            code.as_deref(),
+            sent(&h.up, "GET /api/oauth/usage?cedar_ember=1")
+        ),
+        (502, Some("limit_reset_unanswered"), 1),
+        "the open outcome's read went out and failed"
+    );
+    // `business` is the one polled account, so its first slot falls 300 s after the scheduler's start and reads no
+    // profile. The hour has not passed since the failed read, and the slot's reading stands at the set that read
+    // remembered, so only the due mark sends the block read.
+    tokio::time::pause();
+    let scheduler = phoebis_ledger::QuotaPoll {
+        ledger: h.ledger.clone(),
+        router: h.router.clone(),
+        store: h.store.clone(),
+        tables: std::sync::Arc::new(phoebis_ledger::PlanTables::shipped()),
+        usage: h.usage.clone(),
+    }
+    .spawn();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    h.clock_cell
+        .fetch_add(301_000, std::sync::atomic::Ordering::SeqCst);
+    tokio::time::advance(std::time::Duration::from_secs(301)).await;
+    tokio::time::resume();
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (sent(&h.up, "GET /api/oauth/usage?cedar_ember=1") == 2).then_some(())
+    })
+    .await;
+    scheduler.abort();
+}
+
+#[tokio::test]
+async fn an_open_outcome_is_read_again_after_a_read_from_before_it() {
+    use common::{get, json, login, post, CLAIM_PATH, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let usable = serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]});
+    store_limit_resets(&h.store, usable.clone());
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        fake_upstream::Respond::Gated(Box::new(limit_resets_answer(usable))),
+    );
+    let early = tokio::spawn({
+        let usage = h.usage.clone();
+        async move { usage.limit_resets("business").await }
+    });
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (sent(&h.up, "GET /api/oauth/usage?cedar_ember=1") == 1).then_some(())
+    })
+    .await;
+    h.up.set_rule_after(
+        1,
+        LIMIT_RESETS_PATH,
+        limit_resets_answer(
+            serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1")]}),
+        ),
+    );
+    h.clock_cell
+        .fetch_add(1_000, std::sync::atomic::Ordering::SeqCst);
+    h.up.set_rule_after(0, CLAIM_PATH, fake_upstream::Respond::CloseAfterRequest);
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"five_hour":{"utilization":42.0,"resets_at":"2026-10-11T15:00:00Z"}}"#
+                .to_vec(),
+        },
+    );
+    let open = tokio::spawn({
+        let (app, cookie) = (h.app.clone(), cookie.clone());
+        async move { post(&app, USE_RESET, "", Some(&cookie)).await }
+    });
+    // The claim's task reports its poll's reading and runs on to the block read, which joins the held one.
+    common::wait_json(&h.app, "/admin/accounts/business", &cookie, |account| {
+        account["windows"].as_array().is_some_and(|windows| {
+            windows
+                .iter()
+                .any(|w| w["id"] == "five_hour" && w["utilization"].as_f64() == Some(0.42))
+        })
+    })
+    .await;
+    h.up.release();
+    let open = open.await.unwrap();
+    let code = open
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    let status = open.status().as_u16();
+    early.await.unwrap().unwrap();
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let grant = &account["limit_resets"]["grants"][0];
+    assert_eq!(
+        (
+            status,
+            code.as_deref(),
+            grant["state"].as_str(),
+            grant["resets_left"].as_u64()
+        ),
+        (502, Some("limit_reset_unanswered"), Some("used"), Some(0)),
+        "the block the joined read sent before the claim is read again: {account}"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_reading_after_a_claim_is_not_asked_again() {
+    use common::{json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    // The rig polls nothing on its own, so the clean reading from before the claim is this poll's.
+    h.usage.poll("business").await.unwrap();
+    h.clock_cell
+        .fetch_add(1_000, std::sync::atomic::Ordering::SeqCst);
+    h.up.set_rule_after(0, "/api/oauth/usage", upstream_failure());
+    let before = sent(&h.up, "GET /api/oauth/usage ");
+    let used = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let status = used.status().as_u16();
+    let used = json(used).await;
+    assert_eq!(
+        (
+            status,
+            used["outcome"].as_str(),
+            sent(&h.up, "GET /api/oauth/usage ") - before
+        ),
+        (200, Some("used"), 1),
+        "a failed reading keeps the instant of the one before the claim and is not asked again: {used}"
+    );
+}
+
+#[tokio::test]
+async fn the_use_route_sends_no_claim_to_a_plan_that_ended() {
+    use common::{login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    assert!(h.store.set_plan_ended("business", common::NOW).unwrap());
+    let refused = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let code = refused
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            code.as_deref(),
+            sent(&h.up, "POST /api/organizations/")
+        ),
+        (409, Some("limit_reset_not_polled"), 0),
+        "the poll no longer asks an account whose plan ended, so the route sends it no claim"
+    );
+}
+
+#[tokio::test]
+async fn an_unsettled_use_sends_no_limit_resets_read_to_a_plan_that_just_ended() {
+    use common::{login, post, CLAIM_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(0, CLAIM_PATH, fake_upstream::Respond::CloseAfterRequest);
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/usage",
+        fake_upstream::Respond::Json {
+            status: 403,
+            headers: vec![("x-should-retry".into(), "false".into())],
+            body: br#"{"type":"error","error":{"type":"permission_error","message":"OAuth authentication is currently not allowed for this organization.","details":{"error_code":"oauth_not_allowed_for_organization","error_visibility":"user_facing"}}}"#
+                .to_vec(),
+        },
+    );
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"account":{"uuid":"00000000-0000-4000-8000-000000000100","email":"a@example.invalid","has_claude_max":false,"has_claude_pro":false},"organization":{"uuid":"o","organization_type":"claude_free","rate_limit_tier":"default_claude_ai","subscription_status":"canceled","billing_type":"none"}}"#
+                .to_vec(),
+        },
+    );
+    let open = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let code = open
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    let ended = h
+        .store
+        .subscription_term("business")
+        .unwrap()
+        .unwrap()
+        .plan_ended_at;
+    assert_eq!(
+        (
+            open.status().as_u16(),
+            code.as_deref(),
+            ended.is_some(),
+            sent(&h.up, "GET /api/oauth/usage?cedar_ember=1")
+        ),
+        (502, Some("limit_reset_unanswered"), true, 0),
+        "the claim's poll found the plan ended, so no limit resets read follows it"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_claim_leaves_its_row() {
+    use common::{json, login, post, CLAIM_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(0, CLAIM_PATH, claim_answer(r#"{"result":"cooldown"}"#));
+    let refused = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let status = refused.status().as_u16();
+    let refused = json(refused).await;
+    assert_eq!(
+        (status, refused["outcome"].as_str()),
+        (200, Some("refused")),
+        "{refused}"
+    );
+    let rows = claimed_rows(&h.app, &cookie, |rows| !rows.is_empty()).await;
+    let read: Vec<_> = rows
+        .iter()
+        .map(|row| {
+            (
+                row["detail"]["result"].as_str(),
+                row["detail"]["outcome"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        read,
+        vec![(Some("cooldown"), Some("refused"))],
+        "a refused claim reached the upstream, so it leaves its row: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_unanswered_claim_leaves_its_row() {
+    use common::{login, post, CLAIM_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(0, CLAIM_PATH, fake_upstream::Respond::CloseAfterRequest);
+    let open = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let code = open
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    assert_eq!(
+        (open.status().as_u16(), code.as_deref()),
+        (502, Some("limit_reset_unanswered"))
+    );
+    let request =
+        h.up.requests()
+            .into_iter()
+            .find(|r| r.line.starts_with("POST /api/organizations/"))
+            .expect("the claim reached the fake");
+    let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+    let rows = claimed_rows(&h.app, &cookie, |rows| !rows.is_empty()).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let detail = &rows[0]["detail"];
+    assert_eq!(
+        (
+            &detail["request_id"],
+            &detail["result"],
+            detail["outcome"].as_str(),
+            &detail["status"],
+            detail["error"].is_string(),
+            &detail["cleared"]
+        ),
+        (
+            &body["request_id"],
+            &serde_json::Value::Null,
+            Some("unsettled"),
+            &serde_json::Value::Null,
+            true,
+            &serde_json::json!([])
+        ),
+        "a claim the fake never answered leaves its row with the id it sent: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn a_later_answer_never_moves_the_use() {
+    use common::{get, json, login};
+    use phoebis_oauth::ClaimOutcome;
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1")]}),
+    );
+    for claim in [
+        claimed("reset", ClaimOutcome::Used, common::NOW + 1_000),
+        claimed("already_used", ClaimOutcome::Refused, common::NOW + 2_000),
+    ] {
+        h.ledger.record(phoebis_ledger::limit_reset_claimed(
+            "business", "admin", "rg-b-1", &claim,
+        ));
+    }
+    // The routing log reads up to the clock, which then stands at the later event.
+    h.clock_cell
+        .fetch_add(2_000, std::sync::atomic::Ordering::SeqCst);
+    claimed_rows(&h.app, &cookie, |rows| rows.len() == 2).await;
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(
+        account["limit_resets"]["grants"][0]["used_at"].as_i64(),
+        Some(1_791_721_001_000),
+        "an already used answer after the use leaves the use's instant: {account}"
+    );
+}
+
+#[tokio::test]
+async fn a_use_from_before_the_row_was_created_is_not_read() {
+    use common::{get, json, login};
+    use phoebis_oauth::ClaimOutcome;
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1"), spent_grant("rg-b-2")]}),
+    );
+    // `business` was created at the rig's clock.
+    for (grant, at) in [("rg-b-1", common::NOW - 1), ("rg-b-2", common::NOW)] {
+        h.ledger.record(phoebis_ledger::limit_reset_claimed(
+            "business",
+            "admin",
+            grant,
+            &claimed("reset", ClaimOutcome::Used, at),
+        ));
+    }
+    claimed_rows(&h.app, &cookie, |rows| rows.len() == 2).await;
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let grants = &account["limit_resets"]["grants"];
+    assert_eq!(
+        (&grants[0]["used_at"], &grants[1]["used_at"]),
+        (
+            &serde_json::Value::Null,
+            &serde_json::json!(1_791_721_000_000_i64)
+        ),
+        "a use dated before the row was created is an earlier holder's: {account}"
+    );
+}
+
 /// A profile read that finds no plan stores the document it found, so a flagged account answers the free plan and
 /// the found tier beside the flag's instant, where the last plan's document stood before the read.
 #[tokio::test]

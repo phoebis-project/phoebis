@@ -868,7 +868,7 @@ impl Drop for ClaimGuard<'_> {
 
 /// A claim whose head arrived, classed as the client classes it: a 401, 403 or 429 refuses with no answer, any other
 /// status but 200 and a 200 whose body does not parse leave the claim unsettled, and a parsed answer takes its class
-/// from its word.
+/// from its word. Beside it, the parse's refusal of a 200's body.
 fn answered(
     status: u16,
     body: &[u8],
@@ -876,16 +876,16 @@ fn answered(
     at: i64,
     label: String,
     request_id: String,
-) -> Claim {
-    let (outcome, answer) = match status {
-        401 | 403 | 429 => (ClaimOutcome::Refused, None),
+) -> (Claim, Option<OauthError>) {
+    let (outcome, answer, unparsed) = match status {
+        401 | 403 | 429 => (ClaimOutcome::Refused, None, None),
         200 => match parse_claim_answer(body) {
-            Ok(answer) => (class_of(&answer.result, repeated), Some(answer)),
-            Err(_) => (ClaimOutcome::Unsettled, None),
+            Ok(answer) => (class_of(&answer.result, repeated), Some(answer), None),
+            Err(error) => (ClaimOutcome::Unsettled, None, Some(error)),
         },
-        _ => (ClaimOutcome::Unsettled, None),
+        _ => (ClaimOutcome::Unsettled, None, None),
     };
-    Claim {
+    let claim = Claim {
         answer,
         at,
         error: None,
@@ -893,7 +893,8 @@ fn answered(
         outcome,
         request_id,
         status: Some(status),
-    }
+    };
+    (claim, unparsed)
 }
 
 /// The class of a parsed answer's `result`. A word the router does not know leaves the claim unsettled, since it
@@ -1381,7 +1382,20 @@ impl UsageService {
                 request_id,
                 status: None,
             },
-            Ok((head, body)) => answered(head.status, &body, repeated, at, label, request_id),
+            Ok((head, body)) => {
+                let (claim, unparsed) =
+                    answered(head.status, &body, repeated, at, label, request_id);
+                // The claim reads as unsettled with no answer, so this line is the one trace of why.
+                if let Some(error) = unparsed {
+                    tracing::warn!(
+                        account = %account_id,
+                        status = %head.status,
+                        error = %error,
+                        "the answer to a limit reset claim could not be read"
+                    );
+                }
+                claim
+            }
         };
         inner.settle_request_id(account_id, holder, grant_id, &claim, repeated);
         if let Some(answer) = &claim.answer {

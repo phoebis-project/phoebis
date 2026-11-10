@@ -19,10 +19,10 @@ use axum::{Extension, Json, Router};
 use phoebis_ledger::{lead_over_pace, polled, QuotaPoll};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, grant_states,
-    loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput,
-    ControlKind, LimitResets, LoginKind, OauthError, PairingError, PairingSession, PairingStatus,
-    PendingIdentity, PollOutcome, PollStatus, ProfileResponse, Started, UsageSnapshot, UsageWindow,
-    FABLE_WINDOW_KEY,
+    loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput, Claim,
+    ClaimOutcome, ClaimRefusal, ControlKind, LimitResets, LoginKind, OauthError, PairingError,
+    PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus, ProfileResponse,
+    Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
@@ -77,6 +77,7 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(usage_latest))
         .routes(routes!(usage_refresh))
         .routes(routes!(limit_resets_read))
+        .routes(routes!(limit_reset_use))
         .routes(routes!(verify))
         .routes(routes!(analytics::accounts))
         .routes(routes!(analytics::breakdown))
@@ -870,8 +871,10 @@ async fn read_limit_resets_after_poll(state: &AdminState, id: &str) -> bool {
     state.usage.limit_resets(id).await.is_ok()
 }
 
+const ACCOUNT_CHANGED: &str = "the account changed while its reset was being used";
 const NOT_POLLED: &str = "the account's usage is not read, so its resets are not either";
 const NOT_SUBSCRIPTION: &str = "only a subscription account holds limit resets";
+const NOT_USABLE: &str = "this reset is not usable now";
 
 /// Read an account's limit resets now.
 ///
@@ -922,6 +925,7 @@ async fn limit_resets_read(
         .await
         .err()
         .map(|error| error.to_string());
+    let uses = reset_uses_of(&state, &id).await;
     match state.store.account_extras_of(&id) {
         Ok(extras) => Json(LimitResetsRead {
             error,
@@ -929,12 +933,255 @@ async fn limit_resets_read(
                 &state,
                 &row,
                 &extras.unwrap_or_default(),
+                Some(&uses),
                 (state.clock)(),
             ),
         })
         .into_response(),
         Err(error) => store_failure(error),
     }
+}
+
+/// One account's uses of a limit reset by grant id, for a route that answers that account alone. A ledger read that
+/// fails answers none, as the account list's falls back, so the member still goes out, with no `used_at`.
+async fn reset_uses_of(state: &AdminState, account_id: &str) -> BTreeMap<String, i64> {
+    match state
+        .ledger
+        .db()
+        .read(phoebis_ledger::limit_reset_uses)
+        .await
+    {
+        Ok(uses) => uses
+            .into_iter()
+            .filter(|used| used.account_id == account_id)
+            .map(|used| (used.grant_id, used.at))
+            .collect(),
+        Err(error) => {
+            tracing::warn!(account = %account_id, %error, "the limit resets' uses could not be read from the ledger");
+            BTreeMap::new()
+        }
+    }
+}
+
+/// Use one of an account's limit resets now.
+///
+/// Sends the claim the client sends for the grant, once, and answers after the reads that follow it: the usage poll's
+/// own read after a reset and after an outcome the answer leaves open, and a read of the account's limit resets after
+/// an open outcome, whose failure leaves the read due for the account's next poll slot. The claim runs in a task of
+/// its own, so a caller that goes away cuts neither the request nor its record, and every claim that reached the
+/// upstream writes one `limit_reset_claimed` row to the routing log, whatever its outcome. A refusal before the request
+/// leaves sends nothing and writes no row.
+#[utoipa::path(
+    post,
+    path = "/admin/accounts/{id}/limit-resets/{grant}/use",
+    operation_id = "account_limit_reset_use",
+    tag = "Accounts",
+    params(
+        ("id" = String, Path, description = "The account's id"),
+        ("grant" = String, Path, description = "The grant's id, as the account's `limit_resets` member lists it"),
+    ),
+    responses(
+        (status = 200, description = "The claim's outcome, for a claim whose answer the router parsed, which names a `result`. An upstream 200 that names a `result` beside a member of another type is no parsed answer and reads 502 `limit_reset_unanswered`.", body = LimitResetUse),
+        (status = 400, description = "`only a subscription account holds limit resets`", body = ErrorBody, example = json!({"error": "only a subscription account holds limit resets"})),
+        (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
+        // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
+        // attribute after it fails to parse.
+        (status = 409, description = "- `the account changed while its reset was being used`, which carries the `limit_reset_account_changed` code\n- `a reset of this account is being used now`, which carries the `limit_reset_in_flight` code\n- `the account's identity names no organization, so pair it again`, which carries the `limit_reset_no_organization` code\n- `the account's usage is not read, so its resets are not either`, which carries the `limit_reset_not_polled` code\n- `this reset is not usable now`, which carries the `limit_reset_not_usable` code\n\nThe account changed where its row reads another holder than the row the route read, or where a pairing, a disconnect or a delete crossed the claim before it left.",
+            headers(("x-phoebis-error-code" = String, description = "`limit_reset_account_changed`, `limit_reset_in_flight`, `limit_reset_no_organization`, `limit_reset_not_polled` or `limit_reset_not_usable`: the refusal, with the message the bullets pair it with")),
+            body = ErrorBody, example = json!({"error": "this reset is not usable now"})),
+        (status = 500, response = StorageFailure),
+        (status = 502, description = "- `upstream: {error}`, for a claim that never left, its token not acquired or the upstream not reached, which carries the `limit_reset_not_sent` code\n- `upstream: HTTP <status>`, for an upstream 401, 403 or 429, which carries the `limit_reset_refused` code\n- `upstream: HTTP <status>`, `upstream: <the transport's sentence>` or `upstream: no answer was read before the claim ended`, for a claim that may have left with no answer that names a `result`, which carries the `limit_reset_unanswered` code",
+            headers(("x-phoebis-error-code" = String, description = "`limit_reset_not_sent`, `limit_reset_refused` or `limit_reset_unanswered`: the failure, with the message the bullets pair it with")),
+            body = ErrorBody, example = json!({"error": "upstream: HTTP 500"})),
+    ),
+)]
+async fn limit_reset_use(
+    State(state): State<Arc<AdminState>>,
+    Path((id, grant)): Path<(String, String)>,
+) -> Response {
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    if row.kind != AccountKind::Oauth {
+        return failure(StatusCode::BAD_REQUEST, NOT_SUBSCRIPTION);
+    }
+    let extras = match state.store.account_extras_of(&id) {
+        Ok(extras) => extras.unwrap_or_default(),
+        Err(error) => return store_failure(error),
+    };
+    if !asked(&row, &extras) {
+        return failure_with_code(StatusCode::CONFLICT, "limit_reset_not_polled", NOT_POLLED);
+    }
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    // A task of its own, so a console that goes away cuts neither the request nor its record. It takes the row
+    // checked here, and the service claims for that row's holder alone.
+    state.ledger.track(tokio::spawn(claim_and_record(
+        state.clone(),
+        row,
+        grant,
+        answer,
+    )));
+    answered
+        .await
+        .unwrap_or_else(|_| unanswered("no answer was read before the claim ended"))
+}
+
+/// The claim's work from the request to the answer the route waits for: the first stage (the request, the fold and
+/// the event), then the reads the outcome calls for. `row` is the row the route checked, and the claim is for its
+/// holder alone.
+async fn claim_and_record(
+    state: Arc<AdminState>,
+    row: AccountRow,
+    grant: String,
+    answer: tokio::sync::oneshot::Sender<Response>,
+) {
+    let claim = match state.usage.claim_limit_reset(&row, &grant).await {
+        Ok(claim) => claim,
+        Err(refusal) => {
+            let _ = answer.send(refused(refusal));
+            return;
+        }
+    };
+    // The send that waits for room: a claim that left always leaves its row.
+    let event = phoebis_ledger::limit_reset_claimed(&row.id, accounts::ACTOR, &grant, &claim);
+    state.ledger.record_request(event).await;
+    if claim.outcome != ClaimOutcome::Refused {
+        let poll = state.quota_poll();
+        // A joined fetch can carry a reading from before the claim, so one sent before the answer is read again. A
+        // reading with an error keeps the instant of the clean one before it, so it is not asked again, and the next
+        // poll slot reads the account.
+        if matches!(
+            poll.poll_account(&row).await,
+            Ok(reading) if reading.error.is_none() && reading.fetched_at < claim.at
+        ) {
+            let _ = poll.poll_account(&row).await;
+        }
+    }
+    if claim.outcome == ClaimOutcome::Unsettled {
+        let mut landed = read_limit_resets_after_poll(&state, &row.id).await;
+        // A joined read can carry a block from before the attempt, which an open outcome leaves on the card as
+        // usable, so a block read before the claim's answer is read once more.
+        if landed {
+            match state.store.account_extras_of(&row.id) {
+                Ok(extras) => {
+                    let read_at = extras.and_then(|extras| extras.limit_resets_read_at);
+                    if read_at.is_none_or(|at| at < claim.at) {
+                        landed = read_limit_resets_after_poll(&state, &row.id).await;
+                    }
+                }
+                Err(error) => tracing::warn!(
+                    account = %row.id,
+                    %error,
+                    "the instant of the limit resets read after a claim could not be read"
+                ),
+            }
+        }
+        // Only this read shows whether an open claim spent the reset, so one that failed, or that the plan's pause
+        // kept back after the poll above, stays due for the next slot that reads the account.
+        if !landed {
+            state.usage.mark_limit_resets_due(&row);
+        }
+    }
+    let _ = answer.send(claim_response(&state, &row, &grant, claim).await);
+}
+
+/// The answer to a claim the service refused before its request left. The match has no catch-all arm, so a refusal
+/// the service gains does not compile without its answer.
+fn refused(refusal: ClaimRefusal) -> Response {
+    match refusal {
+        ClaimRefusal::AccountChanged => failure_with_code(
+            StatusCode::CONFLICT,
+            "limit_reset_account_changed",
+            ACCOUNT_CHANGED,
+        ),
+        ClaimRefusal::InFlight => failure_with_code(
+            StatusCode::CONFLICT,
+            "limit_reset_in_flight",
+            "a reset of this account is being used now",
+        ),
+        ClaimRefusal::NoOrganization => failure_with_code(
+            StatusCode::CONFLICT,
+            "limit_reset_no_organization",
+            "the account's identity names no organization, so pair it again",
+        ),
+        ClaimRefusal::NotSent(detail) => failure_with_code(
+            StatusCode::BAD_GATEWAY,
+            "limit_reset_not_sent",
+            &format!("upstream: {detail}"),
+        ),
+        ClaimRefusal::NotUsable => {
+            failure_with_code(StatusCode::CONFLICT, "limit_reset_not_usable", NOT_USABLE)
+        }
+    }
+}
+
+/// The 502 of a claim that may have left and whose answer names no `result`.
+fn unanswered(detail: &str) -> Response {
+    failure_with_code(
+        StatusCode::BAD_GATEWAY,
+        "limit_reset_unanswered",
+        &format!("upstream: {detail}"),
+    )
+}
+
+/// The route's answer to a claim that left: 200 for a parsed answer, with the account's member read now, and a 502
+/// otherwise. Nothing read here after the request left turns the outcome into another answer.
+async fn claim_response(
+    state: &AdminState,
+    row: &AccountRow,
+    grant: &str,
+    claim: Claim,
+) -> Response {
+    let Some(answer) = claim.answer else {
+        // By the status where a head arrived, so a 200 the router cannot parse reads `HTTP 200`.
+        let detail = match claim.status {
+            Some(status) => format!("HTTP {status}"),
+            None => claim.error.unwrap_or_default(),
+        };
+        return match claim.status {
+            Some(401 | 403 | 429) => failure_with_code(
+                StatusCode::BAD_GATEWAY,
+                "limit_reset_refused",
+                &format!("upstream: {detail}"),
+            ),
+            _ => unanswered(&detail),
+        };
+    };
+    let mut uses = reset_uses_of(state, &row.id).await;
+    // The claim's event is handed to the ledger's writer before this answer and may not be written yet.
+    if claim.outcome == ClaimOutcome::Used {
+        let at = uses.entry(grant.to_string()).or_insert(claim.at);
+        *at = (*at).max(claim.at);
+    }
+    let limit_resets = match state.store.account_extras_of(&row.id) {
+        Ok(extras) => limit_resets_view(
+            state,
+            row,
+            &extras.unwrap_or_default(),
+            Some(&uses),
+            (state.clock)(),
+        ),
+        Err(error) => {
+            tracing::warn!(
+                account = %row.id,
+                %error,
+                "the answer to a limit reset claim could not read the account's block"
+            );
+            None
+        }
+    };
+    Json(LimitResetUse {
+        cleared: answer.cleared,
+        cooldown_until: answer.cooldown_until,
+        limit_resets,
+        outcome: claim.outcome.as_str().into(),
+        reason: answer.reason,
+        resets_left: answer.resets_left,
+        result: answer.result,
+        weekly_resets_at: answer.weekly_resets_at,
+    })
+    .into_response()
 }
 
 /// Verify an API key.
@@ -2038,6 +2285,8 @@ pub(crate) struct AccountContext {
     /// The router's samples per account as the poll or a head reported them, no charge added and no reset rolled:
     /// the readings an account's windows draw.
     pub reported: BTreeMap<String, UtilizationSample>,
+    /// Each account's uses of a limit reset by grant id: the instant of the newest claim the upstream answered `reset`.
+    pub reset_uses: BTreeMap<String, BTreeMap<String, i64>>,
     /// The router's spend window per usage-based account, at its clock.
     pub spend_windows: BTreeMap<String, SpendWindow>,
     pub week: BTreeMap<String, u64>,
@@ -2177,6 +2426,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
                     phoebis_ledger::latest_extra_usage_share(c, now)?,
                     phoebis_ledger::account_request_counts(c, day_start, to)?,
                     phoebis_ledger::account_request_counts(c, week_start, day_start)?,
+                    phoebis_ledger::limit_reset_uses(c)?,
                 ))
             })
             .await?;
@@ -2193,13 +2443,20 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
         reported_samples(state),
         state.router.spend_windows(),
     );
-    let (old, (quota, extra, extra_polled, extra_share, day, six_days)) = match ledger {
+    let (old, (quota, extra, extra_polled, extra_share, day, six_days, uses)) = match ledger {
         Ok(read) => read,
         Err(error) => {
             tracing::warn!(%error, "the account view could not read the ledger, so totals and windows are empty");
             Default::default()
         }
     };
+    let mut reset_uses: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+    for used in uses {
+        reset_uses
+            .entry(used.account_id)
+            .or_default()
+            .insert(used.grant_id, used.at);
+    }
     // The read takes the six days before the day, so the day's rows are read once, and the week joins the two here:
     // integer sums add exactly in any split.
     let week = crate::lifetime::lifetime_of(six_days, &day);
@@ -2220,6 +2477,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
         overages: overages.unwrap_or_default().into_iter().collect(),
         quota,
         reported,
+        reset_uses,
         spend_windows: spend_windows.unwrap_or_default().into_iter().collect(),
         week,
     }
@@ -2504,6 +2762,29 @@ pub(crate) struct LimitResetsRead {
     pub error: Option<String>,
     /// The member as it stands after the call.
     pub limit_resets: Option<AccountLimitResets>,
+}
+
+/// What `POST /admin/accounts/{id}/limit-resets/{grant}/use` answers for a claim whose answer the router parsed,
+/// which names a `result`.
+#[derive(serde::Serialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LimitResetUse {
+    /// The answer's windows in the router's names, empty where it names none.
+    pub cleared: Vec<String>,
+    /// Epoch milliseconds: the answer's instant.
+    pub cooldown_until: Option<i64>,
+    /// The account's member as it stands after the reads that follow the claim.
+    pub limit_resets: Option<AccountLimitResets>,
+    /// The router's class: `refused`, `unsettled` or `used`.
+    pub outcome: String,
+    /// As sent.
+    pub reason: Option<String>,
+    /// The answer's count.
+    pub resets_left: Option<u32>,
+    /// The upstream's word as sent, a word the router does not know included.
+    pub result: String,
+    /// Epoch milliseconds: the answer's instant.
+    pub weekly_resets_at: Option<i64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -2880,7 +3161,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
-        limit_resets: limit_resets_view(state, row, extras, now),
+        limit_resets: limit_resets_view(state, row, extras, ctx.reset_uses.get(&row.id), now),
         // The amounts come from the newest polled row, since a head row carries none, the share from the newest row
         // that carries one, and the rest from the newest row of any source.
         extra_usage: ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| {
@@ -2922,11 +3203,12 @@ fn asked(row: &AccountRow, extras: &AccountExtras) -> bool {
 }
 
 /// The row's `limit_resets` member at `now`: null for an account the poll does not ask and for one with no stored
-/// block.
+/// block. `uses` is the account's uses by grant id, none where they were not read.
 fn limit_resets_view(
     state: &AdminState,
     row: &AccountRow,
     extras: &AccountExtras,
+    uses: Option<&BTreeMap<String, i64>>,
     now: i64,
 ) -> Option<AccountLimitResets> {
     // Nothing refreshes the block of an account the poll does not ask, so no card offers a reset from it.
@@ -2950,7 +3232,15 @@ fn limit_resets_view(
             resets_total: grant.resets_total,
             starts_at: grant.starts_at,
             state: state.state.as_str().into(),
-            used_at: None,
+            // A use dated before the row was created belongs to an earlier holder of the id.
+            used_at: (grant.resets_left == 0)
+                .then(|| {
+                    uses?
+                        .get(&grant.id)
+                        .copied()
+                        .filter(|at| *at >= extras.created_at)
+                })
+                .flatten(),
         })
         .collect();
     Some(AccountLimitResets {

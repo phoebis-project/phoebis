@@ -62,6 +62,9 @@ pub const FIXTURE_BUILD_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567
 /// usage read's rule keeps `/api/oauth/usage`, so a test switches either one alone.
 pub const LIMIT_RESETS_PATH: &str = "/api/oauth/usage?cedar_ember=1";
 
+/// The prefix of the fake's rule for a limit reset claim, which the organization's id follows.
+pub const CLAIM_PATH: &str = "/api/organizations/";
+
 /// The first instant of the UTC calendar month after the one `NOW` falls in, where a monthly budget's period ends.
 /// Spelled as a literal so the readers compare the relay's month arithmetic against a hand-computed instant.
 pub fn month_end() -> i64 {
@@ -544,6 +547,7 @@ pub struct Polled {
     pub app: Router,
     pub clock_cell: Arc<AtomicI64>,
     pub db: Arc<LedgerDb>,
+    pub ledger: Ledger,
     pub router: RouterHandle,
     pub store: Arc<Store>,
     pub up: FakeUpstream,
@@ -568,6 +572,7 @@ pub async fn admin_parts_polled() -> Polled {
         app: parts.app,
         clock_cell: parts.clock_cell,
         db: parts.db,
+        ledger: parts.ledger,
         router: parts.router,
         store: parts.store,
         up: parts.up,
@@ -1441,6 +1446,7 @@ async fn fake_control_plane(upstream_uuid: &str) -> FakeUpstream {
             "/api/oauth/usage",
             control_response(ControlFixture::Usage).to_vec(),
         ),
+        json_rule(CLAIM_PATH, br#"{"result":"reset"}"#.to_vec()),
         json_rule(
             "/v1/models",
             br#"{"data":[{"id":"claude-sonnet-4-5","type":"model","capabilities":{"effort":{"high":{"supported":true},"low":{"supported":true},"medium":{"supported":true},"supported":true}}}]}"#.to_vec(),

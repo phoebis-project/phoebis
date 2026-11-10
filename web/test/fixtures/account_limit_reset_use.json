@@ -1,0 +1,56 @@
+{
+  "route": "POST /admin/accounts/business/limit-resets/rg-business-1/use",
+  "body": {
+    "cleared": [
+      "seven_day_fable"
+    ],
+    "cooldown_until": null,
+    "limit_resets": {
+      "cooldown_until": null,
+      "eligible": true,
+      "fable_week_share": null,
+      "grants": [
+        {
+          "blocking": [],
+          "clears": [
+            "seven_day_fable"
+          ],
+          "ends_at": 1796083200000,
+          "id": "rg-business-1",
+          "kind": "fable",
+          "label": "Launch reset",
+          "reason": null,
+          "resets_left": 0,
+          "resets_total": 1,
+          "starts_at": 1790812800000,
+          "state": "used",
+          "used_at": 1791721000000
+        },
+        {
+          "blocking": [],
+          "clears": [
+            "seven_day_fable"
+          ],
+          "ends_at": 1796083200000,
+          "id": "rg-business-2",
+          "kind": "fable",
+          "label": "Launch reset",
+          "reason": null,
+          "resets_left": 1,
+          "resets_total": 1,
+          "starts_at": 1790812800000,
+          "state": "usable",
+          "used_at": null
+        }
+      ],
+      "ineligible_reason": null,
+      "left": 1,
+      "read_at": 1791721000000
+    },
+    "outcome": "used",
+    "reason": null,
+    "resets_left": 0,
+    "result": "reset",
+    "weekly_resets_at": null
+  }
+}

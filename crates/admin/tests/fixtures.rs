@@ -2430,6 +2430,44 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .then_some(())
     })
     .await;
+    // `reset-used`'s one reset was used through the router at the capture's instant, its row recorded as the use
+    // route's builder writes it. Recorded after the paired transitions, so it lands after the mirror's rows in every
+    // capture, and waited for, so the grant's `used_at` and the `written` figure of `system.json` count it.
+    parts.ledger.record(phoebis_ledger::limit_reset_claimed(
+        "reset-used",
+        "admin",
+        "rg-used-1",
+        &phoebis_oauth::Claim {
+            answer: Some(phoebis_oauth::ClaimAnswer {
+                cleared: vec![],
+                cooldown_until: None,
+                reason: None,
+                resets_left: None,
+                result: "reset".into(),
+                weekly_resets_at: None,
+            }),
+            at: now,
+            error: None,
+            label: "Launch reset".into(),
+            outcome: phoebis_oauth::ClaimOutcome::Used,
+            request_id: "00000000-0000-4000-8000-0000000000c1".into(),
+            status: Some(200),
+        },
+    ));
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        let claimed = parts
+            .db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind = 'limit_reset_claimed'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+        (claimed == 1).then_some(())
+    })
+    .await;
     // Five limit reset blocks, each read through the service as a poll slot reads one. The five accounts hold the
     // seed's one token, so the fake cannot tell their reads apart and is set to each block in turn. The reads follow
     // the paired transitions, so no row of the routing log and no count of `system.json` waits on them.
@@ -2751,7 +2789,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
 
     // The routing log's hour, seeded after every other capture so its stories leave those files as they were.
     drop(selected);
-    routing_stories(&parts, &cookie, key_generation, baseline).await;
+    routing_stories(&parts, &cookie, key_generation, baseline, &planted).await;
     let hour_start = jiff::Timestamp::from_millisecond(hour_ago).unwrap();
     // The clock the start row stepped, so the page holds that row.
     let hour_end = jiff::Timestamp::from_millisecond(
@@ -3016,8 +3054,14 @@ fn warmed(
 
 /// One decision of each kind through the harness's router, at the capture's instant, and one event of each kind the
 /// ledger writes inside the hour before it: the router's own where a report or an admin action provokes it, the rest
-/// recorded as their writers build them.
-async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64, baseline: u64) {
+/// recorded as their writers build them. The use of a limit reset goes through its route, whose answer is held here.
+async fn routing_stories(
+    parts: &common::Full,
+    cookie: &str,
+    key_generation: i64,
+    baseline: u64,
+    planted: &[String],
+) {
     use phoebis_routing::{Report, RouterEvent, SelectRequest, SelectResult};
     let app = &parts.app;
     let now = common::NOW;
@@ -3741,6 +3785,28 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     ] {
         parts.ledger.record(Record::Event(event));
     }
+    // A use of `business`'s first reset through the route, whose task writes the row of the kind and polls the
+    // account, at the capture's instant.
+    parts.up.set_rule_after(
+        0,
+        common::CLAIM_PATH,
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"result":"reset","resets_left":0,"cleared":["seven_day_overage_included"]}"#
+                .to_vec(),
+        },
+    );
+    let used_route = "/admin/accounts/business/limit-resets/rg-business-1/use";
+    let response = post(app, used_route, "", Some(cookie)).await;
+    assert_eq!(response.status(), 200, "the limit reset use answers");
+    // The path names the function, which a story's local binding of the same name shadows here.
+    crate::hold(
+        planted,
+        "account_limit_reset_use",
+        &format!("POST {used_route}"),
+        json(response).await,
+    );
 
     // The start row lands last, a minute past the capture's instant on a clock stepped by the same minute, so the
     // writer dates its `down_since` from the newest row seeded before it. A story added later lands above this seed.

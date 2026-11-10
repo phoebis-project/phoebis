@@ -787,6 +787,7 @@ const FIXTURES: &[(&str, &str, &str)] = &[
     fixture!("accounts", "200"),
     fixture!("account", "200"),
     fixture!("account_catalog", "200"),
+    fixture!("account_limit_reset_use", "200"),
     fixture!("account_limit_resets", "200"),
     fixture!("account_quota", "200"),
     fixture!("account_usage", "200"),

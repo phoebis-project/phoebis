@@ -1067,6 +1067,32 @@ pub fn recent_gaps(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// One limit reset's newest use: the `at` of the newest `limit_reset_claimed` event of the account and the grant
+/// whose detail reads `result` `reset`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitResetUsed {
+    pub account_id: String,
+    pub at: i64,
+    pub grant_id: String,
+}
+
+/// Every limit reset's newest use the ledger holds, in one seek of `events_kind_at`.
+pub fn limit_reset_uses(conn: &Connection) -> Result<Vec<LimitResetUsed>, LedgerError> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT account_id, json_extract(detail, '$.grant_id'), MAX(at) FROM events \
+         WHERE kind = ?1 AND json_extract(detail, '$.result') = 'reset' AND account_id IS NOT NULL \
+         GROUP BY 1, 2",
+    )?;
+    let rows = stmt.query_map(params![LIMIT_RESET_CLAIMED], |row| {
+        Ok(LimitResetUsed {
+            account_id: row.get(0)?,
+            grant_id: row.get(1)?,
+            at: row.get(2)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 // One invocation declares each kind's constant and the table, so a writer, a fold or a statement that names a kind
 // names one the admin's `kinds` filter accepts.
 macro_rules! event_kinds {
@@ -1088,6 +1114,7 @@ event_kinds! {
     COOLDOWN_SET => "cooldown_set",
     FAST_CREDITS_CHANGED => "fast_credits_changed",
     LEDGER_GAP => "ledger_gap",
+    LIMIT_RESET_CLAIMED => "limit_reset_claimed",
     MARK_CLEARED => "mark_cleared",
     MODEL_PERMITTED => "model_permitted",
     MODEL_REJECTED => "model_rejected",

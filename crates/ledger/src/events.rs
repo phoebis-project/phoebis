@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::{BackoffEdge, Clock, PollFault};
+use phoebis_oauth::{BackoffEdge, Claim, Clock, PollFault};
 use phoebis_relay::CatalogChange;
 use phoebis_routing::{term, CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{
@@ -19,8 +19,8 @@ use crate::assemble::Record;
 use crate::db::newest_row_at;
 use crate::query::{
     ACCOUNT_STATE_CHANGED, CATALOG_CHANGED, COOLDOWN_CLEARED, COOLDOWN_SET, FAST_CREDITS_CHANGED,
-    MARK_CLEARED, OVERAGE_ENDED, OVERAGE_STARTED, PIN_CREATED, PIN_EXPIRED, PIN_MIGRATED,
-    PLAN_ENDED, PLAN_RESTORED, POLL_BACKOFF_ENDED, POLL_BACKOFF_STARTED, POLL_FAILED,
+    LIMIT_RESET_CLAIMED, MARK_CLEARED, OVERAGE_ENDED, OVERAGE_STARTED, PIN_CREATED, PIN_EXPIRED,
+    PIN_MIGRATED, PLAN_ENDED, PLAN_RESTORED, POLL_BACKOFF_ENDED, POLL_BACKOFF_STARTED, POLL_FAILED,
     REFRESH_FAILED, REFRESH_SUCCEEDED, REFRESH_UNCERTAIN, REGISTRY_CHANGED, RESERVATION_EXPIRED,
     SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WARM_PREFIX_EXPIRED, WINDOW_CLEARED,
     WINDOW_RESET, WINDOW_SPENT, WIND_DOWN_STARTED,
@@ -558,6 +558,39 @@ fn plan_event(
                 "organization_type": organization["organization_type"],
                 "rate_limit_tier": organization["rate_limit_tier"],
                 "subscription_status": organization["subscription_status"],
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    })
+}
+
+/// `limit_reset_claimed` on the account whose limit reset an operator's use sent to the upstream, at the instant the
+/// answer arrived or the request failed, detail {cleared, cooldown_until, error, grant_id, label, outcome, reason,
+/// request_id, resets_left, result, status, weekly_resets_at}: every key on every row, null where the claim has no
+/// such fact, and `cleared` an empty array where the claim has no parsed answer. The row's `request_id` column stays
+/// null, since it names a relayed request.
+pub fn limit_reset_claimed(account_id: &str, actor: &str, grant_id: &str, claim: &Claim) -> Record {
+    let answer = claim.answer.as_ref();
+    Record::Event(EventRecord {
+        at: claim.at,
+        kind: LIMIT_RESET_CLAIMED.into(),
+        account_id: Some(account_id.to_string()),
+        actor: Some(actor.to_string()),
+        detail: Some(
+            json!({
+                "cleared": answer.map_or(&[][..], |answer| answer.cleared.as_slice()),
+                "cooldown_until": answer.and_then(|answer| answer.cooldown_until),
+                "error": claim.error,
+                "grant_id": grant_id,
+                "label": claim.label,
+                "outcome": claim.outcome.as_str(),
+                "reason": answer.and_then(|answer| answer.reason.as_deref()),
+                "request_id": claim.request_id,
+                "resets_left": answer.and_then(|answer| answer.resets_left),
+                "result": answer.map(|answer| answer.result.as_str()),
+                "status": claim.status,
+                "weekly_resets_at": answer.and_then(|answer| answer.weekly_resets_at),
             })
             .to_string(),
         ),
