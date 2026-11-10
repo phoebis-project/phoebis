@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_oauth::{
-    BackoffEdge, LandedMark, PollFault, PollIssue, ProfileResponse, UsageError, UsageService,
-    UsageSnapshot,
+    resets_left, BackoffEdge, LandedMark, LimitResets, PollFault, PollIssue, ProfileResponse,
+    UsageError, UsageService, UsageSnapshot,
 };
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
@@ -30,6 +30,10 @@ use crate::task::Ledger;
 /// the poll alone never reaches the endpoint's per-account limit; the first live run moves it to ten minutes if the
 /// 429 warnings say so.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
+
+/// How often the poll reads each polled account's limit resets: a reset a promotion grants reaches the card within the
+/// hour, and a change in which windows stand at their limit sends a read of its own sooner.
+pub const LIMIT_RESETS_INTERVAL: Duration = Duration::from_secs(3_600);
 
 /// How much sooner than an interval after a read the next slot may come: the loop wakes a little after a slot is
 /// due, so an on-time read lands just past its slot, and without this slack the next slot on its phase would be
@@ -417,14 +421,28 @@ impl QuotaPoll {
                     let poll = self.clone();
                     let handle = attempts.spawn(async move {
                         // A slot of an account whose plan ended keeps its cadence for the third poll's profile read.
+                        let paused = Self::plan_paused(&poll.store, &account.id);
                         let mut profile_read = false;
-                        if !Self::plan_paused(&poll.store, &account.id) {
-                            (_, profile_read) = poll.poll_reading(&account).await;
+                        let mut reading = None;
+                        if !paused {
+                            let (answer, read) = poll.poll_reading(&account).await;
+                            profile_read = read;
+                            reading = answer.ok();
                         }
                         // The profile endpoint shares the usage endpoint's limit, so a read the poll made serves the
                         // slot's.
                         if profile_due && !profile_read {
                             poll.refresh_profile(&account).await;
+                        }
+                        // The limit resets share that limit too, so a slot that reads the profile leaves them to the
+                        // next one, and the usage reading goes first, since it is what returns an account to the
+                        // routing.
+                        if !paused
+                            && !profile_due
+                            && !profile_read
+                            && poll.limit_resets_due(&account, reading.as_ref())
+                        {
+                            poll.read_limit_resets(&account).await;
                         }
                         Completion {
                             held: poll.usage.held_for(&account.id),
@@ -776,6 +794,48 @@ impl QuotaPoll {
     /// A mark the manager landed, a refresh's or a usage 401's, reported to the routing with no detail.
     async fn report_mark(router: &RouterHandle, mark: LandedMark) {
         router.report(Report::from(&mark)).await;
+    }
+
+    /// Whether the slot reads the account's limit resets: the hour has passed since the last read, a claim's outcome
+    /// marked the read due, or the account holds a reset and stands at another set of limits than at that read.
+    fn limit_resets_due(&self, account: &AccountRow, reading: Option<&UsageSnapshot>) -> bool {
+        let memory = self.usage.limit_resets_memory(account);
+        if memory.due {
+            return true;
+        }
+        let now = self.usage.now();
+        let extras = self.store.account_extras_of(&account.id).ok().flatten();
+        let stored = extras
+            .as_ref()
+            .and_then(|extras| extras.limit_resets_read_at);
+        // The later of the two, so a restart inside the hour sends nothing and a read the console asked for moves it.
+        let hour = LIMIT_RESETS_INTERVAL.as_millis() as i64;
+        if memory
+            .last_sent_at
+            .max(stored)
+            .is_none_or(|at| now - at >= hour)
+        {
+            return true;
+        }
+        let Some(reading) = reading.filter(|snapshot| snapshot.error.is_none()) else {
+            return false;
+        };
+        let holds_reset = extras
+            .and_then(|extras| extras.limit_resets)
+            .and_then(|block| serde_json::from_value::<LimitResets>(block).ok())
+            .is_some_and(|block| resets_left(&block, now) > 0);
+        holds_reset && reading.windows_at_limit() != memory.at_limit
+    }
+
+    /// The account's limit resets, read and stored through the service. A refusal, a hold's among them, leaves the
+    /// read due for the next slot, and nothing of the read reaches the ledger.
+    async fn read_limit_resets(&self, account: &AccountRow) {
+        let answer = self.usage.limit_resets(&account.id).await;
+        Self::report_landed_mark(&self.usage, &self.router, &account.id).await;
+        // A fault logged its warning in the service.
+        if let Err(UsageError::Unavailable(reason)) = answer {
+            tracing::debug!(account = %account.id, %reason, "the quota poll read no limit resets");
+        }
     }
 
     /// `poll_account`, then `refresh_profile` where the poll did not read the profile, for every

@@ -1712,4 +1712,239 @@ mod service {
         );
         up.shutdown().await;
     }
+
+    /// A usage body in the client's shape: the limit reset block with one grant, and the spend members null.
+    const BLOCK: &[u8] = br#"{"five_hour":{"utilization":12.5,"resets_at":null},"extra_usage":null,"spend":null,"cedar_ember":{"eligible":true,"grants":[{"id":"rg-a-1","label":"Launch reset","clears":["seven_day_overage_included"],"gives_back_weekly":true,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2027-01-01T00:00:00Z","resets_left":1,"resets_total":1,"usable_now":true}]}}"#;
+
+    /// A usage body on the plain path, with the spend and the extra usage the block's body leaves null.
+    const USAGE_BODY: &[u8] = br#"{"five_hour":{"utilization":12.5,"resets_at":null},"extra_usage":{"is_enabled":true,"monthly_limit":5000,"used_credits":1234,"utilization":24.68,"currency":"USD","decimal_places":2},"spend":{"used":{"amount_minor":250,"currency":"USD","exponent":2},"limit":{"amount_minor":5000},"percent":5}}"#;
+
+    /// The request lines of the two reads, each with the space after its target, since the plain target is a prefix
+    /// of the client's shape.
+    const USAGE_LINE: &str = "GET /api/oauth/usage ";
+    const LIMIT_RESETS_LINE: &str = "GET /api/oauth/usage?cedar_ember=1&skip_spend=1 ";
+
+    /// A rule for the client's shape, listed before the usage rule, so the fake answers the block to that shape
+    /// alone, as the upstream fills it.
+    fn limit_resets_rule(respond: Respond) -> Rule {
+        Rule {
+            path_prefix: "/api/oauth/usage?cedar_ember=1&skip_spend=1".into(),
+            respond,
+        }
+    }
+
+    fn usage_body_rule() -> Rule {
+        Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: answering_with(200, USAGE_BODY),
+        }
+    }
+
+    fn answering_with(status: u16, body: &[u8]) -> Respond {
+        Respond::Json {
+            status,
+            headers: vec![],
+            body: body.to_vec(),
+        }
+    }
+
+    fn requests_on(up: &FakeUpstream, line: &str) -> usize {
+        up.requests()
+            .iter()
+            .filter(|r| r.line.starts_with(line))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_limit_resets_read_leaves_the_snapshot_and_stores_the_block() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(answering_with(200, BLOCK)),
+            usage_body_rule(),
+        ])
+        .await;
+        let store = store_with_valid_bundle();
+        let service = service_for(&up, store.clone(), &now);
+        service.poll("a").await.unwrap();
+        let block = service.limit_resets("a").await.unwrap();
+        let row = store.account("a").unwrap().unwrap();
+        let snapshot = service.latest_for(&row).unwrap();
+        assert_eq!(
+            (
+                snapshot.spend.map(|spend| spend.used_minor),
+                snapshot.extra_usage.and_then(|extra| extra.used_credits)
+            ),
+            (Some(250), Some(1234)),
+            "the block's body, whose spend members read null, leaves the regular poll's snapshot alone"
+        );
+        let block = block.expect("the client's shape carries the block");
+        assert_eq!(block.grants.len(), 1);
+        assert_eq!(
+            (block.grants[0].id.as_str(), block.grants[0].clears.clone()),
+            ("rg-a-1", vec!["seven_day_fable".to_string()])
+        );
+        let stored = store
+            .account_extras_of("a")
+            .unwrap()
+            .unwrap()
+            .limit_resets
+            .expect("the row holds the block");
+        assert_eq!(stored["grants"][0]["id"], "rg-a-1");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_hold_stops_a_limit_resets_read() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(answering_with(200, BLOCK)),
+            rate_limited("120"),
+        ])
+        .await;
+        let service = service_for(&up, store_with_valid_bundle(), &now);
+        service.poll("a").await.unwrap();
+        let held = service.limit_resets("a").await;
+        assert_eq!(
+            (held.is_err(), requests_on(&up, LIMIT_RESETS_LINE)),
+            (true, 0),
+            "the usage 429's hold refuses the read before it sends"
+        );
+        now.store(1_000_000 + 120_000, Ordering::SeqCst);
+        let freed = service.limit_resets("a").await;
+        assert_eq!(
+            (freed.is_ok(), requests_on(&up, LIMIT_RESETS_LINE)),
+            (true, 1),
+            "the read goes out once the hold ends"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_limit_resets_read_holds_the_usage_poll() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(Respond::Json {
+                status: 429,
+                headers: vec![("Retry-After".to_string(), "120".to_string())],
+                body: b"{}".to_vec(),
+            }),
+            usage_body_rule(),
+        ])
+        .await;
+        let service = service_for(&up, store_with_valid_bundle(), &now);
+        assert!(service.limit_resets("a").await.is_err());
+        let snapshot = service.poll("a").await.unwrap();
+        assert_eq!(
+            (snapshot.error.is_some(), requests_on(&up, USAGE_LINE)),
+            (true, 0),
+            "the block read's 429 holds the usage poll, which answers the held snapshot"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn two_callers_share_one_limit_resets_read() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(Respond::Gated(Box::new(answering_with(200, BLOCK)))),
+            usage_body_rule(),
+        ])
+        .await;
+        let service = Arc::new(service_for(&up, store_with_valid_bundle(), &now));
+        let read = || {
+            let service = service.clone();
+            tokio::spawn(async move { service.limit_resets("a").await })
+        };
+        let (first, second) = (read(), read());
+        wait_for(Duration::from_secs(5), || {
+            (requests_on(&up, LIMIT_RESETS_LINE) >= 1).then_some(())
+        })
+        .await;
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        up.release();
+        let first = first
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("the first caller reads the block");
+        let second = second
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("the joined caller reads the block");
+        assert_eq!(
+            (first.grants[0].id.as_str(), second.grants[0].id.as_str()),
+            ("rg-a-1", "rg-a-1")
+        );
+        assert_eq!(
+            requests_on(&up, LIMIT_RESETS_LINE),
+            1,
+            "the second caller joins the read still out"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_limit_resets_read_that_was_out_does_not_end_a_due_mark() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(Respond::Gated(Box::new(answering_with(200, BLOCK)))),
+            usage_body_rule(),
+        ])
+        .await;
+        let store = store_with_valid_bundle();
+        let service = Arc::new(service_for(&up, store.clone(), &now));
+        let reading = {
+            let service = service.clone();
+            tokio::spawn(async move { service.limit_resets("a").await })
+        };
+        wait_for(Duration::from_secs(5), || {
+            (requests_on(&up, LIMIT_RESETS_LINE) == 1).then_some(())
+        })
+        .await;
+        let row = store.account("a").unwrap().unwrap();
+        service.mark_limit_resets_due(&row);
+        up.release();
+        let block = reading
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("the held read answers the block");
+        assert_eq!(block.grants[0].id, "rg-a-1");
+        assert!(
+            service.limit_resets_memory(&row).due,
+            "a mark set while the read was out stands for the next slot"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_limit_resets_read_carries_the_usage_reads_head() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(answering_with(200, BLOCK)),
+            usage_body_rule(),
+        ])
+        .await;
+        let service = service_for(&up, store_with_valid_bundle(), &now);
+        service.poll("a").await.unwrap();
+        service.limit_resets("a").await.unwrap();
+        let requests = up.requests();
+        let heads = |line: &str| {
+            requests
+                .iter()
+                .filter(|r| r.line.starts_with(line))
+                .map(|r| r.headers.clone())
+                .collect::<Vec<_>>()
+        };
+        let (usage, limit_resets) = (heads(USAGE_LINE), heads(LIMIT_RESETS_LINE));
+        assert_eq!((usage.len(), limit_resets.len()), (1, 1));
+        assert_eq!(
+            limit_resets[0], usage[0],
+            "the block read sends the usage read's head: the same names in the same order with the same values"
+        );
+        up.shutdown().await;
+    }
 }

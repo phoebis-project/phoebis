@@ -16,7 +16,7 @@ pub enum Plane {
 }
 
 /// A control endpoint in the parts the client sends: the host it resolves, presents as SNI and names in `Host`, and
-/// the request target. None of the four carries a port or a query.
+/// the request target. None carries a port, and the limit resets read alone carries a query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ControlEndpoint {
     pub host: &'static str,
@@ -27,6 +27,7 @@ pub struct Control {
     pub authorize_claude_ai: &'static str,
     pub authorize_console: &'static str,
     pub client_id: &'static str,
+    pub limit_resets: ControlEndpoint,
     pub profile: ControlEndpoint,
     pub roles: ControlEndpoint,
     pub token: ControlEndpoint,
@@ -59,6 +60,11 @@ static PROFILE_2_1_310: Profile = Profile {
         authorize_claude_ai: "https://claude.com/cai/oauth/authorize",
         authorize_console: "https://platform.claude.com/oauth/authorize",
         client_id: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        // The client's own shape of the usage read: it fills the limit reset block and leaves the spend members null.
+        limit_resets: ControlEndpoint {
+            host: "api.anthropic.com",
+            target: "/api/oauth/usage?cedar_ember=1&skip_spend=1",
+        },
         profile: ControlEndpoint {
             host: "api.anthropic.com",
             target: "/api/oauth/profile",

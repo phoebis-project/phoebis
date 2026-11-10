@@ -32,6 +32,15 @@ const REPAIRED: &str = "sk-ant-oat01-EEEE";
 
 const USAGE: &[u8] = br#"{"five_hour":{"utilization":12.5,"resets_at":"2026-09-13T15:00:00+00:00"},"seven_day":{"utilization":40.0,"resets_at":"2026-09-18T00:00:00+00:00"},"cinder_cove":{"utilization":99.0,"resets_at":null},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":42,"resets_at":"2026-09-18T00:00:00+00:00","scope":{"model":{"display_name":"Fable"}}}],"extra_usage":{"is_enabled":true,"monthly_limit":5000,"used_credits":1234,"utilization":0.2468,"currency":"USD"}}"#;
 
+/// `USAGE` with the Fable week at its limit.
+const USAGE_AT_THE_FABLE_LIMIT: &[u8] = br#"{"five_hour":{"utilization":12.5,"resets_at":"2026-09-13T15:00:00+00:00"},"seven_day":{"utilization":40.0,"resets_at":"2026-09-18T00:00:00+00:00"},"cinder_cove":{"utilization":99.0,"resets_at":null},"limits":[{"kind":"weekly_scoped","group":"weekly","percent":100,"resets_at":"2026-09-18T00:00:00+00:00","scope":{"model":{"display_name":"Fable"}}}],"extra_usage":{"is_enabled":true,"monthly_limit":5000,"used_credits":1234,"utilization":0.2468,"currency":"USD"}}"#;
+
+/// A usage body in the client's shape: the limit reset block with one grant, and the spend members null.
+const BLOCK: &[u8] = br#"{"five_hour":{"utilization":12.5,"resets_at":null},"extra_usage":null,"spend":null,"cedar_ember":{"eligible":true,"grants":[{"id":"rg-a-1","label":"Launch reset","clears":["seven_day_overage_included"],"gives_back_weekly":true,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2027-01-01T00:00:00Z","resets_left":1,"resets_total":1,"usable_now":true}]}}"#;
+
+/// The target of the limit resets read, the client's shape of the usage read.
+const LIMIT_RESETS_TARGET: &str = "/api/oauth/usage?cedar_ember=1&skip_spend=1";
+
 fn usage_rule() -> Rule {
     Rule {
         path_prefix: "/api/oauth/usage".into(),
@@ -39,6 +48,19 @@ fn usage_rule() -> Rule {
             status: 200,
             headers: vec![],
             body: USAGE.to_vec(),
+        },
+    }
+}
+
+/// A rule for the client's shape, listed before the usage rule, so the fake fills the block for that shape alone, as
+/// the upstream does.
+fn limit_resets_rule() -> Rule {
+    Rule {
+        path_prefix: LIMIT_RESETS_TARGET.into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: BLOCK.to_vec(),
         },
     }
 }
@@ -107,8 +129,14 @@ struct Paused {
 }
 
 /// Pauses tokio's clock, spawns the poll's scheduler over the harness's usage service as the router's start
-/// does, and lets it take its first pass.
+/// does, and lets it take its first pass. Every polled account whose row holds no limit resets read reads as read at
+/// `NOW`, so a scheduler test meets no block read inside its first hour unless it stores an instant of its own first.
 async fn start_polling(h: &Harness, up: &FakeUpstream) -> Paused {
+    for row in h.store.accounts().unwrap() {
+        if phoebis_ledger::polled(row.kind, row.state) {
+            stamp_limit_resets_read(&h.store, &row.id);
+        }
+    }
     tokio::time::pause();
     let paused = Paused {
         start: Instant::now(),
@@ -228,8 +256,52 @@ fn asked(up: &FakeUpstream, path: &str, secret: &str) -> usize {
         .count()
 }
 
+/// Usage reads on the plain path: the space after the target keeps the client's shape out.
 fn usage_asked(up: &FakeUpstream, secret: &str) -> usize {
-    asked(up, "/api/oauth/usage", secret)
+    asked(up, "/api/oauth/usage ", secret)
+}
+
+fn resets_asked(up: &FakeUpstream, secret: &str) -> usize {
+    asked(up, LIMIT_RESETS_TARGET, secret)
+}
+
+/// Stamps `NOW` as the account's last limit resets read, with no block, where its row holds no read.
+fn stamp_limit_resets_read(store: &Store, id: &str) {
+    let row = store.account(id).unwrap().unwrap();
+    let extras = store.account_extras_of(id).unwrap().unwrap();
+    if extras.limit_resets_read_at.is_none() {
+        store
+            .set_limit_resets(
+                id,
+                row.incarnation,
+                row.lifecycle_generation,
+                extras.limit_resets_epoch,
+                None,
+                NOW,
+            )
+            .unwrap();
+    }
+}
+
+/// The typed block the parser answers for `BLOCK`, as the usage service stores it.
+fn stored_block() -> String {
+    serde_json::to_string(&phoebis_oauth::parse_limit_resets(BLOCK).unwrap().unwrap()).unwrap()
+}
+
+/// Writes `block` and its read's instant to the row under the row's holder, at the epoch of a row no pairing moved.
+fn store_block(h: &Harness, id: &str, block: &str, read_at: i64) {
+    let row = h.store.account(id).unwrap().unwrap();
+    assert!(h
+        .store
+        .set_limit_resets(
+            id,
+            row.incarnation,
+            row.lifecycle_generation,
+            0,
+            Some(block),
+            read_at
+        )
+        .unwrap());
 }
 
 fn rate_limited_bare() -> Respond {
@@ -249,7 +321,8 @@ fn rate_limited_for(retry_after_seconds: &str) -> Respond {
 }
 
 /// Pairs `id` into the store as the pairing flow leaves it: a ready OAuth row, its incarnation the store's
-/// next for the id, and a bundle far from expiry.
+/// next for the id, and a bundle far from expiry. Its row holds a limit resets read at `NOW`, as `start_polling`
+/// stamps one.
 fn pair(store: &Store, id: &str, secret: &str) {
     store
         .insert_account(&AccountRow {
@@ -279,6 +352,7 @@ fn pair(store: &Store, id: &str, secret: &str) {
             },
         )
         .unwrap();
+    stamp_limit_resets_read(store, id);
 }
 
 /// Seconds past `NOW` on the harness's clock cell, for a time the usage service stamped.
@@ -713,7 +787,7 @@ async fn an_empty_schedule_wakes_every_interval_and_polls_a_paired_account_witho
     let usage_requests = || {
         up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count()
     };
     let paused = start_polling(&h, &up).await;
@@ -1339,7 +1413,7 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
     let usages = up
         .requests()
         .iter()
-        .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+        .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
         .count();
     assert_eq!(usages, 2, "one usage request per OAuth account");
     wait_for(Duration::from_secs(2), || {
@@ -1507,7 +1581,7 @@ async fn a_stalled_startup_fetch_is_aborted_by_ledger_shutdown_and_makes_no_furt
     assert_eq!(
         up.requests()
             .iter()
-            .filter(|r| r.line.starts_with("GET /api/oauth/usage"))
+            .filter(|r| r.line.starts_with("GET /api/oauth/usage "))
             .count(),
         1,
         "the aborted fetch made no retry"
@@ -1736,6 +1810,188 @@ async fn a_run_after_an_invalidated_one_writes_its_own_start_and_end() {
         rows[2].3["duration_ms"].as_i64(),
         Some(rows[2].2 - rows[1].2),
         "the end measures the second run"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn no_limit_resets_read_goes_to_an_account_whose_plan_ended() {
+    let up = FakeUpstream::start(vec![limit_resets_rule(), usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(
+        &up,
+        &[oauth("a", A, 0), oauth("c", OAUTH_C, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    store_block(&h, "a", &stored_block(), NOW - 7_200_000);
+    store_block(&h, "c", &stored_block(), NOW - 7_200_000);
+    h.store.set_plan_ended("a", NOW - 60_000).unwrap();
+    let paused = start_polling(&h, &up).await;
+
+    // The first slots, `a`'s at 300 s and `c`'s at 450 s, both find the last read more than two hours back.
+    step_to(&h, &up, &paused, secs(452)).await;
+    assert_eq!(
+        (resets_asked(&up, A), resets_asked(&up, OAUTH_C)),
+        (0, 1),
+        "the flagged account is sent no read, its sibling one"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_limit_resets_are_read_once_an_hour() {
+    let up = FakeUpstream::start(vec![limit_resets_rule(), usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_block(&h, "a", &stored_block(), NOW - 3_240_000);
+    let paused = start_polling(&h, &up).await;
+
+    // The slots come every 300 s from 300 s, and every third one from 900 s reads the profile.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(resets_asked(&up, A), 0, "59 minutes after the last read");
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(resets_asked(&up, A), 1, "64 minutes after it");
+    step_to(&h, &up, &paused, secs(1_202)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        1,
+        "the 900 s slot reads the profile, and the 1 200 s slot lies ten minutes after the read"
+    );
+    // The hour after the 600 s read passes at the 4 200 s slot, or, where that read went out a few milliseconds
+    // past its slot, at the 4 800 s slot, since the 4 500 s slot reads the profile.
+    step_to(&h, &up, &paused, secs(4_802)).await;
+    assert_eq!(resets_asked(&up, A), 2, "the second hour's read");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_limit_sends_one_limit_resets_read() {
+    let up = FakeUpstream::start(vec![
+        limit_resets_rule(),
+        Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: USAGE_AT_THE_FABLE_LIMIT.to_vec(),
+            },
+        },
+        profile_rule(),
+    ])
+    .await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_block(&h, "a", &stored_block(), NOW);
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        1,
+        "the Fable week reads at its limit, where the service remembers no set from a read"
+    );
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        1,
+        "the next slot reads the set the read remembered"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_new_limit_sends_no_limit_resets_read_without_a_reset() {
+    let up = FakeUpstream::start(vec![
+        limit_resets_rule(),
+        Rule {
+            path_prefix: "/api/oauth/usage".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: USAGE_AT_THE_FABLE_LIMIT.to_vec(),
+            },
+        },
+        profile_rule(),
+    ])
+    .await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_block(
+        &h,
+        "a",
+        r#"{"cooldown_until":null,"eligible":false,"grants":[],"ineligible_reason":"tier"}"#,
+        NOW,
+    );
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        0,
+        "the set changed, and the stored block holds no reset"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_profile_slot_leaves_the_limit_resets_to_the_next() {
+    let up = FakeUpstream::start(vec![limit_resets_rule(), usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    store_block(&h, "a", &stored_block(), NOW - 2_850_000);
+    let paused = start_polling(&h, &up).await;
+
+    // The last read lies 57.5 minutes back at the 600 s slot and 62.5 at the 900 s slot, which reads the profile.
+    step_to(&h, &up, &paused, secs(902)).await;
+    assert_eq!(
+        (profile_asked(&up, A), resets_asked(&up, A)),
+        (1, 0),
+        "the slot that reads the profile leaves the due read out"
+    );
+    step_to(&h, &up, &paused, secs(1_202)).await;
+    assert_eq!(resets_asked(&up, A), 1, "the next slot sends it");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_re_pair_sends_the_next_slot_a_limit_resets_read() {
+    let up = FakeUpstream::start(vec![limit_resets_rule(), usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let usage = h
+        .usage
+        .clone()
+        .expect("the harness was built with the poll");
+    // A read at `NOW`, which the service remembers and the row holds, so `start_polling` stamps nothing.
+    let block = usage
+        .limit_resets("a")
+        .await
+        .unwrap()
+        .expect("the client's shape carries the block");
+    assert_eq!(block.grants[0].id, "rg-a-1");
+    assert_eq!(resets_asked(&up, A), 1);
+    let paused = start_polling(&h, &up).await;
+
+    // The pairing as the admin's confirm leaves it: the harness stored generation 1, and the bundle carries the same
+    // access token, so one secret counts both reads.
+    h.store
+        .commit_pairing(
+            "a",
+            1,
+            1,
+            Some(1),
+            &NewBundle {
+                access_token: Secret::new(A),
+                refresh_token: Some(Secret::new(&format!("{A}-refresh"))),
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    usage.invalidate("a");
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(
+        resets_asked(&up, A),
+        2,
+        "the first slot after the pairing reads the block it cleared, five minutes into the hour"
     );
     up.shutdown().await;
 }

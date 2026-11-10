@@ -1,4 +1,4 @@
-//! Token endpoint bodies, the four control-plane request shapes, and the responses they return.
+//! Token endpoint bodies, the five control-plane request shapes, and the responses they return.
 
 use bytes::Bytes;
 use phoebis_profile::{ControlEndpoint, Profile};
@@ -31,6 +31,7 @@ pub enum ControlKind {
     Profile,
     Roles,
     Usage,
+    LimitResets,
 }
 
 impl ControlKind {
@@ -40,11 +41,12 @@ impl ControlKind {
             ControlKind::Profile => profile.control.profile,
             ControlKind::Roles => profile.control.roles,
             ControlKind::Usage => profile.control.usage,
+            ControlKind::LimitResets => profile.control.limit_resets,
         }
     }
 
-    /// The host to resolve, present as SNI, and send in `Host`; the token endpoint lives on a different
-    /// host than the other three.
+    /// The host to resolve, present as SNI, and send in `Host`. The token endpoint lives on a different
+    /// host than the other four.
     pub fn host(self, profile: &Profile) -> &'static str {
         self.endpoint(profile).host
     }
@@ -114,7 +116,8 @@ pub fn control_request(
                 push("Authorization", &format!("Bearer {bearer}"));
             }
         }
-        ControlKind::Usage => {
+        // The probes sent the usage read's head in the client's shape too, and the upstream filled the block for it.
+        ControlKind::Usage | ControlKind::LimitResets => {
             push("Content-Type", CONTENT_TYPE_JSON);
             push("User-Agent", profile.user_agent_cli);
             if let Some(bearer) = bearer {
@@ -130,7 +133,10 @@ pub fn control_request(
     RawRequest {
         method: match kind {
             ControlKind::Token => "POST",
-            ControlKind::Profile | ControlKind::Roles | ControlKind::Usage => "GET",
+            ControlKind::Profile
+            | ControlKind::Roles
+            | ControlKind::Usage
+            | ControlKind::LimitResets => "GET",
         },
         target: endpoint.target.to_string(),
         headers,

@@ -1,6 +1,7 @@
 //! Parses the OAuth usage payload and caches it per account, coalescing concurrent fetches.
 
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -14,7 +15,7 @@ use tokio::sync::Semaphore;
 use crate::exchange::{
     control_request, instant_ms, parse_profile, ControlKind, OauthError, ProfileResponse,
 };
-use crate::limit_resets::SEVEN_DAY_FABLE;
+use crate::limit_resets::{parse_limit_resets, LimitResets, SEVEN_DAY_FABLE};
 use crate::manager::{retry_after_ms, AcquireError, Clock, CredentialManager, LandedMark};
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
@@ -34,6 +35,10 @@ pub const BACKOFF_CAP_MS: i64 = 15 * 60 * 1_000;
 /// ladder every further 429 waits `BACKOFF_CAP_MS`. The ladder starts at two minutes: the endpoint's own limit
 /// is per account and per minute, so a one-minute retry met the same answer.
 const BACKOFF_LADDER_MS: [i64; 3] = [120_000, 240_000, 480_000];
+
+/// The name a passing fault of the limit resets read carries. Its 429 counts on the hold under `USAGE_ENDPOINT`, so
+/// the held answer names the endpoint the hold belongs to.
+const LIMIT_RESETS_ENDPOINT: &str = "limit resets";
 
 /// The endpoint names a 429's warning, the held answer and a passing fault carry.
 const PROFILE_ENDPOINT: &str = "profile";
@@ -226,16 +231,16 @@ pub struct LatestStanding {
 pub enum UsageError {
     #[error("{0}")]
     Unavailable(String),
-    /// The profile endpoint's passing fault, displayed as the text the refresh logs.
+    /// The passing fault of a profile read or a limit resets read, displayed as the text its caller logs.
     #[error("{}", .0.text)]
     Fault(PollFault),
 }
 
-/// A passing fault of the usage or the profile endpoint: any status but 200 and 429 (the usage endpoint's 401
-/// apart), or a transport failure.
+/// A passing fault of the usage read, the profile read or the limit resets read: any status but 200 and 429 (the
+/// usage read's 401 apart), a transport failure, or a limit resets block that does not parse.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PollFault {
-    /// `usage` or `profile`.
+    /// `limit resets`, `profile` or `usage`.
     pub endpoint: &'static str,
     /// The status the endpoint answered, `None` on a transport failure.
     pub status: Option<u16>,
@@ -590,7 +595,8 @@ impl CachedEntry {
     }
 }
 
-/// A transport failure of either endpoint, under the text the snapshot and the profile refresh record for one.
+/// A transport failure of any of the three reads, under the text the snapshot, the profile refresh and the limit
+/// resets read's warning record for one.
 fn transport_fault(endpoint: &'static str, error: &str) -> PollFault {
     PollFault {
         endpoint,
@@ -599,7 +605,8 @@ fn transport_fault(endpoint: &'static str, error: &str) -> PollFault {
     }
 }
 
-/// A status either endpoint refuses with, under the one sentence the snapshot and the profile read record for it.
+/// A status any of the three reads is refused with, under the one sentence the snapshot, the profile read and the
+/// limit resets read's warning record for it.
 fn status_fault(endpoint: &'static str, status: u16) -> PollFault {
     PollFault {
         endpoint,
@@ -629,6 +636,27 @@ fn error_code(body: &[u8]) -> Option<String> {
     Some(body["error"]["details"]["error_code"].as_str()?.to_string())
 }
 
+/// Set by the first block that names the router's pinned client as its ineligible reason, so the warning logs once
+/// per process.
+static PINNED_CLIENT_WARNED: AtomicBool = AtomicBool::new(false);
+
+/// One warning per process where a block's ineligible reason is the router's own pinned client: every card then
+/// loses its resets for a cause the console does not show.
+fn warn_pinned_client(account_id: &str, block: Option<&LimitResets>) {
+    let Some(reason) = block.and_then(|block| block.ineligible_reason.as_deref()) else {
+        return;
+    };
+    if matches!(reason, "cli_version" | "surface")
+        && !PINNED_CLIENT_WARNED.swap(true, Ordering::Relaxed)
+    {
+        tracing::warn!(
+            account = %account_id,
+            reason = %reason,
+            "the upstream offers no limit reset to the router's pinned client"
+        );
+    }
+}
+
 /// The ladder's wait for the `in_a_row`-th 429 in a row, counted from 1.
 fn ladder_step(in_a_row: u32) -> i64 {
     (in_a_row as usize)
@@ -641,12 +669,24 @@ fn ladder_step(in_a_row: u32) -> i64 {
 type FetchOutcome = Result<(UsageSnapshot, Option<PollIssue>), String>;
 type SharedFetch = Shared<BoxFuture<'static, FetchOutcome>>;
 
+/// Why a limit resets read answered no block. `Clone`, since every caller joined to the read takes a copy.
+#[derive(Clone, Debug)]
+enum ResetsFailure {
+    Unavailable(String),
+    Fault(PollFault),
+}
+
+type SharedResetsRead = Shared<BoxFuture<'static, Result<Option<LimitResets>, ResetsFailure>>>;
+
 struct Inner {
     cache: Mutex<HashMap<String, CachedEntry>>,
     inflight: Mutex<HashMap<String, SharedFetch>>,
+    resets_inflight: Mutex<HashMap<String, SharedResetsRead>>,
     /// The reauth mark an account's last failed acquisition landed, until a caller takes it: a fetch answers a
     /// snapshot or a profile, neither of which carries the mark, and the routing hears of it only from a report.
     landed_marks: Mutex<HashMap<String, LandedMark>>,
+    /// The limit resets read each account's poll slot decides by, beside the holder it was written for.
+    resets_memory: Mutex<HashMap<String, (Identity, LimitResetsMemory)>>,
     on_backoff: Mutex<Option<BackoffHook>>,
     semaphore: Semaphore,
     manager: Arc<CredentialManager>,
@@ -671,8 +711,36 @@ impl Drop for InflightGuard {
     }
 }
 
+/// `InflightGuard` for a limit resets read's entry.
+struct ResetsReadGuard {
+    account_id: String,
+    inner: Arc<Inner>,
+}
+
+impl Drop for ResetsReadGuard {
+    fn drop(&mut self) {
+        if let Ok(mut inflight) = self.inner.resets_inflight.lock() {
+            inflight.remove(&self.account_id);
+        }
+    }
+}
+
 pub struct UsageService {
     inner: Arc<Inner>,
+}
+
+/// What the poll's slot decides a limit resets read by, as the service remembers it for the row's holder. A restart
+/// forgets it, and `invalidate` drops it. An entry is keyed by its holder, so one written for an earlier holder
+/// never answers for a later one.
+#[derive(Clone, Debug, Default)]
+pub struct LimitResetsMemory {
+    /// The windows that read at their limit in the cached snapshot when the last read was sent, empty where the
+    /// service remembers none.
+    pub at_limit: BTreeSet<String>,
+    /// Whether a read is due whatever the hour says, until the next read's request goes out.
+    pub due: bool,
+    /// The instant the last read that sent a request went out, clean or failed.
+    pub last_sent_at: Option<i64>,
 }
 
 impl UsageService {
@@ -688,7 +756,9 @@ impl UsageService {
             inner: Arc::new(Inner {
                 cache: Mutex::new(HashMap::new()),
                 inflight: Mutex::new(HashMap::new()),
+                resets_inflight: Mutex::new(HashMap::new()),
                 landed_marks: Mutex::new(HashMap::new()),
+                resets_memory: Mutex::new(HashMap::new()),
                 on_backoff: Mutex::new(None),
                 semaphore: Semaphore::new(concurrency),
                 manager,
@@ -863,9 +933,17 @@ impl UsageService {
         *self.inner.on_backoff.lock().expect(LOCK_POISONED) = Some(hook);
     }
 
+    /// Drops what the service holds for the account: the cached snapshot and the remembered limit resets read with its
+    /// limit set and its due mark. A pairing keeps the holder the memory is keyed by, and the remembered hour would
+    /// hold back the read that fills the block the pairing cleared.
     pub fn invalidate(&self, account_id: &str) {
         self.inner
             .cache
+            .lock()
+            .expect(LOCK_POISONED)
+            .remove(account_id);
+        self.inner
+            .resets_memory
             .lock()
             .expect(LOCK_POISONED)
             .remove(account_id);
@@ -971,9 +1049,213 @@ impl UsageService {
         }
         parse_profile(&body).map_err(|error| UsageError::Unavailable(format!("parse: {error}")))
     }
+
+    /// The account's limit resets, read now in the client's shape and stored on its row: the block as stored, `None`
+    /// where the body carried none. An answer that lands after a claim's fold or a pairing writes nothing, and the
+    /// caller reads what the row holds. Refused while the account waits out its hold, and a 429 counts on that hold.
+    pub async fn limit_resets(&self, account_id: &str) -> Result<Option<LimitResets>, UsageError> {
+        let now = (self.inner.clock)();
+        if self.inner.next_attempt_at(account_id, now).is_some() {
+            return Err(UsageError::Unavailable(
+                "the account is waiting out a rate limit".into(),
+            ));
+        }
+        let shared = {
+            let mut inflight = self.inner.resets_inflight.lock().expect(LOCK_POISONED);
+            match inflight.get(account_id) {
+                Some(existing) => existing.clone(),
+                None => {
+                    let inner = self.inner.clone();
+                    let id = account_id.to_string();
+                    // Spawned so a caller that goes away cuts neither the request nor the store's write, with the
+                    // map's lock held across the spawn as `join_or_start` holds it.
+                    let handle = tokio::spawn(async move {
+                        let guard = ResetsReadGuard {
+                            account_id: id,
+                            inner,
+                        };
+                        let outcome = guard.inner.read_limit_resets(&guard.account_id).await;
+                        // Logged here, once per read, however many callers joined it.
+                        if let Err(ResetsFailure::Fault(fault)) = &outcome {
+                            let status = fault.status.map_or_else(
+                                || "transport".to_string(),
+                                |status| status.to_string(),
+                            );
+                            tracing::warn!(
+                                account = %guard.account_id,
+                                status = %status,
+                                error = %fault.text,
+                                "a read of the limit resets failed"
+                            );
+                        }
+                        outcome
+                    });
+                    let shared = async move {
+                        match handle.await {
+                            Ok(outcome) => outcome,
+                            Err(_) => Err(ResetsFailure::Unavailable(
+                                "limit resets read panicked".into(),
+                            )),
+                        }
+                    }
+                    .boxed()
+                    .shared();
+                    inflight.insert(account_id.to_string(), shared.clone());
+                    shared
+                }
+            }
+        };
+        shared.await.map_err(|failure| match failure {
+            ResetsFailure::Unavailable(message) => UsageError::Unavailable(message),
+            ResetsFailure::Fault(fault) => UsageError::Fault(fault),
+        })
+    }
+
+    /// The limit resets read the service remembers for the row's holder, the default where it remembers none.
+    pub fn limit_resets_memory(&self, account: &AccountRow) -> LimitResetsMemory {
+        let holder = Identity::of(account);
+        self.inner
+            .resets_memory
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(&account.id)
+            .filter(|(written_for, _)| *written_for == holder)
+            .map(|(_, memory)| memory.clone())
+            .unwrap_or_default()
+    }
+
+    /// Marks the account's limit resets read due for its next poll slot.
+    pub fn mark_limit_resets_due(&self, account: &AccountRow) {
+        self.inner
+            .mark_resets_due(&account.id, Identity::of(account));
+    }
 }
 
 impl Inner {
+    async fn read_limit_resets(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<LimitResets>, ResetsFailure> {
+        // Taken together before anything is sent: the store refuses the write of an answer that lands for
+        // another holder, or after a claim's fold or a pairing moved the epoch.
+        let holder = self
+            .identity(account_id)
+            .ok_or_else(|| ResetsFailure::Unavailable("account not found".into()))?;
+        let epoch = match self.store.account_extras_of(account_id) {
+            Ok(Some(extras)) => extras.limit_resets_epoch,
+            Ok(None) => return Err(ResetsFailure::Unavailable("account not found".into())),
+            Err(error) => return Err(ResetsFailure::Unavailable(format!("store: {error}"))),
+        };
+        let token = self.manager.acquire(account_id).await.map_err(|error| {
+            self.keep_landed_mark(account_id, &error);
+            ResetsFailure::Unavailable(format!("acquire: {error}"))
+        })?;
+        let permit = self
+            .semaphore
+            .acquire()
+            .await
+            .expect("usage semaphore is never closed");
+        let sent_at = (self.clock)();
+        // The due mark ends here, where the request goes out. Nothing below writes the memory, so a mark set
+        // while this read is out stands for the next slot.
+        self.remember_resets_read(account_id, holder, sent_at);
+        let request = control_request(
+            self.profile,
+            ControlKind::LimitResets,
+            Some(token.secret.expose()),
+            None,
+        );
+        let host = ControlKind::LimitResets.host(self.profile);
+        let sent = self.control.send(request, host, FETCH_TIMEOUT).await;
+        drop(permit);
+        let (head, body) = sent.map_err(|error| {
+            ResetsFailure::Fault(transport_fault(LIMIT_RESETS_ENDPOINT, &error.to_string()))
+        })?;
+        if head.status == 429 {
+            // The two reads share the endpoint's limit, so the hold is the usage read's own.
+            let received_at = (self.clock)();
+            let retry_after = retry_after_ms(&head, received_at, BACKOFF_CAP_MS);
+            self.rate_limited(account_id, USAGE_ENDPOINT, received_at, retry_after);
+            return Err(ResetsFailure::Unavailable(
+                "limit resets request rate limited".into(),
+            ));
+        }
+        if head.status != 200 {
+            return Err(ResetsFailure::Fault(status_fault(
+                LIMIT_RESETS_ENDPOINT,
+                head.status,
+            )));
+        }
+        let block = parse_limit_resets(&body).map_err(|error| {
+            ResetsFailure::Fault(PollFault {
+                endpoint: LIMIT_RESETS_ENDPOINT,
+                status: Some(200),
+                text: format!("parse: {error}"),
+            })
+        })?;
+        warn_pinned_client(account_id, block.as_ref());
+        let text = block
+            .as_ref()
+            .map(|block| serde_json::to_string(block).expect("a block serializes"));
+        let (incarnation, lifecycle) = (holder.incarnation, holder.lifecycle_generation);
+        match self.store.set_limit_resets(
+            account_id,
+            incarnation,
+            lifecycle,
+            epoch,
+            text.as_deref(),
+            sent_at,
+        ) {
+            Ok(true) => Ok(block),
+            // A fold, a pairing or another holder came between the start and the answer. The row holds what
+            // the caller should read, and the request still counts as sent.
+            Ok(false) => Ok(self.stored_limit_resets(account_id)),
+            Err(error) => Err(ResetsFailure::Unavailable(format!("store: {error}"))),
+        }
+    }
+
+    /// The block on the account's row, `None` without one and for a row that is gone.
+    fn stored_limit_resets(&self, account_id: &str) -> Option<LimitResets> {
+        let extras = self.store.account_extras_of(account_id).ok().flatten()?;
+        serde_json::from_value(extras.limit_resets?).ok()
+    }
+
+    /// Writes the holder's entry of the memory as a read's request goes out: its instant, the windows the cached
+    /// snapshot of the same holder reads at their limit, and the due mark's end.
+    fn remember_resets_read(&self, account_id: &str, holder: Identity, sent_at: i64) {
+        let at_limit = self
+            .cache
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(account_id)
+            .filter(|entry| entry.identity == holder)
+            .map(|entry| entry.snapshot.windows_at_limit())
+            .unwrap_or_default();
+        self.resets_memory.lock().expect(LOCK_POISONED).insert(
+            account_id.to_string(),
+            (
+                holder,
+                LimitResetsMemory {
+                    at_limit,
+                    due: false,
+                    last_sent_at: Some(sent_at),
+                },
+            ),
+        );
+    }
+
+    /// Sets the due mark in the holder's entry of the memory.
+    fn mark_resets_due(&self, account_id: &str, holder: Identity) {
+        let mut memory = self.resets_memory.lock().expect(LOCK_POISONED);
+        let entry = memory
+            .entry(account_id.to_string())
+            .or_insert_with(|| (holder, LimitResetsMemory::default()));
+        if entry.0 != holder {
+            *entry = (holder, LimitResetsMemory::default());
+        }
+        entry.1.due = true;
+    }
+
     fn identity(&self, account_id: &str) -> Option<Identity> {
         self.store
             .account(account_id)
@@ -1243,8 +1525,8 @@ impl Inner {
         }
     }
 
-    /// Counts a profile 429 against the account without touching the snapshot, so a usage fetch after this
-    /// waits as a usage 429 would have made it wait.
+    /// Counts a 429 of the profile read or the limit resets read against the account without touching the snapshot,
+    /// so a usage fetch after this waits as a usage 429 would have made it wait.
     fn rate_limited(
         &self,
         account_id: &str,
