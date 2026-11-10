@@ -75,7 +75,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
         ],
         "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run, \
          its spent destinations, its walls, its slowed spans and its meter drift and, before any poll status exists, \
-         its backoff, \
+         its backoff and, as an account the poll asks, its limit resets about to end, \
          while every pool carries its parked records and its rounds without runway, each writer its state, \
          and the keepalive engine its bus gaps and its expiries between turns"
     );
@@ -2525,12 +2525,14 @@ async fn a_reset_on_a_cooldown_clears_no_wall() {
         json!({ "window": "seven_day_fable", "source": "head" }),
     );
     fold_at(&rig, NOW).await;
-    let mut waiting = grant("rg-b-1", "2023-11-24T22:13:20Z");
-    waiting["usable_now"] = json!(false);
-    waiting["unavailable_reason"] = json!("cooldown");
+    // The grant keeps `usable_now` true, as a claim's fold leaves the other grants under the cooldown it writes.
     store_resets(
         &rig,
-        json!({ "cooldown_until": "2023-11-15T22:13:20Z", "eligible": true, "grants": [waiting] }),
+        json!({
+            "cooldown_until": "2023-11-15T22:13:20Z",
+            "eligible": true,
+            "grants": [grant("rg-b-1", "2023-11-24T22:13:20Z")],
+        }),
     );
 
     usage.poll("business").await.unwrap();
@@ -2540,6 +2542,54 @@ async fn a_reset_on_a_cooldown_clears_no_wall() {
         (wall.holds, wall.detail.get("reset")),
         (true, None),
         "a grant whose reset waits out the block's cooldown clears no wall, though it has a reset left"
+    );
+}
+
+#[tokio::test]
+async fn a_plan_that_ended_is_offered_no_reset() {
+    let up = fake_upstream::FakeUpstream::start(vec![fake_upstream::Rule {
+        path_prefix: "/api/oauth/usage".into(),
+        respond: fable_week(100),
+    }])
+    .await;
+    let rig = rig().await;
+    let usage = usage_over(&rig, &up);
+    let (attention, _arm) = rig.attention(Some(usage.clone()));
+    routing_event(
+        &rig,
+        NOW - HOUR,
+        "window_spent",
+        "business",
+        None,
+        json!({ "window": "seven_day_fable", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    store_resets(
+        &rig,
+        json!({ "eligible": true, "grants": [grant("rg-b-1", "2023-11-18T22:13:20Z")] }),
+    );
+    usage.poll("business").await.unwrap();
+
+    let asked = read(&attention, NOW);
+    let item = find(&asked, Kind::LimitResetEnding, "business").unwrap();
+    let wall = find(&asked, Kind::WallReached, "business").unwrap();
+    assert_eq!(
+        (item.holds, wall.holds, &wall.detail["reset"]["grant"]),
+        (true, true, &json!("rg-b-1")),
+        "a plan the poll asks warns of the reset that ends in four days, and its wall offers it"
+    );
+
+    assert!(rig.store.set_plan_ended("business", NOW).unwrap());
+    let ended = read(&attention, NOW);
+    let wall = find(&ended, Kind::WallReached, "business").unwrap();
+    assert_eq!(
+        (
+            find(&ended, Kind::LimitResetEnding, "business").map(|c| c.holds),
+            wall.holds,
+            wall.detail.get("reset")
+        ),
+        (None, true, None),
+        "a plan that ended carries no reset item, and the wall the day's fold wrote offers no reset"
     );
 }
 
