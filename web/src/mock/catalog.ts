@@ -41,7 +41,8 @@ function redated(envelope: EnvelopeWire, dates: string[]): EnvelopeWire {
 }
 
 const settingsBody = FIXTURES.settings.body as { api_prices: EnvelopeWire; subscription_costs: EnvelopeWire };
-/** The shipped price table as the settings route answers it, dated into the story's past. */
+/** The shipped price table as the settings route answers it, its revisions moved to the story's dates so the story's
+ *  requests price at them. The revision the captured answer holds as the next one keeps a date after the clock. */
 export const API_PRICES_WIRE = redated(settingsBody.api_prices, STORY_PRICE_DATES);
 /** The shipped cost model as the settings route answers it, dated into the story's past. */
 export const SUBSCRIPTION_COSTS_WIRE = redated(settingsBody.subscription_costs, STORY_COST_DATES);

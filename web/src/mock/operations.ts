@@ -1171,8 +1171,8 @@ const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, 
 /**
  * The settings answer in the route's own shape, so the mock's settings reach the pages through the decoder the router's
  * answer goes through. The route answers the price table and the cost model the ledger ships, here with their
- * revisions dated into the story's past, so the dialog, the About card and the drawer read the dates the story's
- * requests price at.
+ * revisions at the story's dates, so the dialog, the About card and the drawer read the dates the story's requests
+ * price at. A price revision the captured answer holds as the next one keeps a date after the story's clock.
  */
 export const SETTINGS_WIRE = {
   ...settingsFixture,
