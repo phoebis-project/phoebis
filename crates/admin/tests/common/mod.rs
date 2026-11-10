@@ -173,7 +173,9 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 }
 
 /// The full harness over a store the caller holds, its ledger's event mirror ticking every `event_poll` rather than
-/// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length.
+/// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length. The same
+/// interval paces the writer's revision poll, which lands pending budget rows, and the retry of a failed spend read on
+/// the ledger's clock, so a budget row a seed provokes lands on that cadence as well.
 pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration) -> Full {
     full_from(
         build_app_routed(

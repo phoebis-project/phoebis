@@ -621,8 +621,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .set_plan_ended("free-org", free_end + 900_000)
         .unwrap());
     // The mirror reads the accounts on its own tick, so the three pairings above land as transitions a tick later.
-    // They are waited for ahead of the pool's create, so their rows take the routing log's first ids and the `written`
-    // figure `system.json` holds counts them in every capture.
+    // No await stands among the pairings, so on the test's current-thread runtime no tick falls between them, and one
+    // tick carries all three in the order the store lists the accounts, by id. An await among them could split them
+    // across ticks and swap their ids. They are waited for ahead of the pool's create, so their rows take the routing
+    // log's first ids and the `written` figure `system.json` holds counts them in every capture.
     fake_upstream::wait_for(Duration::from_secs(15), || {
         let transitions = parts
             .db
