@@ -429,22 +429,23 @@ set lacks takes no charge, since the account has no such window to spend. A head
 percent, so inside one window and one reset a head refines the stored figure: where the router's own figure at the
 head's instant, the stored reading plus the charges since, lies inside the percent the head names, the router keeps it,
 and otherwise it takes the nearer edge of that percent. A poll, and a head that names another reset, land as read, so
-the prediction does not fall inside a window by the head's cut. At the reset it reads zero and counts the requests
-since, a weekly window's reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A
-reading that names no reset, taken before the reset of the reading it replaces, stands under that reset and reads zero
-at it. One taken at or past that reset opens the next window and stands until the next reading, as does one where the
-reading it replaces names no reset to stand under. An API-key account's rate-limit buckets stand until their reset or,
-without one, for a minute. The share is priced through the account's stored tier: a tier change is read at the next
-profile refresh, within a quarter hour, and applied when the router reloads, and a tier changed while the router was
-down is read at start. The newest reading per account and window is kept in the registry and loaded at startup, a window
-a clean poll dropped leaving the registry with its reading, so a restart, and an account whose first poll the endpoint
-refuses, route from the last known windows. A reading carries the plan and the tier the account held when it was taken,
-which the `window_reset` event names when its reset passes. The router never fetches usage at a selection: use of an
-account outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any
-backoff, and by up to one more interval after a failed poll or a restart. The [Quota view](console.md#quota) shows when
-the poll last asked the endpoint for each OAuth account and how it answered, and while an account backs off, since when
-and when its next attempt comes. The `poll_backoff` condition of the [`phoebis_attention`
-gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty minutes.
+the prediction does not fall inside a window by the head's cut. A head that reads the stored figure or more, once that
+figure stands at the wall, lands as read too. At the reset it reads zero and counts the requests since, a weekly
+window's reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names
+no reset, taken before the reset of the reading it replaces, stands under that reset and reads zero at it. One taken at
+or past that reset opens the next window and stands until the next reading, as does one where the reading it replaces
+names no reset to stand under. An API-key account's rate-limit buckets stand until their reset or, without one, for a
+minute. The share is priced through the account's stored tier: a tier change is read at the next profile refresh, within
+a quarter hour, and applied when the router reloads, and a tier changed while the router was down is read at start. The
+newest reading per account and window is kept in the registry and loaded at startup, a window a clean poll dropped
+leaving the registry with its reading, so a restart, and an account whose first poll the endpoint refuses, route from
+the last known windows. A reading carries the plan and the tier the account held when it was taken, which the
+`window_reset` event names when its reset passes. The router never fetches usage at a selection: use of an account
+outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any backoff, and
+by up to one more interval after a failed poll or a restart. The [Quota view](console.md#quota) shows when the poll last
+asked the endpoint for each OAuth account and how it answered, and while an account backs off, since when and when its
+next attempt comes. The `poll_backoff` condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges)
+holds once an account has backed off for thirty minutes.
 
 **The window set** An OAuth account's shared windows are its window set: both shared windows before its first clean
 poll, and from then on the shared windows the newest clean poll's body carried, so an approved Ultra account, whose poll

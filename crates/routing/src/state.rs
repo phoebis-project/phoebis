@@ -2427,7 +2427,9 @@ impl RoutingState {
                         );
                         // The hold raises a head inside the margin to a stored figure at the wall. The head's own
                         // percent reaches the wall at most, so the hold's figure stands as the stored one: a head that
-                        // reads a stored figure at the wall, or more, lands as read.
+                        // reads a stored figure at the wall, or more, lands as read. A real head that reads that figure
+                        // or more lands as read too, which leaves out at most a point of charges on a figure past the
+                        // wall.
                         let at_the_wall = existing.utilization >= 1.0
                             && reading.utilization >= existing.utilization;
                         if one_reset && !at_the_wall {

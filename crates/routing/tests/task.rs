@@ -11072,7 +11072,8 @@ async fn a_head_whose_percent_holds_the_predicted_wall_clears_neither_the_wall_n
 }
 
 /// A head inside the margin over a stored wall is held at the wall's figure. Its own percent from 0.99 reaches the wall
-/// and no further, so the charge since the wall lifts nothing, the stored figure keeps the wall's and the charge leaves.
+/// and no further, so the charge since the wall lifts nothing, the stored figure keeps the wall's and the charge
+/// leaves.
 #[tokio::test]
 async fn a_head_the_hold_raises_keeps_the_walls_figure_over_the_charges_since() {
     let store = seeded_oauth(&["a"]);
