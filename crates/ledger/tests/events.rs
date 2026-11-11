@@ -2168,6 +2168,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             to_account: "b".into(),
             epoch: 2,
             reason: "spent".into(),
+            reasons: Vec::new(),
             fit: Some("fits"),
             runway_ms: None,
             binding: None,

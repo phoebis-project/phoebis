@@ -105,8 +105,8 @@ pub(crate) struct DecisionRow {
     pub agent_id: Option<String>,
     pub model: Option<String>,
     pub account_id: Option<String>,
-    /// The released or moved pin's account, where the pin landed on another account, null where the release took the
-    /// row before the session's next request.
+    /// The account a move took the session from: a rule's move, a failover's landing, or a placement that replaced a
+    /// live pin on another account. Null on every other decision, a placement after an idle expiry among them.
     pub from_account_id: Option<String>,
     /// What decided the row.
     pub by: SummaryBy,
@@ -719,10 +719,10 @@ mod tests {
             ));
             decisions += matches!(typed, Row::Decision(_)) as usize;
         }
-        // The fifteenth is the guardrail block's `refused` decision row, the seed's last row.
+        // The sixteenth is the guardrail block's `refused` decision row, the seed's last row.
         assert_eq!(
-            decisions, 15,
-            "the fixture's 15 decision rows, the guardrail block's among them, round-trip through \
+            decisions, 16,
+            "the fixture's 16 decision rows, the guardrail block's among them, round-trip through \
              DecisionRow and its summary mirrors"
         );
     }

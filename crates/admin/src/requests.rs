@@ -289,7 +289,12 @@ pub(crate) struct Attempt {
     pub estimated_usd: Option<f64>,
     /// Null, or the trace behind the attempt's placement: `strategy`, `tier` (the three-element array `[group,
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a
-    /// fail-over or a move landed it here), `skipped` (array of `account_id`, `obstacle`, every candidate the
+    /// fail-over or a move landed it here: a rule's `drain`, `overage`, `return_to_plan`, `shed` or `spent`, a
+    /// failover's `cooldown`, `fast_lane` or `mark`, or for a placement that replaced a live pin on another account the
+    /// first of `paused`, `disconnected`, `funding_required`, `reauth_required`, `unpaired`, `subscription_ended`,
+    /// `unserved`, `cooldown`, `fast_rate_limit`, `fast_credits`, `budget_unknown`, `budget`, `overage`, `attempted`,
+    /// `spent` and `released` the selection found against the account the pin left, since a deleted account's pin
+    /// leaves at the router's reload as an expiry), `skipped` (array of `account_id`, `obstacle`, every candidate the
     /// choice passed over), `placement` (null, or `rung` (`content`, `static`, or `with_main`), `depth`, and
     /// `prefix_tokens` for a fresh placement with no pin of its own). The completion adds `cache_read`, the tokens the
     /// answer read from the cache.
@@ -473,11 +478,16 @@ pub(crate) struct Event {
     pub session_id: Option<String>,
     pub model: Option<String>,
     pub actor: Option<String>,
-    /// The kind's detail, decoded. A `pin_migrated` event's carries `agent_id`, `from_account`, `epoch`, and
-    /// `reason` (`cooldown`, `drain`, `fast_lane`, `mark`, `overage`, `return_to_plan`, `shed`, or `spent`), a
-    /// `pin_expired` event's `agent_id` and `reasons`, the facts the selection found against the released pin's
-    /// account (the documentation site's routing page describes them under Moves), and a stored `pin_released`
-    /// event's `agent_id`.
+    /// The kind's detail, decoded. A `pin_migrated` event's carries `agent_id`, `from_account`, `epoch`, `reason` (a
+    /// rule's or a failover's `cooldown`, `drain`, `fast_lane`, `mark`, `overage`, `return_to_plan`, `shed`, or
+    /// `spent`, or for a placement that replaced a live pin on another account the first of `paused`, `disconnected`,
+    /// `funding_required`, `reauth_required`, `unpaired`, `subscription_ended`, `unserved`, `cooldown`,
+    /// `fast_rate_limit`, `fast_credits`, `budget_unknown`, `budget`, `overage`, `attempted`, `spent` and `released`
+    /// the selection found against the account the pin left), and for such a placement `reasons`, the pin's whole
+    /// list, absent on a rule's move and a failover's landing. A deleted account's pin leaves at the router's reload
+    /// as `pin_expired` with `deleted`. A `pin_expired` event's detail carries `agent_id` and `reasons`, the facts the
+    /// selection found against the released pin's account (the documentation site's routing page describes them under
+    /// Moves), and a stored `pin_released` event's `agent_id`.
     #[schema(value_type = Option<Object>)]
     pub detail: Value,
     pub pool_id: Option<String>,

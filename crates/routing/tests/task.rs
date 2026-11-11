@@ -3853,7 +3853,7 @@ async fn an_expired_idle_pin_the_selection_replaces_emits_the_decision_then_both
 }
 
 #[tokio::test]
-async fn a_pin_whose_account_left_the_pool_is_replaced_with_both_events_in_order() {
+async fn a_pin_whose_account_left_the_pool_moves_to_the_member_under_unserved() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -3890,20 +3890,18 @@ async fn a_pin_whose_account_left_the_pool_is_replaced_with_both_events_in_order
     assert_eq!(record.pin.as_ref().map(|pin| pin.found), Some("left_pool"));
     assert_eq!(
         pin_events_of(&record),
-        [("pin_expired", Some("unserved")), ("pin_created", None)],
-        "the expiry names the first reason the task read against the pin"
+        [("pin_migrated", Some("unserved"))],
+        "the live pin moves under what the selection found against its account"
     );
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == from && reasons == vec!["unserved"])
-    );
-    assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinCreated { account_id, .. } if account_id == to)
+        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, reasons, .. } if from_account == from && to_account == to && reason == "unserved" && reasons == vec!["unserved"])
     );
 }
 
 #[tokio::test]
-async fn a_placement_off_a_paused_account_names_it_as_the_source_and_a_replaced_pin_on_the_same_account_names_none(
+async fn a_pin_on_a_paused_account_moves_to_the_sibling_under_paused_and_a_replaced_pin_on_the_same_account_names_none(
 ) {
+    use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     // No purge tick runs, so the row past its TTL below stays for the selection to replace.
@@ -3928,28 +3926,42 @@ async fn a_placement_off_a_paused_account_names_it_as_the_source_and_a_replaced_
     store.set_enabled(&from, false, "test").unwrap();
     handle.reload().await.unwrap();
     let mut events = handle.subscribe_events();
-    handle
+    let answer = handle
         .select(request(&handle, Some("s1"), 1_100))
         .await
         .unwrap();
+    let moved = match &answer.result {
+        SelectResult::Selected(s) => s.trace.moved,
+        other => panic!("{other:?}"),
+    };
     let (summary, record) = next_decision(&mut events).await;
     assert_eq!(
         (
             summary.kind,
+            summary.rule,
+            moved,
             record.outcome.account_id.as_deref(),
+            record.outcome.rule,
             pin_events_of(&record)
         ),
         (
             "placed",
+            Some("paused"),
+            Some("paused"),
             Some(to),
-            vec![("pin_expired", Some("paused")), ("pin_created", None)]
+            Some("paused"),
+            vec![("pin_migrated", Some("paused"))]
         ),
-        "the selection replaced the pin the pause left"
+        "the selection moved the pin the pause left, with no expiry and no fresh pin"
     );
     assert_eq!(
         record.outcome.from_account_id.as_deref(),
         Some(from.as_str()),
-        "the placement names the paused account the pin left"
+        "the move names the paused account the pin left"
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, reasons, cause: None, .. } if from_account == from && to_account == to && reason == "paused" && reasons == vec!["paused"]),
+        "the move carries its cause and the whole list"
     );
     let mut events = handle.subscribe_events();
     // One millisecond past the pool's hour-long affinity TTL, the paused account still out of the set.
@@ -3974,6 +3986,117 @@ async fn a_placement_off_a_paused_account_names_it_as_the_source_and_a_replaced_
     assert_eq!(
         record.outcome.from_account_id, None,
         "a pin replaced on its own account names no source"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_on_a_paused_account_idle_past_its_ttl_stays_an_expiry_and_its_placement_names_no_source(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // No purge tick runs, so the row past its TTL below stays for the selection to replace.
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let to = if from == "a" { "b" } else { "a" };
+    store.set_enabled(&from, false, "test").unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // One millisecond past the pool's hour-long affinity TTL.
+    let answer = handle
+        .select(request(&handle, Some("s1"), 1_000 + HOUR + 1))
+        .await
+        .unwrap();
+    let moved = match &answer.result {
+        SelectResult::Selected(s) => s.trace.moved,
+        other => panic!("{other:?}"),
+    };
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (
+            summary.kind,
+            summary.rule,
+            moved,
+            record.outcome.account_id.as_deref(),
+            record.outcome.from_account_id.as_deref(),
+            pin_events_of(&record)
+        ),
+        (
+            "placed",
+            None,
+            None,
+            Some(to),
+            None,
+            vec![("pin_expired", Some("expired")), ("pin_created", None)]
+        ),
+        "an idle pin expires beside its account's pause, and its placement names no source"
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == from && reasons == vec!["expired", "paused"]),
+        "the expiry keeps both facts"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_on_an_account_paused_as_it_left_the_pool_moves_under_paused_ahead_of_unserved() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let to = if from == "a" { "b" } else { "a" };
+    // One reload takes the account out of the pool and pauses it. The reload's purge keeps a pin whose account left
+    // its pool, so the selection finds both facts against it.
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: to.into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    store.set_enabled(&from, false, "test").unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_migrated", Some("paused"))],
+        "what the account is outranks what its pool says"
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { reason, reasons, .. } if reason == "paused" && reasons == vec!["unserved", "paused"]),
+        "the move keeps the list in the selection's own order"
     );
 }
 
@@ -4474,7 +4597,8 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
 }
 
 #[tokio::test]
-async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_with_both_facts() {
+async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_moves_under_cooldown_with_both_facts(
+) {
     use phoebis_routing::{Report, RouterEvent};
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -4551,18 +4675,11 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
     }
     let (placed, record) = next_decision(&mut events).await;
     assert_eq!(placed.kind, "placed");
-    assert_eq!(
-        pin_events_of(&record),
-        [("pin_expired", Some("cooldown")), ("pin_created", None)]
-    );
+    assert_eq!(pin_events_of(&record), [("pin_migrated", Some("cooldown"))]);
     assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == a && reasons == vec!["cooldown", "spent"]),
-        "no sibling holds allowance, so the spent rule names no destination and the cooled pin expires"
+        matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, reasons, .. } if from_account == a && to_account == b && reason == "cooldown" && reasons == vec!["cooldown", "spent"]),
+        "no sibling holds allowance, so the spent rule names no destination and the cooled pin moves under its cooldown"
     );
-    assert!(matches!(
-        next_event(&mut events).await,
-        RouterEvent::PinCreated { .. }
-    ));
 }
 
 /// A rejection as the relay reports it, with the clock deciding the row's set time.
@@ -9776,7 +9893,7 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
 }
 
 #[tokio::test]
-async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
+async fn a_marked_pin_moved_off_its_cooled_account_inside_a_decision_clears_its_mark_as_moved() {
     use phoebis_routing::RouterEvent;
     let store = shedding_store(&["a", "b"]);
     with_tier(&store, "a");
@@ -9787,7 +9904,7 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
     ] {
         store.upsert_pin(&pin).unwrap();
     }
-    // The model is cooled on a, so step 5 releases s1's pin and the session is placed afresh on b.
+    // The model is cooled on a, so step 5 releases s1's pin and the placement on b moves the session.
     store
         .upsert_cooldown(&CooldownRow {
             account_id: "a".into(),
@@ -9815,20 +9932,20 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
                 .unwrap()
         ),
         ("b".into(), None),
-        "the cooled account's pin is released and the session placed afresh"
+        "no rule moves the cooled account's pin, and the selection replaces it on b"
     );
     let (summary, record) = next_decision(&mut events).await;
     assert_eq!(summary.kind, "placed");
     assert!(record.pin.as_ref().is_some_and(|pin| pin.marked));
     assert_eq!(
         record.outcome.mark_cleared, None,
-        "no heal and no move cleared it"
+        "no heal and no rule's move cleared it inside the selection"
     );
     let later = drained(&mut events).await;
     assert!(
         later
             .iter()
-            .any(|event| matches!(event, RouterEvent::PinExpired { reasons, .. } if reasons.contains(&"cooldown"))),
+            .any(|event| matches!(event, RouterEvent::PinMigrated { reason, reasons, .. } if reason == "cooldown" && reasons.contains(&"cooldown"))),
         "{later:?}"
     );
     assert!(
@@ -9837,7 +9954,7 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
             RouterEvent::MarkCleared {
                 account_id,
                 pin: PinKey { session_id, .. },
-                reason: "released",
+                reason: "moved",
                 marked_at,
                 marked_on,
                 marked_window,
@@ -9849,7 +9966,7 @@ async fn a_marked_pin_released_inside_a_decision_clears_its_mark_as_released() {
                 && marked_on == "a"
                 && marked_window == "five_hour"
         )),
-        "the release inside the decision clears the mark: {later:?}"
+        "the move inside the decision clears the mark: {later:?}"
     );
 }
 
@@ -10026,7 +10143,8 @@ async fn a_marked_dated_row_the_rekey_replaces_with_a_newer_spelled_row_clears_i
 }
 
 #[tokio::test]
-async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the_same_selection() {
+async fn a_mark_a_round_makes_on_the_requests_own_pin_clears_as_moved_when_the_same_selection_moves_the_pin(
+) {
     use phoebis_routing::RouterEvent;
     let store = shedding_store(&["a", "b"]);
     with_tier(&store, "a");
@@ -10038,7 +10156,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
         store.upsert_pin(&pin).unwrap();
     }
     // The model is cooled on a: the round still runs and marks s1, the heavier pin, with b as its destination, and
-    // step 5 then releases the pin for the cooldown and places the session afresh on b.
+    // step 5 then releases the pin for the cooldown and the placement on b moves the session.
     store
         .upsert_cooldown(&CooldownRow {
             account_id: "a".into(),
@@ -10066,7 +10184,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
                 .unwrap()
         ),
         ("b".into(), None),
-        "the cooled account's pin is released and the session placed afresh"
+        "no rule moves the cooled account's pin, and the selection replaces it on b"
     );
     let (summary, record) = next_decision(&mut events).await;
     assert_eq!(summary.kind, "placed");
@@ -10080,13 +10198,13 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
     );
     assert_eq!(
         record.outcome.mark_cleared, None,
-        "no heal and no move cleared it"
+        "no heal and no rule's move cleared it inside the selection"
     );
     let later = drained(&mut events).await;
     assert!(
         later
             .iter()
-            .any(|event| matches!(event, RouterEvent::PinExpired { reasons, .. } if reasons.contains(&"cooldown"))),
+            .any(|event| matches!(event, RouterEvent::PinMigrated { reason, reasons, .. } if reason == "cooldown" && reasons.contains(&"cooldown"))),
         "{later:?}"
     );
     assert!(
@@ -10095,7 +10213,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
             RouterEvent::MarkCleared {
                 account_id,
                 pin: PinKey { session_id, .. },
-                reason: "released",
+                reason: "moved",
                 marked_at,
                 marked_on,
                 marked_window,
@@ -10107,7 +10225,7 @@ async fn a_mark_a_round_makes_on_the_requests_own_pin_is_released_with_it_in_the
                 && marked_on == "a"
                 && marked_window == "five_hour"
         )),
-        "the mark made and released in one selection is cleared as released: {later:?}"
+        "the mark made and moved off in one selection is cleared as moved: {later:?}"
     );
 }
 

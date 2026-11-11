@@ -606,7 +606,7 @@ async fn pin_events_until_created_on(
 }
 
 #[tokio::test]
-async fn a_marked_accounts_pin_ends_at_the_failovers_selection_and_the_sibling_takes_a_fresh_one() {
+async fn a_marked_accounts_pin_moves_to_the_sibling_at_the_failovers_selection_under_attempted() {
     let up = FakeUpstream::start(vec![]).await;
     up.add_credential_rule(KEYED_A, "/v1/messages", json(401, INVALID_KEY));
     up.add_credential_rule(KEYED_B, "/v1/messages", json_200());
@@ -631,30 +631,44 @@ async fn a_marked_accounts_pin_ends_at_the_failovers_selection_and_the_sibling_t
         (200, "b")
     );
     drain(resp).await;
-    let pins: Vec<(&str, String, Vec<&str>)> = pin_events_until_created_on(&mut events, "s1", "b")
-        .await
-        .into_iter()
-        .map(|event| match event {
-            RouterEvent::PinCreated { account_id, .. } => ("created", account_id, vec![]),
-            RouterEvent::PinExpired {
-                account_id,
-                reasons,
-                ..
-            } => ("expired", account_id, reasons),
-            RouterEvent::PinMigrated {
-                to_account, reason, ..
-            } => panic!("the pin moved to {to_account} under {reason}"),
-            other => panic!("{other:?}"),
-        })
-        .collect();
+    let pins: Vec<(&str, String, Option<String>, Vec<&str>)> =
+        pin_events_until_created_on(&mut events, "s1", "b")
+            .await
+            .into_iter()
+            .map(|event| match event {
+                RouterEvent::PinCreated { account_id, .. } => ("created", account_id, None, vec![]),
+                RouterEvent::PinExpired {
+                    account_id,
+                    reasons,
+                    ..
+                } => ("expired", account_id, None, reasons),
+                RouterEvent::PinMigrated {
+                    from_account,
+                    to_account,
+                    reason,
+                    reasons,
+                    ..
+                } => (
+                    "moved",
+                    format!("{from_account} to {to_account}"),
+                    Some(reason),
+                    reasons,
+                ),
+                other => panic!("{other:?}"),
+            })
+            .collect();
     assert_eq!(
         pins,
         [
-            ("created", "a".to_string(), vec![]),
-            ("expired", "a".to_string(), vec!["attempted"]),
-            ("created", "b".to_string(), vec![]),
+            ("created", "a".to_string(), None, vec![]),
+            (
+                "moved",
+                "a to b".to_string(),
+                Some("attempted".to_string()),
+                vec!["attempted"]
+            ),
         ],
-        "the failover's selection ends the marked account's pin and places a fresh one, with no move under a mark"
+        "the failover's selection moves the marked account's live pin to the sibling under the attempt"
     );
     let events = drain_until_complete(&mut sub).await;
     let traces: Vec<serde_json::Value> = events
@@ -667,8 +681,8 @@ async fn a_marked_accounts_pin_ends_at_the_failovers_selection_and_the_sibling_t
         .collect();
     assert_eq!(
         traces.last().map(|t| &t["moved"]),
-        Some(&serde_json::Value::Null),
-        "the serving placement is a fresh one, not a move"
+        Some(&serde_json::json!("attempted")),
+        "the serving placement names the move's cause"
     );
     wait_for(Duration::from_secs(5), || {
         (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())

@@ -703,18 +703,18 @@ A marked session moves at its next request, the request that ran the round inclu
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
 never within `shed_dwell_seconds` back to an account that shed it, and with none it renews in place and keeps its mark.
 A mark from a round on plan quota moves a standard request alone: a fast-mode request of the marked session stays where
-it is. A pin on an account cooling for the session's model, marked or not, is released rather than moved, with
-`cooldown` among its reasons: the selection's renew step does not renew it, the fresh placement takes its place, and a
-mark goes with it. The round on the account still runs, since a cooldown can hold one model alone. An unmarked pin never
-moves for utilization. A mark holds until the pin moves, is released or expires, or its account heals: when the
-account's projection on the marked window reads under the line its horizon sets (the wall at the account's end or the
-window's own reset, `window_ceiling` at the five-hour bound) at the pin's next request, or, for a mark the stretch made,
-when the stretch reads at or under `slow_down_stretch_seconds`, the mark clears and the pin stays. A later round adds
-its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the pause between two rounds
-on one account and the time a shed session keeps off the account that shed it. The marks live on the pins' rows in the
-registry, beside each account's last round, so a restart neither forgets a mark nor starts a fresh round inside the
-dwell. A held request does not survive one (the relay's open connection closes and the client retries), and the routing
-log's router started row says so.
+it is. A pin on an account cooling for the session's model, marked or not, is replaced rather than renewed, with
+`cooldown` among its reasons: the selection's renew step does not renew it, and the placement that takes its place on
+another account moves the session, its mark clearing as `moved`. The round on the account still runs, since a cooldown
+can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin moves, is released or
+expires, or its account heals: when the account's projection on the marked window reads under the line its horizon sets
+(the wall at the account's end or the window's own reset, `window_ceiling` at the five-hour bound) at the pin's next
+request, or, for a mark the stretch made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark
+clears and the pin stays. A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus
+has two roles, the pause between two rounds on one account and the time a shed session keeps off the account that shed
+it. The marks live on the pins' rows in the registry, beside each account's last round, so a restart neither forgets a
+mark nor starts a fresh round inside the dwell. A held request does not survive one (the relay's open connection closes
+and the client retries), and the routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -754,31 +754,39 @@ weighing the band's hours inside the horizon as the band weighs them, the walk o
 keepalive probe's usage never counts. A burn the model cannot price, for a model it has no weight for or a tier it has
 no capacity for, reads as none.
 
-Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_lane`, `mark`, `overage`,
-`return_to_plan`, `shed` or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
-`fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A move a rule's
-gate read adds the destination's fit (`fits`, `rewrite_only` or `least_bad`), its runway, unbounded where it passes its
-window's reset, and the window that binds it, and a failover's move adds its `cause`: for a cooldown its `scope`
-(`account`, `fast`, `fast_credits` or `model:<id>`), its `reason` (the cooldown row's own word, such as `rate_limit`)
-and its `window`, and for a mark the account's `state` and the state's `cause`. A failover with neither, a 401 whose
-refresh failed with a transient error the request could not wait out, carries none. A mark that clears records
-`mark_cleared` with the reason `healed` (the account's projection on the marked window read under its line again, or its
-stretch under the threshold for a mark the stretch made), `moved` or `released`. A reservation that leaves without
-the usage that would have replaced it records `reservation_expired`, with the relay's word for a request that ended
-without usage (`canceled`, `exhausted`, `refused` or `transport_error`) or `timeout` for a booking an hour old. A pin
-released without a move records `pin_expired` with `reasons`, every fact the selection found against the account:
-`attempted`, `budget` (the pinned member has reached one of its spend budgets), `budget_unknown` (the ledger is degraded
-and the pinned member carries a budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned
-account whose `fast_credits` row stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one
-whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`,
-`unserved`, the account's state when it cannot serve (`disconnected`, `funding_required` until its retry is admitted,
-`reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
-whose destination emptied. A pin whose creating request was answered 400, 403 or 404, or was bound to its account and
-ended at an authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the
-session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
-is placed afresh rather than moved. In the routing log, a `placed` decision whose session's pin the selection released
-off another account, for any of the reasons above, names that account as its source (`from_account_id`), and one placed
-after the purge took the row or a client error names none.
+Any move records a `pin_migrated` event, a rule's or a failover's with reason `cooldown`, `drain`, `fast_lane`, `mark`,
+`overage`, `return_to_plan`, `shed` or `spent`, and a replaced live pin's with a reason of its own (below): `cooldown`
+and `mark` when a failover or a credential mark moved the session, `fast_lane` when a fast-mode rejection moved the
+session, the others after the rule above that moved it. A move a rule's gate read adds the destination's fit (`fits`,
+`rewrite_only` or `least_bad`), its runway, unbounded where it passes its window's reset, and the window that binds it,
+and a failover's move adds its `cause`: for a cooldown its `scope` (`account`, `fast`, `fast_credits` or `model:<id>`),
+its `reason` (the cooldown row's own word, such as `rate_limit`) and its `window`, and for a mark the account's `state`
+and the state's `cause`. A failover with neither, a 401 whose refresh failed with a transient error the request could
+not wait out, carries none. A mark that clears records `mark_cleared` with the reason `healed` (the account's projection
+on the marked window read under its line again, or its stretch under the threshold for a mark the stretch made), `moved`
+or `released`. A reservation that leaves without the usage that would have replaced it records `reservation_expired`,
+with the relay's word for a request that ended without usage (`canceled`, `exhausted`, `refused` or `transport_error`)
+or `timeout` for a booking an hour old. A pin released without a move records `pin_expired` with `reasons`, every fact
+the selection found against the account: `attempted`, `budget` (the pinned member has reached one of its spend budgets),
+`budget_unknown` (the ledger is degraded and the pinned member carries a budget), `cooldown`, `deleted`, `expired`,
+`fast_credits` (a fast request's pinned account whose `fast_credits` row stands or whose usage credits the poll reads as
+unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`,
+`spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`
+until its retry is admitted, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against
+the account, as with a move whose destination emptied. A pin whose creating request was answered 400, 403 or 404, or was
+bound to its account and ended at an authentication failure that marked nothing, with no cooldown or mark on the account
+and no other turn of the session renewing it meanwhile, records the single reason `client_error`: it never served, so
+the session's next request is placed afresh rather than moved.
+
+A placement that replaces a live pin and lands on another account is a move as well, recorded as `pin_migrated` with the
+reason the pin left its account for (`paused`, `disconnected`, `funding_required`, `reauth_required`, `unpaired`,
+`subscription_ended`, `unserved`, `cooldown`, `fast_rate_limit`, `fast_credits`, `budget_unknown`, `budget`, `overage`,
+`attempted`, `spent` or `released`, the first of that order the selection found) and with `reasons`, every fact it
+found. The request's `moved` and the decision's rule carry the same word, and the decision names the account the session
+left (`from_account_id`). A session idle past its pin's TTL stays an expiry beside any other reason, and so does a pin
+replaced on its own account: each records `pin_expired` with `reasons` and `pin_created`, and its placement names no
+source. A deleted account's pins leave when the router reloads, as `pin_expired` with `deleted`, so a session that sat
+on one is placed afresh and its placement names no source.
 
 ### Slow-down
 
@@ -1021,8 +1029,8 @@ their own bounds, as the paragraph after the steps says. Each attempt goes throu
    place](#retry-in-place)). Any other failover row on a portable request records the cooldown, invalidates the matching
    pin, and returns to step 1. On a non-portable request it records the cooldown and commits the failed response
    instead. An authentication failure is the exception: it is never committed (see the paragraph after these steps), and
-   the failover leaves the pin of an account it marks for the next selection to end. Any other row commits and relays
-   the response.
+   the failover leaves the pin of an account it marks for the next selection to replace. Any other row commits and
+   relays the response.
 4. Once the committed response ends, renew the pin with the usage it carried: the served account is final for this
    request. A pin this request created and whose answer is `400`, `403` or `404` is released instead, since it never
    served, unless another turn of the session renewed it meanwhile, and so is one a non-portable request created before
@@ -1037,21 +1045,21 @@ per request. A refusal whose `Retry-After` is over five seconds and within the m
 request that already held its minute on another account fails over at once. A `Retry-After` past that minute, a second
 failure, or an API-key account's failure fails the request over to the next eligible account, and a request bound to its
 account, or one with no account left, is answered the router's own `503 accounts_unavailable` with no account named. An
-account the failover marks, or finds disconnected, keeps its pin until the reselect expires it and places a fresh one.
-Any other failover moves the pin, and the move is recorded as `pin_migrated` with its cause ([Moves](#moves)): the
-landing reads the session's own burn, the cooled and the refused accounts are out, and the strategy ranks the accounts
-the session fits as a move's gate does, then the one where the rewrite alone fits with the longest runway, then the
-least bad, then any account at all, so a session whose every candidate is inside the wind-down is still served. The
-failover, its waits included, starts no new leg past the request's own deadline, ten minutes less a margin: past it the
-request is answered `503 accounts_unavailable` rather than tried on another account. The attempt rows read `auth_failed`
-with the upstream status, and the account reads `reauth_required` after a conclusive failure of the refresh (an
-`invalid_grant`, a token endpoint's `401`) or after a rejected replay, which the Accounts view and the `reauth_required`
-attention condition show. Whoever lands the mark reports it at once: the relay for a failover or a rejected replay, and
-the usage poll, its profile read and the catalog refresh when their own token refresh lands it. The routing writer's
-fenced write and the reload after it then take the account out of selection. Until that reload the credential cache
-refuses the marked credential, so no request dials the account on the token it still held. A rejected replay's mark
-refuses the replayed token's lineage in the credential cache the same way, so the token the upstream just refused is not
-handed to another request.
+account the failover marks, or finds disconnected, keeps its pin until the reselect moves it to another account, under
+the account's state or `attempted` ([Moves](#moves)). Any other failover moves the pin, and the move is recorded as
+`pin_migrated` with its cause ([Moves](#moves)): the landing reads the session's own burn, the cooled and the refused
+accounts are out, and the strategy ranks the accounts the session fits as a move's gate does, then the one where the
+rewrite alone fits with the longest runway, then the least bad, then any account at all, so a session whose every
+candidate is inside the wind-down is still served. The failover, its waits included, starts no new leg past the
+request's own deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather
+than tried on another account. The attempt rows read `auth_failed` with the upstream status, and the account reads
+`reauth_required` after a conclusive failure of the refresh (an `invalid_grant`, a token endpoint's `401`) or after a
+rejected replay, which the Accounts view and the `reauth_required` attention condition show. Whoever lands the mark
+reports it at once: the relay for a failover or a rejected replay, and the usage poll, its profile read and the catalog
+refresh when their own token refresh lands it. The routing writer's fenced write and the reload after it then take the
+account out of selection. Until that reload the credential cache refuses the marked credential, so no request dials the
+account on the token it still held. A rejected replay's mark refuses the replayed token's lineage in the credential
+cache the same way, so the token the upstream just refused is not handed to another request.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first. Earlier events are
 buffered, up to 64 KiB, and relayed after commit in order, and a stream that exceeds the buffer or sends no committing

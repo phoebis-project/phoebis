@@ -2805,6 +2805,26 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     patched(r#"{"in_flight_cap":16}"#).await;
     mirror_caught_up(parts, baseline).await;
 
+    // Moved for its account's state: the operator pauses the account a session sits on, the session's next request
+    // lands on the sibling as a move under `paused`, and the account is resumed for the stories after it.
+    let response = post(app, "/admin/accounts/business/pause", "", Some(cookie)).await;
+    assert_eq!(response.status(), 204, "the account is paused");
+    mirror_caught_up(parts, baseline).await;
+    let paused_off = parts
+        .router
+        .select(asked(parts, key_generation, "r-paused", 1, Some("s-held")))
+        .await
+        .unwrap();
+    assert!(
+        matches!(&paused_off.result, SelectResult::Selected(s) if s.account.id == "direct" && s.trace.moved == Some("paused")),
+        "the paused account's session moves to the sibling, not {:?}",
+        paused_off.result
+    );
+    drop(paused_off);
+    let response = post(app, "/admin/accounts/business/resume", "", Some(cookie)).await;
+    assert_eq!(response.status(), 204, "the account is resumed");
+    mirror_caught_up(parts, baseline).await;
+
     // A keepalive probe renews its pin.
     let probe = parts
         .router

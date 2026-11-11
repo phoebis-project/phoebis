@@ -128,30 +128,35 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             to_account,
             epoch,
             reason,
+            reasons,
             fit,
             runway_ms,
             binding,
             cause,
             at,
-        } => EventRecord {
-            at: *at,
-            kind: PIN_MIGRATED.into(),
-            account_id: Some(to_account.clone()),
-            detail: Some(
-                json!({
-                    "agent_id": pin.agent_id,
-                    "from_account": from_account,
-                    "epoch": epoch,
-                    "reason": reason,
-                    "fit": fit,
-                    "runway_ms": runway_ms,
-                    "binding": binding,
-                    "cause": cause,
-                })
-                .to_string(),
-            ),
-            ..pin_row(pin)
-        },
+        } => {
+            let mut detail = json!({
+                "agent_id": pin.agent_id,
+                "from_account": from_account,
+                "epoch": epoch,
+                "reason": reason,
+                "fit": fit,
+                "runway_ms": runway_ms,
+                "binding": binding,
+                "cause": cause,
+            });
+            // Only a replaced pin's move holds a list, so a rule's move and a failover's landing keep their detail.
+            if !reasons.is_empty() {
+                detail["reasons"] = json!(reasons);
+            }
+            EventRecord {
+                at: *at,
+                kind: PIN_MIGRATED.into(),
+                account_id: Some(to_account.clone()),
+                detail: Some(detail.to_string()),
+                ..pin_row(pin)
+            }
+        }
         RouterEvent::MarkCleared {
             account_id,
             pin,
@@ -988,6 +993,7 @@ mod tests {
                 to_account: "b".into(),
                 epoch: 7,
                 reason: "cooldown".into(),
+                reasons: Vec::new(),
                 fit: Some("fits"),
                 runway_ms: None,
                 binding: None,
@@ -1042,6 +1048,7 @@ mod tests {
             to_account: "b".into(),
             epoch: 7,
             reason: "cooldown".into(),
+            reasons: Vec::new(),
             fit: Some("rewrite_only"),
             runway_ms: Some(5_400_000),
             binding: Some("five_hour".into()),

@@ -935,7 +935,8 @@ fn reads_utilization(a: &AttemptRecord) -> bool {
 }
 
 /// Whether the attempt's stored trace names a move: `shed`, `spent`, `overage`, `return_to_plan` and `drain`
-/// from the selector alike, `cooldown`, `fast_lane` and `mark` from a fail-over's recovered reason.
+/// from the selector alike, `cooldown`, `fast_lane` and `mark` from a fail-over's recovered reason, and the cause a
+/// live pin a placement replaced on another account left for, such as `paused` or `unserved`.
 fn moved(a: &AttemptRecord) -> bool {
     a.selection
         .as_deref()

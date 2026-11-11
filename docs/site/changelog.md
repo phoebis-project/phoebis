@@ -131,21 +131,21 @@ failover](routing.md#cooldowns-and-failover)). A slow-down hold never runs past 
 after the reset is read afresh ([Slow-down](routing.md#slow-down)). A reading that moves a window's reset later while
 the stored one still lies ahead replaces it with no `window_reset`, and a clean poll that drops the 5-hour window
 records the end of the account's slow-down in the routing log at the drop ([The windows the router works
-from](routing.md#the-windows-the-router-works-from)). A pin placed on another account after the selection released its
-earlier pin names the released pin's account as its source in the routing log, and one placed after the purge took the
-earlier pin names none ([Moves](routing.md#moves)). A shedding round leaves out a pin whose agent ended and a pin with
-no burn on the fired window, and marks a pin in place of a covering one only where its burn covers a tenth of what is
-left to shed, so a round never rewrites a session for a sliver ([Moves](routing.md#moves)). A move fits a destination
-only where its room covers half the moved pin's burn beyond the pin's own, a fresh placement keeping the ceiling, and an
-ended pin's burn leaves the projection until its next request ([Moves](routing.md#moves)). A window's round waits a
-quarter of the time from its first reading over the ceiling to the wall instant its burn projects, at most two burn
-averages, so a burst toward a near wall instant fires early and a slow climb waits, and the routing log names the wall
-instant ([Moves](routing.md#moves)). A shedding round and the heal of a standing mark test a window against the wall
-where its horizon is the account's end or the window's own reset, since the quota left there is lost, and against the
-ceiling elsewhere ([Subscription end](routing.md#subscription-end)). A move's fit reads the windows the destination's
-window set holds, so an account whose set lacks the 5-hour window can take a shed move ([Moves](routing.md#moves)). A
-pin's entrypoint and effort read null where the turn named none ([Sessions](console.md#sessions)), and the routing
-log's cooldown chip names the model a cooldown holds ([Routing log](console.md#routing-log)).
+from](routing.md#the-windows-the-router-works-from)). A placement that replaces a live pin on another account is
+recorded as a move with the reason the pin left for, and a placement after an idle expiry names no account it left
+([Moves](routing.md#moves)). A shedding round leaves out a pin whose agent ended and a pin with no burn on the fired
+window, and marks a pin in place of a covering one only where its burn covers a tenth of what is left to shed, so a
+round never rewrites a session for a sliver ([Moves](routing.md#moves)). A move fits a destination only where its room
+covers half the moved pin's burn beyond the pin's own, a fresh placement keeping the ceiling, and an ended pin's burn
+leaves the projection until its next request ([Moves](routing.md#moves)). A window's round waits a quarter of the time
+from its first reading over the ceiling to the wall instant its burn projects, at most two burn averages, so a burst
+toward a near wall instant fires early and a slow climb waits, and the routing log names the wall instant
+([Moves](routing.md#moves)). A shedding round and the heal of a standing mark test a window against the wall where its
+horizon is the account's end or the window's own reset, since the quota left there is lost, and against the ceiling
+elsewhere ([Subscription end](routing.md#subscription-end)). A move's fit reads the windows the destination's window set
+holds, so an account whose set lacks the 5-hour window can take a shed move ([Moves](routing.md#moves)). A pin's
+entrypoint and effort read null where the turn named none ([Sessions](console.md#sessions)), and the routing log's
+cooldown chip names the model a cooldown holds ([Routing log](console.md#routing-log)).
 
 With `keepalive.enabled` on a pool the router keeps a replayable copy of every eligible request a session sends and,
 shortly before the cache entry would expire, sends a probe that reads it ([Keepalive](keepalive.md)). The policy's
