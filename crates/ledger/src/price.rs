@@ -387,6 +387,19 @@ mod tests {
             Some(CostSplit::default()),
             "a free call costs no dollars: {free:?}"
         );
+        // The `/v1/usage` sums call `price_usd` without `price_row`, so the zero must come from `price_usd` itself.
+        assert_eq!(
+            price_usd(
+                &api_prices(),
+                &RowKey {
+                    classifier: true,
+                    ..plan_row()
+                },
+                input(1_000),
+            ),
+            Some(CostSplit::default()),
+            "the dollars alone read zero for a free call"
+        );
         let plain_windows = windows(&plain.shares);
         assert!(!plain_windows.is_empty(), "{plain:?}");
         assert_eq!(
@@ -451,6 +464,7 @@ mod tests {
         );
         assert_eq!(free.share_reason, Some("client_classifier"));
         let plain = price(&row, input(1_000));
+        assert_eq!(plain.usd, None, "the price list lacks Mystery 2: {plain:?}");
         assert_eq!(
             (windows(&plain.shares), plain.equivalent),
             (vec![(FIVE_HOUR, None), (SEVEN_DAY, None)], None),
