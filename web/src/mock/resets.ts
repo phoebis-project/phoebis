@@ -20,13 +20,15 @@ export interface MockGrant {
 }
 
 /**
- * One seed's block in the upstream's field names, beside two members the block itself does not carry: the Fable
- * week's entry of the usage body's `weekly_scoped_shares`, and `uses`, the instant of each use through the router by
- * grant id, which the router's ledger holds since the upstream's block names the time of none.
+ * One seed's block in the upstream's field names, beside three members the block itself does not carry: `folds`, the
+ * count of claims' answers folded into it, which stands for the store's epoch, the Fable week's entry of the usage
+ * body's `weekly_scoped_shares`, and `uses`, the instant of each use through the router by grant id, which the router's
+ * ledger holds since the upstream's block names the time of none.
  */
 export interface MockBlock {
   cooldown_until: string | null;
   eligible: boolean;
+  folds: number;
   grants: readonly MockGrant[];
   ineligible_reason: string | null;
   /** The Fable week's `used_percent_of_weekly`, null where the body carries no share. */
@@ -62,8 +64,8 @@ function kindOf(g: MockGrant): string {
 /** One promotion gave every grant of the story, so they share its label and its start. */
 const PROMOTION = { label: 'Launch reset', starts_at: ago(10 * DAY) } as const;
 /** A usage-based seat's block: no grant, and the reason the upstream gives for one. */
-const SEAT: MockBlock = { cooldown_until: null, eligible: false, grants: [], ineligible_reason: 'seat', used_percent_of_weekly: null, uses: {} };
-const ELIGIBLE = { cooldown_until: null, eligible: true, ineligible_reason: null, used_percent_of_weekly: null, uses: {} } as const;
+const SEAT: MockBlock = { cooldown_until: null, eligible: false, folds: 0, grants: [], ineligible_reason: 'seat', used_percent_of_weekly: null, uses: {} };
+const ELIGIBLE = { cooldown_until: null, eligible: true, folds: 0, ineligible_reason: null, used_percent_of_weekly: null, uses: {} } as const;
 
 /** One seed's block as the upstream's usage body carries it, in the upstream's field names. */
 export const RESET_BLOCKS: Readonly<Record<string, MockBlock>> = {
@@ -126,8 +128,15 @@ const resetsLeft = (block: MockBlock, now: number): number => block.grants.filte
 /** The last read of every block that answered 200. */
 const READ_AT = NOW - 20 * MINUTE;
 
-/** A seed's `limit_resets` member in the route's own names, null for a seed with no block. */
-export function limitResetsWire(seed: string, blocks: Readonly<Record<string, MockBlock>>, now: number): Record<string, unknown> | null {
+/** The member's `revision`: the account's incarnation above the block's epoch in its low 32 bits, as the router's
+ *  token carries them, so a use confirmed on an account deleted since or on counts a fold moved is refused. */
+export const resetsRevision = (incarnation: number, block: MockBlock): number => incarnation * 2 ** 32 + block.folds;
+
+/**
+ * A seed's `limit_resets` member in the route's own names, null for a seed with no block. `incarnation` is the
+ * account's, as its edit token carries it, and a seed is its id's first account.
+ */
+export function limitResetsWire(seed: string, blocks: Readonly<Record<string, MockBlock>>, now: number, incarnation = 1): Record<string, unknown> | null {
   const block = lookup(blocks, seed);
   if (block === undefined) return null;
   const states = grantStates(block, now);
@@ -153,6 +162,7 @@ export function limitResetsWire(seed: string, blocks: Readonly<Record<string, Mo
     ineligible_reason: block.ineligible_reason,
     left: resetsLeft(block, now),
     read_at: READ_AT,
+    revision: resetsRevision(incarnation, block),
   };
 }
 
@@ -186,6 +196,8 @@ export function foldAnswer(block: MockBlock, grantId: string, answer: MockUse, a
   return {
     ...block,
     cooldown_until: answer.cooldown_until === null ? block.cooldown_until : iso(answer.cooldown_until),
+    // Every fold moves the store's epoch, so a dialog still open on the counts before it names a stale member.
+    folds: block.folds + 1,
     grants: block.grants.map((g) => (g.id === grantId ? { ...g, resets_left: count(g) } : g)),
     used_percent_of_weekly: givesBack && block.used_percent_of_weekly !== null ? 0 : block.used_percent_of_weekly,
     uses: used ? { ...block.uses, [grantId]: at } : block.uses,

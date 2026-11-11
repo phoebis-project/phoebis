@@ -143,6 +143,20 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
 });
 
+test('a use sends the revision of the member it was confirmed on as expected_revision, and no body without one', async () => {
+  const calls = stub(() => answer(200, { outcome: 'used', result: 'reset' }));
+  const api = new HttpApi();
+  await api.useLimitReset('acc', 'rg-acc-1', 5);
+  await api.useLimitReset('acc', 'rg-acc-1');
+  assert.deepEqual(
+    calls.map((c) => [c.init.method, c.init.body]),
+    [
+      ['POST', '{"expected_revision":5}'],
+      ['POST', undefined],
+    ],
+  );
+});
+
 test('listRequests sends the key, the direction and the fallback switch, and none under the defaults, and listRoutingLog sends the direction', async () => {
   const calls = stub((url) => answer(200, url.startsWith('/admin/requests') ? { next_cursor: null, requests: [] } : { next_cursor: null, rows: [] }));
   const api = new HttpApi();

@@ -31,9 +31,9 @@ use phoebis_routing::{
     FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    answers_stamp_token, stamp_token, AccountExtras, AccountKind, AccountRow, AccountState,
-    ApiKeyRow, CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember, PoolRow, Settled,
-    StateCause, StoreError,
+    answers_stamp_token, limit_resets_token, stamp_token, AccountExtras, AccountKind, AccountRow,
+    AccountState, ApiKeyRow, CooldownRow, CredentialStanding, Identity, NewBundle, PoolMember,
+    PoolRow, Settled, StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -982,6 +982,19 @@ fn uses_by_account(
     by_account
 }
 
+/// What a use names. A member the route does not name is ignored.
+#[derive(serde::Deserialize, ToSchema)]
+pub(crate) struct LimitResetUseInput {
+    /// The `revision` of the account's `limit_resets` member the reset was confirmed on, as the last answer carried
+    /// it. A malformed value answers `400`, one the member no longer carries `409` under `limit_reset_account_changed`,
+    /// and a request without it is bound to the route's own read.
+    // Kept raw and apart from an absent field, as `PatchAccountInput` keeps its own, so a present null is refused with
+    // its own sentence rather than read as "not sent".
+    #[serde(default, deserialize_with = "present")]
+    #[schema(value_type = u64)]
+    pub expected_revision: Option<Value>,
+}
+
 /// Use one of an account's limit resets now.
 ///
 /// Sends the claim the client sends for the grant, once, and answers after the reads that follow it: the usage poll's
@@ -989,7 +1002,8 @@ fn uses_by_account(
 /// an open outcome, whose failure leaves the read due for the account's next poll slot. The claim runs in a task of
 /// its own, so a caller that goes away cuts neither the request nor its record, and every claim that reached the
 /// upstream writes one `limit_reset_claimed` row to the routing log, whatever its outcome. A refusal before the request
-/// leaves sends nothing and writes no row.
+/// leaves sends nothing and writes no row. The body's optional `expected_revision` binds the claim to the
+/// `limit_resets` member the reset was confirmed on, so a use whose account or block moved since sends nothing.
 #[utoipa::path(
     post,
     path = "/admin/accounts/{id}/limit-resets/{grant}/use",
@@ -999,13 +1013,14 @@ fn uses_by_account(
         ("id" = String, Path, description = "The account's id"),
         ("grant" = String, Path, description = "The grant's id, as the account's `limit_resets` member lists it"),
     ),
+    request_body(content = Option<LimitResetUseInput>, description = "Optional: a request with no body, or with an empty one, names no `expected_revision`", content_type = "application/json"),
     responses(
         (status = 200, description = "The claim's outcome, for a claim whose answer the router parsed, which names a `result`. An upstream 200 that names a `result` beside a member of another type is no parsed answer and reads 502 `limit_reset_unanswered`.", body = LimitResetUse),
-        (status = 400, description = "`only a subscription account holds limit resets`", body = ErrorBody, example = json!({"error": "only a subscription account holds limit resets"})),
+        (status = 400, description = "- `only a subscription account holds limit resets`\n- `body must be a JSON object`\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer", body = ErrorBody, example = json!({"error": "only a subscription account holds limit resets"})),
         (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
-        (status = 409, description = "- `the account changed while its reset was being used`, which carries the `limit_reset_account_changed` code\n- `a reset of this account is being used now`, which carries the `limit_reset_in_flight` code\n- `the account's identity names no organization, so pair it again`, which carries the `limit_reset_no_organization` code\n- `the account's usage is not read, so its resets are not either`, which carries the `limit_reset_not_polled` code\n- `this reset is not usable now`, which carries the `limit_reset_not_usable` code\n\nThe account changed where its row reads another holder than the row the route read, or where a pairing, a disconnect or a delete crossed the claim before it left.",
+        (status = 409, description = "- `the account changed while its reset was being used`, which carries the `limit_reset_account_changed` code\n- `a reset of this account is being used now`, which carries the `limit_reset_in_flight` code\n- `the account's identity names no organization, so pair it again`, which carries the `limit_reset_no_organization` code\n- `the account's usage is not read, so its resets are not either`, which carries the `limit_reset_not_polled` code\n- `this reset is not usable now`, which carries the `limit_reset_not_usable` code\n\nThe account changed where its row reads another holder than the row the route read, where a pairing, a disconnect or a delete crossed the claim before it left, or where the request names an `expected_revision` the account's `limit_resets` member no longer carries: the account was deleted and created again, paired again, or had a reset used since the member was read.",
             headers(("x-phoebis-error-code" = String, description = "`limit_reset_account_changed`, `limit_reset_in_flight`, `limit_reset_no_organization`, `limit_reset_not_polled` or `limit_reset_not_usable`: the refusal, with the message the bullets pair it with")),
             body = ErrorBody, example = json!({"error": "this reset is not usable now"})),
         (status = 500, response = StorageFailure),
@@ -1017,9 +1032,22 @@ fn uses_by_account(
 async fn limit_reset_use(
     State(state): State<Arc<AdminState>>,
     Path((id, grant)): Path<(String, String)>,
+    body: Bytes,
 ) -> Response {
     let row = match limit_reset_account(&state, &id) {
         Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    let sent = if body.is_empty() {
+        None
+    } else {
+        match parse_object::<LimitResetUseInput>(&body) {
+            Ok(input) => input.expected_revision,
+            Err(refusal) => return refusal,
+        }
+    };
+    let expected_revision = match fence_revision(sent.as_ref()) {
+        Ok(token) => token,
         Err(refusal) => return refusal,
     };
     let (answer, answered) = tokio::sync::oneshot::channel();
@@ -1032,6 +1060,7 @@ async fn limit_reset_use(
         state.clone(),
         row,
         grant,
+        expected_revision,
         first_stage,
         answer,
     )));
@@ -1045,15 +1074,19 @@ async fn limit_reset_use(
 
 /// The claim's work from the request to the answer the route waits for: the first stage (the request, the fold and
 /// the event), then the reads the outcome calls for. `row` is the row the route checked, and the claim is for its
-/// holder alone.
+/// holder alone, and for the block `expected_revision` names where the request named one.
 async fn claim_and_record(
     state: Arc<AdminState>,
     row: AccountRow,
     grant: String,
+    expected_revision: Option<u64>,
     first_stage: ClaimRunning,
     answer: tokio::sync::oneshot::Sender<Response>,
 ) {
-    let claimed = state.usage.claim_limit_reset(&row, &grant).await;
+    let claimed = state
+        .usage
+        .claim_limit_reset(&row, &grant, expected_revision)
+        .await;
     // Before the match, since a landed mark comes with a refusal, whose arm returns at once.
     state.quota_poll().report_landed_mark(&row.id).await;
     let claim = match claimed {
@@ -2767,6 +2800,10 @@ pub(crate) struct AccountLimitResets {
     pub left: u32,
     /// Epoch milliseconds: the instant of the block's last read that answered 200.
     pub read_at: i64,
+    /// An opaque token naming this account and this state of its block, which a use sends back as
+    /// `expected_revision`. A pairing and a claim's fold move it, and an account deleted and created again under the
+    /// same id never answers a token its predecessor did.
+    pub revision: u64,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
@@ -3301,6 +3338,7 @@ fn limit_resets_view(
         ineligible_reason: block.ineligible_reason,
         left,
         read_at: extras.limit_resets_read_at?,
+        revision: limit_resets_token(row.incarnation, extras.limit_resets_epoch),
     })
 }
 
@@ -3765,9 +3803,9 @@ pub(crate) fn fence_token(
     }
 }
 
-/// The edit token an account edit's body names, `None` when it sent none, refused when it is not a non-negative integer.
-/// The route answers 409 when it names another incarnation or revision than its own read, so the store fences on the
-/// read alone.
+/// The edit token an account edit's body names, or the token a limit reset's use names, `None` when it sent none,
+/// refused when it is not a non-negative integer. An account edit answers 409 when it names another incarnation or
+/// revision than its own read, so the store fences on the read alone.
 // The error is a rendered HTTP response, returned once per request and dropped. Boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]

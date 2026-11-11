@@ -2107,7 +2107,10 @@ mod service {
         let service = service_for(&up, store.clone(), &now);
         service.poll("a").await.unwrap();
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let requests = up.requests();
         let usage = requests
@@ -2166,13 +2169,25 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"cooldown"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let ids = request_ids(&up);
         assert_eq!(ids.len(), 4);
@@ -2200,7 +2215,7 @@ mod service {
         let row = store.account("a").unwrap().unwrap();
         let claiming = {
             let service = service.clone();
-            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1", None).await })
         };
         wait_for(Duration::from_secs(5), || {
             (claims_sent(&up).len() == 1).then_some(())
@@ -2226,11 +2241,20 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         now.store(1_599_999, Ordering::SeqCst);
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         now.store(1_600_000, Ordering::SeqCst);
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let ids = request_ids(&up);
         assert_eq!(ids.len(), 3);
@@ -2249,11 +2273,20 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        let first = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let first = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering(403));
-        let second = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let second = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(
             (first.outcome, second.outcome),
@@ -2281,12 +2314,18 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(2, 2));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         // One millisecond after the outcome, the first instant a read goes out after the id was kept.
         now.store(1_000_001, Ordering::SeqCst);
         service.limit_resets("a").await.unwrap();
         service.limit_resets("a").await.unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let ids = request_ids(&up);
         assert_eq!(ids.len(), 2);
@@ -2304,11 +2343,20 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"cooldown"}"#));
-        let second = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let second = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(
             second.outcome,
@@ -2336,7 +2384,10 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(1, 1));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        let claim = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let claim = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(claim.outcome, ClaimOutcome::Refused);
         assert_eq!(
@@ -2358,7 +2409,10 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        let claim = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let claim = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(claim.outcome, ClaimOutcome::Used);
         let block = stored_block(&store);
@@ -2391,13 +2445,16 @@ mod service {
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
 
-        let waiting = service.claim_limit_reset(&row, "rg-a-2").await;
+        let waiting = service.claim_limit_reset(&row, "rg-a-2", None).await;
         assert!(
             matches!(waiting, Err(ClaimRefusal::NotUsable)),
             "{waiting:?}"
         );
         assert_eq!(up.requests().len(), 0, "the waiting grant sends nothing");
-        let first = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let first = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         assert_eq!(first.outcome, ClaimOutcome::Used);
         let claims = claims_sent(&up);
         assert_eq!(claims.len(), 1);
@@ -2419,7 +2476,7 @@ mod service {
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
 
-        let refused = service.claim_limit_reset(&row, "rg-a-1").await;
+        let refused = service.claim_limit_reset(&row, "rg-a-1", None).await;
         assert!(
             matches!(refused, Err(ClaimRefusal::NoOrganization)),
             "{refused:?}"
@@ -2441,7 +2498,7 @@ mod service {
         let row = store.account("a").unwrap().unwrap();
         let claim = || {
             let (service, row) = (service.clone(), row.clone());
-            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1", None).await })
         };
         let first = claim();
         wait_for(Duration::from_secs(5), || {
@@ -2470,7 +2527,10 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let snapshot = service.poll("a").await.unwrap();
         assert_eq!(
@@ -2493,7 +2553,10 @@ mod service {
         let service = service_for(&up, store.clone(), &now);
         service.poll("a").await.unwrap();
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(
             claims_sent(&up).len(),
@@ -2522,7 +2585,10 @@ mod service {
             (requests_on(&up, LIMIT_RESETS_LINE) == 1).then_some(())
         })
         .await;
-        let claim = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let claim = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         assert_eq!(claim.outcome, ClaimOutcome::Used);
         up.release();
         let read = reading
@@ -2585,7 +2651,7 @@ mod service {
             .unwrap();
         store_block(&store, after.incarnation, &block_with(3, 3));
 
-        let refused = service.claim_limit_reset(&before, "rg-a-1").await;
+        let refused = service.claim_limit_reset(&before, "rg-a-1", None).await;
         assert!(
             matches!(refused, Err(ClaimRefusal::AccountChanged)),
             "{refused:?}"
@@ -2595,7 +2661,10 @@ mod service {
             0,
             "the new holder's reset is not spent on the deleted holder's confirmation"
         );
-        let claim = service.claim_limit_reset(&after, "rg-a-1").await.unwrap();
+        let claim = service
+            .claim_limit_reset(&after, "rg-a-1", None)
+            .await
+            .unwrap();
         assert_eq!(claim.outcome, ClaimOutcome::Used);
         assert_eq!(claims_sent(&up).len(), 1);
         up.shutdown().await;
@@ -2608,7 +2677,10 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let before = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&before, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&before, "rg-a-1", None)
+            .await
+            .unwrap();
         // No `invalidate` tells the service of the new row, since it would drop the kept id before the holder is read.
         store.delete_account("a", "test").unwrap();
         store
@@ -2641,7 +2713,10 @@ mod service {
             .unwrap();
         store_block(&store, after.incarnation, &block_with(3, 3));
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&after, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&after, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let ids = request_ids(&up);
         assert_eq!(ids.len(), 2);
@@ -2665,12 +2740,18 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         // One millisecond after the outcome, so the read follows the attempt and keeps the id for the usable grant.
         now.store(1_000_001, Ordering::SeqCst);
         service.limit_resets("a").await.unwrap();
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let ids = request_ids(&up);
         assert_eq!(ids.len(), 2);
@@ -2693,10 +2774,16 @@ mod service {
         let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
         let service = service_for(&up, store.clone(), &now);
         let row = store.account("a").unwrap().unwrap();
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         service.invalidate("a");
         answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         let ids = request_ids(&up);
         assert_eq!(ids.len(), 2);
@@ -2717,7 +2804,7 @@ mod service {
         let row = store.account("a").unwrap().unwrap();
         let claiming = {
             let (service, row) = (service.clone(), row.clone());
-            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1", None).await })
         };
         wait_for(Duration::from_secs(5), || {
             (claims_sent(&up).len() == 1).then_some(())
@@ -2727,7 +2814,10 @@ mod service {
         up.release();
         let first = claiming.await.unwrap().unwrap();
         // The gate stays open, so the second claim is answered 500 at once.
-        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(first.outcome, ClaimOutcome::Unsettled);
         let ids = request_ids(&up);
@@ -2761,7 +2851,7 @@ mod service {
         let row = store.account("a").unwrap().unwrap();
         let claiming = {
             let service = service.clone();
-            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1").await })
+            tokio::spawn(async move { service.claim_limit_reset(&row, "rg-a-1", None).await })
         };
         wait_for(Duration::from_secs(5), || {
             up.requests()
@@ -2807,7 +2897,10 @@ mod service {
             (requests_on(&up, LIMIT_RESETS_LINE) == 1).then_some(())
         })
         .await;
-        let first = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let first = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
         up.release();
         let held = reading
             .await
@@ -2824,7 +2917,10 @@ mod service {
             "the held read's write landed, and its block is one that drops an id"
         );
         service.limit_resets("a").await.unwrap();
-        let second = service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        let second = service
+            .claim_limit_reset(&row, "rg-a-1", None)
+            .await
+            .unwrap();
 
         assert_eq!(
             (first.outcome, second.outcome),

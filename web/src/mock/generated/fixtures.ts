@@ -159,7 +159,8 @@ export const FIXTURES: Record<string, Fixture> = {
         ],
         "ineligible_reason": null,
         "left": 2,
-        "read_at": 1791721000000
+        "read_at": 1791721000000,
+        "revision": 4294967296
       },
       "extra_usage": {
         "currency": "USD",
@@ -266,7 +267,8 @@ export const FIXTURES: Record<string, Fixture> = {
         ],
         "ineligible_reason": null,
         "left": 1,
-        "read_at": 1791721000000
+        "read_at": 1791721000000,
+        "revision": 4294967297
       },
       "outcome": "used",
       "reason": null,
@@ -319,7 +321,8 @@ export const FIXTURES: Record<string, Fixture> = {
         ],
         "ineligible_reason": null,
         "left": 2,
-        "read_at": 1791721000000
+        "read_at": 1791721000000,
+        "revision": 4294967296
       }
     }
   },
@@ -592,7 +595,8 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "ineligible_reason": null,
             "left": 2,
-            "read_at": 1791721000000
+            "read_at": 1791721000000,
+            "revision": 4294967296
           },
           "extra_usage": {
             "currency": "USD",
@@ -788,7 +792,8 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "ineligible_reason": null,
             "left": 1,
-            "read_at": 1791721000000
+            "read_at": 1791721000000,
+            "revision": 4294967296
           },
           "extra_usage": null,
           "pool": null,
@@ -862,7 +867,8 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "ineligible_reason": null,
             "left": 1,
-            "read_at": 1791721000000
+            "read_at": 1791721000000,
+            "revision": 4294967296
           },
           "extra_usage": null,
           "pool": null,
@@ -936,7 +942,8 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "ineligible_reason": null,
             "left": 0,
-            "read_at": 1791721000000
+            "read_at": 1791721000000,
+            "revision": 4294967296
           },
           "extra_usage": null,
           "pool": null,
@@ -1007,7 +1014,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "grants": [],
             "ineligible_reason": "seat",
             "left": 0,
-            "read_at": 1791721000000
+            "read_at": 1791721000000,
+            "revision": 4294967296
           },
           "extra_usage": {
             "currency": "USD",

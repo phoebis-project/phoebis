@@ -81,7 +81,8 @@ export function ResetDialog({
   };
   const send = async (grant: ResetGrant) => {
     setClaim('out');
-    const result = await api.useLimitReset(account.id, grant.id).then(
+    // The member the confirmation is drawn from, so the router claims for the account and the counts it shows.
+    const result = await api.useLimitReset(account.id, grant.id, block?.revision).then(
       (use) => ({ use }),
       (thrown: unknown) => ({ thrown }),
     );

@@ -2410,6 +2410,32 @@ const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use'
   });
 }
 {
+  // The dialog's use names the member its read answered, so the router claims for the account and the counts it
+  // showed. secondary's one reset opens on the confirmation (`RESET_BLOCKS` in `web/src/mock/resets.ts`), and the
+  // wrapped use reaches no mock, so the claim writes no row and folds nothing.
+  const { readLimitResets, useLimitReset } = api;
+  let opened = null;
+  const sent = [];
+  api.readLimitResets = async (...args) => (opened = await readLimitResets.apply(api, args));
+  api.useLimitReset = async (...args) => {
+    sent.push(args);
+    throw new Error('held by the case');
+  };
+  resetButtonOf('secondary')?.click();
+  await m.settle(600);
+  resetDialogs()[0]?.querySelector('.dialog__foot .btn--primary')?.click();
+  await m.settle(200);
+  await escapeOn(m);
+  api.readLimitResets = readLimitResets;
+  api.useLimitReset = useLimitReset;
+  const revision = opened?.limitResets?.revision;
+  results.push({
+    name: "/quota the dialog's use names the revision of the member its read answered (seed secondary)",
+    ok: sent.length === 1 && typeof revision === 'number' && sent[0][2] === revision,
+    missing: [JSON.stringify({ revision, sent })],
+  });
+}
+{
   // A claim on its way holds its dialog: Escape and a click on the backdrop leave it open with Use reset disabled, and
   // the same request closes it after the answer. nightly's one reset is usable, so its dialog opens on the
   // confirmation, and a use of it answers a cooldown 25 minutes after the mock's load (`RESET_ANSWERS` in

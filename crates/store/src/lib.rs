@@ -104,8 +104,8 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use crate::migrations::has_table;
 
 pub use accounts::{
-    answers_stamp_token, stamp_token, AccountExtras, AccountKind, AccountRow, AccountState,
-    Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
+    answers_stamp_token, limit_resets_token, stamp_token, AccountExtras, AccountKind, AccountRow,
+    AccountState, Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
 };
 pub use backup::{snapshot, BackupError, RETRY_PAUSE};
 pub use credentials::{

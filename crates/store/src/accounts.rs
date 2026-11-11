@@ -153,6 +153,19 @@ pub fn answers_stamp_token(incarnation: u64, updated_at: i64, token: u64) -> boo
     (high, stamp as i64) == (incarnation, updated_at)
 }
 
+/// The low bits of a limit resets token, which carry the block's epoch. The incarnation takes the bits above them.
+const LIMIT_RESETS_EPOCH_BITS: u32 = 32;
+
+/// What a use of a limit reset sends back to be bound to the block it was confirmed on: the row's incarnation and the
+/// block's epoch in one integer. A grant id names a promotion and repeats across accounts, so a claim must name the
+/// account a dialog showed. The epoch moves at a pairing, which can name another organization of the same upstream
+/// account, and at a claim's fold, which changes the counts, and an account created again under the id starts its
+/// epoch over, so neither part alone names one account under one login with the counts one dialog showed. A part past
+/// its share saturates, as `edit_token`'s does.
+pub fn limit_resets_token(incarnation: u64, epoch: u64) -> u64 {
+    pack_token(incarnation, epoch, LIMIT_RESETS_EPOCH_BITS)
+}
+
 /// The one host the relay dials.
 pub const INFERENCE_HOST: &str = "api.anthropic.com";
 

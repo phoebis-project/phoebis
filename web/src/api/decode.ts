@@ -130,6 +130,7 @@ export function decodeLimitResets(v: unknown): LimitResets | null {
     ineligibleReason: strOrNull(r.ineligible_reason),
     left: num(r.left),
     readAt: isoOr(r.read_at, epoch),
+    revision: num(r.revision),
   }));
 }
 

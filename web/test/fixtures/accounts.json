@@ -152,7 +152,8 @@
           ],
           "ineligible_reason": null,
           "left": 2,
-          "read_at": 1791721000000
+          "read_at": 1791721000000,
+          "revision": 4294967296
         },
         "extra_usage": {
           "currency": "USD",
@@ -348,7 +349,8 @@
           ],
           "ineligible_reason": null,
           "left": 1,
-          "read_at": 1791721000000
+          "read_at": 1791721000000,
+          "revision": 4294967296
         },
         "extra_usage": null,
         "pool": null,
@@ -422,7 +424,8 @@
           ],
           "ineligible_reason": null,
           "left": 1,
-          "read_at": 1791721000000
+          "read_at": 1791721000000,
+          "revision": 4294967296
         },
         "extra_usage": null,
         "pool": null,
@@ -496,7 +499,8 @@
           ],
           "ineligible_reason": null,
           "left": 0,
-          "read_at": 1791721000000
+          "read_at": 1791721000000,
+          "revision": 4294967296
         },
         "extra_usage": null,
         "pool": null,
@@ -567,7 +571,8 @@
           "grants": [],
           "ineligible_reason": "seat",
           "left": 0,
-          "read_at": 1791721000000
+          "read_at": 1791721000000,
+          "revision": 4294967296
         },
         "extra_usage": {
           "currency": "USD",

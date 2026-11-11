@@ -2067,7 +2067,7 @@ async fn a_refused_claim_sends_one_limit_resets_read() {
     // can send a block read.
     store_block(&h, "a", &stored_block(), NOW);
     let row = h.store.account("a").unwrap().unwrap();
-    let claim = usage.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+    let claim = usage.claim_limit_reset(&row, "rg-a-1", None).await.unwrap();
     assert_eq!(claim.outcome, ClaimOutcome::Refused);
     let paused = start_polling(&h, &up).await;
 

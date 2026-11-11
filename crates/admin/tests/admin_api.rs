@@ -1487,6 +1487,8 @@ async fn a_block_with_no_grant_is_not_an_unread_block() {
             "ineligible_reason": "seat",
             "left": 0,
             "read_at": common::NOW,
+            // The row's first incarnation, 1 << 32, above the epoch 0 of a block no fold or pairing moved.
+            "revision": 4_294_967_296_u64,
         }),
         "a block that lists no grant answers the member with an empty list: {read}"
     );
@@ -2539,6 +2541,156 @@ async fn the_use_route_reports_a_reauth_mark_its_claim_landed() {
         "the claim's refresh found the refresh token revoked, so nothing left"
     );
     routing_reads_reauth_required(&h.router).await;
+}
+
+/// The `revision` of `business`'s `limit_resets` member in `answer`, a read's or the account's own.
+fn resets_revision(answer: &serde_json::Value) -> u64 {
+    answer["limit_resets"]["revision"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("the member carries its revision: {answer}"))
+}
+
+/// The use of `business`'s grant `rg-b-1` with `revision` as its `expected_revision`, answered by its status, its
+/// code and the count of claims the fake has read since the rig started.
+async fn use_naming(
+    h: &common::Polled,
+    cookie: &str,
+    revision: u64,
+) -> (u16, Option<String>, usize) {
+    let body = format!(r#"{{"expected_revision":{revision}}}"#);
+    let used = common::post(&h.app, USE_RESET, &body, Some(cookie)).await;
+    let code = used
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    (
+        used.status().as_u16(),
+        code,
+        sent(&h.up, "POST /api/organizations/"),
+    )
+}
+
+#[tokio::test]
+async fn a_use_that_names_an_earlier_accounts_revision_sends_nothing() {
+    use common::{delete, get, json, login, post, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let usable = serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]});
+    h.up.set_rule_after(0, LIMIT_RESETS_PATH, limit_resets_answer(usable.clone()));
+    let read = "/admin/accounts/business/limit-resets/read";
+    let earlier = resets_revision(&json(post(&h.app, read, "", Some(&cookie)).await).await);
+    // The routes drop the caches a running router holds for the deleted account. The create route writes an unpaired
+    // slot whose pairing would move the epoch, so the new account takes its identity, its bundle and its state from
+    // the store, its block at the epoch 0 the first account's read left.
+    assert_eq!(
+        delete(&h.app, "/admin/accounts/business", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    let created = post(
+        &h.app,
+        "/admin/accounts",
+        r#"{"id":"business","kind":"oauth","label":"Business"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    h.store
+        .set_identity(
+            "business",
+            &phoebis_store::Identity {
+                account_uuid: common::ACCOUNT_UUID.into(),
+                email: "test@example.invalid".into(),
+                organization_uuid: Some("00000000-0000-4000-8000-000000000002".into()),
+            },
+        )
+        .unwrap();
+    let incarnation = h.store.account("business").unwrap().unwrap().incarnation;
+    h.store
+        .commit_credentials(
+            "business",
+            incarnation,
+            1,
+            None,
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: common::NOW,
+                expires_at: common::NOW + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.store
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Ready,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
+    store_limit_resets(&h.store, usable);
+    let stale = use_naming(&h, &cookie, earlier).await;
+    assert_eq!(
+        stale,
+        (409, Some("limit_reset_account_changed".to_string()), 0),
+        "the click names the deleted account's member, so the new account's reset is not spent"
+    );
+    let current =
+        resets_revision(&json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await);
+    let used = use_naming(&h, &cookie, current).await;
+    assert_eq!(
+        (used.0, used.2),
+        (200, 1),
+        "a use that names the new account's member leaves"
+    );
+}
+
+#[tokio::test]
+async fn a_use_that_names_a_revision_from_before_a_pairing_sends_nothing() {
+    use common::{json, login, post, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    h.up.set_rule_after(
+        0,
+        LIMIT_RESETS_PATH,
+        limit_resets_answer(
+            serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+        ),
+    );
+    let read = "/admin/accounts/business/limit-resets/read";
+    let earlier = resets_revision(&json(post(&h.app, read, "", Some(&cookie)).await).await);
+    let stored = h.store.credentials("business").unwrap().unwrap();
+    h.store
+        .commit_pairing(
+            "business",
+            1,
+            1,
+            Some(stored.generation),
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: common::NOW,
+                expires_at: common::NOW + 3_600_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    // The pairing cleared the block, and the next read stores the grant as usable again under the pairing's epoch.
+    let again = json(post(&h.app, read, "", Some(&cookie)).await).await;
+    assert_eq!(
+        again["limit_resets"]["grants"][0]["state"], "usable",
+        "{again}"
+    );
+    let stale = use_naming(&h, &cookie, earlier).await;
+    assert_eq!(
+        stale,
+        (409, Some("limit_reset_account_changed".to_string()), 0),
+        "the click names the member from before the pairing, so nothing leaves"
+    );
 }
 
 #[tokio::test]

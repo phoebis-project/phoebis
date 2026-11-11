@@ -45,7 +45,8 @@
       ],
       "ineligible_reason": null,
       "left": 1,
-      "read_at": 1791721000000
+      "read_at": 1791721000000,
+      "revision": 4294967297
     },
     "outcome": "used",
     "reason": null,

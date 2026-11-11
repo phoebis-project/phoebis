@@ -297,8 +297,9 @@ export interface Api {
   updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool>;
   /**
    * `POST /admin/accounts/{id}/limit-resets/{grant}/use`, quiet too. A refusal is thrown as an `ApiError` with its
-   * code.
+   * code. `revision` is the one of the `limitResets` member the use was confirmed on, and a member the account no
+   * longer carries answers 409 `limit_reset_account_changed`.
    */
-  useLimitReset(accountId: string, grantId: string): Promise<ResetUse>;
+  useLimitReset(accountId: string, grantId: string, revision?: number): Promise<ResetUse>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

@@ -9,7 +9,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
-use phoebis_store::{AccountRow, Store};
+use phoebis_store::{limit_resets_token, AccountRow, Store};
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
 use phoebis_transport::TransportError;
@@ -909,7 +909,8 @@ impl Claim {
 /// Why a claim sent nothing.
 #[derive(Debug)]
 pub enum ClaimRefusal {
-    /// The account's row reads another holder than the one the caller confirmed.
+    /// The account's row reads another holder than the one the caller confirmed, or the row and its block no longer
+    /// answer the token the caller named.
     AccountChanged,
     /// A claim of the account is on its way.
     InFlight,
@@ -1319,11 +1320,14 @@ impl UsageService {
     }
 
     /// Claims `grant_id` for the holder of `account`, the row the caller read and confirmed the reset on. A grant id
-    /// repeats across accounts, so the claim never follows the id to another holder.
+    /// repeats across accounts, so the claim never follows the id to another holder. `expected_revision`, where the
+    /// caller names one, is the `limit_resets_token` of the block the reset was confirmed on, and a claim whose row
+    /// and block no longer answer it sends nothing.
     pub async fn claim_limit_reset(
         &self,
         account: &AccountRow,
         grant_id: &str,
+        expected_revision: Option<u64>,
     ) -> Result<Claim, ClaimRefusal> {
         let inner = &self.inner;
         let account_id = account.id.as_str();
@@ -1354,6 +1358,13 @@ impl UsageService {
         let (label, epoch, read_left) = inner
             .usable_grant(account_id, grant_id)
             .ok_or(ClaimRefusal::NotUsable)?;
+        // The confirmation can be older than the caller's row: a dialog stays open across a delete and a create under
+        // the id, a pairing, and a use from another window, each of which this token tells apart.
+        if expected_revision
+            .is_some_and(|sent| sent != limit_resets_token(holder.incarnation, epoch))
+        {
+            return Err(ClaimRefusal::AccountChanged);
+        }
         let token = inner
             .acquire_token(account_id)
             .await

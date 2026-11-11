@@ -171,6 +171,8 @@ export interface LimitResets {
   /** The resets left on the grants that have not ended. */
   left: number;
   readAt: string;
+  /** The token a use sends back, so the claim names the account and the state of its block that this member shows. */
+  revision: number;
 }
 
 /** What the read before the dialog answers: the member as it stands, and the read's error where it failed. */

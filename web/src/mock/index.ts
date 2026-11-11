@@ -28,7 +28,7 @@ import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
-import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, type MockBlock } from './resets';
+import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
 import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, getDecision, listRoutingLog } from './routingLog';
@@ -97,6 +97,7 @@ const revised = (a: Account): Account => ({ ...a, revision: a.revision + 1 });
 /** The route's edit token carries the account's incarnation above a 32-bit revision, so an id deleted and created
  * again starts past every token its predecessor answered. */
 const INCARNATION = 2 ** 32;
+const incarnationOf = (a: Account): number => Math.floor(a.revision / INCARNATION);
 
 /** The pool and key routes' edit token carries the row's incarnation above the 42 bits of its `updatedAt`
  * millisecond, so an id deleted and created again inside one millisecond still answers a token of its own. */
@@ -1394,7 +1395,7 @@ export class MockApi implements Api {
   async readLimitResets(accountId: string): Promise<LimitResetsRead> {
     const a = this.account(accountId);
     const at = mockClock.now();
-    const limitResets = decodeLimitResets(limitResetsWire(accountId, this.resetBlocks, at));
+    const limitResets = decodeLimitResets(limitResetsWire(accountId, this.resetBlocks, at, incarnationOf(a)));
     this.putAccount({ ...a, limitResets });
     // The usage service refuses a read while the poll waits out a backoff, and the route answers the stored block.
     const next = a.usage?.poll?.nextAttemptAt;
@@ -1645,7 +1646,7 @@ export class MockApi implements Api {
     return latency(this.poolView(next), 250);
   }
 
-  async useLimitReset(accountId: string, grantId: string): Promise<ResetUse> {
+  async useLimitReset(accountId: string, grantId: string, revision?: number): Promise<ResetUse> {
     const path = `/admin/accounts/${encodeURIComponent(accountId)}/limit-resets/${encodeURIComponent(grantId)}/use`;
     const a = this.account(accountId);
     const at = mockClock.now();
@@ -1654,6 +1655,8 @@ export class MockApi implements Api {
     // The router checks the grant against its stored block before anything leaves, so the table never answers a use
     // the router refuses, a grant that waits among them.
     if (block === undefined || index < 0 || grantStates(block, at)[index].state !== 'usable') throw new ApiError(409, 'this reset is not usable now', 'limit_reset_not_usable', path);
+    // The router compares the token once the grant read usable, before the claim's token is acquired.
+    if (revision !== undefined && revision !== resetsRevision(incarnationOf(a), block)) throw new ApiError(409, 'the account changed while its reset was being used', 'limit_reset_account_changed', path);
     const entry = lookup(RESET_ANSWERS, grantId);
     if (entry === undefined) throw new Error(`the story answers no use of ${grantId}`);
     // Every claim that left writes its row, one the upstream left unanswered included, as the router's task does.
@@ -1663,7 +1666,7 @@ export class MockApi implements Api {
     if ('refusal' in entry) throw new ApiError(entry.refusal.status, entry.refusal.message, entry.refusal.code, path);
     this.resetBlocks = { ...this.resetBlocks, [accountId]: foldAnswer(block, grantId, entry.answer, at) };
     // Built after the fold, so the claimed grant reads its count and its use from this claim.
-    const wire = limitResetsWire(accountId, this.resetBlocks, at);
+    const wire = limitResetsWire(accountId, this.resetBlocks, at, incarnationOf(a));
     const limitResets = decodeLimitResets(wire);
     const claimed = limitResets?.grants.find((g) => g.id === grantId);
     const readings = entry.answer.outcome === 'used' && claimed ? readingsAfterReset(a, claimed.clears, claimed.kind, at) : {};
