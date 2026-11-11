@@ -1427,12 +1427,14 @@ as the path or "not configured", then its table's entry in force, its revision c
 pending, as `effective {date}, {n} revisions, next {date}`, each date with its time where the entry carries one, the
 last reading `{problem}` in their place while the cost model reports a problem), Storage path, "Requests, samples and
 the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as
-`at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long
-a session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod
+`at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long a
+session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod
 reports stays listed after its last use, or the session expiry where that is the lesser of the two, which also bounds
-the lines its pins draw), and Admin secret as "configured" or "not configured", each path's, each retention line's and
-each session line's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets
-are on the installation page, and `phoebis check-config` prints this router's."
+the lines its pins draw), "Reset warning" (as `5 days before a reset ends`, or "off" at 0, how long before an unused
+limit reset ends the Dashboard raises its item and the Quota card's Resets chip takes the tone of a plan about to end),
+and Admin secret as "configured" or "not configured", each path's, each retention line's, each session line's and the
+reset warning's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets are
+on the installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point

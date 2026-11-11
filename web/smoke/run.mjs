@@ -28313,7 +28313,7 @@ await forView('/settings', async () => {
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Session expiry', 'Non-companion timeout', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Requests, samples and the routing log', 'Rollups', 'Body capture', 'Session expiry', 'Non-companion timeout', 'Reset warning', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null && (failed.container.querySelector('pre.snippet')?.textContent ?? '').split('\n')[0] === 'ANTHROPIC_BASE_URL=http://router.example.com:8080',
     missing: [...rows, (failed.container.querySelector('pre.snippet')?.textContent ?? 'no block').split('\n')[0]],
   });
   failed.unmount();
@@ -28420,17 +28420,18 @@ await forView('/settings', async () => {
 });
 
 // A zero on a retention key keeps its rows forever, so About reads "kept forever" on that line, and one day reads in
-// the singular. The body capture line reads the limit the answer carries, here one the seed does not hold.
+// the singular. The body capture line reads the limit the answer carries, here one the seed does not hold. A zero on
+// the reset warning's days turns the warning off, so its line reads "off" rather than a period of 0 days.
 await forView('/settings', async () => {
   const { getSettings } = api;
   api.getSettings = async (...args) => {
     const settings = await getSettings.apply(api, args);
-    return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 6, retentionDays: 0, rollupRetentionDays: 1 } };
+    return { ...settings, retention: { ...settings.retention, bodyCaptureMaxHours: 6, retentionDays: 0, rollupRetentionDays: 1 }, usage: { ...settings.usage, limitResetWarningDays: 0 } };
   };
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
-  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups=') || row.startsWith('Body capture='));
-  results.push({ name: '/settings a zero retention reads kept forever, a one-day retention kept for 1 day, and the body capture limit its own hours', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day', 'Body capture=at most 6 hours']), missing: kept });
+  const kept = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`).filter((row) => row.startsWith('Requests, samples and the routing log=') || row.startsWith('Rollups=') || row.startsWith('Body capture=') || row.startsWith('Reset warning='));
+  results.push({ name: '/settings a zero retention reads kept forever, a one-day retention kept for 1 day, the body capture limit its own hours, and a reset warning of 0 days off', ok: JSON.stringify(kept) === JSON.stringify(['Requests, samples and the routing log=kept forever', 'Rollups=kept for 1 day', 'Body capture=at most 6 hours', 'Reset warning=off']), missing: kept });
   api.getSettings = getSettings;
   page.unmount();
 });
@@ -28467,16 +28468,17 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
   // page's own label, and the price file's row the date of the entry it holds next, the story's 2026-10-09. The three
   // keepalive limits read on the Sessions page beside their counts, so About carries none of them. The two session
-  // lines read the mock's `SETTINGS_WIRE.sessions`, 86400 s and 3600 s.
+  // lines read the mock's `SETTINGS_WIRE.sessions`, 86400 s and 3600 s, and the reset warning line the mock's
+  // `SETTINGS_WIRE.usage`, 5 days.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Session expiry=1d (86400 s)', 'Non-companion timeout=1h (3600 s)', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Session expiry=1d (86400 s)', 'Non-companion timeout=1h (3600 s)', 'Reset warning=5 days before a reset ends', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
-    name: '/settings each path, retention line and session line names its key in the configuration file and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Session expiry=Set by sessions.expire_after_seconds in the configuration file', 'Non-companion timeout=Set by sessions.non_companion_idle_seconds in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    name: '/settings each path, retention line, session line and the reset warning line names its key in the configuration file and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Requests, samples and the routing log=Set by stats.retention_days in the configuration file', 'Rollups=Set by stats.rollup_retention_days in the configuration file', 'Body capture=Set by stats.body_capture_max_hours in the configuration file', 'Session expiry=Set by sessions.expire_after_seconds in the configuration file', 'Non-companion timeout=Set by sessions.non_companion_idle_seconds in the configuration file', 'Reset warning=Set by usage.limit_reset_warning_days in the configuration file', 'Admin secret=The secret the variable admin.secret_env names. It reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));

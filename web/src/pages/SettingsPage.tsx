@@ -161,6 +161,7 @@ export function SettingsPage() {
                 { label: 'Body capture', value: `at most ${plural(s.retention.bodyCaptureMaxHours, 'hour')}`, title: bootstrapNote('stats.body_capture_max_hours') },
                 { label: 'Session expiry', value: `${fmtDuration(s.sessions.expireAfterSeconds * 1000)} (${s.sessions.expireAfterSeconds} s)`, title: bootstrapNote('sessions.expire_after_seconds') },
                 { label: 'Non-companion timeout', value: `${fmtDuration(s.sessions.nonCompanionIdleSeconds * 1000)} (${s.sessions.nonCompanionIdleSeconds} s)`, title: bootstrapNote('sessions.non_companion_idle_seconds') },
+                { label: 'Reset warning', value: s.usage.limitResetWarningDays === 0 ? 'off' : `${plural(s.usage.limitResetWarningDays, 'day')} before a reset ends`, title: bootstrapNote('usage.limit_reset_warning_days') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names. It reaches every route.' },
               ]}
             />
