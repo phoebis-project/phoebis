@@ -6,8 +6,8 @@ use phoebis_store::{
     Cancellation, CompanionPermissions, Failover, GuardrailAttachment, GuardrailRow, Identity,
     KeepaliveAgentRow, KeepaliveBatch, MemberWrite, MemoryKey, MemoryRecord, MemoryStore,
     ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolRow, PresetStamp,
-    ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause, StorageKey, Store,
-    StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
+    ReturnToPlan, RulesMode, Secret, SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey,
+    Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -418,7 +418,8 @@ fn a_pool_inserted_without_a_placement_reads_by_strategy() {
 }
 
 #[test]
-fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
+fn a_pin_with_a_distinct_value_in_every_numeric_column_and_every_optional_group_set_reads_back_as_written(
+) {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
         .insert_account(&account("a", AccountKind::Oauth))
@@ -465,7 +466,8 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         vec![before.clone()],
         "a pin written with no unmetered burn reads a zero unmetered copy"
     );
-    // A distinct value in every copy and every column after them, so a read left on another column's offset shows.
+    // The upsert binds its values by position: two swapped binds of one type read back unseen where the two columns
+    // hold one value, and an optional group's dropped bind where the group is unset.
     let copy = |base: f64| PinBurn {
         cache_read: base + 0.1,
         input: base + 0.2,
@@ -474,23 +476,38 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         write_5m: base + 0.5,
     };
     let pin = PinRow {
+        epoch: 2,
+        created_at: 1_100,
+        last_used_at: 1_300,
+        key_generation: 1_700,
+        incarnation: 3,
+        last_refresh_at: 1_200,
         burn: copy(1.0),
         burn_banded: copy(2.0),
         burn_fast: copy(3.0),
         burn_unmetered: copy(4.0),
+        burn_unmetered_model: Some("claude-sonnet-5".into()),
+        shed: Some(ShedStamp {
+            from: "b".into(),
+            at: 1_250,
+            reason: Some("cooldown".into()),
+        }),
+        static_hash: Some("static-hash".into()),
+        tail_hash: Some("tail-hash".into()),
         mark: Some(PinMark {
             at: 7,
             on: "a".into(),
             window: "five_hour".into(),
         }),
         entrypoint: Some("cli".into()),
+        effort: Some("high".into()),
         ..before
     };
     store.upsert_pin(&pin).unwrap();
     assert_eq!(
         store.load_routing().unwrap().pins,
         vec![pin],
-        "every copy and every column after them reads back as written"
+        "each column reads back the value written to it"
     );
 }
 

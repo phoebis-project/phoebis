@@ -12534,6 +12534,60 @@ fn an_overage_move_prefers_a_fitting_sibling() {
 }
 
 #[test]
+fn a_round_ranks_its_own_pin_never_renewed_with_usage_by_the_requests_body_and_plans_its_rewrite_from_it(
+) {
+    let s = tiered(shedding_pool(Shedding::default()));
+    // Both pins warm, so the order ranks them by burn per rewritten token. s1, the request's own pin, burns 0.04 of the
+    // 5-hour window an hour and has reported no prompt, s0 burns 0.02 over a prompt of 1 000 tokens.
+    let mut st = rounding(vec![
+        PinRow {
+            last_input_tokens: 0,
+            ..burning("s1", "a", 4.0, true, T)
+        },
+        burning("s0", "a", 2.0, true, T),
+    ]);
+    // No reset, so the 5-hour horizon sits five hours out: 0.9 plus 0.06 an hour projects 1.2, an excess of 0.05 an hour
+    // over the ceiling, and the target is half the burn, 0.03, which s1 alone covers.
+    st.record_sample("a", sample(0.9, 0.1, T - 500), 0);
+    st.record_sample("b", sample(0.1, 0.1, T - 500), 0);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(
+        &mut st,
+        &s,
+        &SelectRequest {
+            body_tokens: 4_000,
+            ..auxiliary(&s, "s1", T)
+        },
+        &mut rng(),
+    );
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.per_rewrite.map(|r| (r * 1e9).round()),
+                p.planned.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("s0", Some(20_000.0), None),
+            ("s1", Some(10_000.0), Some("b"))
+        ],
+        "s1 divides its 0.04 by the body's 4 000 tokens and ranks after s0's 0.02 over 1 000"
+    );
+    let current = &round.pins[1];
+    assert!(
+        current
+            .rewrite
+            .is_some_and(|r| (r - 4_000.0 / 60_000_000.0).abs() < 1e-12),
+        "the move rewrites the body's 4 000 tokens, priced as the Pro-week figure: {:?}",
+        current.rewrite
+    );
+}
+
+#[test]
 fn a_return_to_plan_move_prefers_a_fitting_sibling() {
     let s = snapshot_with_terms(
         b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),

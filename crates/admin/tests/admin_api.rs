@@ -6825,6 +6825,75 @@ async fn a_named_accounts_shares_leave_out_the_window_its_set_lacks() {
 }
 
 #[tokio::test]
+async fn a_plan_funded_request_on_a_tier_the_cost_model_does_not_size_keeps_the_accounts_key_over_an_empty_share_map(
+) {
+    use common::{get, json, login};
+    use phoebis_ledger::{AttemptRecord, Record, RequestRecord};
+    let now = common::NOW;
+    let parts =
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::subscription_costs()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // An enterprise plan is one the router prices by its tier, and the test cost model sizes no enterprise tier.
+    parts
+        .store
+        .set_profile(
+            "business",
+            r#"{"organization":{"organization_type":"claude_enterprise"}}"#,
+            &phoebis_store::SubscriptionRow {
+                tier: Some("default_claude_enterprise".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    parts.router.reload().await.unwrap();
+    let at = now - 3_600_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-unsized".into(),
+            received_at: at,
+            finished_at: Some(at + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            session_id: Some("s1".into()),
+            agent_id: Some("main".into()),
+            model: "claude-opus-5-5".into(),
+            canonical_model: "claude-opus-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: "r-unsized".into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: phoebis_store::AccountKind::Oauth,
+            started_at: at,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            ..Default::default()
+        }],
+        bodies: None,
+    });
+    fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        parts.db.request("r-unsized").await.unwrap()
+    })
+    .await;
+    let session = session_row(
+        &json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await,
+        "s1",
+    );
+    assert_eq!(
+        session["spend"]["shares"],
+        serde_json::json!({"business": {}}),
+        "no window priced, and the account's key still marks that a plan paid: {session}"
+    );
+}
+
+#[tokio::test]
 async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_its_base() {
     use common::{generation, login, post, wait_json};
     use phoebis_ledger::{Record, RequestRecord};
