@@ -200,7 +200,7 @@ fn rounded(value: f64) -> f64 {
 /// nothing served to explain it. A climb under `MIN_RISE`, a few of the meter's quanta, keeps its split, and so does a
 /// dip the fold cannot price, since nothing judges it.
 fn drop_faulty_dips(
-    tx: &Transaction<'_>,
+    conn: &Connection,
     prices: &PriceRevisions,
     tables: &PlanTables,
     account: &str,
@@ -232,7 +232,8 @@ fn drop_faulty_dips(
             .iter()
             .position(|dip| rounded(close.utilization - readings[dip.level].1.utilization) >= 0.0);
         let Some(outermost) = outermost else {
-            if rounded(readings[before].1.utilization - close.utilization) > 0.0 {
+            // A dip opens where a part does, so a head inside the sources' gap under the poll before it opens none.
+            if close.falls_from(&readings[before].1) {
                 open.push(Dip {
                     level: before,
                     first: at,
@@ -246,7 +247,8 @@ fn drop_faulty_dips(
             if climb < MIN_RISE {
                 continue;
             }
-            let share = match predicted(tx, prices, tables, account, window, first.at, close.at)? {
+            let share = match predicted(conn, prices, tables, account, window, first.at, close.at)?
+            {
                 Prediction::Unpriced => continue,
                 Prediction::Empty => 0.0,
                 Prediction::Priced { share, .. } => share,
@@ -283,10 +285,9 @@ fn drop_faulty_dips(
     Ok(())
 }
 
-/// Closes the complete runs since the newest row of each account and window, prices their plan-funded attempts
-/// through `price_row` under each attempt's client, writes the rows with `INSERT OR IGNORE` and drops the rows whose
-/// window ended more than 30 days before `now`, all on the caller's transaction. The hourly fold calls it before it
-/// folds the routing conditions, so `meter_drift` reads the windows the same tick closed.
+/// The rows the complete runs since the newest row of each account and window write, their plan-funded attempts
+/// priced through `price_row` under each attempt's client. It writes nothing, so the hourly fold runs it on a read
+/// transaction before it takes the write lock and hands the rows to `reconcile_write`.
 ///
 /// A run is complete once a later reset appears or its reset lies behind `now`, and one a later reset closed while its
 /// own lay ahead by more than the reset slack slid rather than ended, so it writes no row. A run splits into parts
@@ -294,23 +295,20 @@ fn drop_faulty_dips(
 /// is the parts' `run_sum`. The row is skipped where `run_sum` answers none or its first end is older than the oldest
 /// retained request, whose rise the router's own requests would explain only in part. The ledger reads no registry:
 /// every account with a reading is read, and an account whose attempts draw no plan window writes no row.
-pub fn reconcile(
-    tx: &Transaction<'_>,
+pub fn reconcile_read(
+    conn: &Connection,
     prices: &PriceRevisions,
     tables: &PlanTables,
     now: i64,
-) -> Result<(), LedgerError> {
+) -> Result<Vec<ReconciliationRow>, LedgerError> {
     let cutoff = now - RECONCILIATION_RETENTION_MS;
-    tx.execute(
-        "DELETE FROM window_reconciliations WHERE window_end < ?1",
-        params![cutoff],
-    )?;
+    let mut rows = Vec::new();
     let earliest: Option<i64> =
-        tx.query_row("SELECT MIN(received_at) FROM requests", [], |r| r.get(0))?;
+        conn.query_row("SELECT MIN(received_at) FROM requests", [], |r| r.get(0))?;
     let Some(earliest) = earliest else {
-        return Ok(());
+        return Ok(rows);
     };
-    let accounts: Vec<String> = tx
+    let accounts: Vec<String> = conn
         .prepare(concat!(
             quota_accounts_cte!(),
             " SELECT account_id FROM accounts WHERE account_id IS NOT NULL"
@@ -318,14 +316,14 @@ pub fn reconcile(
         .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
     for account in &accounts {
-        let newest = newest_window_ends(tx, account)?;
+        let newest = newest_window_ends(conn, account)?;
         for window in WINDOWS {
             let newest = newest.get(window).copied();
             // A run the table already holds names a reset at or before its window's newest row, and a window that ended
             // before the cutoff would leave with the next purge, while every reading of a run past both names a reset
             // past them less the slack, so older readings need not be read at all.
             let floor = newest.unwrap_or(i64::MIN).max(cutoff) - RESET_SLACK_MS;
-            for mut run in runs(&readings_of(tx, account, window, floor)?) {
+            for mut run in runs(&readings_of(conn, account, window, floor)?) {
                 let key = run.key();
                 let complete = run.closed_at.is_some() || key < now;
                 if !complete || key < cutoff || newest.is_some_and(|n| key <= n) {
@@ -341,33 +339,60 @@ pub fn reconcile(
                 {
                     continue;
                 }
-                drop_faulty_dips(tx, prices, tables, account, window, &mut run)?;
-                let Some(sum) = run_sum(tx, prices, tables, account, window, &run)? else {
+                drop_faulty_dips(conn, prices, tables, account, window, &mut run)?;
+                let Some(sum) = run_sum(conn, prices, tables, account, window, &run)? else {
                     continue;
                 };
                 if sum.first_at < earliest {
                     continue;
                 }
-                tx.execute(
-                    &format!(
-                        "INSERT OR IGNORE INTO window_reconciliations ({COLUMNS}) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
-                    ),
-                    params![
-                        account,
-                        window,
-                        key,
-                        sum.first_at,
-                        sum.last_at,
-                        sum.rise,
-                        sum.share,
-                        sum.rise / sum.share,
-                        sum.requests,
-                        now
-                    ],
-                )?;
+                rows.push(ReconciliationRow {
+                    account_id: account.clone(),
+                    window: window.to_string(),
+                    window_end: key,
+                    first_reading_at: sum.first_at,
+                    last_reading_at: sum.last_at,
+                    observed_rise: sum.rise,
+                    predicted_share: sum.share,
+                    ratio: sum.rise / sum.share,
+                    requests: sum.requests,
+                    computed_at: now,
+                });
             }
         }
+    }
+    Ok(rows)
+}
+
+/// Drops the rows whose window ended more than 30 days before `now` and writes `rows` with `INSERT OR IGNORE`, on
+/// the caller's write transaction. The hourly fold calls it before it folds the routing conditions on the same
+/// transaction, so `meter_drift` reads the windows the same tick closed.
+pub fn reconcile_write(
+    tx: &Transaction<'_>,
+    rows: &[ReconciliationRow],
+    now: i64,
+) -> Result<(), LedgerError> {
+    tx.execute(
+        "DELETE FROM window_reconciliations WHERE window_end < ?1",
+        params![now - RECONCILIATION_RETENTION_MS],
+    )?;
+    let mut insert = tx.prepare(&format!(
+        "INSERT OR IGNORE INTO window_reconciliations ({COLUMNS}) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+    ))?;
+    for row in rows {
+        insert.execute(params![
+            row.account_id,
+            row.window,
+            row.window_end,
+            row.first_reading_at,
+            row.last_reading_at,
+            row.observed_rise,
+            row.predicted_share,
+            row.ratio,
+            row.requests,
+            row.computed_at
+        ])?;
     }
     Ok(())
 }
@@ -387,7 +412,7 @@ struct RunSum {
 /// or where a part holds a plan-funded attempt carrying tokens that the tables price to no share on the window, whose
 /// draw the rise holds and the sum would miss.
 fn run_sum(
-    tx: &Transaction<'_>,
+    conn: &Connection,
     prices: &PriceRevisions,
     tables: &PlanTables,
     account: &str,
@@ -400,7 +425,7 @@ fn run_sum(
             continue;
         };
         let (from, to) = (first.at, last.at);
-        match predicted(tx, prices, tables, account, window, from, to)? {
+        match predicted(conn, prices, tables, account, window, from, to)? {
             Prediction::Unpriced => return Ok(None),
             Prediction::Empty => {}
             Prediction::Priced { share, requests } => {

@@ -1737,9 +1737,9 @@ fn note_unpriced(
 }
 
 /// One fold of the routing conditions at `now` on the purge task's connection, off the runtime thread. The windows
-/// completed since the last tick are reconciled first, on the same transaction, so `meter_drift` reads the ratios this
-/// tick wrote and a failed fold writes neither. A fold that fails leaves the last one's rows, which the next tick
-/// replaces.
+/// completed since the last tick are read and priced ahead of the write transaction and written on it with the
+/// conditions, so `meter_drift` reads the ratios this tick wrote and a failed fold writes neither. A fold that fails
+/// leaves the last one's rows, which the next tick replaces.
 async fn fold_conditions(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
@@ -1750,8 +1750,15 @@ async fn fold_conditions(
     let tables = tables.clone();
     let folded = blocking(db, move |db| {
         db.purge(|conn| {
+            // Read and priced on one snapshot before the write lock is taken, so a batch waits behind the 30-day
+            // delete, the inserts and the conditions fold alone. The read transaction ends before the write begins,
+            // since one that turns to writing is refused once the writer committed past its snapshot.
+            let rows = {
+                let read = conn.transaction()?;
+                crate::reconcile::reconcile_read(&read, &prices, &tables, now)?
+            };
             let tx = crate::db::begin_write(conn)?;
-            crate::reconcile::reconcile(&tx, &prices, &tables, now)?;
+            crate::reconcile::reconcile_write(&tx, &rows, now)?;
             crate::rollup::fold_routing_conditions(&tx, &tables, now)?;
             tx.commit()?;
             Ok(())

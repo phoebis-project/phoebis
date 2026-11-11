@@ -88,8 +88,8 @@ pub use quota::{
     PROFILE_EVERY_POLLS,
 };
 pub use reconcile::{
-    newest_rows, read_reconciliations, reconcile, ReconciliationRow, MIN_RISE, RATIO_HIGH,
-    RATIO_LOW,
+    newest_rows, read_reconciliations, reconcile_read, reconcile_write, ReconciliationRow,
+    MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,

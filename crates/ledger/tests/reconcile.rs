@@ -4,9 +4,9 @@
 
 use phoebis_ledger::test_tables::{api_prices, subscription_costs, JANUARY_2026};
 use phoebis_ledger::{
-    bucket_of, fold_routing_conditions, newest_rows, read_reconciliations, reconcile,
-    routing_conditions, AttemptRecord, LedgerDb, QuotaSampleRecord, ReconciliationRow,
-    RequestRecord, SampleSource, MIN_RISE, RATIO_HIGH, RATIO_LOW,
+    bucket_of, fold_routing_conditions, newest_rows, read_reconciliations, reconcile_read,
+    reconcile_write, routing_conditions, AttemptRecord, LedgerDb, QuotaSampleRecord,
+    ReconciliationRow, RequestRecord, SampleSource, MIN_RISE, RATIO_HIGH, RATIO_LOW,
 };
 use phoebis_routing::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::AccountKind;
@@ -160,12 +160,14 @@ fn head_reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> Quota
     }
 }
 
-/// One hourly reconciliation at `now` on the test tables, on its own transaction as the fold's.
+/// One hourly reconciliation at `now` on the test tables in the fold's order: the read pass, then the write on a
+/// transaction of its own.
 fn fold(db: &LedgerDb, now: i64) {
     let (prices, tables) = (api_prices(), subscription_costs());
     db.write(|c| {
+        let rows = reconcile_read(c, &prices, &tables, now)?;
         let tx = c.transaction()?;
-        reconcile(&tx, &prices, &tables, now)?;
+        reconcile_write(&tx, &rows, now)?;
         tx.commit()?;
         Ok(())
     })
@@ -1010,6 +1012,40 @@ fn a_head_one_percent_under_the_poll_before_it_joins_the_run_and_two_percent_und
         [(SATURDAY + 30 * MINUTE, 2, 0.52)],
         "two percent under is a fall, and the part the head opens holds a head and a poll, so it adds its rise"
     );
+}
+
+#[test]
+fn a_head_one_percent_under_the_poll_before_it_opens_no_dip() {
+    let reset = SATURDAY + 2 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    seed_request(&db, "seed", SATURDAY - MINUTE);
+    // The head reads a point under the poll before it, inside the sources' gap, then falls to 0.10, a dip the 39 Sonnet
+    // units completed inside it refill. A dip opened at the head would close only at the last poll, on a climb of 0.49
+    // those units cannot explain, and take the three heads with it.
+    db.insert_samples(
+        &[
+            reading(FIVE_HOUR, SATURDAY, 0.50, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 10 * MINUTE, 0.49, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.10, reset),
+            head_reading(FIVE_HOUR, SATURDAY + 30 * MINUTE, 0.49, reset),
+            reading(FIVE_HOUR, SATURDAY + 40 * MINUTE, 0.98, reset),
+        ],
+        None,
+    )
+    .unwrap();
+    served(&db, "refill", SONNET, SATURDAY + 25 * MINUTE, 39, None);
+    let row = the_row(&db, reset);
+    assert_eq!(
+        (row.first_reading_at, row.last_reading_at, row.requests),
+        (SATURDAY + 20 * MINUTE, SATURDAY + 40 * MINUTE, 1),
+        "the run's first part holds no attempt, so the row is the part the fall to 0.10 opens: {row:?}"
+    );
+    assert!(
+        close(row.observed_rise, 0.88),
+        "0.10 to 0.98, the three heads kept: {}",
+        row.observed_rise
+    );
+    assert!(close(row.predicted_share, 0.39), "{}", row.predicted_share);
 }
 
 #[test]
