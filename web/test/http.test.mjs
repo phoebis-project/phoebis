@@ -137,6 +137,8 @@ test('the HttpApi encodes ids into paths and lists into comma-separated query va
   assert.equal(url.searchParams.get('limit'), '50');
   await api.clearCooldown('acc', 'model:claude-sonnet-5');
   assert.equal(calls[1].url, '/admin/accounts/acc/cooldowns/model%3Aclaude-sonnet-5');
+  await api.useLimitReset('acc', 'launch/1');
+  assert.equal(calls[2].url, '/admin/accounts/acc/limit-resets/launch%2F1/use');
   assert.equal(slug('My Pool!'), 'my-pool');
   assert.equal(slug(`${'a'.repeat(63)} tail`), 'a'.repeat(63), 'a name cut at the limit keeps no trailing separator');
 });
@@ -692,10 +694,12 @@ test("a dialog's write reaches no toast when refused, since the dialog draws the
     () => api.createAccount({ id: 'work', kind: 'oauth', label: 'work', secret: null }),
     () => api.createKey({ ...keyEdit, expiresAt: null }),
     () => api.createPool(poolSave('Spare')),
+    () => api.readLimitResets('work'),
     () => api.renameAccount('work', 'Work', 1),
     () => api.updateAccount('work', { canceled: false, subscriptionEndsAt: null }, 1),
     () => api.updateKey('desktop', keyEdit, 1),
     () => api.updatePool('main', poolSave('Main'), 1),
+    () => api.useLimitReset('work', 'rg-work-1'),
   ];
   for (const status of [400, 403, 409, 500]) {
     stub(() => answer(status, { error: 'refused' }));
@@ -756,7 +760,7 @@ test('the attention read is one GET, and its failures reach no toast, since the 
       ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
       // The console draws a kind it does not know as `unknown`, which opens nothing.
       ['unknown', 'usage-seat', null],
-      ['unknown', 'reset-ending', null],
+      ['limit_reset_ending', 'reset-ending', { id: 'reset-ending', page: 'accounts' }],
       ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
       ['model_unpriced', 'claude-opus-99', null],
       ['meter_drift', 'business', { id: 'business', page: 'accounts' }],

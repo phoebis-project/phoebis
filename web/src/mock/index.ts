@@ -1,16 +1,17 @@
 import type { AccountPatch, Api, CreateGuardrailInput, CreateKeyInput, CreatePoolInput, KeyInput, PoolInput } from '@/api/client';
 import type { GuardrailInput, GuardrailPatch, GuardrailRange, GuardrailTestInput, OverviewRange } from '@/api/client';
-import { decodeSettings, keyStatusOf } from '@/api/decode';
+import { decodeLimitResets, decodeResetUse, decodeSettings, keyStatusOf } from '@/api/decode';
 import { decodeStreamCut } from '@/api/decode';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, MemberEligibility,
-  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
+  ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RateLimitWindow, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, ResetUse, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
 import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
+import { lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
@@ -27,7 +28,9 @@ import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
+import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, type MockBlock } from './resets';
 import { createRng } from './rng';
+import { round } from './round';
 import { ROUTING_LOG_KINDS, WEEKLY_RESETS, getDecision, listRoutingLog } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
@@ -534,6 +537,24 @@ const requestOrderOf = (order: RequestOrder, dir: 'asc' | 'desc') => {
   return (a: RequestLog, b: RequestLog): number => compare(keyOf(a, order), keyOf(b, order));
 };
 
+/** A window as the poll after a reset reads it: `by` taken off its use, and its lead and projection with it. */
+const lowered = (w: RateLimitWindow, by: number, at: number): RateLimitWindow => {
+  const drop = Math.min(by, w.utilization);
+  const less = (v: number | null) => (v === null ? null : round(v - drop, 3));
+  return { ...w, lead: less(w.lead), observedAt: iso(at), projection: less(w.projection), utilization: round(w.utilization - drop, 3) };
+};
+
+/**
+ * An account's readings after a reset, as the poll that follows the claim reads them: each window the grant clears
+ * empty, and where the grant gives the Fable week back without clearing the 7-day window, that window less the week's
+ * share of it, as the one measured use read.
+ */
+function readingsAfterReset(a: Account, clears: readonly string[], kind: string, at: number): Pick<Account, 'fableWindow' | 'windows'> {
+  const share = kind === 'fable' && !clears.includes('7d') ? (a.limitResets?.fableWeekShare ?? null) : null;
+  const read = (w: RateLimitWindow) => (clears.includes(w.id) ? lowered(w, 1, at) : w.id === '7d' && share !== null ? lowered(w, share, at) : w);
+  return { fableWindow: a.fableWindow && read(a.fableWindow), windows: a.windows.map(read) };
+}
+
 type StoredPool = PoolRow<Omit<PoolMember, 'activePins'>>;
 
 export class MockApi implements Api {
@@ -568,6 +589,8 @@ export class MockApi implements Api {
       return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth', ...servedFigures(m.accountId, Date.now(), p.slowDown) };
     }),
   }));
+  /** The story's limit reset blocks, each use's answer folded in as the router's store folds it. */
+  private resetBlocks: Record<string, MockBlock> = { ...RESET_BLOCKS };
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
   private sessions: Session[] = [...SESSIONS];
@@ -770,6 +793,7 @@ export class MockApi implements Api {
       id: input.id,
       kind: input.kind,
       label: input.label,
+      limitResets: null,
       plan: null,
       pool: null,
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
@@ -1361,6 +1385,17 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
+  async readLimitResets(accountId: string): Promise<LimitResetsRead> {
+    const a = this.account(accountId);
+    const at = mockClock.now();
+    const limitResets = decodeLimitResets(limitResetsWire(accountId, this.resetBlocks, at));
+    this.putAccount({ ...a, limitResets });
+    // The usage service refuses a read while the poll waits out a backoff, and the route answers the stored block.
+    const next = a.usage?.poll?.nextAttemptAt;
+    const held = next !== null && next !== undefined && Date.parse(next) > at;
+    return latency({ error: held ? 'the account is waiting out a rate limit' : null, limitResets }, 400);
+  }
+
   refreshUsage(_accountId: string) {
     return latency(undefined, 400);
   }
@@ -1602,6 +1637,28 @@ export class MockApi implements Api {
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     if (guardrailIds !== undefined) this.setSubjectGuardrails('pools', id, guardrailIds);
     return latency(this.poolView(next), 250);
+  }
+
+  async useLimitReset(accountId: string, grantId: string): Promise<ResetUse> {
+    const path = `/admin/accounts/${encodeURIComponent(accountId)}/limit-resets/${encodeURIComponent(grantId)}/use`;
+    const a = this.account(accountId);
+    const at = mockClock.now();
+    const block = lookup(this.resetBlocks, accountId);
+    const index = block?.grants.findIndex((g) => g.id === grantId) ?? -1;
+    // The router checks the grant against its stored block before anything leaves, so the table never answers a use
+    // the router refuses, a grant that waits among them.
+    if (block === undefined || index < 0 || grantStates(block, at)[index].state !== 'usable') throw new ApiError(409, 'this reset is not usable now', 'limit_reset_not_usable', path);
+    const entry = lookup(RESET_ANSWERS, grantId);
+    if (entry === undefined) throw new Error(`the story answers no use of ${grantId}`);
+    if ('refusal' in entry) throw new ApiError(entry.refusal.status, entry.refusal.message, entry.refusal.code, path);
+    this.resetBlocks = { ...this.resetBlocks, [accountId]: foldAnswer(block, grantId, entry.answer, at) };
+    // Built after the fold, so the claimed grant reads its count and its use from this claim.
+    const wire = limitResetsWire(accountId, this.resetBlocks, at);
+    const limitResets = decodeLimitResets(wire);
+    const claimed = limitResets?.grants.find((g) => g.id === grantId);
+    const readings = entry.answer.outcome === 'used' && claimed ? readingsAfterReset(a, claimed.clears, claimed.kind, at) : {};
+    this.putAccount({ ...a, ...readings, limitResets });
+    return latency(decodeResetUse({ ...entry.answer, limit_resets: wire }), 400);
   }
 
   async verifyAccount(accountId: string) {

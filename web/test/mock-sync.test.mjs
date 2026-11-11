@@ -47,6 +47,8 @@ const recordShape = (r) => r && { ...r, candidates: r.candidates.map((c) => ({ .
 const SYNC = {
   account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary') },
   account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('primary') },
+  account_limit_reset_use: { decode: (b) => d.decodeResetUse(b), mock: (api) => api.useLimitReset('primary', 'rg-primary-1') },
+  account_limit_resets: { decode: (b) => d.decodeLimitResetsRead(b), mock: (api) => api.readLimitResets('primary') },
   account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('primary') },
   account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary').usage },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
@@ -101,7 +103,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
-const UNCONSUMED = ['account_limit_reset_use', 'account_limit_resets', 'bound_refusals', 'oauth_session', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
+const UNCONSUMED = ['bound_refusals', 'oauth_session', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system', 'test_tables'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');
@@ -136,7 +138,8 @@ const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'wo
  * unchecked. Every row of the mock's answer is walked, not only the first.
  */
 const CLOSED = {
-  accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
+  account_limit_reset_use: { '.outcome': d.RESET_OUTCOME_VALUES },
+  accounts: { '[].kind': d.ACCOUNT_KIND_VALUES, '[].limitResets.grants[].state': [...d.RESET_GRANT_STATE_VALUES, undefined] },
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   attention: { '[].kind': d.ATTENTION_KIND_VALUES, '[].link.page': [...d.ATTENTION_PAGE_VALUES, undefined], '[].subject.type': d.ATTENTION_SUBJECT_VALUES },

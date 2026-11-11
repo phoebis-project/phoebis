@@ -1,13 +1,13 @@
 import type {
   Account, AccountCatalog, AccountKind, AccountRollup, AgentRequests, AllowanceReset, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FundedSum, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, Lifecycle, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
-  MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, RewritesAnswer,
+  CohortHold, CostRevision, CostSplit, CreatedApiKey, DecisionKind, DecisionRecord, DecisionSummary, Exhaustion, FastLaneReading, FundedSum, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyFigures, KeyModels, Lifecycle, LimitResets, LimitResetsRead, MemberBudget, ModelPrice, ModelRule, ModelRulesMode,
+  MoveCause, Overview, PairingConfirmed, PairingSession, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, PriceCells, PriceRevision, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, Reconciliation, ReconciliationsAnswer, RecordCandidate, RecordHold, RecordOutcome, RecordSettings, Refusal, RefusalCategoriesAnswer, ReplayOutcome, RequestEvent, RequestLog, RequestPage, RequestPhases, RequestShape, ResetUse, RewritesAnswer,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionDay, SessionInfo, SessionSpend, SessionSpendPart, Settings, Spend, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, UnusedAllowanceAnswer, WastedProbeReason, WindowId, WindowSample,
 } from './types';
 import type { AgentContext, BurnFigures } from './types';
 import type { StreamCut } from './types';
 import type { Condition, Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailMatch, GuardrailMode, GuardrailPreset, GuardrailPresetState, GuardrailRef, GuardrailTestResult } from './types';
-import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CLASSIFIER_VALUES, COMPANION_PERMISSION_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, LIFECYCLE_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
+import { ACCOUNT_KIND_VALUES, AFFINITY_MODE_VALUES, AGENT_STATE_VALUES, ATTEMPT_OUTCOME_VALUES, ATTENTION_KIND_VALUES, ATTENTION_PAGE_VALUES, ATTENTION_SUBJECT_VALUES, AUTO_MODE_VALUES, BUDGET_PERIOD_VALUES, BURN_UNIT_VALUES, BY_KIND_VALUES, CLASSIFIER_VALUES, COMPANION_PERMISSION_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_SUBJECT_VALUES, DECISION_KIND_VALUES, DIAGNOSTICS_SOURCE_VALUES, ELIGIBILITY_VALUES, FACT_ENTITY_VALUES, FACT_UNIT_VALUES, GUARDRAIL_MODE_VALUES, GUARD_VERDICT_VALUES, LIFECYCLE_VALUES, MESSAGE_SELECTOR_VALUES, MODEL_RULES_MODE_VALUES, OVERAGE_POLICY_VALUES, PARK_KIND_VALUES, PIN_REASON_VALUES, PLACEMENT_RUNG_VALUES, POLL_OUTCOME_VALUES, POOL_STATUS_VALUES, POOL_STRATEGY_VALUES, RECIPE_CAUSE_VALUES, RECIPE_STATE_VALUES, REQUEST_KIND_VALUES, REQUEST_OUTCOME_VALUES, RESET_GRANT_STATE_VALUES, RESET_OUTCOME_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, TEST_VERDICT_VALUES, WARM_SESSIONS_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
@@ -115,6 +115,36 @@ export function decodeSubscription(profile: Rec | null, sub: Rec | null): Subscr
   };
 }
 
+const windowIds = (v: unknown): WindowId[] => strings(v).map(windowKeyId).filter((id): id is WindowId => id !== null);
+
+export function decodeLimitResets(v: unknown): LimitResets | null {
+  return orNull(v, (r) => ({
+    cooldownUntil: isoOrNull(r.cooldown_until),
+    eligible: bool(r.eligible),
+    fableWeekShare: numOrNull(r.fable_week_share),
+    grants: list(r.grants).map(rec).map((g) => ({
+      blocking: windowIds(g.blocking), clears: windowIds(g.clears), endsAt: isoOr(g.ends_at, epoch), id: str(g.id), kind: str(g.kind), label: str(g.label),
+      reason: strOrNull(g.reason), resetsLeft: num(g.resets_left), resetsTotal: num(g.resets_total), startsAt: isoOr(g.starts_at, epoch),
+      state: oneOf(RESET_GRANT_STATE_VALUES, g.state) ?? 'unknown', usedAt: isoOrNull(g.used_at),
+    })),
+    ineligibleReason: strOrNull(r.ineligible_reason),
+    left: num(r.left),
+    readAt: isoOr(r.read_at, epoch),
+  }));
+}
+
+export const decodeLimitResetsRead = (v: unknown): LimitResetsRead => ({ error: strOrNull(rec(v).error), limitResets: decodeLimitResets(rec(v).limit_resets) });
+
+export function decodeResetUse(v: unknown): ResetUse {
+  const u = rec(v);
+  return {
+    cleared: windowIds(u.cleared), cooldownUntil: isoOrNull(u.cooldown_until), limitResets: decodeLimitResets(u.limit_resets),
+    // A class this console does not know is open, so no page says "not used" about it.
+    outcome: oneOf(RESET_OUTCOME_VALUES, u.outcome) ?? 'unsettled',
+    reason: strOrNull(u.reason), resetsLeft: numOrNull(u.resets_left), result: str(u.result), weeklyResetsAt: isoOrNull(u.weekly_resets_at),
+  };
+}
+
 export function decodeAccount(v: unknown): Account {
   const a = rec(v);
   const cooldowns = list(a.cooldowns).map(rec).map((c) => ({ reason: str(c.reason), scope: str(c.scope), setAt: isoOr(c.set_at, epoch), until: isoOr(c.until, epoch), windowId: windowKeyId(str(c.window)) }));
@@ -137,6 +167,7 @@ export function decodeAccount(v: unknown): Account {
     id: str(a.id),
     kind: accountKind(a.kind),
     label: str(a.label),
+    limitResets: decodeLimitResets(a.limit_resets),
     overage: orNull(a.overage, (o) => ({ inUse: bool(o.in_use), observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOrNull(o.since) })),
     plan: planName(subscription),
     planEndedAt: isoOrNull(a.plan_ended_at),
@@ -1066,6 +1097,7 @@ export function decodeSettings(v: unknown): Settings {
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds), nonCompanionIdleSeconds: num(rec(s.sessions).non_companion_idle_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
     subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
+    usage: { limitResetWarningDays: num(rec(s.usage).limit_reset_warning_days) },
   };
 }
 

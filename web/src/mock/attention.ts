@@ -2,12 +2,13 @@ import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { lookup } from '@/lib/counts';
 import { tokensTotal, undatedModel } from '@/lib/format';
-import { hoursOfKey } from '@/lib/windows';
+import { WINDOW_KEY, hoursOfKey, windowEntry } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
-import { KEEPALIVE_OVERVIEW } from './operations';
+import { KEEPALIVE_OVERVIEW, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS, poolById } from './pools';
 import { REQUESTS, planPaid } from './requests';
+import { RESET_BLOCKS, resetEnding, wallReset } from './resets';
 // The walls condition names its shedding round `round`, so the helper reads under another name here.
 import { round as roundTo } from './round';
 import { ROUTING_EVENTS } from './routingLog';
@@ -59,6 +60,12 @@ function unpriced(model: string): Pick<AttentionItem, 'detail' | 'since'> | null
 
 const sonnetUnpriced = unpriced('claude-sonnet-4-5');
 
+/** The windows an account's reading holds at their limit, in the router's names, as the wall's join reads the poll. */
+const atLimit = (accountId: string): string[] => {
+  const a = accountById.get(accountId);
+  return [...(a?.windows ?? []), ...(a?.fableWindow ? [a.fableWindow] : [])].filter((w) => w.utilization >= 1).map((w) => windowEntry(WINDOW_KEY, w.id) ?? w.id);
+};
+
 /**
  * An account's walls over the day as the reader dates them, read by the newest round on the newest wall's window
  * inside that window's length before it: after a projection round the error of its projection, after a slow-down round
@@ -77,8 +84,10 @@ function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
   const slowed = round?.detail.trigger === 'slow_down';
   const projection = !slowed && typeof round?.detail.projection === 'number' ? round.detail.projection : null;
   const reset = typeof newest.detail.reset === 'number' ? newest.detail.reset : null;
+  // From the block and the present reading, as the reader joins it: the row's windows name the day's spent ones.
+  const usable = wallReset(lookup(RESET_BLOCKS, accountId), atLimit(accountId), NOW);
   return {
-    detail: { early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null, projection_error: projection === null ? null : roundTo(1 - projection, 3), setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
+    detail: { early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null, projection_error: projection === null ? null : roundTo(1 - projection, 3), ...(usable === null ? {} : { reset: usable }), setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
     since: spent[0].at,
   };
 }
@@ -230,18 +239,28 @@ const CONDITIONS: AttentionItem[] = [
 ].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
 
 /**
+ * One item per account whose stored block holds an unused reset that ends within the settings' days, read from the
+ * blocks as the reader reads the stored ones, listed by when each began, then by subject.
+ */
+const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
+  const held = resetEnding(a.id, lookup(RESET_BLOCKS, a.id), NOW, SETTINGS_WIRE.usage.limit_reset_warning_days);
+  return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'limit_reset_ending' as const }] : [];
+}).sort((x, y) => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
+
+/**
  * One item per kind but a failed certificate reload, the expiries between turns, which the Dashboard reads as a figure,
  * and a wall, which holds on two accounts, on the story's accounts, pools, keys, proxy listener, models and keepalive
  * engine, in the route's order: jobs exhausted from the runner's first request after its one member spent the day's
  * budget, a client build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's
  * lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy
- * listener's certificate 12 days from its end, a priced record of the jobs pool's one member parked in the ledger file,
- * the keepalive engine's bus gaps, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's 5-hour
- * window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and secondary's after the 11:00 round,
- * nightly spent after the least-bad move onto it, the all pool's round that found no destination with runway, studio
- * slowed in work for 2 h 8 min of the day, and the engine's retained prompts at 92 percent of their cap. The meter
- * drift reads the reconciled windows, the four routing conditions the routing log's events, as the ledger folds them,
- * and the two keepalive items the overview's figures.
+ * listener's certificate 12 days from its end, nightly's reset 4 days from its end, a priced record of the jobs pool's
+ * one member parked in the ledger file, the keepalive engine's bus gaps, the backoff secondary's poll is in, Sonnet 4.5
+ * priced nothing, nightly's 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and
+ * secondary's after the 11:00 round, which secondary's reset can clear, nightly spent after the least-bad move onto
+ * it, the all pool's round that found no destination with runway, studio slowed in work for 2 h 8 min of the day, and
+ * the engine's retained prompts at 92 percent of their cap. The meter drift reads the reconciled windows, the four
+ * routing conditions the routing log's events, as the ledger folds them, the reset item and the wall's reset the
+ * stored blocks, and the two keepalive items the overview's figures.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -300,6 +319,7 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'certificate_expiring',
     since: ago(18 * DAY),
   },
+  ...RESET_ITEMS,
   {
     ...ATTENTION_ITEM_SAMPLE,
     detail: { accounts: ['research'], count: 1, pool: 'jobs' },

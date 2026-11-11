@@ -135,6 +135,67 @@ export interface AccountSlowDown {
   thresholdMs: number;
 }
 
+export const RESET_GRANT_STATE_VALUES = ['blocked', 'cooldown', 'ended', 'paused', 'usable', 'used', 'waiting'] as const;
+/** `unknown` stands for a state word this console does not know. */
+export type ResetGrantState = (typeof RESET_GRANT_STATE_VALUES)[number] | 'unknown';
+
+/** One grant of an account's limit resets, as the account row answers it. */
+export interface ResetGrant {
+  /** The windows that block the grant: the console's window id where it knows the name, else the name as sent. */
+  blocking: WindowId[];
+  /** The windows the grant clears, read as `blocking` is. */
+  clears: WindowId[];
+  endsAt: string;
+  id: string;
+  /** `fable`, `full`, `session`, `weekly` or the upstream's word as sent. */
+  kind: string;
+  label: string;
+  /** The upstream's reason as sent on a `blocked` grant, null on every other state. */
+  reason: string | null;
+  resetsLeft: number;
+  resetsTotal: number;
+  startsAt: string;
+  state: ResetGrantState;
+  /** The use through this router, null on a grant with a reset left and on one used elsewhere. */
+  usedAt: string | null;
+}
+
+/** An account's one-time limit resets, null on the row where the router read none. */
+export interface LimitResets {
+  cooldownUntil: string | null;
+  eligible: boolean;
+  /** The Fable week's used share of the 7-day window as a fraction of 1, null where the poll read none. */
+  fableWeekShare: number | null;
+  grants: ResetGrant[];
+  ineligibleReason: string | null;
+  /** The resets left on the grants that have not ended. */
+  left: number;
+  readAt: string;
+}
+
+/** What the read before the dialog answers: the member as it stands, and the read's error where it failed. */
+export interface LimitResetsRead {
+  error: string | null;
+  limitResets: LimitResets | null;
+}
+
+export const RESET_OUTCOME_VALUES = ['refused', 'unsettled', 'used'] as const;
+export type ResetOutcome = (typeof RESET_OUTCOME_VALUES)[number];
+
+/** What a use answers for a claim whose answer the router parsed, which names a `result`. */
+export interface ResetUse {
+  cleared: WindowId[];
+  cooldownUntil: string | null;
+  limitResets: LimitResets | null;
+  /** The router's class. A word this console does not know reads `unsettled`, never a refusal. */
+  outcome: ResetOutcome;
+  reason: string | null;
+  resetsLeft: number | null;
+  /** The upstream's word as sent. */
+  result: string;
+  weeklyResetsAt: string | null;
+}
+
 export interface Account {
   /** Set only on an OAuth account; an api_key account always reads false. */
   canceled: boolean;
@@ -152,6 +213,7 @@ export interface Account {
   id: string;
   kind: AccountKind;
   label: string;
+  limitResets: LimitResets | null;
   /** The router's own reading of whether requests bill as overage; `since` is null when a usage sample, not a response, reported it. */
   overage: { inUse: boolean; observedAt: string; reset: string | null; since: string | null } | null;
   plan: string | null;
@@ -309,7 +371,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'keepalive_cap', 'expired_between_turns'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'limit_reset_ending', 'ledger_record_parked', 'keepalive_bus_gaps', 'poll_backoff', 'model_unpriced', 'meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long', 'keepalive_cap', 'expired_between_turns'] as const;
 /** `unknown` stands for a kind this console does not know, which the route never answers under that name. */
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number] | 'unknown';
 
@@ -2125,6 +2187,9 @@ export interface Settings {
    * `revisions` lists every dated entry of the file, ascending by date, and is empty where the model reads as empty.
    */
   subscriptionCosts: SubscriptionCosts & { problem: string | null; revisions: CostRevision[]; source: string };
+  /** `limitResetWarningDays`: how many days before an unused limit reset ends the warning shows, 0 for never, a file
+   *  setting the console shows and never edits. */
+  usage: { limitResetWarningDays: number };
 }
 
 export interface SessionInfo {

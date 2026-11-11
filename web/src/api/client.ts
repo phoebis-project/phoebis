@@ -18,6 +18,7 @@ import type {
   KeepaliveOverview,
   KeepaliveRecipe,
   KeyModels,
+  LimitResetsRead,
   MemberBudget,
   ModelRule,
   ModelRulesMode,
@@ -40,6 +41,7 @@ import type {
   RequestDetail,
   RequestPage,
   RequestQuery,
+  ResetUse,
   RewritesAnswer,
   RoutingLogPage,
   RoutingLogQuery,
@@ -273,6 +275,8 @@ export interface Api {
   login(secret: string, stayLoggedIn?: boolean): Promise<SessionInfo>;
   logout(): Promise<void>;
   pauseAccount(accountId: string): Promise<void>;
+  /** `POST /admin/accounts/{id}/limit-resets/read`, quiet for the shell's toast: the dialog draws its failure. */
+  readLimitResets(accountId: string): Promise<LimitResetsRead>;
   refreshUsage(accountId: string): Promise<void>;
   releaseSession(keyId: string, sessionId: string): Promise<void>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
@@ -291,5 +295,7 @@ export interface Api {
   /** `revision` is the one the row was read at. A save over a row that moved since answers 409 `stale_edit`. */
   updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool>;
+  /** `POST /admin/accounts/{id}/limit-resets/{grant}/use`, quiet too. A refusal is thrown as an `ApiError` with its code. */
+  useLimitReset(accountId: string, grantId: string): Promise<ResetUse>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

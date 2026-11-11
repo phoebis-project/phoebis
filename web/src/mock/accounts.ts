@@ -1,10 +1,11 @@
-import { planName } from '@/api/decode';
+import { decodeLimitResets, planName } from '@/api/decode';
 import type { Account, BurnUnit, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { kindGroup } from '@/lib/selection';
 import { periodHoursOf, windowKeyId, windowLabelOf } from '@/lib/windows';
 import { leadOf } from './lead';
+import { RESET_BLOCKS, limitResetsWire } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
@@ -596,7 +597,9 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
   const end = endOf({ ...a, subscription }, NOW);
   const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
-  return { ...a, fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: a.planEndedAt === null ? a.windows.map(led) : [] };
+  // The poll no longer asks an account whose plan ended, so the route shows no reset of it.
+  const limitResets = a.planEndedAt === null ? decodeLimitResets(limitResetsWire(a.id, RESET_BLOCKS, NOW)) : null;
+  return { ...a, fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: a.planEndedAt === null ? a.windows.map(led) : [] };
 });
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));

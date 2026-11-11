@@ -717,7 +717,7 @@ await forView('/', async () => {
     title
       .split('\n')
       .filter((l) => !l.startsWith('started ') && !l.startsWith('Opens the Routing log'))
-      .map((l) => l.replace(/^(backoff_since|expires|last_at|next_attempt_at): (?!\d+$).+$/, '$1: <instant>').replace(/ \((?!\d+\))[^()]+\)\. Replace the pair/, ' (<instant>). Replace the pair'));
+      .map((l) => l.replace(/^(backoff_since|ends_at|expires|last_at|next_attempt_at): (?!\d+$).+$/, '$1: <instant>').replace(/ \((?!\d+\))[^()]+\)\. Replace the pair/, ' (<instant>). Replace the pair'));
   // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
   // address's path stands for it.
   const target = (href) => href?.split('?')[0] ?? null;
@@ -736,6 +736,8 @@ await forView('/', async () => {
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
     ['Credential refresh failed: legacy', 'badge--serious', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
+    // nightly's reset ends 4 days and 12 hours out, inside the mock's five days.
+    ['nightly: a reset ends in 4 days', 'badge--warning', '/accounts/nightly', ['account: nightly', 'clears: ["five_hour","seven_day_fable"]', 'days_left: 4', 'ending: 1', 'ends_at: <instant>', 'grant: rg-nightly-1', 'grant_label: Launch reset', 'resets_left: 1']],
     ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     // The keepalive engine's bus gaps rank after the parked record, a router subject that opens the Sessions view, read
     // off the mock's keepalive overview: three gaps, the last two hours back.
@@ -760,7 +762,7 @@ await forView('/', async () => {
       'secondary: 1 wall reached on the 5h window, the last round projected 109 %, shed_cap and window_ceiling, since 14:02',
       'badge--warning',
       '/routing-log',
-      ['projection_error: -0.087', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+      ['projection_error: -0.087', 'reset: {"clears":["five_hour"],"grant":"rg-secondary-1","label":"Launch reset"}', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
     ],
     // Studio's wall at a poll of 14:20 follows the round its stretch fired at 14:05, so it reads how long before the
     // 15:29 reset it came, read off the mock's studio wall seed.
@@ -792,16 +794,16 @@ await forView('/', async () => {
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all nineteen while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's the routing log, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty, nightly's reset item among them, while no layout folds it",
     ok:
-      lead() === '19 need attention' &&
+      lead() === '20 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
       ages[6] === 'started 18d ago' &&
-      /^started 1h( 1m)? ago$/.test(ages[7] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[9] ?? '') &&
+      /^started 1h( 1m)? ago$/.test(ages[8] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[10] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -882,7 +884,7 @@ await forView('/', async () => {
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its nineteen items again', ok: lead() === '19 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: "/ the story back, the next tick draws its twenty items again, nightly's reset item among them", ok: lead() === '20 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -967,10 +969,10 @@ await forView('/', async () => {
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its nineteen items shows the four that fit and folds the other fifteen behind \"+15 more\" titled with their words one per line, whose list holds all nineteen worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its twenty items, nightly's reset item among them, shows the four that fit and folds the other sixteen behind \"+16 more\" titled with their words one per line, whose list holds all twenty worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+15 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+16 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -982,7 +984,7 @@ await forView('/', async () => {
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+18 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+19 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -5794,16 +5796,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const aged = ([age, titled]) => age !== null && age === titled && /^(now|\d+[dhms]( \d+[hm])? ago)$/.test(age);
   const rowAges = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map(ageOf);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
-  // Overflow workspace out of funding, secondary's poll backoff, nightly's meter drift and the three routing conditions
-  // (the walls on nightly and secondary, nightly spent within the hour of a move, and all's round without a
-  // destination). work draws studio's wall after the round its stretch fired, in the wall's second wording, and studio
-  // slowed past twice the stretch, and the routing state writer belongs to no pool's card.
+  // Overflow workspace out of funding, nightly's reset that ends in four days, secondary's poll backoff, nightly's meter
+  // drift and the three routing conditions (the walls on nightly and secondary, nightly spent within the hour of a move,
+  // and all's round without a destination). work draws studio's wall after the round its stretch fired, in the wall's
+  // second wording, and studio slowed past twice the stretch, and the routing state writer belongs to no pool's card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
       rowAges('jobs').length === 2 &&
-      rowAges('all').length === 8 &&
+      rowAges('all').length === 9 &&
       rowAges('work').length === 2 &&
       [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
@@ -5811,6 +5813,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         JSON.stringify([
           ['Client drift', '2.1.271', '/keys#laptop'],
           ['Funding required', 'Overflow workspace', '/accounts/overflow'],
+          ['Reset ending', 'nightly', '/accounts/nightly'],
           ['Usage poll backing off', 'secondary', '/accounts/secondary'],
           ['Meter drift against the table', 'nightly', '/meter'],
           ['Wall reached under the ceiling', 'nightly', '/routing-log'],
@@ -6053,6 +6056,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Priced record parked', null],
           ['Client drift', '/keys#laptop'],
           ['Funding required', '/accounts/overflow'],
+          ['Reset ending', '/accounts/nightly'],
           ['Usage poll backing off', '/accounts/secondary'],
           ['Meter drift against the table', '/meter?accounts=nightly'],
           ['Wall reached under the ceiling', sinceThen({ accounts: 'nightly', kinds: 'window_spent' }, since('wall_reached', 'nightly'))],

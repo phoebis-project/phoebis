@@ -16,6 +16,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   keepalive_bus_gaps: 'Keepalive bus gaps',
   keepalive_cap: 'Keepalive cap',
   ledger_record_parked: 'Priced record parked',
+  limit_reset_ending: 'Reset ending',
   meter_drift: 'Meter drift against the table',
   model_unpriced: 'Model unpriced',
   poll_backoff: 'Usage poll backing off',
@@ -40,6 +41,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'seriou
   keepalive_bus_gaps: 'serious',
   keepalive_cap: 'warning',
   ledger_record_parked: 'serious',
+  limit_reset_ending: 'warning',
   meter_drift: 'warning',
   model_unpriced: 'info',
   poll_backoff: 'warning',
@@ -132,6 +134,13 @@ export function anchorOf(hash: string): string | null {
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 /** The listener a certificate item's subject names: `proxy.tls` is the proxy listener's pair. */
 const listenerOf = ({ subject }: AttentionItem): string => subject.id.replace(/\.tls$/, '');
+/** "a reset ends in 4 days", "the first of 2 resets ends today": the item's subject and its whole days. */
+const resetEnds = (d: AttentionItem['detail']): string => {
+  const ending = num(d.ending);
+  const left = num(d.days_left);
+  // The route floors the days left, so a reset at 0 ends within a day, as the certificate's item reads its last.
+  return `${ending > 1 ? `the first of ${ending} resets` : 'a reset'} ${left <= 0 ? 'ends today' : `ends in ${plural(left, 'day')}`}`;
+};
 
 /** The item's detail as the one line a pool card's row draws. */
 export function attentionDetail(item: AttentionItem, now: number): string {
@@ -175,6 +184,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
+    case 'limit_reset_ending':
+      return `${resetEnds(d)} (${fmtAbsolute(isoOrNull(d.ends_at))}) and clears ${listWords(strings(d.clears).map((w) => windowTag(w)))}: ${text(d.grant_label) ?? ''}`;
     case 'model_unpriced': {
       const n = num(d.requests);
       return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
@@ -297,6 +308,7 @@ export function attentionWords(item: AttentionItem, now: number): string | null 
   if (item.kind === 'expired_between_turns') return `${ATTENTION_LABEL[item.kind]}: ${num(d.expired)} in 24h`;
   if (item.kind === 'slowed_long') return `${item.subject.label}: ${slowedWords(item, now)}`;
   if (item.kind === 'meter_drift') return `${item.subject.label}: ${driftWords(item, now)}`;
+  if (item.kind === 'limit_reset_ending') return `${item.subject.label}: ${resetEnds(d)}`;
   if (item.kind !== 'wall_reached' && item.kind !== 'destination_spent' && item.kind !== 'shed_no_runway') return null;
   return `${item.subject.label}: ${conditionWords(item, now)}`;
 }

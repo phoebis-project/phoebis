@@ -1184,4 +1184,5 @@ export const SETTINGS_WIRE = {
   sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS, non_companion_idle_seconds: NON_COMPANION_IDLE_SECONDS },
   storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
   subscription_costs: SUBSCRIPTION_COSTS_WIRE,
+  usage: { limit_reset_warning_days: 5 },
 };

@@ -583,13 +583,13 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's nineteen
- * items, more than the row holds at 1280 by 800: the badges shown and the fold's count add up to nineteen, the fold
- * badge draws its dashed border, and its list opens under it inside the window with all nineteen, closing on Escape
- * with the focus back on the badge. The router pass seeds an exhaustion of its main pool, which any request the pool
- * serves later in the run (a keepalive probe among them) clears: the light pass, which reaches the dashboard first,
- * requires that item, so a route answering an empty list fails it, and the dark pass draws that item or the quiet line,
- * never the unavailable one.
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's twenty
+ * items, nightly's reset item among them, more than the row holds at 1280 by 800: the badges shown and the fold's count
+ * add up to twenty, the fold badge draws its dashed border, and its list opens under it inside the window with all
+ * twenty, closing on Escape with the focus back on the badge. The router pass seeds an exhaustion of its main pool,
+ * which any request the pool serves later in the run (a keepalive probe among them) clears: the light pass, which
+ * reaches the dashboard first, requires that item, so a route answering an empty list fails it, and the dark pass draws
+ * that item or the quiet line, never the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);
@@ -631,7 +631,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '19 need attention' || texts.length + folded !== 19 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's nineteen items folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '20 need attention' || texts.length + folded !== 20 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's twenty items, nightly's reset item among them, folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -705,7 +705,7 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 19 || read.rows !== 19 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's nineteen items one per row`);
+    if (read.badges !== 20 || read.rows !== 20 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's twenty items, nightly's reset item among them, one per row`);
     if (!read.inside) say('draws a badge past its box');
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);

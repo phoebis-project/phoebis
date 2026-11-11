@@ -301,6 +301,7 @@ export class HttpApi implements Api {
   };
   logout = () => call<void>('DELETE', '/admin/session');
   pauseAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/pause`);
+  readLimitResets = async (accountId: string) => d.decodeLimitResetsRead(await call('POST', `/admin/accounts/${enc(accountId)}/limit-resets/read`, undefined, { report: 'quiet' }));
   refreshUsage = async (accountId: string) => {
     await call('POST', `/admin/accounts/${enc(accountId)}/usage/refresh`);
   };
@@ -325,6 +326,7 @@ export class HttpApi implements Api {
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.
   updatePool = async (id: string, input: PoolInput, revision?: number) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, withRevision(d.encodePool(input), revision), DIALOG_WRITE));
+  useLimitReset = async (accountId: string, grantId: string) => d.decodeResetUse(await call('POST', `/admin/accounts/${enc(accountId)}/limit-resets/${enc(grantId)}/use`, undefined, { report: 'quiet' }));
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }
 

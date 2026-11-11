@@ -75,7 +75,7 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(a.companionId, '1fa58bef');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['canceled', 'companionId', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'planEndedAt', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'spend', 'status', 'subscription', 'usage', 'usageBased', 'windows'],
+    ['canceled', 'companionId', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'limitResets', 'overage', 'plan', 'planEndedAt', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'spend', 'status', 'subscription', 'usage', 'usageBased', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -2429,7 +2429,7 @@ test('settings decode the members the route answers and nothing more', () => {
   const s = d.decodeSettings(wire);
   assert.deepEqual(
     Object.keys(s).sort(),
-    ['about', 'access', 'apiPrices', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts'],
+    ['about', 'access', 'apiPrices', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
     'the decoder reads the members the route answers',
   );
   const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
@@ -2444,6 +2444,7 @@ test('settings decode the members the route answers and nothing more', () => {
       sessions: ['expireAfterSeconds', 'nonCompanionIdleSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
       subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'regimes', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
+      usage: ['limitResetWarningDays'],
     },
     'each member carries what the pages read and no other key',
   );
@@ -2791,6 +2792,14 @@ test('a session decodes its burn unit and window, and a pin the cost model canno
   assert.equal(Object.keys(d.decodeRecipe(fixture('keepalive_recipes').recipes[0])).some((k) => k.startsWith('net')), false, 'a recipe carries no net member');
 });
 
+test('an answer the console does not know is never a refusal', () => {
+  const use = (outcome, result) => d.decodeResetUse({ cleared: [], cooldown_until: null, limit_resets: null, outcome, reason: null, resets_left: null, result, weekly_resets_at: null });
+  const read = (u) => [u.outcome, u.result];
+  assert.deepEqual(read(use('unsettled', 'later_word')), ['unsettled', 'later_word'], "a result the console does not know keeps the router's class and reads as sent");
+  assert.deepEqual(read(use('later_class', 'reset')), ['unsettled', 'reset'], 'a class the console does not know is open, so no page says the reset was not used');
+  assert.deepEqual(read(use('refused', 'ineligible')), ['refused', 'ineligible'], 'a refusal reads refused');
+});
+
 test("an attention item decodes the route's shape, its start an instant and its detail passed through", () => {
   const [raw] = fixture('attention').items;
   assert.deepEqual(d.decodeAttention(raw), {
@@ -2837,6 +2846,14 @@ test("an unpriced model's attention item decodes under its own kind, a model sub
   assert.deepEqual(d.decodeAttention({ ...raw, link: { id: raw.subject.id, page: 'models' } }), decoded, 'a router that names the models page opens no page the console draws');
   assert.deepEqual(d.decodeAttention({ ...raw, link: null }), decoded, 'a router that sends no link');
   assert.deepEqual(Object.keys(raw.detail).sort(), ['model', 'requests'], 'the detail names the model and its plan requests');
+});
+
+test("the console reads the reset item's windows and label from the members the route sends", () => {
+  const raw = fixture('attention').items.find((i) => i.kind === 'limit_reset_ending');
+  assert.ok(raw, 'the capture holds the reset item');
+  // The sentence's end alone, from the cleared window on, so the days and the instant before it stay free. The
+  // item's arm reads no clock.
+  assert.match(d.attentionDetail(d.decodeAttention(raw), 0), / Fable: Launch reset$/);
 });
 
 test('an attention item with a spelling the console does not know reads the unknown kind with its raw kind, a pool subject and no link', () => {

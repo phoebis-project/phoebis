@@ -25,6 +25,8 @@ export {
   RECIPE_STATE_VALUES,
   REQUEST_KIND_VALUES,
   REQUEST_OUTCOME_VALUES,
+  RESET_GRANT_STATE_VALUES,
+  RESET_OUTCOME_VALUES,
   TEST_VERDICT_VALUES,
 } from '@/api/types';
 export { accountColor, accountSlots } from '@/components/charts/theme';
