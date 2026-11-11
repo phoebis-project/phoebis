@@ -2694,6 +2694,50 @@ async fn a_use_that_names_a_revision_from_before_a_pairing_sends_nothing() {
 }
 
 #[tokio::test]
+async fn a_use_whose_expected_revision_is_null_sends_nothing() {
+    use common::{json, login, post, LIMIT_RESETS_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    let refused = post(
+        &h.app,
+        USE_RESET,
+        r#"{"expected_revision": null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            sent(&h.up, "POST /api/organizations/")
+        ),
+        (400, 0),
+        "a member the route cannot read names no account, so no claim leaves bound to the route's own read"
+    );
+    // The block read fails, so the read route answers the stored block, which a claim's fold would have moved.
+    h.up.set_rule_after(0, LIMIT_RESETS_PATH, upstream_failure());
+    let read = json(
+        post(
+            &h.app,
+            "/admin/accounts/business/limit-resets/read",
+            "",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let grant = &read["limit_resets"]["grants"][0];
+    assert_eq!(
+        (grant["state"].as_str(), grant["resets_left"].as_u64()),
+        (Some("usable"), Some(1)),
+        "the grant keeps its one reset: {read}"
+    );
+}
+
+#[tokio::test]
 async fn a_later_answer_never_moves_the_use() {
     use common::{get, json, login};
     use phoebis_oauth::ClaimOutcome;
