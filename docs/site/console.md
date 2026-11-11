@@ -1586,6 +1586,7 @@ panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the 
 | cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
 | fast credits changed | An account's usage credits for fast mode became available or unavailable. |
 | ledger gap | The ledger could not record a request whole, and the reason names what it is missing. |
+| limit reset claimed | An operator's use of a limit reset reached the upstream. The row names the grant, the request id, the upstream's result and reason as sent, the router's outcome (refused, unsettled or used), the windows it cleared, the count left and, for a claim with no answer, the status or the transport error. |
 | mark cleared | A shedding mark left a pin: it moved, was released, or its account's window read under its line again, the wall or the ceiling, or its stretch under the threshold. |
 | model permitted | An account served a model another account had rejected. |
 | model rejected | An account answered 404 for a model, which cools that model on the account. |

@@ -15319,7 +15319,7 @@ await forView('/routing-log', async () => {
 });
 
 // The Routing log's Sort control, Time alone: newest first at rest, and Ascending reads the hour from its oldest row,
-// the stream reversed whole, so the story's event 337 and the decision of req_d41e5b80-c26 at the hour's first instant
+// the stream reversed whole, so the story's event 338 and the decision of req_d41e5b80-c26 at the hour's first instant
 // (`web/src/mock/routingLog.ts`) lead in the reverse of their newest-first order, each Time cell dated. The read sends
 // the direction, the address carries it and a reload reads it back.
 await forView('/routing-log', async () => {
@@ -15360,7 +15360,7 @@ await forView('/routing-log', async () => {
   } finally {
     recorded.restore();
   }
-  const up = { arrow: 'up', first: ['event/337', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
+  const up = { arrow: 'up', first: ['event/338', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
   const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
   results.push({
     name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',
@@ -15526,7 +15526,7 @@ await forView('/routing-log', async () => {
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 37 && ['+ Mark cleared', '+ Plan ended', '+ Plan restored', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        events.length === 38 && ['+ Mark cleared', '+ Plan ended', '+ Plan restored', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -15554,7 +15554,7 @@ await forView('/routing-log', async () => {
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 44 && back.checked === 44,
+        back.address === null && back.chip === 'no kinds chip' && back.options === 45 && back.checked === 45,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -17793,6 +17793,23 @@ await forView('/routing-log', async () => {
       cooldown_set: ['Scope', 'Reason', 'Window', 'Until', 'Set by'],
       fast_credits_changed: ['Before', 'After', 'Cause', 'Effect'],
       ledger_gap: ['Reason', 'Meaning', 'Effect', 'Request'],
+      // Every claim's row holds all twelve keys, so a pair stands by its member's value.
+      limit_reset_claimed: ({ detail: c }) =>
+        [
+          ['Grant', c.label !== null || c.grant_id !== null],
+          ['Outcome', c.outcome !== null],
+          ['Result', c.result !== null],
+          ['Reason', c.reason !== null],
+          ['Cleared', c.cleared.length > 0],
+          ['Resets left', c.resets_left !== null],
+          ['Cooldown until', c.cooldown_until !== null],
+          ['Status', c.status !== null || c.error !== null],
+          ['Error', c.error !== null],
+          ['Request id', c.request_id !== null],
+          ['Actor', true],
+        ]
+          .filter(([, drawn]) => drawn)
+          .map(([label]) => label),
       mark_cleared: ['Key', 'Session', 'Agent', 'Model', 'Reason', 'Marked', 'Standing for'],
       model_permitted: ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request'],
       model_rejected: ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request'],
@@ -17833,7 +17850,7 @@ await forView('/routing-log', async () => {
       window_spent: (e) => ['Window', 'Reading', 'Read from', 'Resets', 'Effect', ...(e.requestId === null ? [] : ['Request'])],
     };
     const EVENT_KINDS = [
-      'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
+      'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'limit_reset_claimed', 'mark_cleared', 'model_permitted', 'model_rejected',
       'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
       'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
       'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
@@ -17841,10 +17858,12 @@ await forView('/routing-log', async () => {
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
     // The pairs the event carries the facts for: the state's effect, the gap's meaning, the spent window's effect, the
     // backoff's span and its close by cause, the failed poll's answer and the cut's figures, the last two read off
-    // nightly's 503 seed and the undecodable row's seed, and the reset's source.
+    // nightly's 503 seed and the undecodable row's seed, the reset's source, and the claim's pairs read off workshop's
+    // refused seed, whose cooldown runs 40 minutes past the clock.
     const VALUES = {
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
+      limit_reset_claimed: (e) => ({ 'Cooldown until': [hhmm(e.detail.cooldown_until)], Grant: ['Launch reset', 'rg-workshop-1'], Outcome: ['reset refused'], Result: ['cooldown'], Status: ['200'] }),
       poll_backoff_ended: (e) => ({
         'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`],
         [e.detail.cause === 'plan_ended' ? "Ended by the plan's end" : 'Resumed']: [hhmm(e.detail.resumed_at)],
@@ -17881,11 +17900,15 @@ await forView('/routing-log', async () => {
     // The pairs whose value prints in the mono face: the cut's code, and the upstream's id where the panel draws it,
     // as the request drawer prints the id.
     const MONO = { stream_interrupted: ['Code', 'Upstream request'] };
+    // The row a kind's check reads where the newest row is not the one. A block that runs before this one can send uses
+    // on this run's one MockApi, so the newest claim can be another case's: the seeded refusal on workshop, an account no
+    // case sends a use for, stands for the kind.
+    const PICK = { limit_reset_claimed: (r) => r.accountId === 'workshop' };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {
       // The story's newest registry change revokes a key and names no field, so the account edit stands for the kind.
       const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: [kind], limit: 25, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
-      const e = listed.find((r) => Object.keys(r.detail.diff ?? {}).length > 0) ?? listed[0];
+      const e = listed.find(PICK[kind] ?? ((r) => Object.keys(r.detail.diff ?? {}).length > 0)) ?? listed[0];
       if (!e) {
         results.push({ name: `/routing-log the ${kind} detail reads its pairs`, ok: false, missing: ['no event of the kind in the story'] });
         continue;

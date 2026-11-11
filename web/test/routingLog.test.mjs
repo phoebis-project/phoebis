@@ -282,7 +282,7 @@ test('a fact key the console has no label for is dropped rather than drawn under
 
 test('every event kind has its words, and a kind without a tone of its own reads neutral', () => {
   const kinds = [
-    'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
+    'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'limit_reset_claimed', 'mark_cleared', 'model_permitted', 'model_rejected',
     'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
     'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
     'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
@@ -1018,6 +1018,10 @@ const DETAIL_EVENTS = {
   cooldown_set: [{ reason: 'rate_limit', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }, ['Scope', 'Reason', 'Window', 'Until', 'Set by']],
   fast_credits_changed: [{ after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: ms(11, 30) }, ['Before', 'After', 'Cause', 'Effect']],
   ledger_gap: [{ reason: 'chunk_skipped', request_id: 'req_1' }, ['Reason', 'Meaning', 'Effect', 'Request']],
+  limit_reset_claimed: [
+    { cleared: ['seven_day_fable'], cooldown_until: null, error: null, grant_id: 'rg-a-1', label: 'Launch reset', outcome: 'used', reason: null, request_id: '00000000-0000-4000-8000-0000000000c1', resets_left: 0, result: 'reset', status: 200, weekly_resets_at: null },
+    ['Grant', 'Outcome', 'Result', 'Cleared', 'Resets left', 'Status', 'Request id', 'Actor'],
+  ],
   mark_cleared: [{ agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: 0.91, reason: 'healed' }, ['Key', 'Session', 'Agent', 'Model', 'Reason', 'Marked', 'Standing for']],
   model_permitted: [{ attempt: 2, rejected_by: ['secondary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request']],
   model_rejected: [{ attempt: 1, request_id: 'req_011', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request']],

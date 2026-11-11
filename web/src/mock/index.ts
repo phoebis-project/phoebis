@@ -31,7 +31,7 @@ import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_LOG_KINDS, WEEKLY_RESETS, getDecision, listRoutingLog } from './routingLog';
+import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, getDecision, listRoutingLog } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
@@ -567,6 +567,8 @@ export class MockApi implements Api {
   private buriedKeys = new Map<string, number>([['desktop', 1]]);
   /** The incarnation each deleted pool id reached, which its next pool starts above. */
   private buriedPools = new Map<string, number>();
+  /** The request ids the claims send, drawn apart from the secrets so a use moves no token a later write draws. */
+  private claimIds = createRng(7_919);
   /** The instant each confirm started its account's first poll, held until a list read lands that reading. */
   private firstPolls = new Map<string, number>();
   // The attachments live on the guardrails alone, as one table holds them in the registry, and every pool and key view
@@ -1650,6 +1652,10 @@ export class MockApi implements Api {
     if (block === undefined || index < 0 || grantStates(block, at)[index].state !== 'usable') throw new ApiError(409, 'this reset is not usable now', 'limit_reset_not_usable', path);
     const entry = lookup(RESET_ANSWERS, grantId);
     if (entry === undefined) throw new Error(`the story answers no use of ${grantId}`);
+    // Every claim that left writes its row, one the upstream left unanswered included, as the router's task does.
+    const sent = 'refusal' in entry ? { answer: null, status: entry.upstream } : { answer: entry.answer, status: 200 };
+    const detail = claimDetail(block.grants[index], this.claimIds.uuid(), sent.status, sent.answer);
+    this.written.push({ type: 'event', accountId: a.id, actor: 'admin', agentId: null, at: iso(at), detail, id: ROUTING_EVENTS.length + this.written.length + 1, keyId: null, kind: 'limit_reset_claimed', model: null, poolId: null, requestId: null, sessionId: null });
     if ('refusal' in entry) throw new ApiError(entry.refusal.status, entry.refusal.message, entry.refusal.code, path);
     this.resetBlocks = { ...this.resetBlocks, [accountId]: foldAnswer(block, grantId, entry.answer, at) };
     // Built after the fold, so the claimed grant reads its count and its use from this claim.

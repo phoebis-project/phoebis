@@ -22,6 +22,7 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   cooldown_set: 'cooldown set',
   fast_credits_changed: 'fast credits changed',
   ledger_gap: 'ledger gap',
+  limit_reset_claimed: 'limit reset claimed',
   mark_cleared: 'mark cleared',
   model_permitted: 'model permitted',
   model_rejected: 'model rejected',
@@ -53,5 +54,5 @@ export const EVENT_KIND_LABEL: Record<string, string> = {
   window_spent: 'window spent',
 };
 
-/** Every kind the Kinds list offers: the six decision kinds, `probe`, and the 37 event kinds. */
+/** Every kind the Kinds list offers: the decision kinds, `probe` and the event kinds. */
 export const ALL_KINDS: readonly string[] = [...Object.keys(DECISION_KIND_LABEL), 'probe', ...Object.keys(EVENT_KIND_LABEL)];

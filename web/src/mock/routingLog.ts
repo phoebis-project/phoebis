@@ -16,6 +16,7 @@ import { earliest, leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
+import { RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
 import { TABLES } from './samples';
@@ -2527,6 +2528,57 @@ function planEndedRows(account: Account): EventSeed[] {
   ];
 }
 
+/**
+ * A claim's detail as the router writes it: every key on every row, null where the claim has no such fact, and the
+ * instants in epoch milliseconds. The claim's request id travels here alone, since the row's own column names a relayed
+ * request. A claim the upstream answered without a `result` carries no answer.
+ */
+export function claimDetail(grant: MockGrant, requestId: string, status: number, answer: MockUse | null): Record<string, unknown> {
+  return {
+    cleared: answer?.cleared ?? [],
+    cooldown_until: answer?.cooldown_until ?? null,
+    error: null,
+    grant_id: grant.id,
+    label: grant.label,
+    // With no answer, the status alone classes the claim as the client classes it.
+    outcome: answer?.outcome ?? ([401, 403, 429].includes(status) ? 'refused' : 'unsettled'),
+    reason: answer?.reason ?? null,
+    request_id: requestId,
+    resets_left: answer?.resets_left ?? null,
+    result: answer?.result ?? null,
+    status,
+    weekly_resets_at: answer?.weekly_resets_at ?? null,
+  };
+}
+
+/**
+ * The claims the story's blocks rest on: studio's use at the instant its block stamps, and workshop's refusal 20
+ * minutes back, the claim its block's cooldown comes from.
+ */
+function claimRows(): EventSeed[] {
+  const studio = RESET_BLOCKS.studio;
+  const workshop = RESET_BLOCKS.workshop;
+  const used = studio.grants[0];
+  const cooled = workshop.grants[0];
+  const cooldown = workshop.cooldown_until === null ? null : Date.parse(workshop.cooldown_until);
+  return [
+    {
+      accountId: 'studio',
+      actor: 'admin',
+      at: iso(studio.uses[used.id]),
+      detail: claimDetail(used, '8c1f5a3e-2d74-4b09-9e6a-5f3b7c0d1e82', 200, { cleared: ['seven_day_fable'], cooldown_until: null, outcome: 'used', reason: null, resets_left: 0, result: 'reset', weekly_resets_at: null }),
+      kind: 'limit_reset_claimed',
+    },
+    {
+      accountId: 'workshop',
+      actor: 'admin',
+      at: iso(NOW - 20 * MINUTE),
+      detail: claimDetail(cooled, '3a9e6d1c-7b52-4f80-a4c3-9d2e5b8f0c17', 200, { cleared: [], cooldown_until: cooldown, outcome: 'refused', reason: null, resets_left: null, result: 'cooldown', weekly_resets_at: null }),
+      kind: 'limit_reset_claimed',
+    },
+  ];
+}
+
 const WEEK = 7 * DAY;
 
 /** The plan word and the tier a `window_reset` stores, those of the reading it replaced. */
@@ -2798,6 +2850,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'secondary', at: iso(endsAt - pool.windDownMinutes * MINUTE), detail: { end_source: 'canceled', ends_at: endsAt, wind_down_minutes: pool.windDownMinutes }, kind: 'wind_down_started', poolId: 'all' },
     ...planRows(primary),
     ...planEndedRows(accountById.get('sunset')!),
+    ...claimRows(),
   );
   if (oldestCooldown) seeds.push({ accountId: oldestCooldown.accountId, at: iso(oldestCooldown.until), detail: { cause: 'expired', scope: oldestCooldown.scope }, kind: 'cooldown_cleared' });
   if (gap) seeds.push({ accountId: null, at: iso(Date.parse(gap.at) + (gap.durationMs ?? 0)), detail: { reason: 'chunk_skipped', request_id: gap.id }, kind: 'ledger_gap', requestId: gap.id });
@@ -2819,7 +2872,7 @@ const LATE_EVENT_ID = ROUTING_EVENTS.find((e) => Date.parse(e.at) === LATE_EVENT
 
 /** Every event kind the ledger writes, as the route validates `kinds` against them. */
 const EVENT_KINDS: readonly string[] = [
-  'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'mark_cleared', 'model_permitted', 'model_rejected',
+  'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'limit_reset_claimed', 'mark_cleared', 'model_permitted', 'model_rejected',
   'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
   'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
   'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',

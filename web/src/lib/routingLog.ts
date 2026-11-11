@@ -1,4 +1,4 @@
-import { iso, list, numOrNull as num, strOrNull as str } from '@/api/decode';
+import { iso, list, numOrNull as num, strings, strOrNull as str } from '@/api/decode';
 import { FACT_UNIT_VALUES, PIN_RELEASE_REASON_VALUES } from '@/api/types';
 import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { accountHref, type LogFilters, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
@@ -137,7 +137,7 @@ export const KIND_PRESETS: readonly KindPreset[] = [
   { label: 'placements and pins', members: ['placed', 'renewed', 'pin_created', 'pin_migrated', 'pin_released', 'pin_expired', 'reservation_expired'] },
   { label: 'moves and holds', members: ['moved', 'held', 'shedding_round', 'mark_cleared', 'wind_down_started', 'slow_down_started', 'slow_down_ended'] },
   { label: 'exhaustion and refusals', members: ['exhausted', 'refused', 'window_spent', 'budget_reached', 'stream_interrupted'] },
-  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'plan_ended', 'plan_restored', 'refresh_succeeded', 'refresh_uncertain'] },
+  { label: 'account state and windows', members: ['account_state_changed', 'window_reset', 'window_cleared', 'limit_reset_claimed', 'overage_started', 'overage_ended', 'budget_period_ended', 'fast_credits_changed', 'refresh_failed', 'poll_failed', 'plan_ended', 'plan_restored', 'refresh_succeeded', 'refresh_uncertain'] },
   { label: 'cooldowns and backoff', members: ['cooldown_set', 'cooldown_cleared', 'poll_backoff_started', 'poll_backoff_ended'] },
   { label: 'keepalive', members: ['probe', 'warm_prefix_expired'] },
   { label: 'registry changes', members: ['registry_changed', 'catalog_changed', 'model_permitted', 'model_rejected'] },
@@ -376,6 +376,13 @@ const CLEARED_WORD: Record<string, string> = { admin: 'by hand', expired: 'deadl
 const CREDITS_WORD: Record<string, string> = { org_spend_cap_reached: 'spend cap reached' };
 const PERIOD_WORD: Record<string, string> = { day: 'daily budget', month: 'monthly budget' };
 const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
+/** The By chip's words for a claim's outcome, which the panel's Outcome pair repeats. */
+const RESET_OUTCOME_WORD: Record<string, string> = { refused: 'reset refused', unsettled: 'reset not confirmed', used: 'reset used' };
+/** A class this console does not know is open, so it reads as not confirmed. A row with no outcome reads null. */
+const resetOutcome = (v: unknown): string | null => {
+  const outcome = str(v);
+  return outcome === null ? null : (lookup(RESET_OUTCOME_WORD, outcome) ?? RESET_OUTCOME_WORD.unsettled);
+};
 /**
  * The pool fields a registry edit reads as a share rather than a bare number, a row written before the rename among
  * them.
@@ -503,6 +510,9 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     }
     case 'ledger_gap':
       return { value: words(str(d.reason) ?? 'gap') };
+    // The router names the class, so the chip never reads the upstream's word for it.
+    case 'limit_reset_claimed':
+      return { value: resetOutcome(d.outcome) ?? words(e.kind) };
     case 'model_permitted':
       return { value: list(d.rejected_by).length > 0 ? 'after 404' : 'permitted' };
     case 'model_rejected':
@@ -1918,6 +1928,30 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Meaning', meaning === undefined ? null : plain(meaning));
       if (str(d.reason)?.startsWith('chunk')) add('Effect', plain('the captured response is stored truncated'));
       add('Request', request);
+      break;
+    }
+    case 'limit_reset_claimed': {
+      // The upstream's words keep their underscores, which `text` would read as spaces. The claim's request id names no
+      // relayed request, so it draws unlinked.
+      const label = str(d.label);
+      const grant = str(d.grant_id);
+      const outcome = resetOutcome(d.outcome);
+      const result = str(d.result);
+      const reason = str(d.reason);
+      const status = num(d.status);
+      const error = str(d.error);
+      const requestId = str(d.request_id);
+      add('Grant', label === null ? null : plain(label), grant === null ? null : { mono: true, value: grant });
+      add('Outcome', outcome === null ? null : plain(outcome));
+      add('Result', result === null ? null : plain(result));
+      add('Reason', reason === null ? null : plain(reason));
+      add('Cleared', ...strings(d.cleared).map((name) => plain(windowTag(name))));
+      add('Resets left', count(d.resets_left));
+      add('Cooldown until', time(d.cooldown_until));
+      add('Status', status !== null ? plain(String(status)) : error === null ? null : plain('transport failure'));
+      add('Error', error === null ? null : plain(error));
+      add('Request id', requestId === null ? null : { mono: true, value: requestId });
+      add('Actor', plain(row.actor ?? 'admin'));
       break;
     }
     case 'model_permitted':
