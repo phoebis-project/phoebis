@@ -2658,7 +2658,8 @@ test('a pricing effective date that is not a date decodes as the string sent wit
   const listed = d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, revisions: [{ ...first, effective: 'v3', content: { ...first.content, effective: 'v3' } }, ...rest] } }).apiPrices.revisions;
   assert.deepEqual([listed[0].effective, listed[0].effectiveDate], ['v3', null], "a revision's free-text date is kept as sent");
   assert.equal(listed[0].models.length, Object.keys(first.content.models).length, 'its rows still decode');
-  assert.deepEqual(listed.slice(1).map((r) => r.effectiveDate), ['2026-10-08T00:00:00.000Z', '2026-11-09T18:30:00.000Z'], 'the dated revisions parse');
+  const instants = rest.map((r) => r.effective.length === 10 ? `${r.effective}T00:00:00.000Z` : `${r.effective.slice(0, 19)}.000Z`);
+  assert.deepEqual(listed.slice(1).map((r) => r.effectiveDate), instants, 'the dated revisions parse');
   assert.deepEqual(d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, revisions: 'none' } }).apiPrices.revisions, [], 'a list the answer garbles reads as none');
 });
 

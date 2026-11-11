@@ -419,6 +419,7 @@ pub(crate) struct LongContextView {
 #[derive(Serialize, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubscriptionCostsView {
+    /// The revision's `effective` as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     /// Keyed by the tier the account's profile reports.
     pub capacity: BTreeMap<String, CapacityView>,
