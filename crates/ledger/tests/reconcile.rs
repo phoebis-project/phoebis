@@ -1082,7 +1082,8 @@ fn a_run_whose_first_reading_predates_the_requests_retention_cutoff_is_skipped()
     assert_eq!(
         windows_under(SATURDAY - 10 * MINUTE),
         [SEVEN_DAY, FIVE_HOUR],
-        "the purge keeps a request received at the cutoff, so a run whose first reading lies there keeps its requests"
+        "the purge keeps the requests received from the cutoff on, so a run whose first reading stands there \
+         writes its row"
     );
     assert_eq!(
         windows_under(SATURDAY - 10 * MINUTE + 1),
