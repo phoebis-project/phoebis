@@ -169,7 +169,8 @@ stops reading a marked account until a pairing is confirmed on it. Any other fai
 endpoint, or a read that fails in transport, leaves the state as it is: the poll logs one warning and writes one
 `poll_failed` event per poll that failed, while a `429` backs the poll off, and a usage `403` whose error code is
 `oauth_not_allowed_for_organization` writes `plan_ended` in its place where the profile it makes due reports no plan, as
-the next paragraph describes.
+the next paragraph describes. The poll's second read of the usage endpoint, for the account's limit resets, marks
+nothing on a `401` and writes no event where it fails ([Quota samples](statistics.md#quota-samples)).
 
 An OAuth account whose subscription ended keeps its credential and its state, and its profile reports the organization
 holding no plan. A profile read that finds no plan, the third poll's or the start's, stores the document it found and
@@ -179,12 +180,13 @@ reads its profile every quarter hour, the account answers the plan `free` and th
 places nothing on the account, reading it as past its end, the account view answers no quota window, since the last
 reading would draw as live, and Refresh reads the profile before any usage request. The readings taken before the end
 keep the plan and the tier they were priced under. A profile read or a pairing confirmed on the account that finds a
-plan again clears the flag, and the usage poll reads the account from its next slot. A pairing whose profile still
-reports no plan keeps the flag and starts no usage read, and a disconnect leaves the flag standing until a pairing that
-finds a plan. `GET /admin/accounts` answers the flag as `plan_ended_at`, and the routing log records `plan_ended` and
-`plan_restored`. A profile read that finds a Team or Enterprise plan whose tier the cost model holds no capacity row for
-logs one warning naming the account and the tier, once per account and tier until a restart, and the seat reads unpriced
-until the cost model holds the tier.
+plan again clears the flag, and the usage poll reads the account from its next slot. A confirmed pairing also clears the
+account's stored limit resets, which were read under the pairing before it. The usage poll reads the account's resets
+again within its next slots. A pairing whose profile still reports no plan keeps the flag and starts no usage read, and
+a disconnect leaves the flag standing until a pairing that finds a plan. `GET /admin/accounts` answers the flag as
+`plan_ended_at`, and the routing log records `plan_ended` and `plan_restored`. A profile read that finds a Team or
+Enterprise plan whose tier the cost model holds no capacity row for logs one warning naming the account and the tier,
+once per account and tier until a restart, and the seat reads unpriced until the cost model holds the tier.
 
 The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
 each calls its own route:

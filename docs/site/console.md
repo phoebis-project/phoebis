@@ -329,12 +329,12 @@ on the stored resets under a line that says how old they are.
 The dialog's first page, "Resets on primary", lists the account's resets, the usable ones first: the label, what the
 reset clears, how many are left and the date to use it by, with the reason beside a row that cannot be used ("Used at
 14:30", "Waits for the other reset"). An account whose only reset is usable opens on the second page. The second page,
-"Use reset on primary", names each window the reset clears with its reading now and what the use does to it ("clears to
-100% left", or "starts anew" for the 5-hour window), how many resets are left after, the date to use it by, and that a
-used reset cannot be returned. A Fable reset also gives the 7-day window back its Fable share, and the page prints the
-share left after as an estimate from the upstream's own figures. Where the windows read 100% left, the page says the
-reset has nothing to clear yet. While the claim is on its way the button reads "Using…" and the dialog cannot be
-closed.
+the confirmation "Use reset on primary", names each window the reset clears with its reading now and what the use does
+to it ("clears to 100% left", or "starts anew" for the 5-hour window), how many resets are left after, the date to use
+it by, and that a used reset cannot be returned. A Fable reset also gives the 7-day window back its Fable share, and the
+page prints the share left after as an estimate from the upstream's own figures. Where the windows read 100% left, the
+page says the reset has nothing to clear yet. While the claim is on its way the button reads "Using…" and the dialog
+cannot be closed.
 
 ![The reset dialog's first page: the account's resets](assets/quota-reset-pick-light.png#only-light)
 ![The reset dialog's first page: the account's resets](assets/quota-reset-pick-dark.png#only-dark)
@@ -1642,7 +1642,7 @@ panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the 
 | cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
 | fast credits changed | An account's usage credits for fast mode became available or unavailable. |
 | ledger gap | The ledger could not record a request whole, and the reason names what it is missing. |
-| limit reset claimed | An operator's use of a limit reset reached the upstream. The row names the grant, the request id, the upstream's result and reason as sent, the router's outcome (refused, unsettled or used), the windows it cleared, the count left and, for a claim with no answer, the status or the transport error. |
+| limit reset claimed | An operator's use of a limit reset reached the upstream. The row names the grant, the request id, the upstream's result and reason as sent, the router's outcome (refused, unsettled or used), the windows it cleared, the count left and the HTTP status, or the transport error where no answer arrived. |
 | mark cleared | A shedding mark left a pin: it moved, was released, or its account's window read under its line again, the wall or the ceiling, or its stretch under the threshold. |
 | model permitted | An account served a model another account had rejected. |
 | model rejected | An account answered 404 for a model, which cools that model on the account. |

@@ -720,8 +720,9 @@ Defaults whole and is rarely set.
 ### usage
 
 Defaults whole. The poll and the refresh read the endpoint under the account's hold and answer the reading they made.
-`refresh_concurrency` is how many accounts' usage and profile fetches may run at once. `limit_reset_warning_days` is how
-many days before an unused limit reset ends the Dashboard and the Quota card warn, and 0 turns the warning off.
+`refresh_concurrency` is how many accounts' usage, profile and limit reset reads may run at once.
+`limit_reset_warning_days` is how many days before an unused limit reset ends the Dashboard and the Quota card warn, and
+0 turns the warning off.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -851,7 +852,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Header read timeout | 30 seconds for a request head on all three listeners, after the TLS handshake's own 30. |
 | Keepalive ticker | One scheduling pass per second, and a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
-| Ledger channel | 4,096 records, `ledger_behind` at 2,048 queued, and an event or sample past it drops as a `ledger_gap`. |
+| Ledger channel | 4,096 records, `ledger_behind` at 2,048 queued, and an event or sample past it drops as a `ledger_gap`, but for the event of a limit reset's use, which waits for room. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Parsed tree bytes | 363 bytes per body element, counted against `proxy.body_budget_bytes` from before the parse until the relay drops the tree. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |

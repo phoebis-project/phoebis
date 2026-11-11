@@ -400,9 +400,9 @@ exists to prevent, so the connection is refused instead.
 
 ## What the router sends on its own
 
-The polls, the fetches and the probes leave the router with no client behind them. A poll and a fetch have no switch,
-and the credential refresh that a poll or a fetch draws ahead of the token's expiry has none either. A probe has the
-pool's.
+The polls, the fetches and the probes leave the router with no client behind them, and a use of a limit reset leaves on
+the operator's click alone. A poll and a fetch have no switch, and the credential refresh that a poll or a fetch draws
+ahead of the token's expiry has none either. A probe has the pool's.
 
 **The usage poll.** Every 300 seconds the router reads the usage endpoint of every OAuth account that holds a
 credential, a paused account included, because a paused account's quota is still the operator's to watch. The call
@@ -414,6 +414,25 @@ alone never reaches the endpoint's per-account limit. No key or field turns the 
 The reads are that far apart because the profile endpoint shares the usage endpoint's per-account limit and a profile
 429 pauses the account's usage poll for up to fifteen minutes. The profile read rides on the poll and has no switch of
 its own.
+
+**The limit resets.** The router reads the usage endpoint a second time per account for the account's one-time limit
+resets, with the query Claude Code sends for them. The read leaves in the poll's own slot, after the usage reading: once
+an hour, in the slot whose reading shows another set of windows at their limit than the last read of the resets saw
+while the account holds a reset, in the slot after the upstream refused a use, and in the first slot after a confirmed
+pairing. The console's "Use reset", Refresh and "Refresh all" read them too, and so does a use whose outcome stayed
+open. A read whose answer could not be stored leaves again in the account's next slot, and so does a failed read after a
+use. The read counts against the usage endpoint's per-account limit and waits out its hold, and a slot that reads the
+profile sends none, so a slot sends two requests at most against that limit. An account under a plan-ended pause is sent
+none, and the startup fetch reads none. No key or field turns the read off: `usage.limit_reset_warning_days` sets the
+warning alone ([Quota samples](statistics.md#quota-samples)).
+
+**The use of a limit reset.** The router uses a reset on the operator's word alone: a click on "Use reset" on a Quota
+card, confirmed in its dialog ([Quota](console.md#quota)), sends one `POST` to the usage endpoint's host, the call
+Claude Code sends for a reset, with the usage read's head. The router sends it once and never sends it again by itself.
+The usage reads' hold does not stop it, and its answer arms no hold and moves the account to no re-pair, whatever its
+status. After it the router reads the account's usage at once, under the usage reads' hold, unless the upstream refused
+the use or the account's plan ended while the use was out ([Quota samples](statistics.md#quota-samples)). No setting and
+no schedule uses a reset.
 
 **The catalog fetch.** The router reads each enabled account's model listing with `GET /v1/models?limit=1000`, its head
 measured from the one Claude Code release the profile records, every `routing.catalog_refresh_seconds` (default 21600,

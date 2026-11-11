@@ -111,10 +111,12 @@ PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 `e2e:mock` builds the console with the fixture-backed mock into `dist-mock/` (`npm run build:mock`), serves that bundle
 from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`. The mock's random draws are seeded, so two runs write the
-same screenshots byte for byte, which `diff -r` over the two directories shows. Beside the views' shots it writes five
+same screenshots byte for byte, which `diff -r` over the two directories shows. Beside the views' shots it writes nine
 more per theme: the open catalog popup as `<theme>/accounts-catalog.png`, the open cost reference's three tabs as
-`<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`, and the
-Analytics page's Burn tab as `<theme>/analytics-burn.png`.
+`<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`, the Analytics
+page's Burn tab as `<theme>/analytics-burn.png`, the written session's open row on the Sessions view as
+`<theme>/sessions-open.png` and at 375 by 800 as `<theme>/sessions-phone.png`, and the Quota view's reset dialog on its
+two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`.
 
 Against a running router, from `web/`:
 
@@ -124,11 +126,10 @@ PHOEBIS_E2E_BASE=http://127.0.0.1:8081 PHOEBIS_E2E_SECRET=... PHOEBIS_SCREENSHOT
 
 `PHOEBIS_E2E_BASE` is the admin listener's URL (`http://127.0.0.1:8081` when unset) and `PHOEBIS_E2E_SECRET` the admin
 secret, without which the script stops with `set PHOEBIS_E2E_SECRET`. The router seeds its registry at real time, so
-the clock origin there is the launch instant, and the pass skips the two mock-only views and writes none of the five
+the clock origin there is the launch instant, and the pass skips the three mock-only views and writes none of the nine
 extra shots. `cargo test -p phoebis-router --test end_to_end the_ui_passes` runs the same script against a router the
-test starts and seeds itself when `PHOEBIS_E2E_BROWSER=1` is set, and prints
-`skipped: set PHOEBIS_E2E_BROWSER=1 to run the browser pass` otherwise, so a build host without Chromium still runs the
-rest of that suite.
+test starts and seeds itself when `PHOEBIS_E2E_BROWSER=1` is set, and prints `skipped: set PHOEBIS_E2E_BROWSER=1 to run
+the browser pass` otherwise, so a build host without Chromium still runs the rest of that suite.
 
 `npm run e2e:reference` is the reference smoke: it serves `dist/` on a loopback port with a stub document, opens
 `/api-reference/` in both color schemes, and asserts that the page loads with no console error, lists the stub's
@@ -139,10 +140,10 @@ of the browser's storage. The README lists its assertions, and
 
 The site's screenshots are the mock pass's. The committed names are `docs/site/assets/<view>-light.png` and
 `<view>-dark.png`, so after a pass that exited 0, copy `light/<view>.png` to `docs/site/assets/<view>-light.png` and
-`dark/<view>.png` to `docs/site/assets/<view>-dark.png` for the sixteen pairs the pages embed: `accounts`, `analytics`,
+`dark/<view>.png` to `docs/site/assets/<view>-dark.png` for the eighteen pairs the pages embed: `accounts`, `analytics`,
 `analytics-burn`, `analytics-cache-warming`, `cost-reference-plan-rates`, `dashboard`, `guardrails`, `keys`, `meter`,
-`pools`, `quota`, `quota-windows`, `requests`, `routing-log`, `sessions` and `settings`. The three other shots the pass
-writes take no page.
+`pools`, `quota`, `quota-reset-confirm`, `quota-reset-pick`, `quota-windows`, `requests`, `routing-log`, `sessions` and
+`settings`. The five other shots the pass writes take no page.
 
 ## The fixtures
 
@@ -293,14 +294,14 @@ A profile records the measured build's wire constants: its CLI user agent, its A
 the TLS curves, cipher list and signature algorithms, each a field of the `Profile` value in
 `crates/profile/src/lib.rs`, with the fixtures under `crates/profile/fixtures/` as its record. The router's own calls
 send them: the control-plane calls go to the profile's URLs, the token call with its Axios user agent, the profile and
-roles reads with its `claude-code/2.1.310` agent and the usage call with its CLI user agent, the token exchange and the
-refresh carry its client id in their bodies as the authorize URL does in its query, and the connections toward the
-upstream offer its curves and signature algorithms, with its cipher list on the control plane.
-The client's Stainless headers and beta lists are recorded in the fixtures alone, which the fixture suites compare
-against, and the relay emits none of them: headers travel as the client sends them, and the beta edits and the restored
-fields are the relay's fixed rules ([The betas](relay.md#the-betas) and [The restoration](relay.md#the-restoration)),
-which do not follow a newer build. A request the profile cannot reproduce is refused until the router runs a build
-re-pinned to the client. To re-pin the profile against a new build:
+roles reads with its `claude-code/2.1.310` agent and the usage call, the read of the limit resets and the use of a reset
+with its CLI user agent, the token exchange and the refresh carry its client id in their bodies as the authorize URL
+does in its query, and the connections toward the upstream offer its curves and signature algorithms, with its cipher
+list on the control plane. The client's Stainless headers and beta lists are recorded in the fixtures alone, which the
+fixture suites compare against, and the relay emits none of them: headers travel as the client sends them, and the beta
+edits and the restored fields are the relay's fixed rules ([The betas](relay.md#the-betas) and [The
+restoration](relay.md#the-restoration)), which do not follow a newer build. A request the profile cannot reproduce is
+refused until the router runs a build re-pinned to the client. To re-pin the profile against a new build:
 
 1. With the build installed under `~/.local/share/claude/versions/<version>`, run
    `scripts/capture-baseline.sh <path-to-claude-binary> <output-dir>`. It refuses to start with a real

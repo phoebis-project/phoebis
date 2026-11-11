@@ -171,7 +171,23 @@ cadence, and hand the reading to the router and the ledger as a scheduled read d
 and the card draws the reading the refresh took the moment it answers, its time the reading's own instant, and the
 Accounts view shows the first reading once the poll lands, a few seconds after the confirm. Neither sends a usage
 request while the account's plan-ended flag stands: a confirm whose profile still reports no plan keeps the flag and
-reads nothing more, and Refresh reads the profile first, then the usage only where that profile finds a plan.
+reads nothing more, and Refresh reads the profile first, then the usage only where that profile finds a plan. A use of a
+limit reset that the upstream did not refuse reads the endpoint at once too, under the same hold, so the routing and the
+cards read the cleared windows before the next slot, and once more where that reading was taken before the upstream
+answered. No read follows a use on an account whose plan ended while the use was out.
+
+The router reads the endpoint a second time for an account's one-time limit resets, with the query the client sends for
+them, and stores what it reads on the account's row. That read runs after the usage reading in the poll's own slot once
+an hour per account, in the slot whose reading shows another set of windows at their limit than the last read of the
+resets saw while the account holds a reset, and in the slot after the upstream refused a use. It also runs when the
+operator clicks "Use reset" on a Quota card, with the card's Refresh and "Refresh all", and after a use whose outcome
+stayed open. A read whose answer could not be stored, because a pairing or a use changed the account while the read was
+out, is made again in the account's next slot, and so is the read after an open outcome where it failed. A confirmed
+pairing clears the stored resets, and the account's first slot that reads no profile reads them again. The read shares
+the account's hold and its backoff with the usage read, so an account that waits out a 429 is not asked, and a slot
+whose profile read is due leaves it to the next one. An account under a plan-ended pause is not asked, and the startup
+read asks for no resets. A failed read logs one warning, writes no `poll_failed` event, moves the account to no re-pair
+whatever status it answered, and leaves the stored resets as they were.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -192,6 +208,14 @@ such flag, and null where the router holds no such reading. A week whose reset m
 no row, since no reset passed: the week ends at the reset that stands when it passes, and that reset's row reads the
 share left then. The history reaches as far as the events the hourly purge still holds, which `stats.retention_days`
 bounds, so a longer retention shows more weeks.
+
+Every use of a limit reset that reached the upstream writes a `limit_reset_claimed` event on the account, whatever the
+upstream answered and where it answered nothing. Its detail carries the grant's id and label, the request id the claim
+sent, the upstream's `result` and `reason` as sent, the router's `outcome` (`refused`, `unsettled` or `used`), the
+windows the answer cleared, the count of resets left, the cooldown's end and the weekly reset instant where the answer
+names them, and the HTTP status or the transport error. A `window_cleared` after a use ([The windows the router works
+from](routing.md#the-windows-the-router-works-from)) therefore has its cause in the routing log. A use the router
+refused, or whose request never left, writes no event.
 
 ## Pricing
 
@@ -617,8 +641,8 @@ and [Settings](console.md#settings) with the About card that names each price ta
 
 ### Quota
 
-The subscription accounts' windows, their resets, extra usage and poll standing, read from the samples above, are on
-[Quota](console.md#quota).
+The subscription accounts' windows, their resets, extra usage and poll standing, read from the samples above, and their
+one-time limit resets are on [Quota](console.md#quota).
 
 ### Requests
 
@@ -648,16 +672,16 @@ names keeps a holding `ledger_record_parked` series after it is deleted, and the
 `ledger_record_parked` series leave when their rows go. A deleted account or pool a routing condition holds on keeps
 that series the same way, until the fold's trailing day lets its row go. A restart starts the conditions fed by the
 request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new backoff
-run is thirty minutes old. The conditions read from the registry, and `ledger_record_parked`, read from the ledger file,
-hold again at the first read. The four routing conditions, `wall_reached`, `destination_spent`, `shed_no_runway` and
-`slowed_long`, read a table the ledger folds from its events of the trailing 24 hours once an hour and at start,
-`slowed_long` also from the hourly rollups' held sums, so a restart holds them again at the first fold. `meter_drift`
-lands in the same table by the same fold, from the reconciled windows rather than the events, so a restart holds it
-again at the first fold too. Of the keepalive engine's three conditions, `keepalive_bus_gaps` starts over, since the
-engine keeps its gaps in memory alone, `keepalive_cap` holds again once the engine has read its saved sessions, agents
-and recipes back from the registry at start, and only where those still reach 90 percent of a cap
-([A router restart](keepalive.md#a-router-restart)), and `expired_between_turns`, read from the ledger's hourly rollups,
-holds again at the first read.
+run is thirty minutes old. The conditions read from the registry, `limit_reset_ending` among them, and
+`ledger_record_parked`, read from the ledger file, hold again at the first read. The four routing conditions,
+`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`, read a table the ledger folds from its events
+of the trailing 24 hours once an hour and at start, `slowed_long` also from the hourly rollups' held sums, so a restart
+holds them again at the first fold. `meter_drift` lands in the same table by the same fold, from the reconciled windows
+rather than the events, so a restart holds it again at the first fold too. Of the keepalive engine's three conditions,
+`keepalive_bus_gaps` starts over, since the engine keeps its gaps in memory alone, `keepalive_cap` holds again once the
+engine has read its saved sessions, agents and recipes back from the registry at start, and only where those still reach
+90 percent of a cap ([A router restart](keepalive.md#a-router-restart)), and `expired_between_turns`, read from the
+ledger's hourly rollups, holds again at the first read.
 
 | Kind | Tone | Subject | Clears when |
 | --- | --- | --- | --- |
@@ -671,6 +695,7 @@ holds again at the first read.
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `pairing_expiring` | warning | the OAuth account | a re-pair stores an end more than 3 days away, or the account is disconnected or deleted |
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
+| `limit_reset_ending` | warning | the account | every reset that ends within the threshold is used or has ended, the usage poll no longer reads the account, a plan-ended pause included, or the threshold is set to 0 |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `keepalive_bus_gaps` | serious | the keepalive engine | 24 hours pass without a gap, or the router restarts |
 | `poll_backoff` | warning | the polled account | a poll answers clean, or the account is flagged plan ended |
@@ -745,6 +770,15 @@ restart keeps the date, and the detail names the certificate file, the end and t
 which the dashboard's line words as `expires in 12 days` or `expired 3 days ago`, and as `expires today` and
 `expired today` in the day before the end and the day after it.
 
+**`limit_reset_ending`** holds while an account the usage poll reads holds an unused limit reset whose grant ends within
+`usage.limit_reset_warning_days` ([usage](installation.md#usage)), 5 days unless set, and for no account at 0. It reads
+the resets stored on the account's row. The subject is the account, and the item is about the grant that ends first. It
+dates from the threshold's days before that grant's end, or from the grant's start where the grant is shorter, so a
+restart keeps the date. The detail names the account, the grant's id, its label as `grant_label`, the windows it clears,
+its end, the whole days left, the count of resets that end inside the threshold and the account's count of resets left.
+The dashboard's line reads it under the label "Reset ending" as `nightly: a reset ends in 4 days`, and it opens the
+account's card on the [Quota](console.md#quota) view.
+
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own. Each is
 tried again once at the next start or on the dashboard's Replay, and the condition clears when the table empties. The
 subject is the pool the record was served under, or `-` for a record without one. A pool deleted since shows under its
@@ -814,6 +848,11 @@ window's length before the wall: after a projection round the projection error, 
 slow-down round the time the wall arrived before the reset (0 at or after it), and neither with no round. The ledger
 also keeps each account's longest early wall of the hour under a slow-down round, so the figure outlives the trailing
 day. The item opens the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
+A holding wall's detail also carries `reset` (`clears`, `grant` and `label`) while the usage poll reads the account, a
+limit reset of the account is usable now and one of the windows it clears reads at its limit in the account's newest
+usage reading. The member is joined at each read and never folded, so it leaves at the read after the reset was used.
+The dashboard's line then adds `, a reset can clear it` and opens the account's card on the [Quota](console.md#quota)
+view in place of the routing log.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent

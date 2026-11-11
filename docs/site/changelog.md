@@ -291,8 +291,11 @@ leaves out an account whose plan ended while its flag stands, as it leaves out a
 detail's Usage card names the ended plan ([Quota](console.md#quota), [Accounts](console.md#accounts)). The speed chip
 reads the speed the holds realized, and its hover names the factor the pool computed and how far the span has ramped
 ([Quota](console.md#quota)). Under the 12-hour time setting the Quota timeline's short cells read "6 AM" in a cell wide
-enough for it, with fewer cells at a given width ([Quota](console.md#quota)). A pairing confirm on a slot sealed under
-another storage key answers 409 and names the account, so the dialog can offer Disconnect
+enough for it, with fewer cells at a given width ([Quota](console.md#quota)). The Quota view shows each subscription
+account's one-time limit resets, what each clears and when it ends, and uses one behind a confirmation, with a Dashboard
+item before an unused reset ends and a Routing log row for every use that reached the upstream
+([Quota](console.md#quota), [Conditions and gauges](statistics.md#conditions-and-gauges)). A pairing confirm on a slot
+sealed under another storage key answers 409 and names the account, so the dialog can offer Disconnect
 ([Pairing](pairing.md#with-curl)). A pairing whose confirm meets a credential sealed under another storage key reads the
 router's sentence and offers Disconnect, which clears the credential and starts the pairing again from its first step
 ([Accounts](console.md#accounts)). A usage poll's 401 moves the account to `reauth_required`, and any other failed poll,
@@ -369,17 +372,17 @@ skips the member ([API reference](api-reference.md)). The Pools view's Standing 
 seat at its spend cap, `budget unknown` for a budgeted member while the ledger is degraded, `subscription ended` for a
 member whose subscription ended and `unknown` for a member the router answers no reading of, and an exhausted pool's
 status sentence names when a spent member's spend cap resets ([Pools](console.md#pools)). On the Routing log an
-exhaustion that waits on a spend cap reads `spend cap` in its By chip, and a candidate at its spend cap reads
-`spend cap reached until {time}` in its Verdict chip ([Routing log](console.md#routing-log)).
-`GET /admin/analytics/burn` and `GET /admin/sessions` read each account's kind from the routing snapshot and answer no
-`storage failure` ([API reference](api-reference.md)). On the Requests view and the Routing log a late row that lands
-below the rows shown draws on the next auto reload read on any range whose rows fit on the page
-([Requests](console.md#requests), [Routing log](console.md#routing-log)). On the Requests view and the Routing log the
-list's late answer replaces the page an auto reload poll stood in for it, and Next past an overrun under a preset reads
-to the router's clock ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill
-names its range and its end on hover, and when the tab comes back to a read at once the rows it brought keep their tint
-through the read after it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and
-Routing log Time cells print the date before the time on every row, and the Routing log's columns fit their content
+exhaustion that waits on a spend cap reads `spend cap` in its By chip, and a candidate at its spend cap reads `spend cap
+reached until {time}` in its Verdict chip ([Routing log](console.md#routing-log)). `GET /admin/analytics/burn` and `GET
+/admin/sessions` read each account's kind from the routing snapshot and answer no `storage failure` ([API
+reference](api-reference.md)). On the Requests view and the Routing log a late row that lands below the rows shown draws
+on the next auto reload read on any range whose rows fit on the page ([Requests](console.md#requests), [Routing
+log](console.md#routing-log)). On the Requests view and the Routing log the list's late answer replaces the page an auto
+reload poll stood in for it, and Next past an overrun under a preset reads to the router's clock
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). The pressed range pill names its range and its
+end on hover, and when the tab comes back to a read at once the rows it brought keep their tint through the read after
+it ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log Time cells
+print the date before the time on every row, and the Routing log's columns fit their content
 ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests and Routing log views filter on
 an agent id through the Agent filter of the Subject group, carried in the address as `agent_id`
 ([Requests](console.md#requests), [Routing log](console.md#routing-log)). The Requests rows mark a request that
@@ -541,23 +544,23 @@ and frees the next tick ([The console](console.md)). The Dashboard's attention l
 its previous read still out, so a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On
 Requests and the Routing log auto reload also waits while the list for the view's filters is still loading, unless its
 last read failed ([The console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a
-full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick
-([The console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not
-know in the mono face and Whole account, Fast mode and Fast mode credits in the text face
-([Accounts](console.md#accounts)). The Routing log draws an id that links to its account, key, model or pool in the mono
-face where the chip asks for it, as it draws a session's or a request's link, so a decision's Request facts read the Key
-row's id in the face of the Session row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at
-each opening, so a picker's search text starts empty ([The shell](console.md#the-shell)). The login screen's session
-read fails after a minute with no answer, as a view's read does, so a router that never answers it brings the card that
-says the router did not answer ([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit,
-whichever account opens, and the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The
-Analytics view reads the account list with the window: when a new bucket moves a preset's end, on Refresh and Try again,
-and at each interval under a custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view
-reads the sessions and the keepalive overview its pool dialog draws when the dialog opens on a saved pool and again
-after a key write from it, the overview also when the return rate's range is picked, and the Guardrails view reads the
-pools and keys its dialog lists once per visit and again after a write, a dialog close and Refresh, neither at the
-interval ([Pools](console.md#pools), [Guardrails](console.md#guardrails)). An account's catalog dialog draws a failed
-Refresh's failure over the list it kept, until a read answers ([Accounts](console.md#accounts)).
+full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
+console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not know in
+the mono face and Whole account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)). The
+Routing log draws an id that links to its account, key, model or pool in the mono face where the chip asks for it, as it
+draws a session's or a request's link, so a decision's Request facts read the Key row's id in the face of the Session
+row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's search
+text starts empty ([The shell](console.md#the-shell)). The login screen's session read fails after a minute with no
+answer, as a view's read does, so a router that never answers it brings the card that says the router did not answer
+([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and
+the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account
+list with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a
+custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the
+keepalive overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, the
+overview also when the return rate's range is picked, and the Guardrails view reads the pools and keys its dialog lists
+once per visit and again after a write, a dialog close and Refresh, neither at the interval ([Pools](console.md#pools),
+[Guardrails](console.md#guardrails)). An account's catalog dialog draws a failed Refresh's failure over the list it
+kept, until a read answers ([Accounts](console.md#accounts)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
