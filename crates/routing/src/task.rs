@@ -21,16 +21,16 @@ use crate::affinity::{
     ConversationQuery, PredecessorQuery, PurgedEntry,
 };
 use crate::record::{
-    BudgetFacts, CacheMapEntry, DecisionRecord, DecisionSummary, MoveCause, PinEventFacts,
-    RefusalFacts, RefusedRequest, ShedRoundFacts,
+    BudgetFacts, CacheMapEntry, DecisionRecord, DecisionSummary, MarkClearedFacts, MoveCause,
+    PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    budget_facts, burn_unit, decide, obstacle, pace_of, passes_reset, projection_of,
-    projections_of, release_reasons, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle,
-    Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    budget_facts, burn_unit, decide, mark_cleared_of, move_word, obstacle, pace_of, passes_reset,
+    projection_of, projections_of, release_reasons, slow_down_ramp, BurnRead, Decided, FailedOver,
+    Obstacle, Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
-    all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
+    all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
     is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell, shed_dwell_ms,
     slow_down_hold_ms, spend_reset_estimate, standing_mark, wait_until, AccountTicket, BurnUnit,
     CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage,
@@ -384,40 +384,15 @@ impl RouterEvent {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn pin_migrated(
-        key: &PinKey,
-        from_account: String,
-        to: &PinRow,
-        reason: &'static str,
-        record: &DecisionRecord,
-        cause: Option<MoveCause>,
-        at: i64,
-    ) -> RouterEvent {
-        let (fit, runway_ms, binding) = destination_fit(record, &to.account_id);
-        RouterEvent::PinMigrated {
-            pin: key.clone(),
-            from_account,
-            to_account: to.account_id.clone(),
-            epoch: to.epoch,
-            reason: reason.into(),
-            reasons: Vec::new(),
-            fit,
-            runway_ms,
-            binding,
-            cause,
-            at,
-        }
-    }
-
-    /// The move of a live pin a placement replaced on another account: `reason` is the word picked from `reasons`,
-    /// and no failover's cause stands behind it.
-    fn replaced_pin_moved(
         key: &PinKey,
         from_account: String,
         to: &PinRow,
         reason: &'static str,
         reasons: Vec<&'static str>,
         record: &DecisionRecord,
+        cause: Option<MoveCause>,
         at: i64,
     ) -> RouterEvent {
         let (fit, runway_ms, binding) = destination_fit(record, &to.account_id);
@@ -431,7 +406,38 @@ impl RouterEvent {
             fit,
             runway_ms,
             binding,
-            cause: None,
+            cause,
+            at,
+        }
+    }
+
+    fn mark_cleared(
+        account_id: String,
+        pin: PinKey,
+        facts: MarkClearedFacts,
+        at: i64,
+    ) -> RouterEvent {
+        let MarkClearedFacts {
+            reason,
+            marked_at,
+            marked_on,
+            marked_window,
+            projection,
+            stretch_ms,
+            threshold_ms,
+            limit,
+        } = facts;
+        RouterEvent::MarkCleared {
+            account_id,
+            pin,
+            reason,
+            marked_at,
+            marked_on,
+            marked_window,
+            projection,
+            stretch_ms,
+            threshold_ms,
+            limit,
             at,
         }
     }
@@ -2584,48 +2590,17 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
     }
 }
 
-/// The order that picks the one word a replaced pin's move carries out of what stood against its account: what the
-/// account is first, then what its pool and its limits say, so a deleted account's pin, whose list also holds
-/// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, as
-/// `pin_expired` with `deleted`, and the word stands here so the order covers every word `release_reasons` answers but
-/// `expired`, which the arm never reads as a move.
-const MOVE_CAUSE_ORDER: [&str; 17] = [
-    "deleted",
-    "paused",
-    "disconnected",
-    "funding_required",
-    "reauth_required",
-    "unpaired",
-    "subscription_ended",
-    "unserved",
-    "cooldown",
-    "fast_rate_limit",
-    "fast_credits",
-    "budget_unknown",
-    "budget",
-    "overage",
-    "attempted",
-    "spent",
-    "released",
-];
-
 /// The `mark_cleared` of a pin that left its account, when its mark stood: `moved` for a live pin a placement replaced
 /// on another account, `released` for a pin that left without a move (a release, an expiry, a fail-over's invalidation
 /// or a rekey's merge the row lost). `None` for an unmarked pin.
 fn cleared_mark(row: &PinRow, reason: &'static str, at: i64) -> Option<RouterEvent> {
-    let mark = standing_mark(row)?;
-    Some(RouterEvent::MarkCleared {
-        account_id: row.account_id.clone(),
-        pin: row.key(),
-        reason,
-        marked_at: mark.at,
-        marked_on: mark.on.clone(),
-        marked_window: mark.window.clone(),
-        projection: None,
-        stretch_ms: None,
-        threshold_ms: None,
-        limit: None,
-        at,
+    standing_mark(row).map(|mark| {
+        RouterEvent::mark_cleared(
+            row.account_id.clone(),
+            row.key(),
+            mark_cleared_of(mark, reason, None),
+            at,
+        )
     })
 }
 
@@ -3180,6 +3155,7 @@ impl Task {
                 let after = self.state.pin(&pin_key);
                 let now = request.now;
                 let selected = matches!(result, SelectResult::Selected(_));
+                let mut left: Option<&'static str> = None;
                 match (before.as_ref(), after) {
                     (None, Some(new)) if selected => {
                         match self
@@ -3207,6 +3183,7 @@ impl Task {
                                     from,
                                     new,
                                     reason,
+                                    Vec::new(),
                                     &record,
                                     record.outcome.cause.clone(),
                                     now,
@@ -3229,27 +3206,27 @@ impl Task {
                                     // A live pin replaced onto another account moved, whatever stood against the
                                     // account it left: the word is the first of `MOVE_CAUSE_ORDER` its list holds,
                                     // and the event keeps the whole list.
-                                    let word = MOVE_CAUSE_ORDER
-                                        .into_iter()
-                                        .find(|word| released.contains(word))
-                                        .unwrap_or("released");
+                                    let word = move_word(&released);
                                     selection.trace.moved = Some(word);
                                     record.outcome.rule = Some(word);
                                     record.outcome.from_account_id = Some(old.account_id.clone());
                                     summary.rule = Some(word);
-                                    pin_events.push(RouterEvent::replaced_pin_moved(
+                                    pin_events.push(RouterEvent::pin_migrated(
                                         &pin_key,
                                         old.account_id.clone(),
                                         new,
                                         word,
                                         released.clone(),
                                         &record,
+                                        None,
                                         now,
                                     ));
+                                    left = Some("moved");
                                 }
                                 None => {
                                     // An expiry: the list holds `expired`, or the pin was replaced on its own
                                     // account. It names no source.
+                                    left = Some("released");
                                     pin_events.push(RouterEvent::pin_expired(
                                         &pin_key,
                                         &old.account_id,
@@ -3268,6 +3245,7 @@ impl Task {
                                     old.account_id.clone(),
                                     new,
                                     reason.as_str(),
+                                    Vec::new(),
                                     &record,
                                     None,
                                     now,
@@ -3275,42 +3253,31 @@ impl Task {
                             }
                         }
                     }
-                    (Some(old), None) => pin_events.push(RouterEvent::pin_expired(
-                        &pin_key,
-                        &old.account_id,
-                        released,
-                        now,
-                    )),
+                    (Some(old), None) => {
+                        left = Some("released");
+                        pin_events.push(RouterEvent::pin_expired(
+                            &pin_key,
+                            &old.account_id,
+                            released,
+                            now,
+                        ));
+                    }
                     _ => {}
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
                 // The mark the selection cleared (a heal, the move that consumed it, or the pool's switch turned off),
                 // else the one the pin that left here carried, which left with it: `moved` where its placement on
                 // another account moved it, `released` where it left without a move.
-                let left = pin_events.iter().find_map(|event| match event {
-                    RouterEvent::PinMigrated { reasons, .. } if !reasons.is_empty() => {
-                        Some("moved")
-                    }
-                    RouterEvent::PinExpired { .. } => Some("released"),
-                    _ => None,
-                });
                 let mark = before.as_ref().and_then(|old| {
                     let cleared = record.outcome.mark_cleared.as_ref();
                     let account_id = old.account_id.clone();
                     match cleared {
-                        Some(facts) => Some(RouterEvent::MarkCleared {
+                        Some(facts) => Some(RouterEvent::mark_cleared(
                             account_id,
-                            pin: pin_key.clone(),
-                            reason: facts.reason,
-                            marked_at: facts.marked_at,
-                            marked_on: facts.marked_on.clone(),
-                            marked_window: facts.marked_window.clone(),
-                            projection: facts.projection,
-                            stretch_ms: facts.stretch_ms,
-                            threshold_ms: facts.threshold_ms,
-                            limit: facts.limit,
-                            at: request.now,
-                        }),
+                            pin_key.clone(),
+                            facts.clone(),
+                            request.now,
+                        )),
                         None => left.and_then(|reason| {
                             cleared_mark(old, reason, request.now).or_else(|| {
                                 marked_here
@@ -4106,9 +4073,7 @@ impl Task {
                     }
                     // The agent's end does not hang on the placement that served its last turn, so a pin moved
                     // since is marked as well.
-                    let marked = (turn_end == RenewalEnd::AgentEnded)
-                        .then(|| self.state.mark_ended(&key))
-                        .flatten();
+                    let marked = turn_end == RenewalEnd::AgentEnded && self.state.mark_ended(&key);
                     let renewed = (same_epoch && !left_lane)
                         .then(|| self.state.pin_mut(&key))
                         .flatten();
@@ -4147,40 +4112,20 @@ impl Task {
                                     renewed.entrypoint.as_deref(),
                                     now,
                                 );
-                                let at = renewed.burn_at;
-                                let prompt = usage.prompt_tokens();
-                                // Every copy decays from the same `burn_at`, so a copy this renewal adds nothing
-                                // to folds at weight 0 and keeps step with the others.
-                                let folded = |copy: PinBurn, weight: f64| {
-                                    let fold = |rate: f64, tokens: u64| {
-                                        burn_folded(
-                                            rate,
-                                            at,
-                                            now,
-                                            window_ms,
-                                            tokens as f64 * weight,
-                                        )
-                                    };
-                                    PinBurn {
-                                        cache_read: fold(copy.cache_read, usage.cache_read),
-                                        input: fold(copy.input, usage.input),
-                                        output: fold(copy.output, usage.output),
-                                        write_1h: fold(copy.write_1h, usage.write_1h),
-                                        write_5m: fold(copy.write_5m, usage.write_5m),
-                                    }
-                                };
                                 // A fast answer is usage credits: its tokens land in the row's fast copy, priced
                                 // later through the fast table (`BurnRates::fast`). A standard answer folds into the
                                 // plain and banded copies, the banded one weighed by the band. Every copy an answer
                                 // does not land in only decays, the classifier copy among them.
                                 let (plain, fast_weight) =
                                     if fast { (0.0, 1.0) } else { (1.0, 0.0) };
-                                renewed.burn = folded(renewed.burn, plain);
-                                renewed.burn_banded = folded(renewed.burn_banded, plain * band);
-                                renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
-                                renewed.burn_unmetered = folded(renewed.burn_unmetered, 0.0);
-                                renewed.burn_at = Some(now);
-                                renewed.last_input_tokens = prompt;
+                                fold_usage(
+                                    renewed,
+                                    &usage,
+                                    [plain, plain * band, fast_weight, 0.0],
+                                    now,
+                                    window_ms,
+                                );
+                                renewed.last_input_tokens = usage.prompt_tokens();
                             }
                         }
                         let row = renewed.clone();
@@ -4190,10 +4135,12 @@ impl Task {
                                 .note_turn_end(&key, &row.account_id, row.incarnation);
                         }
                         self.write(vec![StateWrite::UpsertPin(row)]);
-                    } else if let Some(marked) = marked {
+                    } else if marked {
                         // A renewal of another epoch or of a lane the pin left writes no row, so the marked row is
                         // written alone.
-                        self.write(vec![StateWrite::UpsertPin(marked)]);
+                        if let Some(row) = self.state.pin(&key) {
+                            self.write(vec![StateWrite::UpsertPin(row.clone())]);
+                        }
                     }
                 }
             }
@@ -4245,13 +4192,13 @@ impl Task {
                 // The fold refines a head's figure as it stores it, so the recovery and the edges read the stored
                 // figure: the head's cut would release a cooldown and clear a wall that the stored figure still holds.
                 let mut sample = sample;
-                for window in moved.iter().filter(|window| is_plan_window(window)) {
-                    if let Some(reading) = self
-                        .state
-                        .sample(&account_id)
-                        .and_then(|stored| stored.reading(window))
-                    {
-                        sample.windows.insert(window.clone(), reading);
+                if let Some(stored) = self.state.sample(&account_id).filter(|_| !sample.poll) {
+                    for window in moved.iter().filter(|window| is_plan_window(window)) {
+                        if let (Some(slot), Some(reading)) =
+                            (sample.windows.get_mut(window), stored.windows.get(window))
+                        {
+                            slot.utilization = reading.utilization;
+                        }
                     }
                 }
                 let mut writes = Vec::new();

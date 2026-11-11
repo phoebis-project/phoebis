@@ -1301,6 +1301,40 @@ pub fn release_reasons(
     reasons
 }
 
+/// The order that picks the one word a replaced pin's move carries out of what stood against its account: what the
+/// account is first, then what its pool and its limits say, so a deleted account's pin, whose list also holds
+/// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, as
+/// `pin_expired` with `deleted`, and the word stands here so the order covers every word `release_reasons` answers but
+/// `expired`, which the arm never reads as a move.
+const MOVE_CAUSE_ORDER: [&str; 17] = [
+    "deleted",
+    "paused",
+    AccountState::Disconnected.as_str(),
+    AccountState::FundingRequired.as_str(),
+    AccountState::ReauthRequired.as_str(),
+    AccountState::Unpaired.as_str(),
+    "subscription_ended",
+    "unserved",
+    "cooldown",
+    FAST_RATE_LIMIT_REASON,
+    FAST_CREDITS_REASON,
+    "budget_unknown",
+    "budget",
+    "overage",
+    "attempted",
+    "spent",
+    "released",
+];
+
+/// The word a live pin's move onto another account carries: the first of `MOVE_CAUSE_ORDER` that `reasons`, the
+/// pin's `release_reasons`, holds, else `released`.
+pub(crate) fn move_word(reasons: &[&'static str]) -> &'static str {
+    MOVE_CAUSE_ORDER
+        .into_iter()
+        .find(|word| reasons.contains(word))
+        .unwrap_or("released")
+}
+
 /// One decision, whole: the answer and its writes as `select` answers them, with the record and the row summary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decided {
@@ -1339,16 +1373,31 @@ pub fn decide(
     // Read ahead of the run, whose writes stamp and move the session's pins: the call judges the turn that stood when
     // it arrived, the one `judged_candidate` directs it by, and its usage folds into that turn's pin whatever turn ends
     // while it is upstream.
-    let judged = request.classifier.then(|| {
-        (
-            judged_turn(state, request),
-            state
-                .latest_turn_pin(&request.key_id, &request.session_id)
-                .map(pin_ref),
-        )
+    let judged = request.classifier.then(|| JudgedTurn {
+        end: state
+            .latest_turn_end(&request.key_id, &request.session_id)
+            .map(|end| (end.account_id.clone(), end.incarnation)),
+        pin: state
+            .latest_turn_pin(&request.key_id, &request.session_id)
+            .map(|pin| (pin_ref(pin), pin.account_id.clone(), pin.incarnation)),
     });
-    let (mut result, writes) = run(state, snapshot, pool, request, rng, &mut rec);
-    if let Some((turn, judged_pin)) = judged {
+    let (mut result, writes) = run(
+        state,
+        snapshot,
+        pool,
+        request,
+        judged.as_ref(),
+        rng,
+        &mut rec,
+    );
+    if let Some(JudgedTurn { end, pin }) = judged {
+        let (judged_pin, pin_turn) = pin
+            .map(|(pin, account_id, incarnation)| (pin, (account_id, incarnation)))
+            .unzip();
+        // The account and incarnation the judged turn ran on: the recorded stream end's, which a move of the turn's pin
+        // since leaves as it was, else the pin's as it stands, the reading after a restart. `None` in a session with no
+        // turn to judge.
+        let turn = end.or(pin_turn);
         rec.judged_pin_step(
             turn.as_ref().map(|(account_id, _)| account_id.as_str()),
             judged_pin.as_ref(),
@@ -1462,6 +1511,9 @@ struct Recorder {
     /// Where the client's classifier call went (`judged_candidate`'s word, else `PLACED_DIRECTION`), for its Pin step.
     /// `None` for a call a fallback credit directed, whose `credit` fact says where it went.
     direction: Option<&'static str>,
+    /// The words of the placement the fallback credit or the judged turn directed ahead of the strategy, for the
+    /// summary's pick.
+    directed: Option<DirectedWords>,
 }
 
 /// The pin a renewal kept, as the summary's renewal fact reads it: whether it was cold on this request, the cause
@@ -1504,21 +1556,21 @@ impl Recorder {
     }
 
     /// The fallback credit's directed placement shows under the `pin` step, which step 1 has already pushed: it gains
-    /// the fact `key` naming the account, so the record keeps its stations and its verdict words. Its verdict reads
+    /// the `credit` fact naming the account, so the record keeps its stations and its verdict words. Its verdict reads
     /// `match`, but on the client's classifier call (`classifier`), whose step keeps `none` since the call holds no
     /// pin.
-    fn directed_placed(&mut self, key: &'static str, account_id: &str, classifier: bool) {
+    fn directed_placed(&mut self, account_id: &str, classifier: bool) {
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
             if !classifier {
                 pin.verdict = "match";
             }
             pin.facts
-                .push(Fact::text(key, account_id).about(account_id));
+                .push(Fact::text(CREDIT_WORDS.fact, account_id).about(account_id));
         }
     }
 
     /// The `pin` step of the client's classifier call, which pins nothing and keeps the verdict `none` beside its
-    /// reason: the turn it judges by that turn's pin's agent and model, the account `judged_turn` answers, the one the
+    /// reason: the turn it judges by that turn's pin's agent and model, the account the judged turn ran on, the one the
     /// charge reads, or `none` in a session with no turn to judge, then where the call went. A call a fallback credit
     /// directed carries no `direction`, since the `credit` fact `directed_placed` wrote names where it went.
     fn judged_pin_step(&mut self, account_id: Option<&str>, turn: Option<&PinRef>) {
@@ -1543,6 +1595,7 @@ fn run(
     snapshot: &RegistrySnapshot,
     pool: Option<&PoolRow>,
     request: &SelectRequest,
+    turn: Option<&JudgedTurn>,
     rng: &mut impl Rng,
     rec: &mut Recorder,
 ) -> (SelectResult, Vec<StateWrite>) {
@@ -1800,12 +1853,13 @@ fn run(
         state,
         pool,
     );
-    let judged = judged_candidate(state, snapshot, request, &eligible, window);
+    let judged = judged_candidate(state, snapshot, request, turn, &eligible, window);
     let directed = credit
         .map(|c| (c, CREDIT_WORDS))
         .or(judged.map(|(c, _)| (c, JUDGED_WORDS)));
+    rec.directed = directed.map(|(_, words)| words);
     if let Some(c) = credit {
-        rec.directed_placed(CREDIT_WORDS.fact, &c.account_id, request.classifier);
+        rec.directed_placed(&c.account_id, request.classifier);
     }
     if request.classifier {
         rec.direction = match (credit, judged) {
@@ -2619,35 +2673,6 @@ fn fresh_pin(
     shed: Option<(String, String)>,
     moving: Option<&PinRow>,
 ) -> PinRow {
-    // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
-    let (
-        burn,
-        burn_at,
-        burn_banded,
-        burn_fast,
-        burn_unmetered,
-        burn_unmetered_model,
-        last_input_tokens,
-    ) = match moving {
-        Some(moving) => (
-            moving.burn,
-            moving.burn_at,
-            moving.burn_banded,
-            moving.burn_fast,
-            moving.burn_unmetered,
-            moving.burn_unmetered_model.clone(),
-            moving.last_input_tokens,
-        ),
-        None => (
-            PinBurn::default(),
-            None,
-            PinBurn::default(),
-            PinBurn::default(),
-            PinBurn::default(),
-            None,
-            0,
-        ),
-    };
     let mut row = PinRow {
         key_id: request.key_id.clone(),
         session_id: session.to_string(),
@@ -2662,13 +2687,14 @@ fn fresh_pin(
         // this request's old one is choosing.
         key_generation: request.key_generation,
         incarnation: chosen.incarnation,
-        burn,
-        burn_at,
-        burn_banded,
-        burn_fast,
-        burn_unmetered,
-        burn_unmetered_model,
-        last_input_tokens,
+        // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
+        burn: moving.map_or_else(PinBurn::default, |m| m.burn),
+        burn_at: moving.and_then(|m| m.burn_at),
+        burn_banded: moving.map_or_else(PinBurn::default, |m| m.burn_banded),
+        burn_fast: moving.map_or_else(PinBurn::default, |m| m.burn_fast),
+        burn_unmetered: moving.map_or_else(PinBurn::default, |m| m.burn_unmetered),
+        burn_unmetered_model: moving.and_then(|m| m.burn_unmetered_model.clone()),
+        last_input_tokens: moving.map_or(0, |m| m.last_input_tokens),
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
         cache_ttl_ms: FIVE_MINUTES_MS,
@@ -2803,9 +2829,7 @@ fn in_pool_without<'a>(
 ) -> impl Fn(&PinRow) -> bool + 'a {
     move |p: &PinRow| {
         !p.ended
-            && snapshot
-                .key(&p.key_id)
-                .is_some_and(|k| k.pool_id == pool.id)
+            && keyed_in(snapshot, pool, p)
             && own.is_none_or(|own| p.key_parts() != own.parts())
     }
 }
@@ -2815,12 +2839,14 @@ fn ended_in_pool<'a>(
     snapshot: &'a RegistrySnapshot,
     pool: &'a PoolRow,
 ) -> impl Fn(&PinRow) -> bool + 'a {
-    move |p: &PinRow| {
-        p.ended
-            && snapshot
-                .key(&p.key_id)
-                .is_some_and(|k| k.pool_id == pool.id)
-    }
+    move |p: &PinRow| p.ended && keyed_in(snapshot, pool, p)
+}
+
+/// A pin counts in its key's pool, so a former pool's pins never move this pool's figures.
+fn keyed_in(snapshot: &RegistrySnapshot, pool: &PoolRow, p: &PinRow) -> bool {
+    snapshot
+        .key(&p.key_id)
+        .is_some_and(|k| k.pool_id == pool.id)
 }
 
 /// What set a projection's horizon: the account's end and the window's own reset discard the quota left at them, so a
@@ -4975,14 +5001,18 @@ fn trigger_of(
 
 /// What the heal check read when it cleared a mark: the healing projection, with the stretch and the threshold where
 /// the stretch healed it, else the line the projection read under.
-struct Healed {
-    projection: f64,
-    stretch_ms: Option<i64>,
-    threshold_ms: Option<i64>,
-    /// The line the healing projection read under, on a mark the projection healed: 1.0 where the heal's horizon
-    /// was bound to the wall, the window's ceiling where it was bound to the span. `None` on a heal by the stretch,
-    /// which reads `stretch_ms` and `threshold_ms`.
-    limit: Option<f64>,
+pub(crate) enum Healed {
+    Stretch {
+        projection: f64,
+        stretch_ms: i64,
+        threshold_ms: i64,
+    },
+    Projection {
+        projection: f64,
+        /// The line the healing projection read under: 1.0 where the heal's horizon was bound to the wall, the
+        /// window's ceiling where it was bound to the span.
+        limit: f64,
+    },
 }
 
 /// Whether a marked pin's window reads back under the round's test at `now`, the test the window fires on. A 5-hour
@@ -5007,12 +5037,11 @@ fn healed(
         if read.stretch_ms > read.threshold_ms {
             return None;
         }
-        return Some(Healed {
+        return Some(Healed::Stretch {
             projection: read.utilization
                 + read.banded.increase_until(read.horizon - read.threshold_ms),
-            stretch_ms: Some(read.stretch_ms),
-            threshold_ms: Some(read.threshold_ms),
-            limit: None,
+            stretch_ms: read.stretch_ms,
+            threshold_ms: read.threshold_ms,
         });
     }
     let projection = projection_of(
@@ -5025,29 +5054,45 @@ fn healed(
         now,
         BurnRead::Achieved,
     )?;
-    (projection.at_horizon < projection.limit).then_some(Healed {
+    (projection.at_horizon < projection.limit).then_some(Healed::Projection {
         projection: projection.at_horizon,
-        stretch_ms: None,
-        threshold_ms: None,
-        limit: Some(projection.limit),
+        limit: projection.limit,
     })
 }
 
 /// The facts of `mark`, as the decision clears it for `reason`, with what the heal read on `healed`.
-fn mark_cleared_of(
+pub(crate) fn mark_cleared_of(
     mark: &PinMark,
     reason: &'static str,
     heal: Option<&Healed>,
 ) -> MarkClearedFacts {
-    MarkClearedFacts {
+    let facts = MarkClearedFacts {
         reason,
         marked_at: mark.at,
         marked_on: mark.on.clone(),
         marked_window: mark.window.clone(),
-        projection: heal.map(|heal| heal.projection),
-        stretch_ms: heal.and_then(|heal| heal.stretch_ms),
-        threshold_ms: heal.and_then(|heal| heal.threshold_ms),
-        limit: heal.and_then(|heal| heal.limit),
+        projection: None,
+        stretch_ms: None,
+        threshold_ms: None,
+        limit: None,
+    };
+    match heal {
+        None => facts,
+        Some(&Healed::Stretch {
+            projection,
+            stretch_ms,
+            threshold_ms,
+        }) => MarkClearedFacts {
+            projection: Some(projection),
+            stretch_ms: Some(stretch_ms),
+            threshold_ms: Some(threshold_ms),
+            ..facts
+        },
+        Some(&Healed::Projection { projection, limit }) => MarkClearedFacts {
+            projection: Some(projection),
+            limit: Some(limit),
+            ..facts
+        },
     }
 }
 
@@ -6073,44 +6118,42 @@ const PLACED_DIRECTION: &str = "strategy";
 /// to be bound to, and the judged turn's account is where a reference of the conversation resolves. `None` for every
 /// other request, for a count and a probe, and where neither account can serve the call, which is then placed by the
 /// rungs and the strategy. The call holds no pin, so a call directed here moves none: the conversation's next turn
-/// makes the move.
+/// makes the move. `turn` is the judged turn `decide` read ahead of the run.
 fn judged_candidate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     request: &SelectRequest,
+    turn: Option<&JudgedTurn>,
     eligible: &[&'a Candidate],
     window: &str,
 ) -> Option<(&'a Candidate, &'static str)> {
     if !request.classifier || request.count || request.probe {
         return None;
     }
+    let turn = turn?;
     let serves = |account_id: &str, incarnation: u64| {
         candidate_in(eligible, account_id)
             .filter(|c| c.incarnation == incarnation)
             .filter(|c| holds_allowance(state, snapshot, &c.account_id, window, request.now))
     };
-    state
-        .latest_turn_end(&request.key_id, &request.session_id)
-        .and_then(|end| serves(&end.account_id, end.incarnation))
+    turn.end
+        .as_ref()
+        .and_then(|(account_id, incarnation)| serves(account_id, *incarnation))
         .map(|c| (c, "turn_account"))
         .or_else(|| {
-            state
-                .latest_turn_pin(&request.key_id, &request.session_id)
-                .and_then(|pin| serves(&pin.account_id, pin.incarnation))
+            turn.pin
+                .as_ref()
+                .and_then(|(_, account_id, incarnation)| serves(account_id, *incarnation))
                 .map(|c| (c, "pin_account"))
         })
 }
 
-/// The account and incarnation the classifier call's judged turn ran on: the recorded stream end's, which a move of
-/// the turn's pin since leaves as it was, else the pin `latest_turn_pin` answers as it stands, the reading after a
-/// restart. `None` in a session with no turn to judge.
-fn judged_turn(state: &RoutingState, request: &SelectRequest) -> Option<(String, u64)> {
-    match state.latest_turn_end(&request.key_id, &request.session_id) {
-        Some(end) => Some((end.account_id.clone(), end.incarnation)),
-        None => state
-            .latest_turn_pin(&request.key_id, &request.session_id)
-            .map(|pin| (pin.account_id.clone(), pin.incarnation)),
-    }
+/// A classifier call's judged turn, read once ahead of the run: the account and incarnation of the session's recorded
+/// stream end (`latest_turn_end`), and the pin `latest_turn_pin` answers with the account and incarnation it stands
+/// on.
+struct JudgedTurn {
+    end: Option<(String, u64)>,
+    pin: Option<(PinRef, String, u64)>,
 }
 
 /// A fresh request with no live pin lands where its prefix is already warm: the deepest message boundary
@@ -7380,6 +7423,7 @@ fn finish(
         slow_down,
         hold_plan,
         direction: _,
+        directed,
     } = rec;
     let settings = pool.map(settings_of);
     let mut outcome = Outcome {
@@ -7505,6 +7549,7 @@ fn finish(
         renewal: renewal.as_ref(),
         hold_place,
         pick: pick.as_ref(),
+        directed,
         trigger_windows: &trigger_windows,
         horizon_bounds: &horizon_bounds,
         exhaustion: match result {
@@ -7561,6 +7606,7 @@ struct Readings<'r> {
     renewal: Option<&'r Renewal>,
     hold_place: Option<&'static str>,
     pick: Option<&'r Pick>,
+    directed: Option<DirectedWords>,
     exhaustion: Option<&'r Exhaustion>,
     trigger_windows: &'r [&'static str],
     horizon_bounds: &'r [BTreeMap<&'static str, f64>],
@@ -7795,19 +7841,8 @@ impl Readings<'_> {
     fn pick_fact(&self) -> Vec<SummaryFact> {
         let text =
             |key: &'static str, value: String| summary_fact(key, FactValue::Text(value), "text");
-        // The credit or the judged turn placed the request ahead of the strategy, which ranked no candidate. A
-        // classifier call's pin step names its judged account wherever it went, so its direction says which.
-        let mut pin_facts = self
-            .walk
-            .iter()
-            .filter(|w| w.step == "pin")
-            .flat_map(|w| &w.facts);
-        let directed = pin_facts.find_map(|f| match (f.key, &f.value) {
-            (key, _) if key == CREDIT_WORDS.fact => Some(CREDIT_WORDS),
-            ("direction", FactValue::Text(word)) if word != PLACED_DIRECTION => Some(JUDGED_WORDS),
-            _ => None,
-        });
-        if let Some(words) = directed {
+        // The credit or the judged turn placed the request ahead of the strategy, which ranked no candidate.
+        if let Some(words) = self.directed {
             return vec![text("pick", words.reason.into())];
         }
         // Read off the accounts tried rather than the wire attempt: a retry in place advances the attempt on one

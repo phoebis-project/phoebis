@@ -231,7 +231,12 @@ pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
 
 /// `five_hour`, `seven_day`, or a `seven_day_` claim: the plan windows the classifier names on a cooldown row.
 pub fn is_plan_window(window: &str) -> bool {
-    window == FIVE_HOUR || window == SEVEN_DAY || window.starts_with("seven_day_")
+    window == FIVE_HOUR || is_weekly_window(window)
+}
+
+/// `seven_day` or a `seven_day_` claim: the plan windows that span a week.
+pub fn is_weekly_window(window: &str) -> bool {
+    window == SEVEN_DAY || window.starts_with("seven_day_")
 }
 
 /// The plan windows a model's requests draw: both shared windows, and the model's own week where it has one.
@@ -242,9 +247,9 @@ pub fn plan_windows(canonical_model: &str) -> impl Iterator<Item = &'static str>
 }
 
 /// Every plan window an account can hold a reading of, in the trigger's order: both shared windows, then each model
-/// week `MODEL_WINDOWS` names. The projections, the member facts, the projected windows of `GET /admin/accounts` and
-/// `GET /admin/pools` and the hours of `GET /admin/analytics/accounts` iterate this one list, so a week added to the
-/// table is read wherever the others are.
+/// week `MODEL_WINDOWS` names. The projections, the member facts, the projected windows of every answer that asks the
+/// router for a pool's projections and the hours of `GET /admin/analytics/accounts` iterate this one list, so a week
+/// added to the table is read wherever the others are.
 pub fn all_plan_windows() -> impl Iterator<Item = &'static str> {
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
@@ -285,7 +290,7 @@ pub struct WindowReading {
 }
 
 /// The width a head's figure is cut to: a head names the whole percent its window stands in.
-const HEAD_PERCENT: f64 = 0.01;
+pub const HEAD_PERCENT: f64 = 0.01;
 
 /// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
 /// model suffix and neither `worst_bucket`'s prefixes nor the plan-window persistence match them.
@@ -702,6 +707,42 @@ impl Charges {
     }
 }
 
+/// The shares of a window's `charges` booked after `after` and at or before `until`. Folded from positive zero: an
+/// empty `sum` of floats is negative zero, which a JSON reader shows as -0.
+fn charged_between(charges: &[(i64, f64)], after: i64, until: i64) -> f64 {
+    charges
+        .iter()
+        .filter(|(at, _)| *at > after && *at <= until)
+        .fold(0.0, |sum, (_, share)| sum + share)
+}
+
+/// A head's figure for the window `existing` holds, `charges` being the window's: a head truncates the percent a poll
+/// rounds, so inside one reset it bounds the stored figure. The router's own figure stands where it lies in the head's
+/// percent, else the nearer edge of that percent. `None` where the head lands as read.
+fn head_bounded(
+    existing: &WindowReading,
+    reading: &WindowReading,
+    charges: &[(i64, f64)],
+) -> Option<f64> {
+    let one_reset = matches!(
+        (existing.reset, reading.reset),
+        (Some(stored), Some(named)) if crate::task::same_reset(stored, named)
+    );
+    if !one_reset {
+        return None;
+    }
+    // The hold raises a head inside the margin to a stored figure at the wall. The head's own percent reaches the wall
+    // at most, so the hold's figure stands as the stored one: a head that reads a stored figure at the wall, or more,
+    // lands as read. A real head that reads that figure or more lands as read too, which leaves out at most a point of
+    // charges on a figure past the wall.
+    if existing.utilization >= 1.0 && reading.utilization >= existing.utilization {
+        return None;
+    }
+    let own =
+        existing.utilization + charged_between(charges, existing.observed_at, reading.observed_at);
+    Some(own.clamp(reading.utilization, reading.utilization + HEAD_PERCENT))
+}
+
 /// The price of one token of each type; `None` for a type the table cannot price on this model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rates {
@@ -927,6 +968,36 @@ pub(crate) fn burn_folded(
     burn_decayed(burn, burn_at, now, window_ms) + tokens / (window_ms.max(1) as f64 / 1_000.0)
 }
 
+/// Folds `usage` at `now` into the pin's plain, banded, fast and classifier copies, each at its weight. Every copy
+/// decays from the shared `burn_at`, so a copy the usage adds nothing to folds at weight 0 and keeps step with the
+/// others.
+pub(crate) fn fold_usage(
+    pin: &mut PinRow,
+    usage: &PinUsage,
+    [plain, banded, fast, unmetered]: [f64; 4],
+    now: i64,
+    window_ms: i64,
+) {
+    let since = pin.burn_at;
+    let folded = |copy: PinBurn, weight: f64| {
+        let fold = |rate: f64, tokens: u64| {
+            burn_folded(rate, since, now, window_ms, tokens as f64 * weight)
+        };
+        PinBurn {
+            cache_read: fold(copy.cache_read, usage.cache_read),
+            input: fold(copy.input, usage.input),
+            output: fold(copy.output, usage.output),
+            write_1h: fold(copy.write_1h, usage.write_1h),
+            write_5m: fold(copy.write_5m, usage.write_5m),
+        }
+    };
+    pin.burn = folded(pin.burn, plain);
+    pin.burn_banded = folded(pin.burn_banded, banded);
+    pin.burn_fast = folded(pin.burn_fast, fast);
+    pin.burn_unmetered = folded(pin.burn_unmetered, unmetered);
+    pin.burn_at = Some(now);
+}
+
 /// Whether the pin's cache entry is still alive at `now`. A pin only auxiliary requests have used since its placement
 /// (`auxiliary_only`) is kept warm by those requests, so its last use is the measure, and any other pin reads its last
 /// refresh, the last turn that rewrote its prefix.
@@ -943,6 +1014,16 @@ pub fn warm_until(pin: &PinRow, auxiliary_only: bool) -> i64 {
         pin.last_refresh_at
     };
     since + pin.cache_ttl_ms
+}
+
+/// `warm` under the row's own flag, for a reader that holds a stored row and no state.
+pub fn pin_warm(pin: &PinRow, now: i64) -> bool {
+    warm(pin, pin.auxiliary_only, now)
+}
+
+/// `warm_until` under the row's own flag, the instant `pin_warm` answers false from.
+pub fn pin_warm_until(pin: &PinRow) -> i64 {
+    warm_until(pin, pin.auxiliary_only)
 }
 
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
@@ -1493,13 +1574,6 @@ pub(crate) struct TurnEnd {
     pub incarnation: u64,
 }
 
-/// Flags the pin under the canonical `key` in `set`, and only while the pin stands.
-fn flag_held(pins: &HashMap<PinKey, PinRow>, set: &mut HashSet<PinKey>, key: Cow<'_, PinKey>) {
-    if pins.contains_key(&*key) && !set.contains(&*key) {
-        set.insert(key.into_owned());
-    }
-}
-
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
         let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
@@ -1706,7 +1780,9 @@ impl RoutingState {
     /// Records that a selection or a completion renewed the pin under the key since its placement.
     pub(crate) fn mark_renewed(&mut self, key: &PinKey) {
         let key = self.canonical_key(key);
-        flag_held(&self.pins, &mut self.renewed, key);
+        if self.pins.contains_key(&*key) && !self.renewed.contains(&*key) {
+            self.renewed.insert(key.into_owned());
+        }
     }
 
     /// Whether the pin under the key was renewed since its placement.
@@ -1714,13 +1790,17 @@ impl RoutingState {
         self.renewed.contains(&*self.canonical_key(key))
     }
 
-    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release) and answers the row as marked
-    /// for the write, `None` where no pin stands under the key or its mark stood already. The pool's keep reads the
-    /// mark, the pin and its cache stay, and the pin's next request clears it.
-    pub(crate) fn mark_ended(&mut self, key: &PinKey) -> Option<PinRow> {
-        let pin = self.pin_mut(key).filter(|pin| !pin.ended)?;
-        pin.ended = true;
-        Some(pin.clone())
+    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release) and answers whether it marked
+    /// one, so the caller writes the marked row: false where no pin stands under the key or its mark stood already. The
+    /// pool's keep reads the mark, the pin and its cache stay, and the pin's next request clears it.
+    pub(crate) fn mark_ended(&mut self, key: &PinKey) -> bool {
+        match self.pin_mut(key) {
+            Some(pin) if !pin.ended => {
+                pin.ended = true;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Marks every pin the agent holds under the key and session as `mark_ended` marks one, and answers the rows it
@@ -1766,7 +1846,7 @@ impl RoutingState {
     /// The pin's warmth under its own flag, the read every selector path takes. `pin` is a row read from this state, so
     /// its flag is the stored one.
     pub fn pin_warm(&self, pin: &PinRow, now: i64) -> bool {
-        warm(pin, pin.auxiliary_only, now)
+        pin_warm(pin, now)
     }
 
     pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
@@ -2434,7 +2514,7 @@ impl RoutingState {
             && !carried.is_empty()
             && current.polled_at.is_none_or(|at| sample.observed_at > at);
         let mut moved = Vec::new();
-        for (window, reading) in sample.windows {
+        for (window, mut reading) in sample.windows {
             // The set the newest clean poll named bounds what a head, or a poll older than it, lands.
             if !settles && !current.has_window(&window) {
                 continue;
@@ -2444,38 +2524,19 @@ impl RoutingState {
                 .get(&window)
                 .is_none_or(|existing| reading.observed_at > existing.observed_at);
             if newer {
-                // A head truncates the percent a poll rounds, so inside one reset it bounds the stored figure: the
-                // router's own figure stands where it lies in the head's percent, else the nearer edge of that percent.
-                let mut reading = reading;
-                if !sample.poll && !is_bucket_window(&window) {
-                    if let Some(existing) = current.windows.get(&window) {
-                        let one_reset = matches!(
-                            (existing.reset, reading.reset),
-                            (Some(stored), Some(named)) if crate::task::same_reset(stored, named)
-                        );
-                        // The hold raises a head inside the margin to a stored figure at the wall. The head's own
-                        // percent reaches the wall at most, so the hold's figure stands as the stored one: a head that
-                        // reads a stored figure at the wall, or more, lands as read. A real head that reads that figure
-                        // or more lands as read too, which leaves out at most a point of charges on a figure past the
-                        // wall.
-                        let at_the_wall = existing.utilization >= 1.0
-                            && reading.utilization >= existing.utilization;
-                        if one_reset && !at_the_wall {
-                            let since: f64 = self
-                                .charges
-                                .get(account_id)
-                                .map_or(&[][..], |c| c.of(&window))
-                                .iter()
-                                .filter(|(at, _)| {
-                                    *at > existing.observed_at && *at <= reading.observed_at
-                                })
-                                .map(|(_, share)| share)
-                                .sum();
-                            let own = existing.utilization + since;
-                            reading.utilization =
-                                own.clamp(reading.utilization, reading.utilization + HEAD_PERCENT);
-                        }
-                    }
+                if let Some(bounded) = current
+                    .windows
+                    .get(&window)
+                    .filter(|_| !sample.poll && !is_bucket_window(&window))
+                    .and_then(|existing| {
+                        let charges = self
+                            .charges
+                            .get(account_id)
+                            .map_or(&[][..], |c| c.of(&window));
+                        head_bounded(existing, &reading, charges)
+                    })
+                {
+                    reading.utilization = bounded;
                 }
                 // Looked up rather than created: most of a sample's names (the api_key and fast buckets) are never
                 // charged.
@@ -2572,13 +2633,7 @@ impl RoutingState {
             .charges
             .get(account_id)
             .map_or(&[][..], |c| c.of(window));
-        // Folded from positive zero: an empty `sum` of floats is negative zero, which a JSON reader shows as -0.
-        let since = |after: i64| {
-            charges
-                .iter()
-                .filter(|(at, _)| *at > after)
-                .fold(0.0, |sum, (_, share)| sum + share)
-        };
+        let since = |after: i64| charged_between(charges, after, i64::MAX);
         // A booking counts whatever the reading's age: no reading carries a charge that has not happened.
         let reserved = self.reserved(account_id, window);
         match reading.reset {
@@ -3895,26 +3950,7 @@ impl RoutingState {
         let pin = self.pin_mut(&judged.key()).filter(|pin| {
             pin.epoch == judged.epoch && (pin.account_id.as_str(), pin.incarnation) == ran_on
         })?;
-        // Every copy decays from the shared `burn_at`, so the copies the call adds nothing to fold at weight 0 and keep
-        // step with the classifier copy.
-        let since = pin.burn_at;
-        let folded = |copy: PinBurn, weight: f64| {
-            let fold = |rate: f64, tokens: u64| {
-                burn_folded(rate, since, at, window_ms, tokens as f64 * weight)
-            };
-            PinBurn {
-                cache_read: fold(copy.cache_read, usage.cache_read),
-                input: fold(copy.input, usage.input),
-                output: fold(copy.output, usage.output),
-                write_1h: fold(copy.write_1h, usage.write_1h),
-                write_5m: fold(copy.write_5m, usage.write_5m),
-            }
-        };
-        pin.burn = folded(pin.burn, 0.0);
-        pin.burn_banded = folded(pin.burn_banded, 0.0);
-        pin.burn_fast = folded(pin.burn_fast, 0.0);
-        pin.burn_unmetered = folded(pin.burn_unmetered, 1.0);
-        pin.burn_at = Some(at);
+        fold_usage(pin, usage, [0.0, 0.0, 0.0, 1.0], at, window_ms);
         pin.burn_unmetered_model = Some(model.to_string());
         Some(pin.clone())
     }
