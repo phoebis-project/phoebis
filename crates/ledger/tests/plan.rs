@@ -5,8 +5,8 @@
 
 use phoebis_ledger::test_tables::{self, JANUARY_2026, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{
-    entrypoint_of_client, funding_of, price_equivalent, price_shares, CostRevisions, Funding,
-    LedgerError, PlanTables, Speed, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
+    entrypoint_of_client, funding_of, price_shares, CostRevisions, Funding, LedgerError,
+    PlanTables, Speed, SubscriptionCosts, BILLED_FUNDING, FAST_FUNDING,
 };
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
 use phoebis_store::{AccountKind, PinBurn};
@@ -542,8 +542,8 @@ fn the_pro_week_figure_is_the_seven_day_share_on_the_anchor_and_none_for_a_model
 {
     let tables = tables();
     let figure = |model| {
-        price_equivalent(
-            &tables,
+        tables.equivalent_at(
+            SEVEN_DAY,
             None,
             model,
             input(1),
@@ -582,8 +582,8 @@ fn a_null_weight_with_an_override_on_one_window_prices_that_window_alone() {
     assert_eq!(shares[FIVE_HOUR], None, "{shares:?}");
     assert_share(shares[SEVEN_DAY], 0.001, "the override's 1 over 1000");
     assert_share(
-        price_equivalent(
-            &edited,
+        edited.equivalent_at(
+            SEVEN_DAY,
             None,
             HAIKU,
             input(1),

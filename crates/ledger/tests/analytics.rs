@@ -7,14 +7,14 @@ use phoebis_ledger::{
     account_request_counts, apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds,
     burn_groups_paged, burn_rows, burn_series, burn_series_over, deltas_of, fold_account,
     fold_event, fold_keepalive, held_series, hour_ceil, hour_of, key_request_totals, list_requests,
-    member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_equivalent,
-    price_shares, read_account_rollups, read_rollups, refusal_categories, rewrite_series,
-    run_retention_blocking, series, series_paged, session_identities, AttemptRecord,
-    BudgetedMember, CostRevisions, EventRecord, FundingFilter, GroupBy, GroupRow, Histogram,
-    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
-    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, SeriesFilter, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS,
-    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_shares,
+    read_account_rollups, read_rollups, refusal_categories, rewrite_series, run_retention_blocking,
+    series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
+    EventRecord, FundingFilter, GroupBy, GroupRow, Histogram, KeepaliveDelta, LedgerConfig,
+    LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions, PriceTable,
+    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, Speed,
+    WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
+    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
@@ -2636,16 +2636,17 @@ async fn shared_sums(
 async fn a_billed_row_with_tokens_adds_nothing_to_the_figure_and_a_billed_only_group_reads_zero() {
     let costs = test_costs();
     let at = hour_range(WEEKDAY_OFF_PEAK).0;
-    let plan_figure = price_equivalent(
-        &costs,
-        None,
-        "claude-sonnet-5-5",
-        usage(1_000, 100),
-        at,
-        at,
-        NOW,
-    )
-    .expect("Sonnet 5.5 is weighted");
+    let plan_figure = costs
+        .equivalent_at(
+            SEVEN_DAY,
+            None,
+            "claude-sonnet-5-5",
+            usage(1_000, 100),
+            at,
+            at,
+            NOW,
+        )
+        .expect("Sonnet 5.5 is weighted");
     let billed = || ShareRow {
         id: "r-billed",
         account: "k-account",
@@ -3479,7 +3480,8 @@ async fn groups_by(
 /// The Pro-week figure `usage` of `model` reads in the hour of `at` on `tables`, the cost model the read priced at.
 fn equivalent_of(tables: &PlanTables, model: &str, usage: PinUsage, at: i64) -> f64 {
     let hour = hour_of(at) * 1_000;
-    price_equivalent(tables, None, model, usage, hour, hour, NOW)
+    tables
+        .equivalent_at(SEVEN_DAY, None, model, usage, hour, hour, NOW)
         .expect("the cost model weighs the model")
 }
 
@@ -4219,16 +4221,17 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
         "three accounts' windows do not add, so a read naming none answers no share: {every:?}"
     );
     let figure = |usage: PinUsage| {
-        price_equivalent(
-            &tables,
-            None,
-            "claude-sonnet-5-5",
-            usage,
-            hour * 1_000,
-            hour * 1_000,
-            NOW,
-        )
-        .expect("the shipped model weighs the model")
+        tables
+            .equivalent_at(
+                SEVEN_DAY,
+                None,
+                "claude-sonnet-5-5",
+                usage,
+                hour * 1_000,
+                hour * 1_000,
+                NOW,
+            )
+            .expect("the shipped model weighs the model")
     };
     let want = figure(tokens) + figure(cached);
     assert!(
@@ -4951,7 +4954,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     );
     // The Pro-week figure reads no account tier: one Opus 5.5 request on Pro reads the same figure as on Ultra or
     // with no tier at all, so a Pro account's request compares to an Ultra account's.
-    let figure = price_equivalent(&tables, None, "claude-opus-5-5", million, hour, hour, NOW);
+    let figure = tables.equivalent_at(SEVEN_DAY, None, "claude-opus-5-5", million, hour, hour, NOW);
     assert!(figure.is_some(), "the shipped model weighs Opus 5.5");
     for point in [&max, &pro, &tierless] {
         assert_eq!(point.equivalent, figure, "{point:?}");
@@ -5414,7 +5417,9 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
         )
         .unwrap();
     let figure = |model: &str| {
-        price_equivalent(&tables, None, model, million, 3_600_000, 3_600_000, NOW).unwrap()
+        tables
+            .equivalent_at(SEVEN_DAY, None, model, million, 3_600_000, 3_600_000, NOW)
+            .unwrap()
     };
     let named = read(vec!["a".into()]);
     let fable = point_at(&named, 3_600);
@@ -5686,16 +5691,17 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
         ["claude-opus-5-5", "claude-sonnet-5-5"]
     );
     let opus = point(&by_model, "claude-opus-5-5");
-    let equivalent = price_equivalent(
-        &tables,
-        None,
-        "claude-opus-5-5",
-        million,
-        hour * 1_000,
-        hour * 1_000,
-        NOW,
-    )
-    .unwrap();
+    let equivalent = tables
+        .equivalent_at(
+            SEVEN_DAY,
+            None,
+            "claude-opus-5-5",
+            million,
+            hour * 1_000,
+            hour * 1_000,
+            NOW,
+        )
+        .unwrap();
     assert!(
         opus.equivalent
             .is_some_and(|e| (e - 2.0 * equivalent).abs() < 1e-12)
@@ -5764,16 +5770,17 @@ fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
         point_at(points, hour)
     };
     let million = usage(1_000_000, 0);
-    let equivalent = price_equivalent(
-        &tables,
-        None,
-        "claude-opus-5-5",
-        million,
-        WEEKDAY_OFF_PEAK,
-        WEEKDAY_OFF_PEAK + 500,
-        NOW,
-    )
-    .unwrap();
+    let equivalent = tables
+        .equivalent_at(
+            SEVEN_DAY,
+            None,
+            "claude-opus-5-5",
+            million,
+            WEEKDAY_OFF_PEAK,
+            WEEKDAY_OFF_PEAK + 500,
+            NOW,
+        )
+        .unwrap();
     let every = read(Vec::new());
     assert!(
         every.five_hour_share.is_none()
@@ -7734,16 +7741,17 @@ fn a_cost_revision_inside_a_price_span_moves_the_totals_equivalent_at_its_own_bo
         .unwrap();
     let at = |instant: i64| {
         let hour = hour_of(instant) * 1_000;
-        price_equivalent(
-            &costs,
-            None,
-            "claude-opus-5-5",
-            usage(1_000, 0),
-            hour,
-            hour,
-            NOW,
-        )
-        .expect("the test tables weigh Opus 5.5")
+        costs
+            .equivalent_at(
+                SEVEN_DAY,
+                None,
+                "claude-opus-5-5",
+                usage(1_000, 0),
+                hour,
+                hour,
+                NOW,
+            )
+            .expect("the test tables weigh Opus 5.5")
     };
     let (first, second) = (at(before), at(after));
     assert!(

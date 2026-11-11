@@ -5286,7 +5286,7 @@ pub fn session_burn_series(
 mod tests {
     use super::*;
 
-    use crate::plan::{entrypoint_of_client, price_equivalent};
+    use crate::plan::entrypoint_of_client;
     use crate::pricing::effective_instant;
     use crate::test_tables::{plan_of, plan_under};
 
@@ -5752,7 +5752,7 @@ mod tests {
         // A figure no pricing of the row's usage answers, so a sum that priced it again reads another one.
         let mut sums = EquivalentSums::default();
         sums.add_priced(&row, true, Some(0.0625), |priced| {
-            price_equivalent(&tables, entrypoint, model, priced, at, at, at)
+            tables.equivalent_at(SEVEN_DAY, entrypoint, model, priced, at, at, at)
         });
         assert_eq!(
             sums.cost.figure(),
@@ -5833,8 +5833,8 @@ mod tests {
         row.output_tokens = 100;
         let sentinel = 0.375;
         let at = HOUR * 1_000;
-        let repriced = price_equivalent(
-            &costs,
+        let repriced = costs.equivalent_at(
+            SEVEN_DAY,
             entrypoint_of_client(&row.client),
             model,
             row.usage(),

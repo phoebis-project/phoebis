@@ -48,9 +48,9 @@ pub use metrics::{
 };
 pub use pattern::{Patterns, PATTERNS_TOO_LONG};
 pub use plan::{
-    entrypoint_of_client, funding_of, price_equivalent, price_shares, Capacity, CostRevisions,
-    Funding, ModelWindow, Override, Peak, PerWindow, PlanTables, Regime, RegimePeak,
-    SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
+    entrypoint_of_client, funding_of, price_shares, Capacity, CostRevisions, Funding, ModelWindow,
+    Override, Peak, PerWindow, PlanTables, Regime, RegimePeak, SubscriptionCosts, TypeMultiplier,
+    TypeOverride, Unit, WindowShares,
 };
 pub use price::{price_row, Priced, RowKey, SHARE_REASON_CLIENT_CLASSIFIER};
 pub use pricing::{

@@ -1379,28 +1379,6 @@ pub fn price_shares(
         .shares(entrypoint, tier, canonical_model, usage, band_at)
 }
 
-/// The Pro-week figure: `PlanTables::equivalent_at(SEVEN_DAY, entrypoint, canonical_model, usage, at, band_at, now)`,
-/// the revision at `at`, the band at `band_at` and the anchor row at `now`.
-pub fn price_equivalent(
-    tables: &PlanTables,
-    entrypoint: Option<&str>,
-    canonical_model: &str,
-    usage: PinUsage,
-    at: i64,
-    band_at: i64,
-    now: i64,
-) -> Option<f64> {
-    tables.equivalent_at(
-        SEVEN_DAY,
-        entrypoint,
-        canonical_model,
-        usage,
-        at,
-        band_at,
-        now,
-    )
-}
-
 /// The windows a plan row's shares would key, each at zero: what a free call reads. Built from the tier's capacity
 /// alone, with no weight lookup and no pricing call, so a classifier call on a model the weight table lacks reads
 /// the same zero maps as one on a weighted model.
