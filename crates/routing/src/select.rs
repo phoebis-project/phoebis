@@ -559,6 +559,21 @@ pub struct Skipped {
     pub obstacle: &'static str,
 }
 
+/// Whether an account's window set holds each of the two shared plan windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SharedWindows {
+    pub five_hour: bool,
+    pub seven_day: bool,
+}
+
+/// The window set of `account_id` as a selection that lands on it names it.
+fn shared_windows(state: &RoutingState, account_id: &str) -> SharedWindows {
+    SharedWindows {
+        five_hour: state.has_window(account_id, FIVE_HOUR),
+        seven_day: state.has_window(account_id, SEVEN_DAY),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Selection {
     /// The row the selection was made against, so what a request dispatches with is the endpoint and the
@@ -570,6 +585,10 @@ pub struct Selection {
     /// The account's overage state at this selection, so an edit that prices a write reads the same fact the
     /// selector did.
     pub in_overage: bool,
+    /// The shared windows the account's window set holds at this selection, so the relay reads a window a head leaves
+    /// out against the windows the account has. Both for an account with no sample and for a set no clean poll has
+    /// settled.
+    pub shared_windows: SharedWindows,
     pub trace: SelectionTrace,
     /// The pool the candidates were resolved under: a selection re-resolved on a newer revision may name another
     /// pool than the request was admitted under, which the relay refuses rather than dispatch under one pool's
@@ -2551,6 +2570,7 @@ fn run(
             pin: handed,
             migrated,
             in_overage: state.in_overage(&chosen.account_id, request.now, request.fallback_ms),
+            shared_windows: shared_windows(state, &chosen.account_id),
             trace: SelectionTrace {
                 strategy: pool.strategy.as_str(),
                 tier,
@@ -5812,6 +5832,7 @@ fn renew(
         pin: Some(handed),
         migrated: None,
         in_overage: state.in_overage(&current.account_id, now, fallback_ms),
+        shared_windows: shared_windows(state, &current.account_id),
         trace: SelectionTrace {
             strategy: pool.strategy.as_str(),
             renewed: true,

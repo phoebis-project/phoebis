@@ -8,8 +8,8 @@ use phoebis_routing::{
     MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle,
     Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
     RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
-    SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample, WalkStep, Warmth,
-    WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
+    SharedWindows, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
+    WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
     FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
     SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS, WEEK_MS,
 };
@@ -8703,6 +8703,58 @@ fn a_move_reads_a_window_the_destination_s_set_lacks_as_no_window_and_one_it_hol
     assert_eq!(
         fact_of(fit, "verdict", "b"),
         &FactValue::Text("least_bad".into())
+    );
+}
+
+#[test]
+fn a_selection_names_the_shared_windows_its_accounts_set_holds_on_a_placement_and_on_a_renewal() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // a's newest clean poll carried the week alone, so its set lacks the 5-hour window. b has reported no sample.
+    st.record_sample("a", sample_of(&[SEVEN_DAY], 0.1, 1, true), 1);
+    let mut r = rng();
+    let mut selected = |session: &str, attempted: &[&str], now: i64| {
+        let result = decide(
+            &mut st,
+            &s,
+            &request(&s, Some(session), "claude-sonnet-5", true, attempted, now),
+            &mut r,
+        )
+        .result;
+        let SelectResult::Selected(selection) = result else {
+            panic!("expected a selection, got {result:?}")
+        };
+        (
+            selection.account.id.clone(),
+            selection.trace.renewed,
+            selection.shared_windows,
+        )
+    };
+    let week_alone = SharedWindows {
+        five_hour: false,
+        seven_day: true,
+    };
+    let both = SharedWindows {
+        five_hour: true,
+        seven_day: true,
+    };
+    assert_eq!(
+        selected("s1", &[], 2),
+        ("a".to_string(), false, week_alone),
+        "a placement reads the set of the account it lands on"
+    );
+    assert_eq!(
+        selected("s1", &[], 3),
+        ("a".to_string(), true, week_alone),
+        "and so does the renewal of that pin"
+    );
+    assert_eq!(
+        selected("s2", &["a"], 4),
+        ("b".to_string(), false, both),
+        "an account with no sample holds both, as one before its first clean poll does"
     );
 }
 

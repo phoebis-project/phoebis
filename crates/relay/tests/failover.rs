@@ -10,7 +10,7 @@ use phoebis_oauth::AcquireError;
 use phoebis_relay::ProbeObstacle;
 use phoebis_routing::{
     FactValue, MoveCause, Report, RouterConfig, RouterEvent, SharePricer, UtilizationSample,
-    WindowReading, WindowSource, FIVE_HOUR,
+    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::{AccountState, CooldownScope, Failover, PinKey, StateCause, SubscriptionRow};
 use tokio::sync::broadcast;
@@ -959,6 +959,94 @@ async fn a_model_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_ev
         .account_id,
         "b",
         "a 5h rejection cools every model"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_model_week_rejection_on_an_account_without_the_five_hour_window_cools_the_model_alone() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    // The head an account without a 5-hour window answers at its Fable week's wall: no 5-hour family, the week under
+    // its limit, the overage week rejected and spent.
+    let header = |name: &str, value: &str| {
+        (
+            format!("anthropic-ratelimit-unified-{name}"),
+            value.to_string(),
+        )
+    };
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 429,
+            headers: vec![
+                header("status", "rejected"),
+                header("representative-claim", "seven_day_overage_included"),
+                header("7d-utilization", "0.55"),
+                header("7d_oi-status", "rejected"),
+                header("7d_oi-utilization", "1.0"),
+                header("7d_oi-reset", "90000"),
+            ],
+            body: b"{}".to_vec(),
+        },
+    );
+    up.set_credential_rule_after(A, 1, "/v1/messages", json_200());
+    let h = two_accounts(&up).await;
+    // a's clean poll carried the week alone, which settles its window set to the 7-day window.
+    h.router
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: UtilizationSample {
+                observed_at: NOW - 1_000,
+                poll: true,
+                ..UtilizationSample::default()
+            }
+            .with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.55,
+                    reset: None,
+                    observed_at: NOW - 1_000,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-fable-5-1", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b")
+    );
+    let c = h.router.cooldowns().await.unwrap();
+    assert_eq!(
+        (c[0].scope.to_string().as_str(), c[0].window.as_str()),
+        ("model:claude-fable-5-1", "seven_day_overage_included"),
+        "the rejection of the week cools Fable on a and no other model"
+    );
+    assert_eq!(
+        outcome(
+            &h.app
+                .clone()
+                .oneshot(request_for(KEY, "claude-opus-5", "s2"))
+                .await
+                .unwrap()
+        )
+        .account_id,
+        "a",
+        "Opus stays on the account"
     );
     up.shutdown().await;
 }

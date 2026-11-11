@@ -32,7 +32,7 @@ use phoebis_routing::{
     ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, JudgedCharge, KeyPermit,
     LaneFacts, OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal,
     RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest,
-    SelectResult, Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
+    SelectResult, Selection, SelectionTrace, SharedWindows, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -2781,6 +2781,7 @@ impl Relay {
                 pin_epoch,
                 replayed,
                 seq,
+                shared_windows: selection.shared_windows,
                 ticket,
             };
             let request = RawRequest {
@@ -3084,6 +3085,7 @@ impl Relay {
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
                 fast: ctx.admitted.fast,
                 reading: &reading,
+                shared_windows: ctx.shared_windows,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -3298,6 +3300,7 @@ impl Relay {
                         let fallback_ms = ctx.admitted.fallback_ms;
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
                         let fast = ctx.admitted.fast;
+                        let shared_windows = ctx.shared_windows;
                         // Two spellings captured for two purposes that diverge once a resolution lands: the
                         // canonical id is the cooldown's scope and the failover reports' model, the folded
                         // spelling is the wire model `classify`'s rejection arm matches the upstream's own
@@ -3346,6 +3349,7 @@ impl Relay {
                                     model_rejection_ms,
                                     fast,
                                     reading: &reading,
+                                    shared_windows,
                                 },
                             );
                             if let Verdict::FailOver { cooldown, mark } = verdict {
@@ -4602,6 +4606,9 @@ struct Responding<'a> {
     /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
     /// leg answers under it.
     seq: u32,
+    /// The shared windows the leg's account holds (`Selection::shared_windows`), which the head's classification
+    /// reads.
+    shared_windows: SharedWindows,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
 }

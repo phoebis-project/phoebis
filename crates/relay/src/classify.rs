@@ -4,8 +4,8 @@
 use std::cell::OnceCell;
 
 use phoebis_routing::{
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, HOUR_MS, MODEL_REJECTED_REASON, RATE_LIMIT_REASON,
-    RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
+    SharedWindows, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, HOUR_MS, MODEL_REJECTED_REASON,
+    RATE_LIMIT_REASON, RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
 };
 use phoebis_store::{AccountKind, AccountState, StateCause};
 use phoebis_transport::response::ResponseHead;
@@ -120,6 +120,8 @@ pub struct HeadContext<'a> {
     pub fast: bool,
     /// The head's rate-limit families and date, parsed once by the caller for every reader of the head.
     pub reading: &'a HeadReading,
+    /// The shared windows the account's window set holds, off the leg's selection (`Selection::shared_windows`).
+    pub shared_windows: SharedWindows,
 }
 
 pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
@@ -257,7 +259,7 @@ fn oauth_cooldown(
         )
     };
     if let Some(u) = unified {
-        if shared_window_rejected(u, ctx.canonical_model) {
+        if shared_window_rejected(u, ctx.canonical_model, ctx.shared_windows) {
             let reset = [
                 u.five_hour
                     .reset
@@ -272,7 +274,7 @@ fn oauth_cooldown(
             .max();
             return row(Scope::Account, reset);
         }
-        if model_only(u, ctx.canonical_model)
+        if model_only(u, ctx.canonical_model, ctx.shared_windows)
             && (u.seven_day_oi.status == Some(WindowStatus::Rejected)
                 || u.status == Some(WindowStatus::Rejected))
         {
@@ -290,9 +292,13 @@ fn oauth_cooldown(
 
 /// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the requested
 /// model's own week is the only one that rejected.
-fn shared_window_rejected(u: &UnifiedHeaders, canonical_model: &str) -> bool {
+fn shared_window_rejected(
+    u: &UnifiedHeaders,
+    canonical_model: &str,
+    shared: SharedWindows,
+) -> bool {
     plan_window_rejected(u)
-        || (u.status == Some(WindowStatus::Rejected) && !model_only(u, canonical_model))
+        || (u.status == Some(WindowStatus::Rejected) && !model_only(u, canonical_model, shared))
 }
 
 /// The 5-hour or the 7-day status rejected. The top-level status is left out for a fast request: it draws neither
@@ -341,29 +347,34 @@ fn fast_cooldown(
     Cooldown::new(Scope::Fast, until, FAST_RATE_LIMIT_REASON, window)
 }
 
-/// A shared window is healthy when its status reads `allowed` or `allowed_warning` (the near-cap warning is
-/// still an allowance), or when the status is absent and the window's own utilization parses below 1.0: a
-/// window the upstream reported under capacity is not the one that rejected. An absent status with no
-/// utilization, or a third status value, is evidence of nothing, and a model-only cooldown on that basis would
-/// keep sending an exhausted account traffic.
-fn shared_healthy(window: &UnifiedWindow) -> bool {
-    match window.status {
-        Some(WindowStatus::Allowed | WindowStatus::AllowedWarning) => true,
-        Some(_) => false,
-        None => window.utilization.is_some_and(|u| (0.0..1.0).contains(&u)),
+/// A shared window is healthy when its status reads `allowed` or `allowed_warning` (the near-cap warning is still an
+/// allowance), or when the status is absent and the window's own utilization parses below 1.0: a window the upstream
+/// reported under capacity is not the one that rejected. A window the account's set does not hold (`held` false) is
+/// healthy where the head names neither for it, since the account has no such window to reject, as an approved Ultra
+/// account has no 5-hour window. On a window the set holds, an absent status with no utilization is evidence of
+/// nothing, as a third status value is on any window, and a model-only cooldown on that basis would keep sending an
+/// exhausted account traffic.
+fn shared_healthy(window: &UnifiedWindow, held: bool) -> bool {
+    match (window.status, window.utilization) {
+        (Some(WindowStatus::Allowed | WindowStatus::AllowedWarning), _) => true,
+        (Some(_), _) => false,
+        (None, Some(utilization)) => (0.0..1.0).contains(&utilization),
+        (None, None) => !held,
     }
 }
 
-/// Whether the rejection names the request model's own week and nothing shared: both shared windows healthy, the
-/// model's family has a row in the window table, and the representative claim names that row's window, or names
-/// the overage week or no week while the 7d_oi status is rejected. A claim naming another family's week, or one no
-/// row knows, is read before the status fallback and is no model evidence: the account cools, the safe direction
-/// while the claim vocabulary is not yet measured live, and a foreign week never borrows the fallback.
-fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
+/// Whether the rejection names the request model's own week and nothing shared: both shared windows healthy as
+/// `shared_healthy` reads each against the account's window set, the model's family has a row in the window table,
+/// and the representative claim names that row's window, or names the overage week or no week while the 7d_oi status
+/// is rejected. A claim naming another family's week, or one no row knows, is read before the status fallback and is
+/// no model evidence: the account cools, the safe direction while the claim vocabulary is not yet measured live, and a
+/// foreign week never borrows the fallback.
+fn model_only(u: &UnifiedHeaders, canonical_model: &str, shared: SharedWindows) -> bool {
     let Some(own) = phoebis_routing::model_week(canonical_model) else {
         return false;
     };
-    let shared_fine = shared_healthy(&u.five_hour) && shared_healthy(&u.seven_day);
+    let shared_fine = shared_healthy(&u.five_hour, shared.five_hour)
+        && shared_healthy(&u.seven_day, shared.seven_day);
     if !shared_fine {
         return false;
     }
@@ -638,6 +649,10 @@ mod tests {
             model_rejection_ms: 3_600_000,
             fast: false,
             reading: &NO_READING,
+            shared_windows: SharedWindows {
+                five_hour: true,
+                seven_day: true,
+            },
         }
     }
 
@@ -994,6 +1009,67 @@ mod tests {
             cooldown_of(classify(&h, &fable_ctx())).scope,
             Scope::Account,
             "one shared status is not both"
+        );
+    }
+
+    #[test]
+    fn a_shared_window_the_accounts_set_lacks_reads_healthy_where_the_head_names_nothing_of_it() {
+        // The head an account without a 5-hour window answers at its Fable week's wall: no 5-hour family, the week
+        // under its limit, the overage week rejected.
+        let wall = [
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            (
+                "anthropic-ratelimit-unified-representative-claim",
+                "seven_day_overage_included",
+            ),
+            ("anthropic-ratelimit-unified-7d-utilization", "0.55"),
+            ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+            ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
+        ];
+        let week_alone = HeadContext {
+            shared_windows: SharedWindows {
+                five_hour: false,
+                seven_day: true,
+            },
+            ..fable_ctx()
+        };
+        let c = cooldown_of(classify(&head(429, &wall), &week_alone));
+        assert_eq!(
+            (c.scope, c.until, c.window.as_str()),
+            (
+                Scope::Model,
+                1_700_007_200_000 + MARGIN_MS,
+                "seven_day_overage_included"
+            ),
+            "the account has no 5-hour window to reject, so the week's rejection cools the model alone"
+        );
+        // The same head with the 5-hour window named and spent: an account can gain the window after its last clean
+        // poll.
+        let mut spent = wall.to_vec();
+        spent.push(("anthropic-ratelimit-unified-5h-utilization", "1.0"));
+        assert_eq!(
+            cooldown_of(classify(&head(429, &spent), &week_alone)).scope,
+            Scope::Account,
+            "what the head says of a window decides, whatever the set holds"
+        );
+        // A head that names the 5-hour window rejected with its reset, and no top-level status: the rejection is the
+        // account's on any set, until the window's own reset.
+        let five_hour_rejected = [
+            (
+                "anthropic-ratelimit-unified-representative-claim",
+                "seven_day_overage_included",
+            ),
+            ("anthropic-ratelimit-unified-7d-utilization", "0.55"),
+            ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+            ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
+            ("anthropic-ratelimit-unified-5h-status", "rejected"),
+            ("anthropic-ratelimit-unified-5h-reset", "1700003600"),
+        ];
+        let c = cooldown_of(classify(&head(429, &five_hour_rejected), &week_alone));
+        assert_eq!(
+            (c.scope, c.until),
+            (Scope::Account, 1_700_003_600_000 + MARGIN_MS),
+            "a rejected shared window cools the account until its reset, whatever the set holds"
         );
     }
 

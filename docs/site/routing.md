@@ -891,19 +891,23 @@ reset is not refused by a clock a hair behind.
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 429, the claim naming the model's own week, the `7d_oi` or the top-level `status` rejected, 5h and 7d healthy | Model-scoped until the later of the `7d_oi` reset and the top-level reset, else `Retry-After`, else the fallback | Yes |
-| 429, the `7d_oi` status rejected, no other family's week claimed, 5h and 7d healthy | Model-scoped, the same deadline | Yes |
+| 429, the claim naming the model's own week, the `7d_oi` or the top-level `status` rejected, 5h and 7d healthy, a window the account's window set lacks included where the head names nothing of it | Model-scoped until the later of the `7d_oi` reset and the top-level reset, else `Retry-After`, else the fallback | Yes |
+| 429, the `7d_oi` status rejected, no other family's week claimed, 5h and 7d healthy as in the row above | Model-scoped, the same deadline | Yes |
 | 429, a shared window (5h or 7d) or `status` rejected, the 5-hour status absent beside a rejected 7-day window included | Account-wide until the later of the rejected window's reset and the top-level reset, else `Retry-After`, else the fallback | Yes |
 | 429 whose unified headers reject nothing | Account-wide until `Retry-After`, else the fallback | Yes |
 | 429 without unified headers | Account-wide until `Retry-After`, else the fallback | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's headers | Yes |
 
 A shared window is healthy when its status reads `allowed` or `allowed_warning`, or when the status is absent and the
-window's own utilization reads below 1.0. An absent status with no utilization, or any other status value, is not
-evidence that the window is fine, and the rejection cools the whole account. Where the rejection named a window, a
-reading taken after it lifts the account-wide rate-limit row before its deadline: a claim on the 5-hour or the 7-day
-window recovers once that window reads under 1.0, and a claim on another week, or on a shared window the account's
-window set no longer holds, once every shared window the set still holds reads under 1.0.
+window's own utilization reads below 1.0. A window the account's [window set](#the-windows-the-router-works-from) does
+not hold is healthy as well where the head carries neither a status nor a utilization for it: an approved Ultra account
+has no 5-hour window and its heads carry no 5-hour family, so once a clean poll has settled its set, a rejection the two
+model rows above take cools the model alone. On a window the set holds, an absent status with no utilization is not
+evidence that the window is fine, nor is any other status value on either window, and the rejection then cools the whole
+account. Where the rejection named a window, a reading taken after it lifts the account-wide rate-limit row before its
+deadline: a claim on the 5-hour or the 7-day window recovers once that window reads under 1.0, and a claim on another
+week, or on a shared window the account's window set no longer holds, once every shared window the set still holds reads
+under 1.0.
 
 The two model-scoped rows apply to a model whose family has a week of its own in the family table (Fable, whose week is
 `seven_day_fable`). The row cools that model on the account. Where the rejection carried a claim, the row recovers once
