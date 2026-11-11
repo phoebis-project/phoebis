@@ -188,9 +188,9 @@ days). Each reset answers the plan and the tier its event names, null where the 
 inside a week reads as a reset of that week from its last reading before the end, with the plan and the tier of the
 router's stored reading of the week, where it was read before the account's plan-ended flag or the account carries no
 such flag, and null where the router holds no such reading. A week whose reset moved later while it still lay ahead has
-no row, since no reset passed: the later reset ends the week, and its row reads the share left then. The history reaches
-as far as the events the hourly purge still holds, which `stats.retention_days` bounds, so a longer retention shows more
-weeks.
+no row, since no reset passed: the week ends at the reset that stands when it passes, and that reset's row reads the
+share left then. The history reaches as far as the events the hourly purge still holds, which `stats.retention_days`
+bounds, so a longer retention shows more weeks.
 
 ## Pricing
 
