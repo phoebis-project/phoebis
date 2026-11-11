@@ -32,8 +32,7 @@ fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9 * b.abs().max(1.0)
 }
 
-/// A request with no attempt, received at `at`: what tells the reconciliation the ledger's requests reach back that
-/// far.
+/// A request with no attempt, received at `at`.
 fn seed_request(db: &LedgerDb, id: &str, at: i64) {
     db.insert_request(
         &RequestRecord {
@@ -160,12 +159,17 @@ fn head_reading(window: &str, at: i64, utilization: f64, reset_at: i64) -> Quota
     }
 }
 
-/// One hourly reconciliation at `now` on the test tables in the fold's order: the read pass, then the write on a
-/// transaction of its own.
+/// One hourly reconciliation at `now` on the test tables with nothing purged.
 fn fold(db: &LedgerDb, now: i64) {
+    fold_under(db, None, now);
+}
+
+/// `fold` under the requests' retention cutoff `request_cutoff`, in the fold's order: the read pass, then the write on
+/// a transaction of its own.
+fn fold_under(db: &LedgerDb, request_cutoff: Option<i64>, now: i64) {
     let (prices, tables) = (api_prices(), subscription_costs());
     db.write(|c| {
-        let rows = reconcile_read(c, &prices, &tables, now)?;
+        let rows = reconcile_read(c, &prices, &tables, request_cutoff, now)?;
         let tx = c.transaction()?;
         reconcile_write(&tx, &rows, now)?;
         tx.commit()?;
@@ -1049,31 +1053,41 @@ fn a_head_one_percent_under_the_poll_before_it_opens_no_dip() {
 }
 
 #[test]
-fn a_run_whose_first_reading_predates_the_oldest_retained_request_is_skipped() {
+fn a_run_whose_first_reading_predates_the_requests_retention_cutoff_is_skipped() {
     let five_reset = SATURDAY + HOUR;
     let seven_reset = SATURDAY + 2 * HOUR;
-    let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - 5 * MINUTE);
-    db.insert_samples(
-        &[
-            reading(FIVE_HOUR, SATURDAY - 10 * MINUTE, 0.10, five_reset),
-            reading(SEVEN_DAY, SATURDAY, 0.01, seven_reset),
-            reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, five_reset),
-            reading(SEVEN_DAY, SATURDAY + 20 * MINUTE, 0.03, seven_reset),
-        ],
-        None,
-    )
-    .unwrap();
-    served(&db, "r1", SONNET, SATURDAY + 10 * MINUTE, 20, None);
     let now = seven_reset + HOUR;
-    fold(&db, now);
-    assert_eq!(
+    let windows_under = |request_cutoff: i64| {
+        let db = LedgerDb::open_in_memory().unwrap();
+        // The oldest request held is younger than the 5-hour run's first reading with nothing purged between them, as
+        // on a fresh ledger.
+        seed_request(&db, "seed", SATURDAY - 5 * MINUTE);
+        db.insert_samples(
+            &[
+                reading(FIVE_HOUR, SATURDAY - 10 * MINUTE, 0.10, five_reset),
+                reading(SEVEN_DAY, SATURDAY, 0.01, seven_reset),
+                reading(FIVE_HOUR, SATURDAY + 20 * MINUTE, 0.30, five_reset),
+                reading(SEVEN_DAY, SATURDAY + 20 * MINUTE, 0.03, seven_reset),
+            ],
+            None,
+        )
+        .unwrap();
+        served(&db, "r1", SONNET, SATURDAY + 10 * MINUTE, 20, None);
+        fold_under(&db, Some(request_cutoff), now);
         rows(&db, now)
-            .iter()
-            .map(|r| r.window.as_str())
-            .collect::<Vec<_>>(),
+            .into_iter()
+            .map(|r| r.window)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        windows_under(SATURDAY - 10 * MINUTE),
+        [SEVEN_DAY, FIVE_HOUR],
+        "the purge keeps a request received at the cutoff, so a run whose first reading lies there keeps its requests"
+    );
+    assert_eq!(
+        windows_under(SATURDAY - 10 * MINUTE + 1),
         [SEVEN_DAY],
-        "the 5-hour run began before the oldest request kept, so its rise would meet part of what the router sent"
+        "the 5-hour run began before the cutoff, so its rise would meet part of what the router sent"
     );
 }
 

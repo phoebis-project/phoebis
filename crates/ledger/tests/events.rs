@@ -3628,6 +3628,124 @@ async fn the_start_fold_waits_for_the_start_row_so_a_span_the_previous_run_left_
     );
 }
 
+/// One request whose single plan-funded attempt on Ultra account `a` completed at `completed` with `input` plain input
+/// tokens of Sonnet, received half a minute before.
+fn plan_funded_request(db: &LedgerDb, id: &str, completed: i64, input: u64) {
+    let started = completed - 30_000;
+    db.insert_request(
+        &phoebis_ledger::RequestRecord {
+            id: id.into(),
+            received_at: started,
+            finished_at: Some(completed),
+            model: "claude-sonnet-5-5".into(),
+            canonical_model: "claude-sonnet-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[phoebis_ledger::AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: phoebis_store::AccountKind::Oauth,
+            started_at: started,
+            finished_at: Some(completed),
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            output_tokens: Some(0),
+            tier: Some("default_claude_max_20x".into()),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn the_start_fold_reads_the_requests_retention_so_a_run_begun_before_it_writes_no_row() {
+    use phoebis_ledger::test_tables::{api_prices, subscription_costs, JANUARY_2026};
+    const MINUTE: i64 = 60_000;
+    const HOUR: i64 = 60 * MINUTE;
+    const DAY: i64 = 24 * HOUR;
+    // Sunday 2026-01-18 at 12:00 UTC, inside the test tables' first cost entry, where a retention of one day cuts the
+    // requests at Saturday noon.
+    const SUNDAY: i64 = JANUARY_2026 + 3 * DAY;
+    let old_reset = SUNDAY - DAY - HOUR;
+    let new_reset = SUNDAY - HOUR;
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+    // Two complete 5-hour runs a day apart, each read before and after 20 Sonnet units, the older one begun three hours
+    // before the cutoff and the newer one three hours before the fold.
+    db.insert_samples(
+        &[
+            weekly_sample(
+                "a",
+                "five_hour",
+                Some(0.10),
+                SUNDAY - DAY - 3 * HOUR,
+                old_reset,
+            ),
+            weekly_sample(
+                "a",
+                "five_hour",
+                Some(0.30),
+                SUNDAY - DAY - 3 * HOUR + 20 * MINUTE,
+                old_reset,
+            ),
+            weekly_sample("a", "five_hour", Some(0.10), SUNDAY - 3 * HOUR, new_reset),
+            weekly_sample(
+                "a",
+                "five_hour",
+                Some(0.30),
+                SUNDAY - 3 * HOUR + 20 * MINUTE,
+                new_reset,
+            ),
+        ],
+        None,
+    )
+    .unwrap();
+    plan_funded_request(&db, "old", SUNDAY - DAY - 3 * HOUR + 10 * MINUTE, 20);
+    plan_funded_request(&db, "new", SUNDAY - 3 * HOUR + 10 * MINUTE, 20);
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let clock: phoebis_oauth::Clock = Arc::new(|| SUNDAY);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let ledger = phoebis_ledger::spawn(
+        db.clone(),
+        Arc::new(phoebis_ledger::Pricing::new(api_prices())),
+        Arc::new(subscription_costs()),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        Arc::new(phoebis_ledger::Metrics::new()),
+        LedgerConfig {
+            retention_days: 1,
+            ..polled_every_50_ms()
+        },
+    );
+    wait_for(Duration::from_secs(5), || {
+        let folds = ledger
+            .stats()
+            .condition_folds
+            .load(std::sync::atomic::Ordering::SeqCst);
+        (folds >= 1).then_some(())
+    })
+    .await;
+    let rows: Vec<_> = db
+        .read_blocking(|c| phoebis_ledger::read_reconciliations(c, &[], SUNDAY))
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.window, r.window_end))
+        .collect();
+    assert_eq!(
+        rows,
+        [("five_hour".to_string(), new_reset)],
+        "the start's fold reads the cutoff of the one-day retention, so the run begun before it writes no row"
+    );
+}
+
 /// The router reads the mirror's baseline before the start's recovery, so the refresh the recovery settles and the
 /// quarantine it lands are mirrored as changes rather than taken as history.
 #[tokio::test]

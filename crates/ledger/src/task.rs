@@ -446,11 +446,13 @@ pub fn spawn(
         // the purge that frees room waiting.
         let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
         loop {
+            let now = (purging.clock)();
             fold_conditions(
                 &purging.db,
                 &purging.pricing,
                 &purging.tables,
-                (purging.clock)(),
+                request_cutoff(purge_config.retention_days, now),
+                now,
             )
             .await;
             purging
@@ -1744,6 +1746,7 @@ async fn fold_conditions(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     tables: &Arc<PlanTables>,
+    request_cutoff: Option<i64>,
     now: i64,
 ) {
     let prices = pricing.revisions();
@@ -1755,7 +1758,7 @@ async fn fold_conditions(
             // since one that turns to writing is refused once the writer committed past its snapshot.
             let rows = {
                 let read = conn.transaction()?;
-                crate::reconcile::reconcile_read(&read, &prices, &tables, now)?
+                crate::reconcile::reconcile_read(&read, &prices, &tables, request_cutoff, now)?
             };
             let tx = crate::db::begin_write(conn)?;
             crate::reconcile::reconcile_write(&tx, &rows, now)?;
