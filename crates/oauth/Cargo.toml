@@ -26,12 +26,13 @@ url = { workspace = true }
 # The refresh test seam. Enabled through the self dev-dependency below, so it is on for this crate's own
 # tests and absent from anything else that depends on it.
 debug-hooks = []
-# The seed of `random`'s source, turned on by a dependent's dev-dependency for a capture that must repeat, so a
-# release build mints from the process CSPRNG alone.
+# The seed of `random`'s source, for a capture that must repeat, and the re-export of `parse_limit_resets`, for a
+# rig that stores a block from a usage body. A dependent's dev-dependency and the self one below turn it on, so a
+# release build mints from the process CSPRNG alone and names the parser inside this crate alone.
 test-support = []
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
-phoebis-oauth = { path = ".", features = ["debug-hooks"] }
+phoebis-oauth = { path = ".", features = ["debug-hooks", "test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 tokio = { workspace = true, features = ["test-util"] }

@@ -40,8 +40,8 @@ jsonschema = { workspace = true }
 # The test tables and the read count the dry run's pages are pinned by, kept off the dependency above so a release
 # build carries none.
 phoebis-ledger = { path = "../ledger", features = ["debug-hooks", "test-support"] }
-# The seed the fixture capture mints its ids and secrets from, kept off the dependency above so a release build
-# carries none.
+# The seed the fixture capture mints its ids and secrets from and the re-export of the limit resets parser a test
+# stores its block with, kept off the dependency above so a release build carries neither.
 phoebis-oauth = { path = "../oauth", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 rusqlite = { workspace = true }

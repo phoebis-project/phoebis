@@ -15,9 +15,12 @@ pub use exchange::{
     OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
 };
 pub use limit_resets::{
-    grant_states, parse_limit_resets, resets_left, ClaimAnswer, Grant, GrantState, GrantStatus,
-    LimitResets,
+    grant_states, resets_left, ClaimAnswer, Grant, GrantState, GrantStatus, LimitResets,
 };
+// The usage service is the parser's one production caller, and it reaches it inside the crate. A rig that stores a
+// block writes it from a usage body, in the upstream's field names.
+#[cfg(any(test, feature = "test-support"))]
+pub use limit_resets::parse_limit_resets;
 pub use manager::{AccessToken, AcquireError, Backoff, Clock, CredentialManager, LandedMark};
 pub use manager::{SERVER_ERROR_BACKOFF_MS, TRANSIENT_BACKOFF_MS};
 pub use pkce::{generate_pkce, generate_state, Pkce};
