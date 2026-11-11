@@ -20,7 +20,7 @@ use crate::db::newest_row_at;
 use crate::query::{
     ACCOUNT_STATE_CHANGED, CATALOG_CHANGED, COOLDOWN_CLEARED, COOLDOWN_SET, FAST_CREDITS_CHANGED,
     MARK_CLEARED, OVERAGE_ENDED, OVERAGE_STARTED, PIN_CREATED, PIN_EXPIRED, PIN_MIGRATED,
-    PIN_RELEASED, PLAN_ENDED, PLAN_RESTORED, POLL_BACKOFF_ENDED, POLL_BACKOFF_STARTED, POLL_FAILED,
+    PLAN_ENDED, PLAN_RESTORED, POLL_BACKOFF_ENDED, POLL_BACKOFF_STARTED, POLL_FAILED,
     REFRESH_FAILED, REFRESH_SUCCEEDED, REFRESH_UNCERTAIN, REGISTRY_CHANGED, RESERVATION_EXPIRED,
     SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WARM_PREFIX_EXPIRED, WINDOW_CLEARED,
     WINDOW_RESET, WINDOW_SPENT, WIND_DOWN_STARTED,
@@ -180,17 +180,6 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 })
                 .to_string(),
             ),
-            ..pin_row(pin)
-        },
-        RouterEvent::PinReleased {
-            pin,
-            account_id,
-            at,
-        } => EventRecord {
-            at: *at,
-            kind: PIN_RELEASED.into(),
-            account_id: Some(account_id.clone()),
-            detail: Some(json!({ "agent_id": pin.agent_id }).to_string()),
             ..pin_row(pin)
         },
         RouterEvent::ReservationExpired {
@@ -1180,14 +1169,6 @@ mod tests {
                     at: 1,
                 },
                 "pin_expired",
-            ),
-            (
-                RouterEvent::PinReleased {
-                    pin: PinKey::new("k", "s", "main", "m"),
-                    account_id: "a".into(),
-                    at: 1,
-                },
-                "pin_released",
             ),
             (
                 RouterEvent::SlowDownStarted {

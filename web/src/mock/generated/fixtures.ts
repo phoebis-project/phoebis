@@ -15804,7 +15804,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "rows": [
         {
           "type": "event",
-          "id": 125,
+          "id": 124,
           "at": 1791721060000,
           "kind": "router_started",
           "account_id": null,
@@ -20169,7 +20169,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 105,
+          "id": 104,
           "at": 1791721000000,
           "kind": "window_cleared",
           "account_id": "business",
@@ -20191,7 +20191,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 99,
+          "id": 98,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "direct",
@@ -20212,7 +20212,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 98,
+          "id": 97,
           "at": 1791721000000,
           "kind": "cooldown_set",
           "account_id": "business",
@@ -20229,23 +20229,6 @@ export const FIXTURES: Record<string, Fixture> = {
             "reason": "rate_limit",
             "window": "five_hour",
             "source_request_id": "r-move"
-          }
-        },
-        {
-          "type": "event",
-          "id": 97,
-          "at": 1791721000000,
-          "kind": "pin_released",
-          "account_id": "business",
-          "key_id": "desktop",
-          "pool_id": null,
-          "session_id": "s-static",
-          "agent_id": "main",
-          "model": "claude-sonnet-5",
-          "request_id": null,
-          "actor": null,
-          "detail": {
-            "agent_id": "main"
           }
         },
         {
@@ -20856,7 +20839,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 108,
+          "id": 107,
           "at": 1791719320000,
           "kind": "slow_down_ended",
           "account_id": "business",
@@ -20876,7 +20859,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 102,
+          "id": 101,
           "at": 1791718480000,
           "kind": "reservation_expired",
           "account_id": "business",
@@ -20899,7 +20882,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 124,
+          "id": 123,
           "at": 1791718420000,
           "kind": "registry_changed",
           "account_id": null,
@@ -20927,7 +20910,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 123,
+          "id": 122,
           "at": 1791718360000,
           "kind": "refresh_uncertain",
           "account_id": "business",
@@ -20945,7 +20928,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 122,
+          "id": 121,
           "at": 1791718300000,
           "kind": "refresh_failed",
           "account_id": "business",
@@ -20963,7 +20946,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 121,
+          "id": 120,
           "at": 1791718240000,
           "kind": "refresh_succeeded",
           "account_id": "business",
@@ -20982,7 +20965,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 120,
+          "id": 119,
           "at": 1791718180000,
           "kind": "account_state_changed",
           "account_id": "business",
@@ -21002,7 +20985,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 119,
+          "id": 118,
           "at": 1791718120000,
           "kind": "ledger_gap",
           "account_id": null,
@@ -21020,7 +21003,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 107,
+          "id": 106,
           "at": 1791718120000,
           "kind": "slow_down_started",
           "account_id": "business",
@@ -21041,7 +21024,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 118,
+          "id": 117,
           "at": 1791718060000,
           "kind": "budget_period_ended",
           "account_id": "business",
@@ -21060,7 +21043,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 117,
+          "id": 116,
           "at": 1791718000000,
           "kind": "budget_reached",
           "account_id": "business",
@@ -21081,7 +21064,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 116,
+          "id": 115,
           "at": 1791717940000,
           "kind": "catalog_changed",
           "account_id": "business",
@@ -21104,7 +21087,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 110,
+          "id": 109,
           "at": 1791717880000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -21124,7 +21107,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 101,
+          "id": 100,
           "at": 1791717820000,
           "kind": "mark_cleared",
           "account_id": "business",
@@ -21148,7 +21131,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 109,
+          "id": 108,
           "at": 1791717760000,
           "kind": "poll_backoff_started",
           "account_id": "business",
@@ -21169,7 +21152,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 106,
+          "id": 105,
           "at": 1791717700000,
           "kind": "window_reset",
           "account_id": "business",
@@ -21192,7 +21175,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 113,
+          "id": 112,
           "at": 1791717640000,
           "kind": "poll_failed",
           "account_id": "business",
@@ -21212,7 +21195,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 104,
+          "id": 103,
           "at": 1791717640000,
           "kind": "wind_down_started",
           "account_id": "business",
@@ -21231,7 +21214,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 115,
+          "id": 114,
           "at": 1791717580000,
           "kind": "plan_restored",
           "account_id": "business",
@@ -21251,7 +21234,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 103,
+          "id": 102,
           "at": 1791717580000,
           "kind": "warm_prefix_expired",
           "account_id": "direct",
@@ -21278,7 +21261,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 114,
+          "id": 113,
           "at": 1791717520000,
           "kind": "plan_ended",
           "account_id": "business",
@@ -21298,7 +21281,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 112,
+          "id": 111,
           "at": 1791717520000,
           "kind": "poll_backoff_ended",
           "account_id": "business",
@@ -21318,7 +21301,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 100,
+          "id": 99,
           "at": 1791717520000,
           "kind": "shedding_round",
           "account_id": "business",
@@ -21385,7 +21368,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         {
           "type": "event",
-          "id": 111,
+          "id": 110,
           "at": 1791717460000,
           "kind": "poll_backoff_started",
           "account_id": "business",

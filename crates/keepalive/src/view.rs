@@ -6,8 +6,7 @@ use std::sync::Arc;
 
 use phoebis_ledger::{KeepaliveAgents, KeepaliveGaugeSource};
 
-use crate::engine::{Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, Wasted, MAIN_AGENT};
-use crate::events::{err, EventError};
+use crate::engine::{Agent, AgentState, Engine, Guard, Park, ParkKind, Reason, MAIN_AGENT};
 
 /// The Sessions row's one word for an agent's recipe, read off the engine's reason beside its pause bit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -70,7 +69,7 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
         | UnsupportedProbe => RecipeState::Paused,
         AgentReleased | AgentUnknown | BusGap | Compacted | Evicted | Expired
         | ExpiredAtRestart | IdleLimit | InstanceReplaced | KeyOptedOut | OptedOut
-        | ParkedLimit | Released | Reset | SessionEnded | SessionExpired => RecipeState::Ended,
+        | ParkedLimit | Reset | SessionEnded | SessionExpired => RecipeState::Ended,
     };
     match state {
         RecipeState::Held | RecipeState::Retained if paused => RecipeState::Paused,
@@ -279,27 +278,6 @@ impl Engine {
             }
         }
         counts
-    }
-
-    /// The operator's release: every recipe of the session goes, labeled `released`, and the session stays
-    /// registered so its companion keeps reporting. Refused as `quiesced` once the shutdown has quiesced the engine,
-    /// before any state changes: the final save has read its snapshot by then, and a release it does not carry would
-    /// tell the operator a recipe is gone that the next process restores and probes.
-    pub fn release(&self, key_id: &str, session_id: &str) -> Result<usize, EventError> {
-        let key = (key_id.to_string(), session_id.to_string());
-        let released = {
-            let mut inner = self.lock();
-            if inner.closed {
-                return Err(err("quiesced", 503));
-            }
-            let held = inner.sessions.get(&key).map_or(0, |s| {
-                s.agents.values().filter(|a| a.current.is_some()).count()
-            });
-            inner.discard_session(&key, Reason::Released, Some(Wasted::Released));
-            held
-        };
-        self.flush();
-        Ok(released)
     }
 
     /// A closure the metrics renderer can call on every scrape without the ledger crate depending on this

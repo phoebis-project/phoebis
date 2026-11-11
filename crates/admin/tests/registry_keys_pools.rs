@@ -933,10 +933,10 @@ async fn a_main_pin_beside_a_newer_subagent_pin_still_shows_the_main_pin_and_cou
 }
 
 #[tokio::test]
-async fn sessions_list_live_pins_and_a_release_expires_them() {
+async fn sessions_list_live_pins_and_leave_out_a_pin_older_than_the_expiry() {
     let (_first, _up, store, _router) = common::admin_parts().await;
     // The pins' key and its pool are registered first: `RoutingState::purge` deletes a pin whose key it
-    // cannot resolve, so without them the router's first tick races the release and wins about as often as
+    // cannot resolve, so without them the router's first tick races the list and wins about as often as
     // the runtime parks between the two.
     let secret = "phoebis-testkey0000000000000000000000000000000000";
     store
@@ -1061,21 +1061,6 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             sessions[0]["epoch"].as_u64()
         ),
         (Some("s1"), Some(3))
-    );
-    let released = post(&app, "/admin/sessions/k/s1/release", "", Some(&cookie)).await;
-    assert_eq!(released.status(), 204);
-    assert_eq!(released.headers().get("x-phoebis-released").unwrap(), "1");
-    assert_eq!(
-        post(&app, "/admin/sessions/k/s1/release", "", Some(&cookie))
-            .await
-            .status(),
-        404
-    );
-    assert!(
-        json(get(&app, "/admin/sessions", Some(&cookie)).await).await["sessions"]
-            .as_array()
-            .unwrap()
-            .is_empty()
     );
 }
 

@@ -1605,36 +1605,6 @@ async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_fai
     );
 }
 
-/// A labeled stop of the agent settles the probes the recipe paid for, so it ends an open compaction as a failed one:
-/// after the operator's release, the compaction's completion that read the cache books no credit for the probe the
-/// release settled, and the cause stays `released`.
-#[tokio::test]
-async fn the_operators_release_ends_an_open_compaction_as_a_failed_one() {
-    let mut r = rig(RigSpec::default()).await;
-    r.observe("main").await;
-    r.advance_attended(270_000);
-    r.step().await;
-    // 310 s in, past the first turn's own entry and inside the probe's, which ends 570 s in.
-    r.advance_attended(40_000);
-    r.engine.observe(compaction(&r, "compaction"));
-    r.engine.observe(r.selected("compaction", "a"));
-    r.engine.observe(head(&r, "compaction", 200));
-    r.engine.observe(message_start("compaction", 2_000, 0));
-    r.engine.release("desktop", "session").unwrap();
-    r.engine.observe(completed(&r, "compaction", 2_000));
-    let status = r.status("main");
-    assert_eq!(
-        (status.reason, status.credited_today),
-        (Reason::Released, 0),
-        "{status:?}"
-    );
-    assert_eq!(
-        probes_and_credits(&final_rollups(&r).await),
-        (1, BTreeMap::from([("released".to_string(), 1)]), 0),
-        "the probe settled under the release, with no credit beside it"
-    );
-}
-
 /// A subagent's release is a labeled stop too, so the registration that takes the agent back finds no compaction
 /// open: the compaction's completion that read the cache books no credit for the probe the release settled, and the
 /// cause stays the registration's.

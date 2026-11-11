@@ -306,12 +306,14 @@ ALTER TABLE api_keys DROP COLUMN keepalive_opt_out;
 /// The plan word the exchange built from two profile flags had no reader: the term resolves its plan from the
 /// stored document and the tier. A pin carries its agent's end, so a restart keeps an ended agent's pin out of the
 /// figures. No classifier call renews a pin, so the flag for one leaves, and the classifier copy names the model
-/// its calls ran on, which prices it.
+/// its calls ran on, which prices it. A saved keepalive agent whose cause is `released` leaves, since no build
+/// writes or reads that cause any more.
 const V6: &str = r#"
 ALTER TABLE accounts DROP COLUMN subscription_plan;
 ALTER TABLE pins ADD COLUMN ended INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pins DROP COLUMN last_classifier;
 ALTER TABLE pins ADD COLUMN burn_unmetered_model TEXT;
+DELETE FROM keepalive_agents WHERE json_extract(payload, '$.reason') = 'released';
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or

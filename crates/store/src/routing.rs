@@ -506,8 +506,8 @@ impl Store {
 
     /// One routing commit under the lock, at `synchronous = NORMAL` while every other write of the connection runs
     /// at `FULL`: the routing state alone skips the sync, since the next requests rebuild what a power loss takes of
-    /// it, and an operator's cooldown clear or session release a power loss undoes is made again. Counted while the
-    /// lock is still held, so a test that sees the rows sees the count too.
+    /// it, and an operator's cooldown clear a power loss undoes is made again. Counted while the lock is still held,
+    /// so a test that sees the rows sees the count too.
     pub(crate) fn routing_commit<T>(
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, StoreError>,

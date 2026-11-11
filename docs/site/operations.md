@@ -21,9 +21,9 @@ A process crash loses nothing that committed, since the WAL is written before a 
 `synchronous = NORMAL`, so a power loss or an operating-system crash may lose its last transactions. The registry runs
 with `synchronous = FULL`, so every change to its own rows (accounts, credentials, keys, members, pools, refresh
 attempts, rules and secrets) is on disk before it is acknowledged. The routing state (affinity, cooldowns, the marks a
-failing account earns, pins, usage windows, and an operator's cooldown clear or session release) commits at `NORMAL`
-in one transaction per writer wake, so a power loss can lose the last of it: the router rebuilds it from the next
-requests, and an operator redoes a clear or a release it undid.
+failing account earns, pins, usage windows, and an operator's cooldown clear) commits at `NORMAL` in one transaction per
+writer wake, so a power loss can lose the last of it: the router rebuilds it from the next requests, and an operator
+redoes a clear it undid.
 
 ```sh
 phoebis backup --to /path/to/backups/$(date +%F)

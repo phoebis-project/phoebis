@@ -4456,7 +4456,7 @@ fn wasted_probe_figure(r: &Rig, rows: &[RollupRow]) -> Option<f64> {
 
 /// The tier the settlement of the first probe a plan-funded account on the Pro tier leaves unanswered files under, its
 /// stored profile naming `organization_type`, on the suite's own cost tables, and the Pro-week figure the settlement's
-/// counts price at. The operator's release settles the probe as wasted.
+/// counts price at. The companion's release of main settles the probe as wasted.
 async fn probe_on_the_pro_tier_of(organization_type: &str) -> (String, Option<f64>) {
     let mut r = rig(RigSpec {
         tables: phoebis_ledger::test_tables::subscription_costs(),
@@ -4481,10 +4481,11 @@ async fn probe_on_the_pro_tier_of(organization_type: &str) -> (String, Option<f6
     let body = opus_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    r.advance(270_000);
+    // Attended, so the companion still holds its lease when it reports the release.
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1, "{organization_type}");
-    r.engine.release("desktop", "session").unwrap();
+    r.state("main", "released");
     let rows = final_rollups(&r).await;
     let settled = rows
         .iter()
@@ -4776,8 +4777,8 @@ async fn a_credit_answered_across_a_revision_boundary_files_at_its_requests_arri
 }
 
 /// A plan-funded probe on a model without a weight prices nothing whatever its model tier: the test table leaves Opus 5
-/// null beside Opus 5.5 at 2, so the wasted probe's Pro-week figure reads null. The operator's release settles the
-/// probe as wasted.
+/// null beside Opus 5.5 at 2, so the wasted probe's Pro-week figure reads null. The companion's release of main
+/// settles the probe as wasted.
 #[tokio::test]
 async fn a_plan_funded_probe_on_a_model_without_a_weight_prices_no_figure() {
     let mut r = rig(RigSpec {
@@ -4789,10 +4790,11 @@ async fn a_plan_funded_probe_on_a_model_without_a_weight_prices_no_figure() {
     let body = body_on("claude-opus-5");
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    r.advance(270_000);
+    // Attended, so the companion still holds its lease when it reports the release.
+    r.advance_attended(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    r.engine.release("desktop", "session").unwrap();
+    r.state("main", "released");
     let rows = final_rollups(&r).await;
     let settled = rows
         .iter()

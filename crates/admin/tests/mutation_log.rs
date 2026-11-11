@@ -75,7 +75,6 @@ async fn every_admin_mutation_writes_one_line_with_its_route_entity_and_session_
     .await;
     assert_eq!(status(&key), 201);
     let key_secret = json(key).await["secret"].as_str().unwrap().to_string();
-    let released = post(&app, "/admin/sessions/desk/s1/release", "", Some(&cookie)).await;
     let replayed = post(&app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
     assert_eq!(status(&replayed), 200);
     let refused = delete(&app, "/admin/pools/main", None).await;
@@ -95,11 +94,6 @@ async fn every_admin_mutation_writes_one_line_with_its_route_entity_and_session_
                 "method=PUT route=/admin/pools/{{id}}/members status=200 entity=pool id=main {admitted}"
             ),
             format!("method=POST route=/admin/keys status=201 entity=key id=desk {admitted}"),
-            format!(
-                "method=POST route=/admin/sessions/{{key}}/{{session}}/release status={} entity=session \
-                 id=desk/s1 {admitted}",
-                status(&released)
-            ),
             format!(
                 "method=POST route=/admin/ledger/parked/replay status=200 entity=ledger id=- {admitted}"
             ),

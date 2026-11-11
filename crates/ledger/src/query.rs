@@ -1073,8 +1073,8 @@ macro_rules! event_kinds {
     ($($name:ident => $word:expr),* $(,)?) => {
         $(pub const $name: &str = $word;)*
 
-        /// Every event kind the ledger writes, alphabetical: the `kinds` key is validated against it and the decision
-        /// kinds, and a 400 names a kind outside both.
+        /// Every event kind a ledger holds rows of, alphabetical: the `kinds` key is validated against it and the
+        /// decision kinds, and a 400 names a kind outside both.
         pub const EVENT_KINDS: &[&str] = &[$($name),*];
     };
 }
@@ -1096,6 +1096,7 @@ event_kinds! {
     PIN_CREATED => phoebis_routing::PIN_CREATED,
     PIN_EXPIRED => phoebis_routing::PIN_EXPIRED,
     PIN_MIGRATED => phoebis_routing::PIN_MIGRATED,
+    // Rows an older build wrote carry it, so the filter keeps reading them. No build emits it.
     PIN_RELEASED => "pin_released",
     PLAN_ENDED => "plan_ended",
     PLAN_RESTORED => "plan_restored",

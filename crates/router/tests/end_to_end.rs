@@ -4629,16 +4629,24 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     )
     .await;
     assert_eq!(probes["requests"][0]["status"].as_u64(), Some(200));
-    // The operator's release settles the probe nobody came back for, which is the one wasted probe the
+    // The companion's end of the session settles the probe nobody came back for, which is the one wasted probe the
     // analytics view draws a reason row for.
     assert_eq!(
         client
-            .post(admin("/sessions/desktop/e2e-ui/release"))
+            .post(&events)
+            .header("authorization", format!("Bearer {secret}"))
+            .json(&serde_json::json!({
+                "protocol": 1,
+                "event": "session_end",
+                "session_id": "e2e-ui",
+                "instance_id": "e2e-instance",
+                "sequence": 2,
+            }))
             .send()
             .await
             .unwrap()
             .status(),
-        204
+        200
     );
     let _ = wait_json(
         &client,
@@ -4652,8 +4660,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         },
     )
     .await;
-    // The release took `e2e-ui`'s pin and the exhaustion below pins nothing, so this session of its own is the pin
-    // the pool's member holds when the pass reads `/pools`, where the members' pins must sum to more than 0.
+    // The exhaustion below pins nothing, so this session of its own holds a pin of the pool's member when the pass
+    // reads `/pools`, where the members' pins must sum to more than 0.
     let pinned = fixture_request(&client, proxy_port, &secret, "e2e-pinned")
         .send()
         .await

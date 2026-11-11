@@ -259,7 +259,6 @@ reasons! {
     ProbeTransportError => "probe_transport_error",
     Probing => "probing",
     Reauth => "reauth",
-    Released => "released",
     RepeatedColdProbe => "repeated_cold_probe",
     RequestCanceled => "request_canceled",
     RequestFailed => "request_failed",

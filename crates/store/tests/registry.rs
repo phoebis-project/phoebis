@@ -1,12 +1,13 @@
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode, Operator, Selector, Subject};
+use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
     Cancellation, CompanionPermissions, Failover, GuardrailAttachment, GuardrailRow, Identity,
-    MemberWrite, MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy,
-    PinBurn, PinMark, PinRow, PoolRow, PresetStamp, ReturnToPlan, RulesMode, Secret,
-    SessionPlacement, SlowDown, StateCause, StorageKey, Store, StoreError, Strategy,
-    SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
+    KeepaliveAgentRow, KeepaliveBatch, MemberWrite, MemoryKey, MemoryRecord, MemoryStore,
+    ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolRow, PresetStamp,
+    ReturnToPlan, RulesMode, Secret, SessionPlacement, SlowDown, StateCause, StorageKey, Store,
+    StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -260,7 +261,8 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
 }
 
 #[test]
-fn a_pin_saved_before_the_sixth_step_reads_back_as_saved_and_not_ended() {
+fn a_registry_before_the_sixth_step_keeps_its_pin_unended_and_loses_the_agent_saved_under_the_released_cause(
+) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
@@ -294,19 +296,64 @@ fn a_pin_saved_before_the_sixth_step_reads_back_as_saved_and_not_ended() {
         effort: None,
         ended: false,
     };
+    let agent = |agent_id: &str, payload: &str| KeepaliveAgentRow {
+        key_id: "k".into(),
+        key_generation: 1,
+        session_id: "s".into(),
+        agent_id: agent_id.into(),
+        record_version: 3,
+        payload: payload.into(),
+        body: None,
+        body_write: BodyWrite::Keep,
+        headers: "[]".into(),
+        body_size: 0,
+        dispatched_ms: None,
+        fast: false,
+        updated_at: 1,
+    };
     {
         let store = Store::open(&path, &key).unwrap();
         store
             .insert_account(&account("a", AccountKind::Oauth))
             .unwrap();
         store.upsert_pin(&saved).unwrap();
+        // The worker's payload carries the word in its state and its wasted probe, as the companion's release
+        // writes them, so a delete keyed on the word anywhere in the payload would take it as well.
+        store
+            .save_keepalive(&KeepaliveBatch {
+                agents: vec![
+                    agent("main", r#"{"state":"idle","reason":"scheduled"}"#),
+                    agent(
+                        "worker",
+                        r#"{"state":"released","reason":"agent_released","last_stop":"released"}"#,
+                    ),
+                ],
+                ..KeepaliveBatch::default()
+            })
+            .unwrap();
     }
-    at_version_five(&path, "");
+    // No build writes the cause any more, so the seed writes it into main's payload as an older build saved it.
+    at_version_five(
+        &path,
+        "UPDATE keepalive_agents SET payload = json_set(payload, '$.reason', 'released') \
+         WHERE agent_id = 'main';",
+    );
     let store = Store::open(&path, &key).unwrap();
     assert_eq!(
         store.load_routing().unwrap().pins,
         vec![saved],
         "the step adds the mark at its default to the pin it finds"
+    );
+    assert_eq!(
+        store
+            .load_keepalive()
+            .unwrap()
+            .1
+            .iter()
+            .map(|row| row.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        ["worker"],
+        "the agent saved under the released cause leaves and the companion's released agent stands"
     );
 }
 

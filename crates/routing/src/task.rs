@@ -187,11 +187,6 @@ pub enum RouterEvent {
         cause: Option<MoveCause>,
         at: i64,
     },
-    PinReleased {
-        pin: PinKey,
-        account_id: String,
-        at: i64,
-    },
     /// A reservation left the account's prediction without the usage that would have replaced it: the request
     /// ended without a committed usage (`cause` the relay's word for how), or the purge gave up on it (`timeout`).
     /// `shares` is the rewrite the booking carried per plan window, `age_ms` how long it stood.
@@ -1069,11 +1064,6 @@ enum Command {
         refusal: RefusalFacts,
     },
     ReleasePurge,
-    ReleaseSession {
-        key_id: String,
-        session_id: String,
-        reply: oneshot::Sender<usize>,
-    },
     Reload {
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -1591,19 +1581,6 @@ impl RouterHandle {
     /// `ask` reports as `RouterGone`.
     pub fn is_alive(&self) -> bool {
         !self.tx.is_closed()
-    }
-    pub async fn release_session(
-        &self,
-        key_id: &str,
-        session_id: &str,
-    ) -> Result<usize, RouterGone> {
-        let (k, s) = (key_id.to_string(), session_id.to_string());
-        self.ask(|reply| Command::ReleaseSession {
-            key_id: k,
-            session_id: s,
-            reply,
-        })
-        .await
     }
     pub async fn clear_cooldown(
         &self,
@@ -2130,7 +2107,7 @@ pub fn spawn(
 }
 
 /// What one wake landed, all of it routing state the store commits at `NORMAL`: a power loss may take the last of
-/// it, which the next requests rebuild, and an operator's cooldown clear or session release among it is made again.
+/// it, which the next requests rebuild, and an operator's cooldown clear among it is made again.
 /// `refused` is the first refusal's error and `skipped` how many writes the store refused on their own; `stopped` is
 /// the database-wide failure that gave up the rest of the wake, `left` how many writes it left unapplied, counting the
 /// one it met, and `remainder` those writes in order, rekeys among them; `rekey` is the refused rekey the writer tries
@@ -3407,37 +3384,6 @@ impl Task {
                 }
             }
             Command::Shutdown { .. } => unreachable!("the loop takes shutdown before handle"),
-            Command::ReleaseSession {
-                key_id,
-                session_id,
-                reply,
-            } => {
-                // Every agent's pin of the session leaves together: the session's next request starts fresh
-                // wherever each of its agents lands, not only its main turn's.
-                let gone = self.state.release_session(&key_id, &session_id);
-                // The deletes follow the records memory dropped, not the pins the release took, so a subagent whose
-                // pin sits in a failover gap loses its row too.
-                let deletes = self.first_seen_deletes(&key_id, &session_id, None);
-                let count = gone.len();
-                let now = (self.clock)();
-                for row in &gone {
-                    self.emit(RouterEvent::PinReleased {
-                        pin: row.key(),
-                        account_id: row.account_id.clone(),
-                        at: now,
-                    });
-                    if let Some(event) = released_mark(row, now) {
-                        self.emit(event);
-                    }
-                }
-                self.write(
-                    gone.iter()
-                        .map(|row| StateWrite::DeletePin(row.key()))
-                        .chain(deletes)
-                        .collect(),
-                );
-                let _ = reply.send(count);
-            }
             Command::ClearCooldown {
                 account_id,
                 scope,
@@ -4012,7 +3958,7 @@ impl Task {
                 // placement rather than a move away from it.
                 self.state.remove_pin(&key);
                 let now = (self.clock)();
-                let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, Some(now));
+                let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, now);
                 self.emit(RouterEvent::pin_expired(
                     &key,
                     &current.account_id,
@@ -4652,15 +4598,14 @@ impl Task {
     }
 
     /// One delete per first-seen record the session's end dropped from memory. The records are held, as
-    /// `end_first_seen` reads it, where a pin of the session sits in a failover gap at `gap_at` (`gapped`), and `None`
-    /// reads no gap.
+    /// `end_first_seen` reads it, where a pin of the session sits in a failover gap at `gap_at` (`gapped`).
     fn first_seen_deletes(
         &mut self,
         key_id: &str,
         session_id: &str,
-        gap_at: Option<i64>,
+        gap_at: i64,
     ) -> Vec<StateWrite> {
-        let held = gap_at.is_some_and(|now| self.gapped(key_id, session_id, now));
+        let held = self.gapped(key_id, session_id, gap_at);
         self.state
             .end_first_seen(key_id, session_id, held)
             .into_iter()
@@ -4694,7 +4639,7 @@ impl Task {
         // After the takes, so a session whose last pin the purge took ends with it.
         let mut deletes = Vec::new();
         for (row, _) in &purged.pins {
-            deletes.extend(self.first_seen_deletes(&row.key_id, &row.session_id, Some(now)));
+            deletes.extend(self.first_seen_deletes(&row.key_id, &row.session_id, now));
         }
         self.slow_down_edges(now);
         tracing::debug!(
@@ -4714,7 +4659,7 @@ impl Task {
         // A failover whose landing never came ends its session as an expiry does, unless another of its pins still
         // sits in a gap. The invalidation already took the pin's row, so only the records leave.
         for key in &lapsed {
-            deletes.extend(self.first_seen_deletes(&key.key_id, &key.session_id, Some(now)));
+            deletes.extend(self.first_seen_deletes(&key.key_id, &key.session_id, now));
         }
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {

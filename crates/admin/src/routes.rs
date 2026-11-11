@@ -121,7 +121,6 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .routes(routes!(crate::routing_log::list))
         .routes(routes!(whoami, login, logout))
         .routes(routes!(sessions::list))
-        .routes(routes!(sessions::release))
         .routes(routes!(sessions::costs))
         .routes(routes!(settings::show))
         .routes(routes!(system))
@@ -284,12 +283,6 @@ fn entity_of(
         Some("ledger") => ("ledger", None),
         Some("pools") => ("pool", segment("{id}").or(created)),
         Some("oauth") => ("pairing", segment("{id}").or(created)),
-        Some("sessions") => (
-            "session",
-            segment("{key}")
-                .zip(segment("{session}"))
-                .map(|(k, s)| format!("{k}/{s}")),
-        ),
         Some("session") => ("admin_session", None),
         _ => ("none", None),
     }

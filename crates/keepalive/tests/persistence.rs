@@ -1833,17 +1833,19 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
             ..KeepaliveBatch::default()
         })
         .unwrap();
-    let second = r.restart().await;
-    second.load_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
     assert_eq!(
-        second
+        r.engine
             .agent_status("desktop", "session", "main")
             .map(|status| status.unanswered),
         Some(1),
         "the probe saved with a null speed came back"
     );
-    second.release("desktop", "session").unwrap();
-    second.flush_persisted().await;
+    // The companion takes the restored session back and reports main released, which settles the probe as wasted.
+    r.reregister();
+    r.state("main", "released");
+    r.engine.flush_persisted().await;
     let speeds = wait_for(Duration::from_secs(30), || {
         let rows =
             r.db.read_blocking(|c| {
@@ -2356,49 +2358,6 @@ async fn a_loads_settlement_reaches_the_ledger_only_once_the_registry_holds_the_
     third.flush_persisted().await;
     settle_ledger(&r, &mut marks).await;
     assert_eq!(wasted_now(&r), BTreeMap::from([("expired".to_string(), 1)]));
-}
-
-// Apart from the workers, and waiting on the flush counts, as the case above explains.
-/// An operator's release that lands after the shutdown's snapshot is refused: the last save holds the recipe either
-/// way, and a success would tell the operator a recipe is gone that the next process restores and probes.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_release_after_the_quiesce_is_refused_and_leaves_the_final_save_authoritative() {
-    let mut r = rig(on_disk()).await;
-    r.observe("main").await;
-    r.engine.flush_persisted().await;
-    r.state("main", "idle");
-    let retained = r.engine.stats().retained_bytes;
-    assert!(retained > 0);
-    let held = registry(&r);
-    held.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let engine = r.engine.clone();
-    let shutdown = on_own_thread(async move { engine.shutdown().await });
-    // The shutdown's save has read its snapshot and waits on the held registry.
-    r.engine.persist_reached(2, 2).await;
-    let refused = r.engine.release("desktop", "session").unwrap_err();
-    assert_eq!(
-        (refused.code, refused.status),
-        ("quiesced", 503),
-        "a release after the quiesce answers unavailable"
-    );
-    assert_eq!(
-        r.engine.stats().retained_bytes,
-        retained,
-        "the recipe stays as the snapshot read it"
-    );
-    held.execute_batch("COMMIT").unwrap();
-    shutdown.join().unwrap();
-    assert!(
-        saved_agents(&r)[0].body.is_some(),
-        "the final save carries the recipe"
-    );
-    assert_eq!(saved_field(&r, "session", "main", "reason"), "scheduled");
-    settle_ledger(&r, &mut 0).await;
-    assert_eq!(
-        wasted_now(&r),
-        BTreeMap::new(),
-        "no probe settles under a release that never happened"
-    );
 }
 
 /// A save that fails at the load holds the settlements back: the ledger learns of a wasted probe only from the flush

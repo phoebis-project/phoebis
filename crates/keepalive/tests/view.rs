@@ -210,7 +210,7 @@ async fn the_day_counters_read_zero_after_midnight_without_a_probe_or_a_credit()
 }
 
 #[tokio::test]
-async fn the_five_states_follow_the_table() {
+async fn the_retained_not_retained_held_and_paused_states_follow_the_table() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     let read = |r: &Rig, agent: &str| {
@@ -248,15 +248,6 @@ async fn the_five_states_follow_the_table() {
         read(&r, "main"),
         (RecipeState::Paused, Reason::ProbeRetryLimit),
         "the 429's first rung would land at the entry's expiry"
-    );
-    r.engine
-        .release("desktop", "session")
-        .expect("a release before any quiesce");
-    assert_eq!(read(&r, "main"), (RecipeState::Ended, Reason::Released));
-    assert_eq!(
-        read(&r, "worker"),
-        (RecipeState::Ended, Reason::Released),
-        "the release ends every agent's row, the one the engine never kept a recipe for among them"
     );
 }
 

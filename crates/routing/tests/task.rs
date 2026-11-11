@@ -1768,9 +1768,15 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
         "one paused, one disconnected: only an operator can clear it"
     );
     assert_eq!(
-        handle.release_session("k", "s1").await.unwrap(),
-        1,
-        "the pin stays on the disconnected account until it is released or expires"
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.account_id.as_str()))
+            .collect::<Vec<_>>(),
+        [("s1", other.account.id.as_str())],
+        "the pin stays on the disconnected account until it expires"
     );
     store.set_enabled(&sel.account.id, true, "test").unwrap();
     store.delete_account(&other.account.id, "test").unwrap();
@@ -1782,8 +1788,12 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
     assert!(
         matches!(fourth.result, SelectResult::Selected(ref s) if s.account.id == sel.account.id)
     );
-    assert_eq!(handle.release_session("k", "s2").await.unwrap(), 1);
-    assert!(handle.pins().await.unwrap().is_empty());
+    assert!(handle
+        .pins()
+        .await
+        .unwrap()
+        .iter()
+        .any(|p| p.session_id == "s2" && p.account_id == sel.account.id));
 }
 
 #[tokio::test]
@@ -4312,18 +4322,13 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         vec![(b.as_str(), false)],
         "one ask lists every account with evidence, by id"
     );
-    // Clearing the cooldown, releasing the session, and the purge each say so, and each says what released
-    // the row it took.
+    // Clearing the cooldown and the purge each say so, and each says what released the row it took.
     assert!(handle
         .clear_cooldown(&a, CooldownScope::Account)
         .await
         .unwrap());
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, cause, .. } if account_id == a && cause == "admin")
-    );
-    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
-    assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinReleased { pin: PinKey { session_id, .. }, account_id, .. } if session_id == "s1" && account_id == b)
     );
     handle
         .select(request(&handle, Some("s2"), 2_000))
@@ -4351,9 +4356,22 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, cause, .. } if account_id == a && cause == "expired"),
         "the purge tick reached the deadline the rejection announced"
     );
-    assert!(
-        matches!(next_event(&mut events).await, RouterEvent::PinExpired { pin: PinKey { session_id, .. }, reasons, .. } if session_id == "s2" && reasons == vec!["expired"]),
-        "and the idle pin went with it"
+    // The map holds the pins in no order, so the tick's two expiries are read as a set.
+    let mut expired = Vec::new();
+    for _ in 0..2 {
+        match next_event(&mut events).await {
+            RouterEvent::PinExpired { pin, reasons, .. } => expired.push((pin.session_id, reasons)),
+            other => panic!("{other:?}"),
+        }
+    }
+    expired.sort();
+    assert_eq!(
+        expired,
+        [
+            ("s1".to_string(), vec!["expired"]),
+            ("s2".to_string(), vec!["expired"])
+        ],
+        "and the idle pins went with it"
     );
     // Last, because a fresh reading below the limit releases the rate-limit cooldown the assertions above
     // need still standing.
@@ -9679,10 +9697,27 @@ async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
         ),
         other => panic!("the round follows its decision, not {other:?}"),
     }
-    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    // The relay's release of the stored pin, which no selection renewed since the load.
+    handle
+        .report(Report::PinReleased {
+            pin: PinRef {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+                epoch: 1,
+                lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+                entrypoint: None,
+                effort: None,
+            },
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
-        phoebis_routing::RouterEvent::PinReleased { .. }
+        phoebis_routing::RouterEvent::PinExpired { reasons, .. } if reasons == vec!["client_error"]
     ));
     match next_event(&mut events).await {
         phoebis_routing::RouterEvent::MarkCleared {
@@ -14229,26 +14264,26 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
     );
     assert!(state.pin_pace(&s1.key()).is_some());
 
-    // A session's release takes its pace at once. The failover's invalidation takes the row alone, since the landing
-    // writes the fresh one under the same key, so the pace waits for the purge.
-    state.release_session("k", "s2");
-    assert!(state.pin_pace(&s2.key()).is_none());
-    state
-        .invalidate_pin(
-            &PinRef {
-                key_id: "k".into(),
-                session_id: "s1".into(),
-                agent_id: "main".into(),
-                model: "claude-sonnet-5".into(),
-                epoch: 1,
-                lane: s1.lane.clone(),
-                entrypoint: None,
-                effort: None,
-            },
-            "a",
-        )
-        .expect("the row");
-    assert!(state.pin_pace(&s1.key()).is_some());
+    // The failover's invalidation takes the row alone, since the landing writes the fresh one under the same key, so
+    // the pace waits for the purge.
+    for pin in [&s1, &s2] {
+        state
+            .invalidate_pin(
+                &PinRef {
+                    key_id: "k".into(),
+                    session_id: pin.session_id.clone(),
+                    agent_id: "main".into(),
+                    model: "claude-sonnet-5".into(),
+                    epoch: pin.epoch,
+                    lane: pin.lane.clone(),
+                    entrypoint: None,
+                    effort: None,
+                },
+                "a",
+            )
+            .expect("the row");
+    }
+    assert!(state.pin_pace(&s1.key()).is_some() && state.pin_pace(&s2.key()).is_some());
     assert_eq!(state.slow_down_state("p", "a"), Some(&entry));
 
     let purged = state.purge(&snapshot, AT + 2_000);
@@ -14258,7 +14293,10 @@ async fn a_quiet_accounts_slow_down_entry_and_a_gone_pins_pace_leave_at_the_purg
         "a holds no pin of the pool, so its entry leaves whole"
     );
     assert!(state.slow_down_state("p", "a").is_none());
-    assert!(state.pin_pace(&s1.key()).is_none(), "no pin holds the key");
+    assert!(
+        state.pin_pace(&s1.key()).is_none() && state.pin_pace(&s2.key()).is_none(),
+        "no pin holds either key"
+    );
 }
 
 /// Pool `p` slowing its pins over the tiered account `a` alone, its session `s1` pinned there burning ten input tokens
@@ -14543,9 +14581,8 @@ async fn a_purge_that_drops_a_slowed_entry_ends_its_span() {
             _ => None,
         })
         .expect("the read under 1 opened a span");
-    // The session ends and the account goes quiet: the purge drops the entry, and the span, whose factor never returned
-    // to 1, ends at the entry's last read.
-    handle.release_session("k", "s1").await.unwrap();
+    // The session idles past the pool's hour of affinity and the account goes quiet: the purge expires the pin and
+    // drops the entry, and the span, whose factor never returned to 1, ends at the entry's last read.
     now.store(AT + IN_FLIGHT_RECLAIM_MS + 1_000, Ordering::SeqCst);
     let ended = loop {
         if let RouterEvent::SlowDownEnded {
@@ -15305,63 +15342,6 @@ async fn a_start_sweeps_the_first_seen_rows_of_a_session_with_no_pin_and_keeps_a
 }
 
 #[tokio::test]
-async fn a_sessions_release_drops_its_records_so_its_return_reads_a_new_instant() {
-    let store = seeded(&["a"]);
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle
-        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
-        .await
-        .unwrap();
-    handle
-        .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 1_100))
-        .await
-        .unwrap();
-    wait_for(WRITTEN, || {
-        (stored_first_seen(&store) == [seen("s1", "main", 1_000), seen("s1", "worker-1", 1_100)])
-            .then_some(())
-    })
-    .await;
-    assert_eq!(
-        creation_times(&handle).await,
-        vec![
-            standing("s1", "main", "claude-sonnet-5", Some(1_000), Some(1_000)),
-            standing(
-                "s1",
-                "worker-1",
-                "claude-sonnet-5",
-                Some(1_100),
-                Some(1_000)
-            ),
-        ],
-        "the records stand before the release"
-    );
-    now.store(2_000, Ordering::SeqCst);
-    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 2);
-    wait_for(WRITTEN, || {
-        let load = store.load_routing().unwrap();
-        (load.pins.is_empty() && load.first_seen.is_empty()).then_some(())
-    })
-    .await;
-    now.store(3_000, Ordering::SeqCst);
-    handle
-        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 3_000))
-        .await
-        .unwrap();
-    assert_eq!(
-        creation_times(&handle).await,
-        vec![standing(
-            "s1",
-            "main",
-            "claude-sonnet-5",
-            Some(3_000),
-            Some(3_000)
-        )],
-        "the session's return is a new session"
-    );
-}
-
-#[tokio::test]
 async fn the_purge_drops_the_records_of_a_session_whose_last_pin_expires() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -15730,39 +15710,6 @@ async fn mains_record_stands_through_its_failover_gap_while_a_subagents_pin_expi
 }
 
 #[tokio::test]
-async fn a_release_while_every_pin_of_the_session_sits_in_a_failover_gap_deletes_the_gapped_subagents_row(
-) {
-    // A third account, so the return lands wherever the two failovers left.
-    let store = seeded(&["a", "b", "c"]);
-    let now = Arc::new(AtomicI64::new(1_000));
-    let (handle, worker) =
-        main_in_a_gap_beside_a_subagent(&store, &now, RouterConfig::default(), 1_200).await;
-    let on = handle.pins().await.unwrap()[0].account_id.clone();
-    handle.report(rejected(&on, worker, 1_200 + HOUR)).await;
-    wait_for(WRITTEN, || {
-        store.load_routing().unwrap().pins.is_empty().then_some(())
-    })
-    .await;
-    now.store(1_300, Ordering::SeqCst);
-    assert_eq!(
-        handle.release_session("k", "s1").await.unwrap(),
-        0,
-        "the release takes no pin"
-    );
-    now.store(1_400, Ordering::SeqCst);
-    handle
-        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_400))
-        .await
-        .unwrap();
-    restarted(handle, &store, &now).await;
-    assert_eq!(
-        stored_first_seen(&store),
-        [seen("s1", "main", 1_400)],
-        "the return's row loads and the gapped subagent's row is gone"
-    );
-}
-
-#[tokio::test]
 async fn a_lapsed_failover_keeps_the_sessions_records_while_another_of_its_pins_still_sits_in_a_gap(
 ) {
     // A third account, so the return lands wherever the two failovers left.
@@ -15876,15 +15823,18 @@ async fn a_backlog_holding_a_sessions_end_and_its_return_lands_the_new_instant_a
     let now = Arc::new(AtomicI64::new(1_000));
     let (handle, hold) = parked_writer(&store, &now).await;
     // These land ahead of the backlog: s1's one pin, and s2's main and subagent pins.
+    let mut pins = Vec::new();
     for (session, agent, at) in [
         ("s1", "main", 1_000),
         ("s2", "main", 1_000),
         ("s2", "worker-1", 1_100),
     ] {
-        handle
-            .select(turn_of(&handle, session, agent, "claude-sonnet-5", at))
-            .await
-            .unwrap();
+        pins.push(selected_pin(
+            handle
+                .select(turn_of(&handle, session, agent, "claude-sonnet-5", at))
+                .await
+                .unwrap(),
+        ));
     }
     for index in 0..WRITER_DEPTH - 2 {
         fill(&handle, index).await;
@@ -15897,8 +15847,16 @@ async fn a_backlog_holding_a_sessions_end_and_its_return_lands_the_new_instant_a
         "the last filler finds the channel full"
     );
     now.store(2_000, Ordering::SeqCst);
-    for session in ["s1", "s2"] {
-        handle.release_session("k", session).await.unwrap();
+    // Each session ends as its last pin leaves, the relay releasing every pin.
+    for pin in pins {
+        handle
+            .report(Report::PinReleased {
+                pin,
+                incarnation: 1,
+                lifecycle_generation: 1,
+                credential_generation: 1,
+            })
+            .await;
     }
     // s1 returns on another model, s2 under the key its main pin's end holds in the backlog.
     now.store(3_000, Ordering::SeqCst);
@@ -15946,10 +15904,12 @@ async fn a_sessions_end_takes_an_earlier_subagents_record_though_a_same_key_retu
     let (handle, hold) = parked_writer(&store, &now).await;
     // These land ahead of the backlog: both placements, then the subagent's pin leaving while main's stands, so its
     // end deletes no record.
-    handle
-        .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
-        .await
-        .unwrap();
+    let main = selected_pin(
+        handle
+            .select(turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000))
+            .await
+            .unwrap(),
+    );
     let worker = selected_pin(
         handle
             .select(turn_of(&handle, "s1", "worker-1", "claude-sonnet-5", 1_100))
@@ -15976,7 +15936,14 @@ async fn a_sessions_end_takes_an_earlier_subagents_record_though_a_same_key_retu
         "the last filler finds the channel full"
     );
     now.store(2_000, Ordering::SeqCst);
-    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    handle
+        .report(Report::PinReleased {
+            pin: main,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
     // The session returns under the key its main pin's end holds in the backlog.
     now.store(3_000, Ordering::SeqCst);
     handle
@@ -16026,11 +15993,14 @@ async fn sessions_that_end_and_return_within_one_instant_in_the_backlog_keep_eac
     // records.
     let sessions: Vec<String> = (0..16).map(|i| format!("s{i:02}")).collect();
     // These land ahead of the backlog.
+    let mut pins = Vec::new();
     for session in &sessions {
-        handle
-            .select(turn_of(&handle, session, "main", "claude-sonnet-5", 1_000))
-            .await
-            .unwrap();
+        pins.push(selected_pin(
+            handle
+                .select(turn_of(&handle, session, "main", "claude-sonnet-5", 1_000))
+                .await
+                .unwrap(),
+        ));
     }
     for index in 0..WRITER_DEPTH - sessions.len() + 1 {
         fill(&handle, index).await;
@@ -16043,8 +16013,15 @@ async fn sessions_that_end_and_return_within_one_instant_in_the_backlog_keep_eac
         "the last filler finds the channel full"
     );
     now.store(2_000, Ordering::SeqCst);
-    for session in &sessions {
-        assert_eq!(handle.release_session("k", session).await.unwrap(), 1);
+    for (session, pin) in sessions.iter().zip(pins) {
+        handle
+            .report(Report::PinReleased {
+                pin,
+                incarnation: 1,
+                lifecycle_generation: 1,
+                credential_generation: 1,
+            })
+            .await;
         handle
             .select(turn_of(&handle, session, "main", "claude-sonnet-5", 2_000))
             .await

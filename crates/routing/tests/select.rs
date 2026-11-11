@@ -21974,9 +21974,27 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     // T + 201 min, the first anchor: 0.87 used.
     charge(&mut st, 101, 201);
     assert!(close(cedar_five_hour(&st, T + 201 * MINUTE), 0.87));
-    // T + 220 min: the two Fable sessions end.
+    // T + 220 min: the two Fable sessions end, each pin taken off cedar as a failover's invalidation takes it, since a
+    // purge at that instant would also take the subagent, idle past its hour.
     for session in HEAVY {
-        st.release_session("k", session);
+        let current = st
+            .pin(&key(session, "main", FABLE))
+            .cloned()
+            .expect("the Fable session's pin");
+        st.invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: session.into(),
+                agent_id: "main".into(),
+                model: FABLE.into(),
+                epoch: current.epoch,
+                lane: current.lane.clone(),
+                entrypoint: None,
+                effort: None,
+            },
+            "cedar",
+        )
+        .expect("the row");
     }
     // T + 271 min 14 s: the poll reads alder's Fable week spent, its reset six days out.
     st.record_sample(
@@ -26939,8 +26957,31 @@ fn the_cedar_window_replay_ends_at_a_zero_factor_with_the_subagent_held_and_no_r
         "the subagent's 31 minutes since r-70 are a pause, so r-101 goes out unheld on no cycle"
     );
     charge(&mut st, 101, 201);
+    // The two Fable sessions end, each pin taken off cedar as a failover's invalidation takes it.
     for session in HEAVY {
-        st.release_session("k", session);
+        let current = st
+            .pin(&PinKey {
+                key_id: "k".into(),
+                session_id: session.into(),
+                agent_id: "main".into(),
+                model: FABLE.into(),
+            })
+            .cloned()
+            .expect("the Fable session's pin");
+        st.invalidate_pin(
+            &PinRef {
+                key_id: "k".into(),
+                session_id: session.into(),
+                agent_id: "main".into(),
+                model: FABLE.into(),
+                epoch: current.epoch,
+                lane: current.lane.clone(),
+                entrypoint: None,
+                effort: None,
+            },
+            "cedar",
+        )
+        .expect("the row");
     }
     st.record_sample(
         "alder",

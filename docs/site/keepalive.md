@@ -318,7 +318,7 @@ Each state reads these causes:
   `invalid_cache_control`, `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`,
   `request_too_large`, `session_limit`, `storage_limit`, `structured_output`, `unsupported_shape`.
 - `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `compacted`, `evicted`, `expired`, `expired_at_restart`,
-  `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
+  `idle_limit`, `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `reset`, `session_ended`,
   `session_expired`.
 
 A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's structural error
@@ -340,9 +340,9 @@ is turned off or the key's `keepalive` permission is taken away is judged at the
 compaction, or settles as wasted.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
-instance, the session's own expiry and an operator's release each discard every recipe of the session at once, and the
-deletion of the key that registered it, or the same key id created again, takes the previous holder's sessions and their
-recipes with it within a second of the deletion, rather than leaving them to the session expiry.
+instance and the session's own expiry each discard every recipe of the session at once, and the deletion of the key that
+registered it, or the same key id created again, takes the previous holder's sessions and their recipes with it within a
+second of the deletion, rather than leaving them to the session expiry.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
@@ -417,7 +417,7 @@ request), or when the next request after the probe reads nothing from the entry 
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
 | `idle_limit` | The idle window ran out and the last entry of the probe's chain lapsed before a real request read it. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
-| `released` | By an operator's release, the key's `keepalive` permission taken away, or the mod reporting the agent released. |
+| `released` | The key's `keepalive` permission taken away, or the mod reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
 | `session_ended` | By an explicit `session_end` report or the session's own expiry with no report. |
 
@@ -528,7 +528,6 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | transport error | `probe_transport_error` |
 | probing | `probing` |
 | needs re-auth | `reauth` |
-| released | `released` |
 | cold probes | `repeated_cold_probe` |
 | request canceled | `request_canceled` |
 | request failed | `request_failed` |

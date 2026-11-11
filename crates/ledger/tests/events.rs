@@ -2174,11 +2174,6 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             cause: None,
             at: 1,
         },
-        RouterEvent::PinReleased {
-            pin: PinKey::new("k", "s", "main", "m"),
-            account_id: "a".into(),
-            at: 1,
-        },
         RouterEvent::ReservationExpired {
             account_id: "a".into(),
             request_id: "r".into(),
@@ -2304,6 +2299,8 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
         .filter_map(event_of)
         .map(|row| row.kind)
         .collect();
+    // Written kinds are listed, and the list holds one word no event emits: `pin_released`, kept for the rows an
+    // older build stored.
     for kind in &answered {
         assert!(
             EVENT_KINDS.contains(&kind.as_str()),

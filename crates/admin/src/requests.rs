@@ -393,7 +393,7 @@ pub(crate) struct Event {
     /// - `pin_created`: a session's first placement on an account.
     /// - `pin_expired`: a pin left its account, with the facts that released it.
     /// - `pin_migrated`: a pin moved to another account, with the move's reason.
-    /// - `pin_released`: an operator released the session.
+    /// - `pin_released`: a stored event of a session an operator released by hand. No build emits it.
     /// - `plan_ended`: a profile read found the account's organization holding no plan, which flags the account
     ///   plan ended, with the read's `source` (`profile`, or `usage_403` where a usage 403 naming the organization's
     ///   refusal made the read due) and the profile's `organization_type`, `rate_limit_tier` and
@@ -476,8 +476,8 @@ pub(crate) struct Event {
     /// The kind's detail, decoded. A `pin_migrated` event's carries `agent_id`, `from_account`, `epoch`, and
     /// `reason` (`cooldown`, `drain`, `fast_lane`, `mark`, `overage`, `return_to_plan`, `shed`, or `spent`), a
     /// `pin_expired` event's `agent_id` and `reasons`, the facts the selection found against the released pin's
-    /// account (the documentation site's routing page describes them under Moves), and a `pin_released` event's
-    /// `agent_id`.
+    /// account (the documentation site's routing page describes them under Moves), and a stored `pin_released`
+    /// event's `agent_id`.
     #[schema(value_type = Option<Object>)]
     pub detail: Value,
     pub pool_id: Option<String>,

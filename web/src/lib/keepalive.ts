@@ -52,7 +52,6 @@ export const CAUSE_LABEL: Record<RecipeCause, string> = {
   probe_transport_error: 'transport error',
   probing: 'probing',
   reauth: 'needs re-auth',
-  released: 'released',
   repeated_cold_probe: 'cold probes',
   request_canceled: 'request canceled',
   request_failed: 'request failed',
@@ -122,7 +121,6 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   probe_transport_error: 'The last probe failed on the transport before an answer came back. The next attempt is scheduled on the retry ladder before the entry expires.',
   probing: 'A probe is in flight right now.',
   reauth: 'The account needs re-pairing or funding before anything can be sent on it.',
-  released: 'An operator released this session, so every recipe on it was dropped.',
   repeated_cold_probe:
     'The probe read no cache for the prefix it was meant to keep warm, so that entry had already expired and the next turn writes regardless. Consecutive cold probes past the cold probe limit pause the recipe until the next real request.',
   request_canceled: "The agent's request was canceled before it finished, so the last answered request's recipe stays armed where one was, and the canceled body is never probed.",
@@ -238,13 +236,13 @@ function isReleasedLine(line: Pick<SessionLine, 'lifecycle'>): boolean {
 }
 
 /**
- * A session the engine is done with: the row's recipe summary reads the cause `session_ended` or `released`, each of
- * which drops every recipe of the session, or every line it draws is a released one. Such a session keeps its lines,
- * so its probe facts stay in view once it is shown.
+ * A session the engine is done with: the row's recipe summary reads the cause `session_ended`, which drops every
+ * recipe of the session, or every line it draws is a released one. Such a session keeps its lines, so its probe facts
+ * stay in view once it is shown.
  */
 export function isFinished(session: Pick<Session, 'keepalive'>, lines: readonly Pick<SessionLine, 'lifecycle'>[]): boolean {
   const { cause } = session.keepalive;
-  return cause === 'session_ended' || cause === 'released' || (lines.length > 0 && lines.every(isReleasedLine));
+  return cause === 'session_ended' || (lines.length > 0 && lines.every(isReleasedLine));
 }
 
 /** A row's or a line's Status word: a lifecycle word, `finished` for a session the engine is done with, `unreported`

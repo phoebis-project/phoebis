@@ -1341,9 +1341,11 @@ async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
         .set_pool_members("main", &[member("a", 0), member("b", 1)], "test")
         .unwrap();
     h.router.reload().await.unwrap();
-    // The first turn pinned the session to `b`; releasing it lets the second turn's selection start over from
-    // priority, so it tries `a` first and only reaches `b` (with its own earlier record intact) on a failover.
-    h.router.release_session("desktop", "s-1").await.unwrap();
+    // The first turn pinned the session to `b`. Past the pool's hour of affinity the pin has idled out, so the second
+    // turn's selection starts over from priority: it tries `a` first and only reaches `b` (with its own earlier
+    // record intact) on a failover.
+    h.clock
+        .store(NOW + 3_600_000 + 1_000, std::sync::atomic::Ordering::SeqCst);
     up.add_credential_rule(
         A,
         "/v1/messages",

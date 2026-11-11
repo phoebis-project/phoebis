@@ -120,10 +120,9 @@ test('requestsRange picks the narrowest range that covers the last request, with
   assert.equal(d.requestsRange(null, NOW), null);
 });
 
-test('isFinished reads a session whose main ended with it or was released, or whose every line the mod released', () => {
+test('isFinished reads a session whose main ended with it, or whose every line the mod released', () => {
   const session = (cause) => ({ keepalive: { cause, nextProbeAt: null } });
   assert.equal(d.isFinished(session('session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('released'), [{ agentId: 'main', lifecycle: 'idle' }]), true, 'the cause alone, with a line the mod kept');
   assert.equal(d.isFinished(session('agent_released'), [{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
   assert.equal(d.isFinished(session('probing'), [{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
   assert.equal(d.isFinished(session('scheduled'), []), false);

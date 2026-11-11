@@ -1,17 +1,16 @@
-//! The sessions view: the live pins joined with what the ledger saw, the release that expires a pin, and the
-//! per-model cost card the console shows beside them.
+//! The sessions view: the live pins joined with what the ledger saw, and the per-model cost card the console shows
+//! beside them.
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
-use axum::http::{HeaderValue, StatusCode};
+use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_routing::{BurnRates, BurnUnit, PinStanding, FIVE_HOUR, MAIN_AGENT, SEVEN_DAY};
 use utoipa::ToSchema;
 
-use crate::openapi::{ErrorBody, LedgerFailure, RouterUnavailable};
-use crate::routes::{failure, router_unavailable};
+use crate::openapi::{LedgerFailure, RouterUnavailable};
+use crate::routes::router_unavailable;
 use crate::session_spend::{AgentRequests, SessionDay, SessionSpend};
 use crate::AdminState;
 
@@ -791,57 +790,6 @@ pub(crate) async fn costs(State(state): State<Arc<AdminState>>) -> Response {
             .collect(),
     })
     .into_response()
-}
-
-/// Release a session's pin and recipe.
-#[utoipa::path(
-    post,
-    path = "/admin/sessions/{key}/{session}/release",
-    operation_id = "session_release",
-    tag = "Sessions",
-    params(
-        ("key" = String, Path, description = "The key's id"),
-        ("session" = String, Path, description = "The client's own session id"),
-    ),
-    responses(
-        (status = 204, description = "Releases both the router pin and the keepalive recipe for the pair.",
-            headers(("x-phoebis-released" = String, description = "The pin count"))),
-        (status = 404, description = "`no pin or recipe for this session`", body = ErrorBody, example = json!({"error": "no pin or recipe for this session"})),
-        (status = 503, description = "- `the keepalive engine is shutting down`\n- `the router is not available`", body = ErrorBody, example = json!({"error": "the keepalive engine is shutting down"})),
-    ),
-)]
-pub(crate) async fn release(
-    State(state): State<Arc<AdminState>>,
-    Path((key, session)): Path<(String, String)>,
-) -> Response {
-    // A historical row's key id is not the live snapshot's: the console never offers the action on it, and a
-    // deleted key's session lingering in the engine must not be reachable by naming it directly either.
-    if state.router.snapshot().key(&key).is_none() {
-        return failure(StatusCode::NOT_FOUND, "no pin or recipe for this session");
-    }
-    let pins = match state.router.release_session(&key, &session).await {
-        Ok(n) => n,
-        Err(_) => return router_unavailable(),
-    };
-    let recipes = match state.keepalive.release(&key, &session) {
-        Ok(recipes) => recipes,
-        // The engine has quiesced for the shutdown, so its final save stays what the next process restores.
-        Err(_) => {
-            return failure(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "the keepalive engine is shutting down",
-            )
-        }
-    };
-    if pins == 0 && recipes == 0 {
-        return failure(StatusCode::NOT_FOUND, "no pin or recipe for this session");
-    }
-    let mut r = StatusCode::NO_CONTENT.into_response();
-    r.headers_mut().insert(
-        "x-phoebis-released",
-        HeaderValue::from_str(&pins.to_string()).expect("digits"),
-    );
-    r
 }
 
 #[cfg(test)]

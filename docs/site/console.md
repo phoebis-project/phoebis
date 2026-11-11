@@ -1135,26 +1135,25 @@ of a session id. Add filter opens a "Filter by" field over two groups: Session, 
 Client, Companion, Finished sessions, Forked sessions, Key, Pool and Slowed), and Agents, which reads each agent line,
 main's among them (Account, Agent type, Cache, Effort, Model, Released agents and Status). Filters are AND: a session is
 listed when it passes every Session filter and, while Agents filters stand, when one of its lines passes every Agents
-filter together. A finished session, one whose main agent ended with the session or was released or whose every agent
-the mod released, stays out unless Finished sessions stands, and Released agents draws a live session's released agents,
-which stay hidden without it. Status reads each line's word as the Agents table draws it, so main's line of a session no
-mod reports matches `unreported` whatever word the engine holds for it. The router lists a companion session within the
-session expiry and a session no mod reports while the latest of its last use, its last request and, where its companion
-ended the session, that end is within the non-companion timeout of the Settings page
-(`sessions.non_companion_idle_seconds`, 1h by default), and the view reads that list as it is. Each filter off its
-default stands as a chip on a line under the bar: a click on the chip opens its values again, its x removes it, and from
-two chips on "Clear all" returns every filter to its default. An Agents filter's chip reads `(any agent)` after its
-values in the secondary ink, its hover ending "matched by any one agent". The filters live in the page's address, so a
-reload or a shared link keeps them, and a bare `/sessions` reads the defaults. Where a read the rows wait on failed
-before it answered, the sessions, the recipes or the keys, a line under the bar names it,
-`Could not load the {read}: {reason}`, with Try again, and a failed accounts read draws a line of its own. The head
-under the bar reads "Every session the router lists: what it runs, where it is pinned, what it has spent and whether its
-prompt cache is warm." with the disclosure "How pins and recipes work", whose paragraph says what a pin and a recipe
-are, and a "Cost reference" link that opens the dialog on Plan rates. Auto reload starts at 5 s and reads the accounts,
-the recipes and the sessions at that one interval, and it waits while the Cost reference dialog, the Release question, a
-row's menu or a popover of the bar is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the
-mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under [The five
-states](keepalive.md#the-five-states).
+filter together. A finished session, one whose main agent ended with the session or whose every agent the mod released,
+stays out unless Finished sessions stands, and Released agents draws a live session's released agents, which stay hidden
+without it. Status reads each line's word as the Agents table draws it, so main's line of a session no mod reports
+matches `unreported` whatever word the engine holds for it. The router lists a companion session within the session
+expiry and a session no mod reports while the latest of its last use, its last request and, where its companion ended
+the session, that end is within the non-companion timeout of the Settings page (`sessions.non_companion_idle_seconds`,
+1h by default), and the view reads that list as it is. Each filter off its default stands as a chip on a line under the
+bar: a click on the chip opens its values again, its x removes it, and from two chips on "Clear all" returns every
+filter to its default. An Agents filter's chip reads `(any agent)` after its values in the secondary ink, its hover
+ending "matched by any one agent". The filters live in the page's address, so a reload or a shared link keeps them, and
+a bare `/sessions` reads the defaults. Where a read the rows wait on failed before it answered, the sessions, the
+recipes or the keys, a line under the bar names it, `Could not load the {read}: {reason}`, with Try again, and a failed
+accounts read draws a line of its own. The head under the bar reads "Every session the router lists: what it runs,
+where it is pinned, what it has spent and whether its prompt cache is warm." with the disclosure "How pins and recipes
+work", whose paragraph says what a pin and a recipe are, and a "Cost reference" link that opens the dialog on Plan
+rates. Auto reload starts at 5 s and reads the accounts, the recipes and the sessions at that one interval, and it waits
+while the Cost reference dialog, a row's menu or a popover of the bar is open. The probes and the recipe are explained
+on [Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under [The
+five states](keepalive.md#the-five-states).
 
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
 warming." on hover, offers "Expand all" or "Collapse all", and its summary line reads the rows the filters keep: `{k}
@@ -1220,10 +1219,8 @@ session expiry." While the filters hide every row the router lists, the card rea
 with `{h} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has a ledgered request, each disabled
-with "No ledgered request yet" on hover before it, "View in routing log", which opens the log on that session's
-decisions an hour either side of its last activity, and "Release". Release asks "Release session": `Session {id} loses
-its pin to {account} and every recipe on it is dropped. The next request picks an account again and the prompt cache on
-{account} goes cold.`, and answers "Session released".
+with "No ledgered request yet" on hover before it, and "View in routing log", which opens the log on that session's
+decisions an hour either side of its last activity.
 
 Opening a row reads, on a finished session, "The mod released every agent of this session. Their records keep their
 slots of the cap for one cache TTL after the release and then leave the engine." first, then two grids of facts side by
@@ -1552,7 +1549,7 @@ panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the 
 | pin created | A placement pinned a session to an account. |
 | pin expired | A pin was released, idle past the pin window or for the reasons it lists. |
 | pin moved | A rule or a failover moved a session's pin to another account, with the destination's fit and runway where a rule's gate read it and the failover's cause. |
-| pin released | An operator released a session's pin by hand. |
+| pin released | A stored event of a session an operator released by hand. No build writes it any more. |
 | plan ended | A profile read found the account's organization holding no plan, so the account is flagged plan ended, with the read's source (the profile read, or the usage 403 that made it due) and the profile's organization type, rate-limit tier and subscription status. |
 | plan restored | The account's plan-ended flag cleared, with its source (a profile read that found a plan, or a pairing confirm) and the profile's organization type, rate-limit tier and subscription status. |
 | poll backoff ended | The usage poll answered cleanly again after backing off, or the account's plan ended while a run was open. The panel reads Resumed under `clean_poll` and Ended by the plan's end, with the pause's instant, under `plan_ended`. |

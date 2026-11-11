@@ -360,7 +360,7 @@ async fn a_pool_answers_its_resolved_ceilings_and_a_pool_with_no_member_answers_
 use phoebis_keepalive::Event;
 
 #[tokio::test]
-async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_discards_them() {
+async fn the_sessions_view_carries_the_companion_and_the_recipes() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
@@ -602,41 +602,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             overview["limits"]["agents"]["count"].as_u64()
         ),
         (Some(1), Some(0), Some(1), Some(1))
-    );
-    // Release discards the recipes; with no pin the router releases nothing, and the route still answers 204.
-    let released = post(
-        &parts.app,
-        "/admin/sessions/desktop/s1/release",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(released.status(), 204);
-    let recipes = json(get(&parts.app, "/admin/keepalive/recipes", Some(&cookie)).await).await;
-    assert_eq!(
-        recipes["recipes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| (
-                r["agent_id"].as_str(),
-                r["state"].as_str(),
-                r["cause"].as_str()
-            ))
-            .collect::<Vec<_>>(),
-        [(Some("main"), Some("ended"), Some("released"))],
-        "the release discards the recipe and the agent's row stays with the cause"
-    );
-    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let row = listed["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["session_id"] == "s1")
-        .unwrap();
-    assert!(
-        row["keepalive"]["state"].is_null() && row["keepalive"]["cause"].is_null(),
-        "the session's summary reads main's recipe, which the release discarded"
     );
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(
@@ -1500,7 +1465,7 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
     );
     assert!(
         live["keepalive"]["state"].is_string(),
-        "the live generation carries a recipe before the release, so the release below can be seen to discard it"
+        "the live generation carries the recipe its request armed"
     );
     let historical = rows
         .iter()
@@ -1514,36 +1479,6 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
             historical["keepalive"]["state"].is_null()
         ),
         (Some(true), Some("none"), Some(0), true)
-    );
-    let released = post(
-        &parts.app,
-        "/admin/sessions/desktop/s1/release",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(released.status(), 204);
-    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let rows: Vec<_> = listed["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|r| r["session_id"] == "s1")
-        .collect();
-    let live = rows.iter().find(|r| r["key_generation"] == g).unwrap();
-    assert!(
-        live["keepalive"]["state"].is_null(),
-        "the release discarded the live generation's recipe"
-    );
-    let historical = rows.iter().find(|r| r["key_generation"] == g - 1).unwrap();
-    assert_eq!(
-        (
-            historical["historical"].as_bool(),
-            historical["companion"].as_str(),
-            historical["agents"].as_u64()
-        ),
-        (Some(true), Some("none"), Some(0)),
-        "a release reaches the live generation alone; the historical row is untouched"
     );
 }
 
@@ -1935,10 +1870,9 @@ async fn a_raw_callers_session_with_no_companion_lists_its_pin_as_mains_line() {
 }
 
 /// A deleted key's session outlives the key in the engine until the engine's next tick ends it: the row must read
-/// as historical, with no companion, agents, or recipe, and the console must not be able to release it by naming
-/// it directly.
+/// as historical, with no companion, agents, or recipe.
 #[tokio::test]
-async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_is_refused() {
+async fn a_deleted_keys_session_is_historical_with_no_companion() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
@@ -2009,18 +1943,6 @@ async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_
         ),
         (Some(true), Some("none"), Some(0), true),
         "the deleted key's session outlives it in the engine, but the row reads as historical and read-only"
-    );
-    assert_eq!(
-        post(
-            &parts.app,
-            "/admin/sessions/desktop/s1/release",
-            "",
-            Some(&cookie)
-        )
-        .await
-        .status(),
-        404,
-        "the console cannot release a historical row by naming it directly"
     );
     let held =
         |engine: &phoebis_keepalive::Engine| engine.sessions().iter().any(|s| s.session_id == "s1");
@@ -2255,31 +2177,6 @@ async fn a_probe_leaves_the_keys_last_used_at_alone() {
         after, touched,
         "a probe must not move the key's last_used_at"
     );
-}
-
-/// The engine refuses an operator's release once the shutdown has quiesced it, so the final save stays what the next
-/// process restores: the route answers 503 rather than reporting a release that changed nothing.
-#[tokio::test]
-async fn a_release_after_the_engines_quiesce_answers_503() {
-    let parts = common::admin_parts_full().await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
-    post(
-        &parts.app,
-        "/admin/keys",
-        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
-        Some(&cookie),
-    )
-    .await;
-    parts.keepalive.quiesce();
-    let released = post(
-        &parts.app,
-        "/admin/sessions/desktop/s1/release",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(released.status(), 503);
 }
 
 #[tokio::test]

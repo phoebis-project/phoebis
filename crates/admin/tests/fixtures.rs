@@ -2374,10 +2374,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .map(|k| k.to_string())
             .collect::<std::collections::BTreeSet<_>>()
     };
+    // `pin_released` stands in the kinds for the rows an older build stored, and no build writes it, so the wait reads
+    // every other kind.
+    let written: Vec<&str> = phoebis_ledger::EVENT_KINDS
+        .iter()
+        .copied()
+        .filter(|kind| *kind != "pin_released")
+        .collect();
     // The guardrail block's record is try-sent, so the capture waits for it beside the kinds.
     let log = wait_json(app, &log_route, &cookie, |log| {
         kinds_of(log, "decision") == named(phoebis_ledger::DECISION_KINDS)
-            && kinds_of(log, "event") == named(phoebis_ledger::EVENT_KINDS)
+            && kinds_of(log, "event") == named(&written)
             && log["rows"].as_array().unwrap().iter().any(|row| {
                 row["type"] == "decision"
                     && row["kind"] == "refused"
@@ -2892,7 +2899,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
         })
         .await;
 
-    // An operator clears a cooldown and releases a session.
+    // An operator clears a cooldown.
     let cleared = common::delete(
         app,
         "/admin/accounts/business/cooldowns/model:claude-haiku-4-5-20251001",
@@ -2900,14 +2907,6 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
     )
     .await;
     assert_eq!(cleared.status(), 204);
-    let released = post(
-        app,
-        "/admin/sessions/desktop/s-static/release",
-        "",
-        Some(cookie),
-    )
-    .await;
-    assert_eq!(released.status(), 204);
 
     // Exhausted: every member cooling.
     for account_id in ["business", "direct"] {

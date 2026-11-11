@@ -776,11 +776,9 @@ whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `
 whose destination emptied. A pin whose creating request was answered 400, 403 or 404, or was bound to its account and
 ended at an authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the
 session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
-is placed afresh rather than moved. Releasing a session by hand, from the Sessions view
-([Sessions](console.md#sessions)) or `POST /admin/sessions/{key}/{session}/release`, expires its pin the same way. In
-the routing log, a `placed` decision whose session's pin the selection released off another account, for any of the
-reasons above, names that account as its source (`from_account_id`), and one placed after the purge took the row, a
-release by hand or a client error names none.
+is placed afresh rather than moved. In the routing log, a `placed` decision whose session's pin the selection released
+off another account, for any of the reasons above, names that account as its source (`from_account_id`), and one placed
+after the purge took the row or a client error names none.
 
 ### Slow-down
 

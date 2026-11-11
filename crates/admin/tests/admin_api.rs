@@ -6925,8 +6925,7 @@ async fn a_pin_used_within_the_hour_names_its_session_to_the_fork_facts_when_its
 }
 
 #[tokio::test]
-async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_releasing_it_frees_the_pin(
-) {
+async fn a_request_groups_under_its_own_session_with_that_sessions_pin() {
     use common::{generation, login, post, wait_json};
     use phoebis_ledger::{EventRecord, Record, RequestRecord};
     use std::sync::atomic::Ordering;
@@ -7062,19 +7061,6 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
             .iter()
             .any(|e| e["kind"] == "pin_migrated"),
         "the request's events carry the move of the pin it was routed by: {detail}"
-    );
-
-    let released = post(
-        &parts.app,
-        "/admin/sessions/desktop/s1/release",
-        "",
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(released.status(), 204);
-    assert!(
-        parts.router.pins().await.unwrap().is_empty(),
-        "releasing the session frees its pin"
     );
 }
 

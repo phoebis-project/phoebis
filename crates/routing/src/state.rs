@@ -3751,23 +3751,6 @@ impl RoutingState {
         (rekey, merged_away)
     }
 
-    /// Every agent's pin of the session, released together: the session leaves every account it was on, not
-    /// just its main turn's.
-    pub fn release_session(&mut self, key_id: &str, session_id: &str) -> Vec<PinRow> {
-        let keys: Vec<_> = self
-            .pins
-            .keys()
-            .filter(|k| k.key_id == key_id && k.session_id == session_id)
-            .cloned()
-            .collect();
-        let gone = keys.iter().filter_map(|key| self.take_pin(key)).collect();
-        // The session ended, so its paces leave with it, one whose pin a failover took and no landing wrote back among
-        // them.
-        self.pin_paces
-            .retain(|key, _| !(key.key_id == key_id && key.session_id == session_id));
-        gone
-    }
-
     pub fn pins(&self) -> Vec<PinRow> {
         let mut v: Vec<_> = self.pins.values().cloned().collect();
         v.sort_by(|a, b| a.key_parts().cmp(&b.key_parts()));
