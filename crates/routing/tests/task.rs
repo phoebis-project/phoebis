@@ -9330,7 +9330,8 @@ async fn sub_after_a_restart(
 }
 
 #[tokio::test]
-async fn every_set_and_clear_of_an_ended_agents_mark_reaches_the_store_and_a_restart_reads_it() {
+async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request_survive_a_restart()
+{
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let subagent = |handle: &RouterHandle, request_id: &str, at: i64| SelectRequest {
@@ -9421,11 +9422,43 @@ async fn every_set_and_clear_of_an_ended_agents_mark_reaches_the_store_and_a_res
         })
         .await;
     handle.shutdown().await.unwrap();
-    let (_, (account, ended)) = sub_after_a_restart(&store, &now).await;
+    let (handle, (account, ended)) = sub_after_a_restart(&store, &now).await;
     assert_eq!(
         (account.as_str(), ended),
         (other, true),
         "the renewal's mark is written with the moved pin"
+    );
+
+    // The agent sends again on its pin, which clears the mark, and that request's stream ends its turn: the renewal
+    // names the pin's own epoch, so the mark reaches the store on the renewal's own write of the row.
+    now.store(5_000, Ordering::SeqCst);
+    let served = selected_pin(
+        handle
+            .select(subagent(&handle, "r-5", 5_000))
+            .await
+            .unwrap(),
+    );
+    handle
+        .report(Report::PinRenewed {
+            pin: served,
+            now: 6_000,
+            usage: Some(PinUsage {
+                input: 100,
+                ..PinUsage::default()
+            }),
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn_end: RenewalEnd::AgentEnded,
+        })
+        .await;
+    handle.shutdown().await.unwrap();
+    let (_, (account, ended)) = sub_after_a_restart(&store, &now).await;
+    assert_eq!(
+        (account.as_str(), ended),
+        (other, true),
+        "the renewal's own row carries the mark"
     );
 }
 

@@ -663,14 +663,14 @@ subagent whose last answer stopped with `end_turn` or an agent the companion mod
 and out of every figure the router reads an account's pins for (the burn, a fresh session's prior, the model weeks a
 round tests, a move's fit, the projection and the slow-down's shares), and the round's record keeps its row under
 `ended`. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
-and the agent's next request brings the pin back into the walk and its burn back into every figure and the projection
-that fires a round (see **The projection**, above). The mark is stored with the pin, so a restart keeps such a pin out
-of every figure until the agent's next request. A pin with no priced burn on the fired window, such as a classifier pin
-whose calls took no share of a plan window, is out of the round too (`no_burn`), since it has nothing to shed. The round
-then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
-pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round
-never marks a pin whose mark would leave the account's other unmarked priced pins with less than a tenth of the round's
-burn sum on the window (`last_pin`), so a pool with one session burning there sheds nothing, no round takes all of an
+and the agent's next request brings the pin back into the walk and into every figure, the projection that fires a round
+among them (see **The projection**, above). The mark is stored with the pin, so a restart keeps such a pin out of every
+figure until the agent's next request. A pin with no priced burn on the fired window, such as a classifier pin whose
+calls took no share of a plan window, is out of the round too (`no_burn`), since it has nothing to shed. The round then
+walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A pin
+with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round never
+marks a pin whose mark would leave the account's other unmarked priced pins with less than a tenth of the round's burn
+sum on the window (`last_pin`), so a pool with one session burning there sheds nothing, no round takes all of an
 account's burn, and a pin with almost no burn does not make its heavy neighbor markable. A pin whose burn the cost model
 cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess, and while such a
 pin stands unmarked it is the pin that stays, so the round refuses no mark as `last_pin`. A pin the shed rule's gate
