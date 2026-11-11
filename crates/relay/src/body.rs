@@ -79,8 +79,7 @@ pub enum AccountUuidEdit<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct VersionCheck<'a> {
     pub client_version: &'a str,
-    /// One sample per text block of the first user message, followed by the empty prompt's padding. The suffix
-    /// reproduces when any sample does.
+    /// One sample per text block of the first user message. The suffix reproduces when any sample does.
     pub prompt_units: &'a [[u16; 3]],
 }
 
@@ -639,6 +638,7 @@ pub(crate) fn version_drift(
     let reproduced = check
         .prompt_units
         .iter()
+        .chain([&crate::facts::EMPTY_PROMPT_UNITS])
         .any(|units| crate::billing::cc_version(check.client_version, *units) == value);
     (!reproduced).then_some(DriftKind::VersionSuffix)
 }
@@ -1521,11 +1521,7 @@ mod tests {
         };
         let anchored = body_with(&crate::billing::cc_version("2.1.292", units(blocks[2])));
         let facts = crate::facts::BodyFacts::read(&anchored);
-        assert_eq!(
-            facts.prompt_units.len(),
-            6,
-            "one candidate per text block and the empty prompt's"
-        );
+        assert_eq!(facts.prompt_units.len(), 5, "one candidate per text block");
         assert_eq!(
             version_drift(
                 facts.cc_version.as_deref(),

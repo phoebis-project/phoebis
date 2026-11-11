@@ -16,9 +16,7 @@ pub struct BodyFacts {
     /// matching the client's own JavaScript string indexing. A text too short for a position reads `b'0' as u16` there.
     /// The client hashes the first text of its first non-meta user message for the version suffix, and the meta flag
     /// never reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
-    /// user's own words all land as text blocks of one message, so every block is a candidate. The padding of the empty
-    /// prompt follows them in every body, since the client stamps a resumed request before it writes the resume
-    /// placeholder and a custom agent of a forked skill stamps its first request over the empty prompt.
+    /// user's own words all land as text blocks of one message, so every block is a candidate.
     pub prompt_units: Vec<[u16; 3]>,
     /// The first user message is the client's resume placeholder, so its text is no anchor the stamp was computed over.
     pub resumed: bool,
@@ -128,7 +126,7 @@ impl BodyFacts {
             .is_ok_and(|n| n >= 1);
         let Some(root) = phoebis_guardrails::parse_body(body) else {
             let facts = BodyFacts {
-                prompt_units: vec![[b'0' as u16; 3]],
+                prompt_units: Vec::new(),
                 resumed: false,
                 turn_origin: None,
                 entrypoint: None,
@@ -166,17 +164,13 @@ impl BodyFacts {
         let resumed = first_user.is_some_and(|message| {
             phoebis_guardrails::texts(message).next() == Some(RESUME_PLACEHOLDER)
         });
-        let mut prompt_units = first_user
+        let prompt_units = first_user
             .map(|message| {
                 phoebis_guardrails::texts(message)
                     .map(prompt_units_of)
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        // The client stamps a resumed request over a first user message that holds tool results alone and writes
-        // the placeholder afterwards, and a custom agent of a forked skill stamps its first request over the empty
-        // prompt on a conversation that resumes nothing, so the empty prompt is a candidate for every body.
-        prompt_units.push([b'0' as u16; 3]);
         // Read once and shared by every field the line may carry, so a change to one field's spelling rule
         // never has to re-walk the body to find the text the others already have in hand.
         let first_system_text = root
@@ -404,6 +398,9 @@ fn prompt_units_of(text: &str) -> [u16; 3] {
     [at(4), at(7), at(20)]
 }
 
+/// `prompt_units_of("")`: every sampled position of the empty prompt pads with `b'0'`.
+pub(crate) const EMPTY_PROMPT_UNITS: [u16; 3] = [b'0' as u16; 3];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,10 +466,7 @@ mod tests {
     #[test]
     fn the_prompt_units_of_a_short_prompt_pad_with_zero() {
         let body = br#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        assert_eq!(
-            BodyFacts::read(body).prompt_units,
-            vec![[b'0' as u16; 3], [b'0' as u16; 3]]
-        );
+        assert_eq!(BodyFacts::read(body).prompt_units, vec![[b'0' as u16; 3]]);
     }
 
     #[test]
@@ -486,8 +480,7 @@ mod tests {
             BodyFacts::read(body).prompt_units,
             vec![
                 [b't' as u16, b'-' as u16, b'o' as u16],
-                [b'4' as u16, b'7' as u16, b'X' as u16],
-                [b'0' as u16; 3]
+                [b'4' as u16, b'7' as u16, b'X' as u16]
             ]
         );
     }
@@ -500,14 +493,14 @@ mod tests {
         let body = format!(r#"{{"messages":[{{"role":"user","content":"{text}"}}]}}"#);
         assert_eq!(
             BodyFacts::read(body.as_bytes()).prompt_units,
-            vec![[b'c' as u16, b'f' as u16, b's' as u16], [b'0' as u16; 3]]
+            vec![[b'c' as u16, b'f' as u16, b's' as u16]]
         );
     }
 
     #[test]
-    fn an_unparseable_body_reads_with_zeroed_units() {
+    fn an_unparseable_body_reads_with_no_units() {
         let facts = BodyFacts::read(b"not json");
-        assert_eq!(facts.prompt_units, vec![[b'0' as u16; 3]]);
+        assert_eq!(facts.prompt_units, Vec::<[u16; 3]>::new());
     }
 
     #[test]
@@ -896,7 +889,7 @@ mod tests {
         assert_eq!(facts.line, AttributionLine::Present);
         assert_eq!(
             facts.prompt_units,
-            vec![[0xFFFD, u16::from(b'g'), u16::from(b't')], [b'0' as u16; 3]]
+            vec![[0xFFFD, u16::from(b'g'), u16::from(b't')]]
         );
         assert_eq!(
             crate::body::version_drift(

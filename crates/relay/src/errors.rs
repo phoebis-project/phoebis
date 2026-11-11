@@ -255,6 +255,36 @@ fn contract_message(item: &str) -> &'static str {
     }
 }
 
+/// A drift refusal's message to the client and the advice its warn gives the operator, decided in one arm per case
+/// so the two agree on whether a re-pin cures the drift.
+pub(crate) fn drift_words(kind: DriftKind, resumed: bool) -> (&'static str, &'static str) {
+    match (kind, resumed) {
+        (DriftKind::VersionSuffix, true) => (
+            "the conversation was resumed, and the client's version suffix does not reproduce \
+             from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
+             client version",
+            "Re-pin the router to that client",
+        ),
+        // The words name the anchors the check tried and the marks an operator reads off the refused
+        // request, so a subagent that anchored its suffix elsewhere is told apart from a client that moved.
+        (DriftKind::VersionSuffix, false) => (
+            "the client's version suffix does not reproduce from any text block of the first user \
+             message, the empty prompt or the version the user agent names, the anchors this build \
+             tries for every request. Where the session's main turns pass, re-pinning the router does \
+             not help: the refused body shows where this client anchored the suffix, and its billing \
+             line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and \
+             x-claude-code-agent-type headers, where the client sends them, tell a subagent's \
+             request apart",
+            "Where the session's main turns pass, re-pinning the router does not help",
+        ),
+        (DriftKind::Hash, _) => (
+            "the client's billing hash does not reproduce under the Claude Code release this \
+             build is measured against. Re-pin the router to this client version",
+            "Re-pin the router to that client",
+        ),
+    }
+}
+
 pub(crate) fn relay_failure(error: &RelayError) -> Failure {
     match error {
         // The account's own stored uuid is what fails, which no wait and no resend heals, so the request files as
@@ -392,28 +422,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             status: StatusCode::FORBIDDEN,
             error_type: "permission_error",
             code: "client_drift",
-            message: Cow::Borrowed(match (kind, resumed) {
-                (DriftKind::VersionSuffix, true) => {
-                    "the conversation was resumed, and the client's version suffix does not reproduce \
-                     from the resume placeholder, the empty prompt or the user agent. Re-pin the router to this \
-                     client version"
-                }
-                // The words name the anchors the check tried and the marks an operator reads off the refused
-                // request, so a subagent that anchored its suffix elsewhere is told apart from a client that moved.
-                (DriftKind::VersionSuffix, false) => {
-                    "the client's version suffix does not reproduce from any text block of the first user \
-                     message, the empty prompt or the version the user agent names, the anchors this build \
-                     tries for every request. Where the session's main turns pass, re-pinning the router does \
-                     not help: the refused body shows where this client anchored the suffix, and its billing \
-                     line's cc_is_subagent and the x-claude-code-agent-id, x-claude-code-request-class and \
-                     x-claude-code-agent-type headers, where the client sends them, tell a subagent's \
-                     request apart"
-                }
-                (DriftKind::Hash, _) => {
-                    "the client's billing hash does not reproduce under the Claude Code release this \
-                     build is measured against. Re-pin the router to this client version"
-                }
-            }),
+            message: Cow::Borrowed(drift_words(*kind, *resumed).0),
             retry_after: None,
             no_retry: true,
             class: FailureClass::Refused,

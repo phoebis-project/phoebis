@@ -32,7 +32,7 @@ use phoebis_routing::{
     ConversationLookup, EvidenceSource, Exhaustion, HoldFacts, HoldReason, JudgedCharge, KeyPermit,
     LaneFacts, OverageEvidence, PinRef, PinnedObstacle, PredecessorQuery, Presented, Refusal,
     RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError, RouterHandle, SelectRequest,
-    SelectResult, Selection, SelectionTrace, SharedWindows, BUDGET_WINDOW, MAIN_AGENT,
+    SelectResult, Selection, SelectionTrace, BUDGET_WINDOW, MAIN_AGENT,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
@@ -63,10 +63,10 @@ use crate::classify::{
 use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, body_budget_exhausted, key_body_reads, key_refusal, no_store_answer,
-    relay_failure, Failure, FailureClass, ACCOUNT_CANCELED, CLIENT_GONE_CODE, GUARDRAIL_BLOCKED,
-    METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE,
-    UPSTREAM_UNREACHABLE,
+    accounts_at_cap, body_budget_exhausted, drift_words, key_body_reads, key_refusal,
+    no_store_answer, relay_failure, Failure, FailureClass, ACCOUNT_CANCELED, CLIENT_GONE_CODE,
+    GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE,
+    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_failure, exhaustion_response, pool_moved_failure};
 use crate::facts::{
@@ -333,6 +333,8 @@ struct SecretEntry {
 
 // A poisoned cache mutex means a prior panic happened mid-update, so an entry may not describe its secret.
 const SECRETS_POISONED: &str = "relay secret cache mutex poisoned by a prior panic";
+
+const COMPLETION_POISONED: &str = "completion lock poisoned";
 
 /// The components `/api/ready` names dead, read on every ask. A closure rather than the handles themselves, so
 /// the relay needs no dependency on the crate that composes them.
@@ -646,40 +648,28 @@ impl Trace {
     fn arm_completion(&self, key: Option<&ApiKeyRow>) {
         self.completion
             .lock()
-            .expect("completion lock poisoned")
+            .expect(COMPLETION_POISONED)
             .get_or_insert_with(|| CompletionGuard::arm(self, key));
     }
 
     /// A no-op once the guard left the slot.
-    fn on_leg(&self, attempt: u8, account_id: Option<&str>) {
-        if let Some(guard) = self
-            .completion
-            .lock()
-            .expect("completion lock poisoned")
-            .as_mut()
-        {
-            guard.on_leg(attempt, account_id);
+    fn with_guard(&self, f: impl FnOnce(&mut CompletionGuard)) {
+        if let Some(guard) = self.completion.lock().expect(COMPLETION_POISONED).as_mut() {
+            f(guard);
         }
     }
 
-    /// A no-op once the guard left the slot.
+    fn on_leg(&self, attempt: u8, account_id: &str) {
+        self.with_guard(|guard| guard.on_leg(attempt, account_id));
+    }
+
     fn on_head(&self, judged: Option<JudgedCharge>) {
-        if let Some(guard) = self
-            .completion
-            .lock()
-            .expect("completion lock poisoned")
-            .as_mut()
-        {
-            guard.on_head(judged);
-        }
+        self.with_guard(|guard| guard.on_head(judged));
     }
 
     /// The armed guard, by value, leaving the slot empty.
     fn take_completion(&self) -> Option<CompletionGuard> {
-        self.completion
-            .lock()
-            .expect("completion lock poisoned")
-            .take()
+        self.completion.lock().expect(COMPLETION_POISONED).take()
     }
 
     /// A clone with an empty slot of its own.
@@ -918,8 +908,8 @@ impl CompletionGuard {
         }
     }
 
-    fn on_leg(&mut self, attempt: u8, account_id: Option<&str>) {
-        self.leg = (attempt, account_id.map(str::to_string), None);
+    fn on_leg(&mut self, attempt: u8, account_id: &str) {
+        self.leg = (attempt, Some(account_id.to_string()), None);
     }
 
     /// The charge answer of the leg that now answers the client. A leg whose head never answered it leaves none, so a
@@ -1466,7 +1456,28 @@ impl Relay {
             }
             Ok((Bytes::from(plain), client_gzip))
         };
-        let (raw, client_gzip) = match body_read {
+        let body_read = body_read.and_then(|(raw, client_gzip)| {
+            // A body of many tiny elements builds a tree far larger than itself, so the count is read off the bytes
+            // before the first parse.
+            let elements = element_count(&raw, MAX_BODY_ELEMENTS);
+            if elements > MAX_BODY_ELEMENTS {
+                return Err(relay_failure(&RelayError::BodyTooManyElements));
+            }
+            // The parsed tree is held from here to the guardrail step, across the catalog's lookup, so the budget
+            // counts it before it is built and a budget that cannot grant it refuses here.
+            let tree_bytes = elements as u64 * TREE_BYTES_PER_ELEMENT;
+            let tree_budget = if reservation.is_some() {
+                Some(
+                    self.body_budget
+                        .try_reserve(tree_bytes)
+                        .ok_or_else(body_budget_exhausted)?,
+                )
+            } else {
+                None
+            };
+            Ok((raw, client_gzip, tree_budget))
+        });
+        let (raw, client_gzip, tree_budget) = match body_read {
             Ok(read) => read,
             Err(failure) => {
                 return self
@@ -1482,44 +1493,11 @@ impl Relay {
                     .await;
             }
         };
-        // A body of many tiny elements builds a tree far larger than itself, so the count is read off the bytes before
-        // the first parse.
-        let elements = element_count(&raw, MAX_BODY_ELEMENTS);
-        if elements > MAX_BODY_ELEMENTS {
-            return self
-                .refused_before_body(
-                    &trace,
-                    Some(&key),
-                    &parts.headers,
-                    capture_hours,
-                    retired,
-                    relay_failure(&RelayError::BodyTooManyElements),
-                    client_version.as_deref(),
-                )
-                .await;
-        }
-        // The parsed tree is held from here to the guardrail step, across the catalog's lookup, so the budget counts
-        // it before it is built and a budget that cannot grant it refuses here.
-        let tree_bytes = elements as u64 * TREE_BYTES_PER_ELEMENT;
-        if let Some(reservation) = &mut reservation {
-            if reservation.resize(raw.len() as u64 + tree_bytes).is_err() {
-                return self
-                    .refused_before_body(
-                        &trace,
-                        Some(&key),
-                        &parts.headers,
-                        capture_hours,
-                        retired,
-                        body_budget_exhausted(),
-                        client_version.as_deref(),
-                    )
-                    .await;
-            }
-        }
         // Each lookup below walks the raw body's top-level object itself and holds no table of its members.
         let members = phoebis_cch::TopLevelMembers::read(&raw);
         // The tree lives to the guardrail step and no further: it is dropped before the observation waits on the bus.
         let (facts, tree) = BodyFacts::read_with_tree(&members);
+        let tree = (tree, tree_budget);
         let auto_mode_server = snapshot.auto_mode_server(&key);
         let auto_mode = facts.shape.safeguards.then_some(if auto_mode_server {
             AutoMode::Server
@@ -1558,10 +1536,6 @@ impl Relay {
             Ok(identity) => identity,
             Err(error) => {
                 drop(tree);
-                if let Some(reservation) = &mut reservation {
-                    let shrunk = reservation.resize(raw.len() as u64);
-                    debug_assert!(shrunk.is_ok(), "the body outgrew its reservation");
-                }
                 trace
                     .observed(
                         Some(&key),
@@ -1651,15 +1625,11 @@ impl Relay {
                 model: &identity.canonical_model,
                 user_agent,
                 headers: &headers,
-                body: tree.as_ref(),
+                body: tree.0.as_ref(),
             };
             evaluate_all(set.iter().map(Arc::as_ref), &request)
         };
         drop(tree);
-        if let Some(reservation) = &mut reservation {
-            let shrunk = reservation.resize(raw.len() as u64);
-            debug_assert!(shrunk.is_ok(), "the body outgrew its reservation");
-        }
         let guardrails: Vec<GuardrailMatch> = evaluation
             .matched
             .iter()
@@ -2749,7 +2719,7 @@ impl Relay {
                 )
                 .is_some();
             // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
-            admitted.trace.on_leg(*attempt, Some(&account.id));
+            admitted.trace.on_leg(*attempt, &account.id);
             let responding = Responding {
                 account,
                 admitted,
@@ -2768,8 +2738,6 @@ impl Relay {
                 funding_ordinal,
                 head: &mut leg_head,
                 injected: &injected,
-                judged: selection.judged,
-                judged_pin: selection.judged_pin.as_ref(),
                 key_permit: &mut *key_permit,
                 // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
                 // and recording it would make the next real turn name a probe.
@@ -2777,11 +2745,10 @@ impl Relay {
                     .memory_key
                     .as_ref()
                     .filter(|_| admitted.trace.kind != Kind::Probe),
-                pin: selection.pin.as_ref(),
                 pin_epoch,
                 replayed,
+                selection,
                 seq,
-                shared_windows: selection.shared_windows,
                 ticket,
             };
             let request = RawRequest {
@@ -2971,7 +2938,7 @@ impl Relay {
         outcome.diagnostics_named = ctx.diagnostics_named;
         // The drop guard takes the word only at `Responding::answers`, since the leg may still retry or fail over past
         // this head.
-        outcome.judged = ctx.judged;
+        outcome.judged = ctx.selection.judged;
         self.report_overage(ctx.account, reading.unified.as_ref(), observed_at)
             .await;
         self.report_head_sample(
@@ -3085,7 +3052,7 @@ impl Relay {
                 model_rejection_ms: self.limits.model_rejection.as_millis() as i64,
                 fast: ctx.admitted.fast,
                 reading: &reading,
-                shared_windows: ctx.shared_windows,
+                shared_windows: ctx.selection.shared_windows,
             },
         );
         let committing = match held.as_ref().map(|h| &h.commit) {
@@ -3300,7 +3267,7 @@ impl Relay {
                         let fallback_ms = ctx.admitted.fallback_ms;
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
                         let fast = ctx.admitted.fast;
-                        let shared_windows = ctx.shared_windows;
+                        let shared_windows = ctx.selection.shared_windows;
                         // Two spellings captured for two purposes that diverge once a resolution lands: the
                         // canonical id is the cooldown's scope and the failover reports' model, the folded
                         // spelling is the wire model `classify`'s rejection arm matches the upstream's own
@@ -3321,7 +3288,10 @@ impl Relay {
                             ctx.account.kind,
                             ctx.admitted.identity.canonical_model.clone(),
                             ctx.admitted.identity.folded_model.clone(),
-                            ctx.admitted.portable.then(|| ctx.pin.cloned()).flatten(),
+                            ctx.admitted
+                                .portable
+                                .then(|| ctx.selection.pin.clone())
+                                .flatten(),
                             ctx.admitted.trace.request_id.clone(),
                         );
                         let head = Arc::clone(&head);
@@ -3435,7 +3405,7 @@ impl Relay {
             cooldown,
             mark.map(marked),
             (ctx.admitted.portable && moves_pin && retry_in_place.is_none())
-                .then(|| ctx.pin.cloned())
+                .then(|| ctx.selection.pin.clone())
                 .flatten(),
             &ctx.admitted.trace.request_id,
             generations,
@@ -3593,7 +3563,7 @@ impl Relay {
     /// The report a pinned answer sends at its end: a renewal, or the release of a pin this request created and
     /// answered with a client error.
     fn renewal(&self, ctx: &Responding<'_>) -> Option<Renewal> {
-        ctx.pin.map(|pin| Renewal {
+        ctx.selection.pin.as_ref().map(|pin| Renewal {
             router: self.router.clone(),
             pin: pin.clone(),
             keepalive: ctx.admitted.trace.kind == Kind::Probe,
@@ -3638,7 +3608,7 @@ impl Relay {
             canonical_model: ctx.admitted.identity.canonical_model.clone(),
             entrypoint: ctx.admitted.identity.entrypoint.clone(),
             classifier: ctx.free_of_plan(),
-            judged_pin: ctx.judged_pin.cloned(),
+            judged_pin: ctx.selection.judged_pin.clone(),
             lane: ctx.admitted.lane.clone(),
             root,
             static_boundaries: ctx
@@ -3965,21 +3935,13 @@ impl Relay {
         identity: &RequestIdentity,
         client_version: Option<&str>,
     ) -> LocalRefusal {
-        let advice = match (kind, resumed) {
-            // The refusal built for this request says a re-pin does not help where the main turns pass, so the journal
-            // says the same.
-            (DriftKind::VersionSuffix, false) => {
-                "a caller stamped a billing line this build cannot reproduce. Where the session's main turns pass, \
-                 re-pinning the router does not help"
-            }
-            _ => "a caller stamped a billing line this build cannot reproduce. Re-pin the router to that client",
-        };
+        let advice = drift_words(kind, resumed).1;
         tracing::warn!(
             drift = %kind.as_str(),
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
             resume = resumed,
-            "{advice}",
+            "a caller stamped a billing line this build cannot reproduce. {advice}",
         );
         self.router.record_refusal(
             RefusedRequest {
@@ -4195,7 +4157,7 @@ impl Relay {
         // member's source as the head's outcome does.
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
-        outcome.judged = ctx.judged;
+        outcome.judged = ctx.selection.judged;
         self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, outcome)
             .await
     }
@@ -4582,7 +4544,7 @@ struct Responding<'a> {
     diagnostics_named: bool,
     /// The request's end report, which a committed stream takes into its body with the permit and the ticket.
     end_guard: &'a mut Option<EndGuard>,
-    /// Whether this selection created `pin` rather than renewing one that already served.
+    /// Whether this selection created its pin rather than renewing one that already served.
     fresh_pin: bool,
     /// The funding ordinal the selection's claim answered, `None` off a `funding_required` account. Every pass of the
     /// leg reports a retry's success under it, since each one went out under the mark the claim found.
@@ -4591,24 +4553,17 @@ struct Responding<'a> {
     head: &'a mut Option<HeadGuard>,
     /// The attempt's own additions, body and head, that a 400 might name.
     injected: &'a [Injected],
-    /// The router's answer on a classifier call's charge for this leg's account (`Selection::judged`): the call is
-    /// free of a plan window only where it reads `On`.
-    judged: Option<JudgedCharge>,
-    /// The pin the classifier call's selection judged (`Selection::judged_pin`), which the usage report carries back
-    /// so the call's tokens fold into that pin's classifier copy.
-    judged_pin: Option<&'a PinRef>,
     /// The request's permit, which a committed stream takes into its body.
     key_permit: &'a mut Option<KeyPermit>,
     memory_key: Option<&'a MemoryKey>,
-    pin: Option<&'a PinRef>,
     pin_epoch: Option<u64>,
     replayed: bool,
+    /// The selection that chose this leg's account, whose pin, classifier charge answer, judged pin and shared
+    /// windows the response half reads.
+    selection: &'a Selection,
     /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
     /// leg answers under it.
     seq: u32,
-    /// The shared windows the leg's account holds (`Selection::shared_windows`), which the head's classification
-    /// reads.
-    shared_windows: SharedWindows,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
 }
@@ -4618,14 +4573,14 @@ impl Responding<'_> {
     /// the one call the upstream keeps free of a plan window. A call the router answered off reports as any call, so
     /// its usage charges the window.
     fn free_of_plan(&self) -> bool {
-        self.judged == Some(JudgedCharge::On)
+        self.selection.judged == Some(JudgedCharge::On)
     }
 
     /// Called where this pass's head becomes the client's answer, never for one the leg strips, replays, retries in
     /// place or fails over, so a client that leaves from here on completes on the charge answer the relay's own
     /// completion of that answer carries.
     fn answers(&self) {
-        self.admitted.trace.on_head(self.judged);
+        self.admitted.trace.on_head(self.selection.judged);
     }
 
     /// Both counts and the end report for a body that outlives the response half, so they are released when it

@@ -259,7 +259,10 @@ fn oauth_cooldown(
         )
     };
     if let Some(u) = unified {
-        if shared_window_rejected(u, ctx.canonical_model, ctx.shared_windows) {
+        let model_only = model_only(u, ctx);
+        // A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the
+        // requested model's own week is the only one that rejected.
+        if plan_window_rejected(u) || (u.status == Some(WindowStatus::Rejected) && !model_only) {
             let reset = [
                 u.five_hour
                     .reset
@@ -274,7 +277,7 @@ fn oauth_cooldown(
             .max();
             return row(Scope::Account, reset);
         }
-        if model_only(u, ctx.canonical_model, ctx.shared_windows)
+        if model_only
             && (u.seven_day_oi.status == Some(WindowStatus::Rejected)
                 || u.status == Some(WindowStatus::Rejected))
         {
@@ -288,17 +291,6 @@ fn oauth_cooldown(
         }
     }
     row(Scope::Account, None)
-}
-
-/// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the requested
-/// model's own week is the only one that rejected.
-fn shared_window_rejected(
-    u: &UnifiedHeaders,
-    canonical_model: &str,
-    shared: SharedWindows,
-) -> bool {
-    plan_window_rejected(u)
-        || (u.status == Some(WindowStatus::Rejected) && !model_only(u, canonical_model, shared))
 }
 
 /// The 5-hour or the 7-day status rejected. The top-level status is left out for a fast request: it draws neither
@@ -369,12 +361,12 @@ fn shared_healthy(window: &UnifiedWindow, held: bool) -> bool {
 /// is rejected. A claim naming another family's week, or one no row knows, is read before the status fallback and is
 /// no model evidence: the account cools, the safe direction while the claim vocabulary is not yet measured live, and a
 /// foreign week never borrows the fallback.
-fn model_only(u: &UnifiedHeaders, canonical_model: &str, shared: SharedWindows) -> bool {
-    let Some(own) = phoebis_routing::model_week(canonical_model) else {
+fn model_only(u: &UnifiedHeaders, ctx: &HeadContext<'_>) -> bool {
+    let Some(own) = phoebis_routing::model_week(ctx.canonical_model) else {
         return false;
     };
-    let shared_fine = shared_healthy(&u.five_hour, shared.five_hour)
-        && shared_healthy(&u.seven_day, shared.seven_day);
+    let shared_fine = shared_healthy(&u.five_hour, ctx.shared_windows.five_hour)
+        && shared_healthy(&u.seven_day, ctx.shared_windows.seven_day);
     if !shared_fine {
         return false;
     }

@@ -337,8 +337,8 @@ impl AffinityFacts {
                     classifier: self.classifier,
                     request_id: self.request_id.clone(),
                     attempt: self.attempt,
-                    entrypoint: self.entrypoint.clone(),
-                    judged_pin: self.judged_pin.clone(),
+                    entrypoint: self.entrypoint,
+                    judged_pin: self.judged_pin,
                 },
             );
             usage_sent = true;
