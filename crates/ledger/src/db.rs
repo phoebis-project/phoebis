@@ -100,8 +100,8 @@ pub(crate) struct ParkedRow {
 /// busy timeout its batch fails into the writer's retries. So a slice starts only once every write begun before it
 /// has ended, and a batch waits one slice at most. The handoff works in one direction: after its wait the purge's
 /// `BEGIN IMMEDIATE` competes with the next batch under SQLite's busy backoff, so a writer landing batches back to
-/// back can push a slice past the 5 s busy timeout, and the pass ends logged until the next hour. A bodies slice alone
-/// gives way between two bodies to a write that began after its handoff.
+/// back can push a slice past the 5 s busy timeout, and the pass ends logged until the next hour. Two slices give way
+/// to a write that began after their handoff: a bodies slice between two bodies, and a backfill slice between two rows.
 #[derive(Default)]
 struct Writes {
     begun: AtomicU64,
@@ -834,7 +834,7 @@ fn landing_stamp(tx: &Transaction<'_>, now: i64) -> Result<i64, LedgerError> {
 pub(crate) const LANDING_STAMP_SQL: &str = "SELECT COALESCE(MAX(landed_at), 0) FROM requests";
 
 /// The serving facts' columns of the request row, in the order `serving_values` binds them, so the landing and the
-/// start's backfill write one list.
+/// backfill write one list.
 const SERVING_COLUMNS: [&str; 11] = [
     "serving_account_id",
     "reached_upstream",
@@ -1007,12 +1007,13 @@ pub(crate) fn insert_request_in(
     Ok(previous)
 }
 
-/// Request rows the start's backfill writes per start, the newest first, so the most recent history reads complete
-/// soonest. One slice read through `requests_serving_pending` beside ten filled slices holds the writer for about 95 ms
-/// on a desktop host, and the next start continues where this one stopped.
+/// Request rows one slice of the backfill writes at most, the newest first, so the most recent history reads complete
+/// soonest. One slice read through `requests_serving_pending` beside ten filled slices holds the write lock for about
+/// 95 ms on a desktop host. A start writes one slice and a pass of the purge task the rest, slice after slice, each
+/// going on where the last one stopped.
 pub const BACKFILL_SLICE: usize = 10_000;
 
-/// What one start's backfill did: the rows it wrote and the rows still null with attempts, read after the slice
+/// What one slice of the backfill did: the rows it wrote and the rows still null with attempts, read after the slice
 /// committed. The rare row whose trail lost every attempt stays in the pending index and counts in neither.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Backfilled {
@@ -1027,77 +1028,91 @@ const SERVING_PENDING: &str = " INDEXED BY requests_serving_pending \
     AND EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id)";
 
 /// Fills `ServingFacts` on up to `BACKFILL_SLICE` request rows whose `serving_account_id` is null and whose attempts
-/// exist, newest first through `requests_serving_pending`, in one transaction, the facts through `ServingFacts::of`,
-/// the one rule the landing runs, so a row landed after the step and a backfilled row with the same attempts read
-/// alike. `left` counts the same rows through the same index on a pooled reader after the slice's transaction
-/// commits, outside the writer's lock.
+/// exist, newest first through `requests_serving_pending`, the facts through `ServingFacts::of`, the one rule the
+/// landing runs, so a row landed after the step and a backfilled row with the same attempts read alike. The slice is
+/// one transaction under the purge handoff, as a retention slice is: it starts once every write begun before it has
+/// ended, and it ends after the row in progress once a write is waiting, so a batch waits for the slice's read and one
+/// row at most. The start calls it once before the ledger task writes, where nothing waits and the slice runs whole,
+/// and a pass of the purge task calls it slice after slice until `left` reads zero. `left` counts the same rows
+/// through the same index on the slice's connection after its transaction commits, with no write lock held.
 pub fn backfill_serving_facts(db: &LedgerDb) -> Result<Backfilled, LedgerError> {
-    let written = db.write(|conn| {
-        let tx = begin_write(conn)?;
-        // `ServingFacts::of` reads the request's asked speed and its last attempt alone, so the slice joins each row's
-        // serving attempt and reads those columns, every other field of the two records at its default.
-        let pending = tx
-            .prepare(
-                "SELECT r.id, r.requested_speed, a.account_id, a.upstream_status, a.outcome, a.speed, \
-                 a.cache_miss_reason, a.stop_reason, a.refusal_category, a.input_tokens, a.output_tokens, \
-                 a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
-                 FROM requests r INDEXED BY requests_serving_pending \
-                 JOIN attempts a ON a.request_id = r.id \
-                 AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
-                 WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at DESC LIMIT ?1",
-            )?
-            .query_map(params![BACKFILL_SLICE as i64], |r| {
-                let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
-                    Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
-                };
-                let request = RequestRecord {
-                    id: r.get(0)?,
-                    requested_speed: r.get(1)?,
-                    ..Default::default()
-                };
-                let last = AttemptRecord {
-                    account_id: r.get(2)?,
-                    upstream_status: r.get::<_, Option<i64>>(3)?.map(|n| n as u16),
-                    outcome: r.get(4)?,
-                    speed: r.get(5)?,
-                    cache_miss_reason: r.get(6)?,
-                    stop_reason: r.get(7)?,
-                    refusal_category: r.get(8)?,
-                    input_tokens: tokens(9)?,
-                    output_tokens: tokens(10)?,
-                    cache_read_tokens: tokens(11)?,
-                    cache_write_5m_tokens: tokens(12)?,
-                    cache_write_1h_tokens: tokens(13)?,
-                    ..Default::default()
-                };
-                Ok((request, last))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        {
-            let set = SERVING_COLUMNS
-                .iter()
-                .enumerate()
-                .map(|(i, column)| format!("{column} = ?{}", i + 2))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let mut fill = tx.prepare(&format!("UPDATE requests SET {set} WHERE id = ?1"))?;
-            for (request, last) in &pending {
-                let facts = ServingFacts::of(request, std::slice::from_ref(last));
-                fill.execute(params_from_iter(
-                    once(Value::from(request.id.clone())).chain(serving_values(&facts)),
-                ))?;
+    db.purge_yielding(fill_serving_slice)
+}
+
+/// The slice on `conn`: the read, the fills until `waiting` answers true past the first row, the commit and the count.
+fn fill_serving_slice(
+    conn: &mut Connection,
+    waiting: &dyn Fn() -> bool,
+) -> Result<Backfilled, LedgerError> {
+    let tx = begin_write(conn)?;
+    // `ServingFacts::of` reads the request's asked speed and its last attempt alone, so the slice joins each row's
+    // serving attempt and reads those columns, every other field of the two records at its default.
+    let pending = tx
+        .prepare(
+            "SELECT r.id, r.requested_speed, a.account_id, a.upstream_status, a.outcome, a.speed, \
+             a.cache_miss_reason, a.stop_reason, a.refusal_category, a.input_tokens, a.output_tokens, \
+             a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
+             FROM requests r INDEXED BY requests_serving_pending \
+             JOIN attempts a ON a.request_id = r.id \
+             AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
+             WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at DESC LIMIT ?1",
+        )?
+        .query_map(params![BACKFILL_SLICE as i64], |r| {
+            let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
+                Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
+            };
+            let request = RequestRecord {
+                id: r.get(0)?,
+                requested_speed: r.get(1)?,
+                ..Default::default()
+            };
+            let last = AttemptRecord {
+                account_id: r.get(2)?,
+                upstream_status: r.get::<_, Option<i64>>(3)?.map(|n| n as u16),
+                outcome: r.get(4)?,
+                speed: r.get(5)?,
+                cache_miss_reason: r.get(6)?,
+                stop_reason: r.get(7)?,
+                refusal_category: r.get(8)?,
+                input_tokens: tokens(9)?,
+                output_tokens: tokens(10)?,
+                cache_read_tokens: tokens(11)?,
+                cache_write_5m_tokens: tokens(12)?,
+                cache_write_1h_tokens: tokens(13)?,
+                ..Default::default()
+            };
+            Ok((request, last))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut written = 0;
+    {
+        let set = SERVING_COLUMNS
+            .iter()
+            .enumerate()
+            .map(|(i, column)| format!("{column} = ?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut fill = tx.prepare(&format!("UPDATE requests SET {set} WHERE id = ?1"))?;
+        for (request, last) in &pending {
+            // The first row lands whatever waits, so a slice under steady writes still moves the backfill on.
+            if written > 0 && waiting() {
+                break;
             }
+            let facts = ServingFacts::of(request, std::slice::from_ref(last));
+            fill.execute(params_from_iter(
+                once(Value::from(request.id.clone())).chain(serving_values(&facts)),
+            ))?;
+            written += 1;
         }
-        tx.commit()?;
-        Ok(pending.len())
-    })?;
-    let left = db.read_blocking(|conn| {
-        Ok(conn.query_row(
-            &format!("SELECT COUNT(*) FROM requests{SERVING_PENDING}"),
-            [],
-            |r| r.get::<_, i64>(0),
-        )? as usize)
-    })?;
+    }
+    tx.commit()?;
+    // Counted after the commit on the slice's own connection: no write lock is held, and no blocking worker of the
+    // runtime waits on the reader pool.
+    let left = conn.query_row(
+        &format!("SELECT COUNT(*) FROM requests{SERVING_PENDING}"),
+        [],
+        |r| r.get::<_, i64>(0),
+    )? as usize;
     Ok(Backfilled { written, left })
 }
 
@@ -2315,6 +2330,52 @@ mod tests {
         assert!(
             db.request("r1").await.unwrap().is_some(),
             "and its row is there"
+        );
+    }
+
+    #[test]
+    fn a_write_begun_after_the_handoff_ends_a_backfill_slice_after_the_row_in_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        db.write(|c| {
+            c.execute_batch(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5) \
+                 INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts) \
+                 SELECT 'old-' || i, i, 'm', 'm', 0, 'inference', 'client', 'succeeded', 1 FROM n; \
+                 INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome) \
+                 SELECT id, 1, 'a', 'oauth', received_at, 'succeeded' FROM requests;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        // On a file ledger the write takes the writer's mutex, apart from the purger's the slice holds. The slice fills
+        // inside the write's closure, so the write has begun and not ended while it fills, as a batch blocked on the
+        // slice's lock has.
+        let slice = |write: bool| {
+            db.purge_yielding(|conn, waiting| {
+                if write {
+                    db.write(|_| fill_serving_slice(conn, waiting))
+                } else {
+                    fill_serving_slice(conn, waiting)
+                }
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            slice(true),
+            Backfilled {
+                written: 1,
+                left: 4
+            },
+            "the write waits for one row, and the other four wait for the next slice"
+        );
+        assert_eq!(
+            slice(false),
+            Backfilled {
+                written: 4,
+                left: 0
+            },
+            "with no write begun, the next slice fills the rest"
         );
     }
 

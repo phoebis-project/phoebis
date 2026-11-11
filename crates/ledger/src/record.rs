@@ -116,8 +116,8 @@ pub struct RequestRecord {
     /// on a row from before the column.
     pub fallback_digest: Option<String>,
     /// The serving attempt's facts as the landing wrote them, every field `None` on a row from before the columns
-    /// until the start's backfill reaches it. The assembler leaves them at their default, and the landing derives
-    /// them from the attempts it writes.
+    /// until the backfill reaches it. The assembler leaves them at their default, and the landing derives them from
+    /// the attempts it writes.
     pub serving: ServingFacts,
 }
 

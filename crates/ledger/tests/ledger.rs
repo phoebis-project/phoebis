@@ -1519,9 +1519,9 @@ async fn the_backfill_fills_old_rows_with_the_facts_the_list_derived_from_their_
 }
 
 /// A start fills one slice of the rows written before the columns, the newest first beside ten filled slices, so the
-/// request list's account filter finds the most recent history before the next start fills the rest. A refused request
-/// no attempt served stays null and out of the pending index, and a request whose trail lost every attempt stays null
-/// in it, read and counted by neither start.
+/// request list's account filter finds the most recent history first, and the purge task fills the rest while the
+/// router runs. A refused request no attempt served stays null and out of the pending index, and a request whose
+/// trail lost every attempt stays null in it, read and counted by neither start.
 #[tokio::test]
 async fn a_start_fills_one_slice_of_pending_rows_and_skips_refusals_and_lost_trails() {
     use phoebis_ledger::{backfill_serving_facts, Backfilled, BACKFILL_SLICE};
@@ -1609,6 +1609,132 @@ async fn a_start_fills_one_slice_of_pending_rows_and_skips_refusals_and_lost_tra
         (None, None, 5),
         "the refusal and the lost trail keep a null account, and the pending index holds the five lost trails alone"
     );
+}
+
+/// `count` request rows written before the serving columns, each with one attempt on account `a`, `received_at`
+/// rising with the row's number, so `pending-0` is the oldest and the last row a slice reaches.
+fn seed_pending(path: &std::path::Path, count: usize) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute_batch(&format!(
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM n WHERE i < {last}) \
+             INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts) \
+             SELECT 'pending-' || i, i, 'm', 'm', 0, 'inference', 'client', 'succeeded', 1 FROM n; \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome) \
+             SELECT id, 1, 'a', 'oauth', received_at, 'succeeded' FROM requests;",
+            last = count - 1,
+        ))
+        .unwrap();
+}
+
+/// The ledger task over `db` with a purge pass every 20 ms.
+async fn purging_often(db: Arc<LedgerDb>, up: &FakeUpstream) -> Harness {
+    harness_on(
+        fresh_store(),
+        db,
+        up,
+        &[api_key("a", C, 0)],
+        (0, None),
+        LedgerConfig {
+            purge_interval: Duration::from_millis(20),
+            ..quick()
+        },
+        false,
+    )
+    .await
+}
+
+async fn wait_for_the_oldest_row_filled(h: &Harness) {
+    wait_for_async(Duration::from_secs(5), || async {
+        let (oldest, _) = h.db.request("pending-0").await.unwrap().unwrap();
+        (oldest.serving.account_id.as_deref() == Some("a")).then_some(())
+    })
+    .await;
+}
+
+fn holding(lines: &std::sync::Mutex<Vec<String>>, text: &str) -> Vec<String> {
+    lines
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|line| line.contains(text))
+        .cloned()
+        .collect()
+}
+
+/// The rows a start leaves past its one slice fill while the router runs: the purge task's first pass writes slice
+/// after slice until none is left and names the rows it filled in one line, after which it asks no more.
+#[tokio::test]
+async fn the_purge_task_fills_the_rows_a_start_left_within_one_pass_and_says_once_how_many() {
+    use phoebis_ledger::BACKFILL_SLICE;
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = Arc::new(LedgerDb::open(&path).unwrap());
+    seed_pending(&path, BACKFILL_SLICE + 1);
+    let (lines, _capture) = capture_tracing();
+    let h = purging_often(db, &up).await;
+    wait_for_the_oldest_row_filled(&h).await;
+    let reported = wait_for(Duration::from_secs(5), || {
+        lines
+            .lock()
+            .unwrap()
+            .iter()
+            .position(|line| line.contains("written="))
+    })
+    .await;
+    let passes_ahead = lines.lock().unwrap()[..reported]
+        .iter()
+        .filter(|line| line.contains("purged="))
+        .count();
+    assert_eq!(passes_ahead, 1, "both slices ran in the first pass");
+    let written = holding(&lines, "written=");
+    assert_eq!(written.len(), 1, "one line names the rows filled");
+    assert!(
+        written[0].contains("written=10001 "),
+        "the line counts both slices: {}",
+        written[0]
+    );
+    stays_for(Duration::from_millis(200), || {
+        holding(&lines, "written=").len() == 1
+    })
+    .await;
+    up.shutdown().await;
+}
+
+/// A slice the ledger refuses ends its pass, and the next pass asks again, so the rows fill once the refusal lifts
+/// and a pass logs one refusal at most.
+#[tokio::test]
+async fn a_slice_the_ledger_refuses_ends_the_pass_and_the_next_pass_goes_on() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = Arc::new(LedgerDb::open(&path).unwrap());
+    seed_pending(&path, 3);
+    db.write(|c| {
+        c.execute_batch(
+            "CREATE TRIGGER refuse_fill BEFORE UPDATE ON requests BEGIN SELECT RAISE(ABORT, 'fill refused by test'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let (lines, _capture) = capture_tracing();
+    let h = purging_often(db, &up).await;
+    wait_for(Duration::from_secs(5), || {
+        (!holding(&lines, "fill refused by test").is_empty()).then_some(())
+    })
+    .await;
+    drop_trigger(&h.db, "refuse_fill");
+    wait_for_the_oldest_row_filled(&h).await;
+    let (refusals, passes) = (
+        holding(&lines, "fill refused by test").len(),
+        holding(&lines, "purged=").len(),
+    );
+    assert!(
+        refusals <= passes,
+        "{refusals} refusals over {passes} passes: a refused slice is not tried again inside its pass"
+    );
+    up.shutdown().await;
 }
 
 /// A request's `held` names each of its waits with the reason: the hourly row sums the `slow_down` waits under

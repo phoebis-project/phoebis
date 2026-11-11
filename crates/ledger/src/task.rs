@@ -17,8 +17,8 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use crate::assemble::{Assembler, Record};
 use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{
-    begin_write, delete_parked_in, insert_decision_in, insert_event_in, insert_request_in,
-    insert_samples_in, newest_row_at, update_cache_map_in,
+    backfill_serving_facts, begin_write, delete_parked_in, insert_decision_in, insert_event_in,
+    insert_request_in, insert_samples_in, newest_row_at, update_cache_map_in,
 };
 use crate::events::{spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
@@ -476,6 +476,7 @@ pub fn spawn(
         // the fold waits for its commit, at most one purge interval, since a writer held on a full disk must not keep
         // the purge that frees room waiting.
         let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
+        let mut backfill = Some(0usize);
         loop {
             let now = (purging.clock)();
             fold_conditions(
@@ -500,6 +501,9 @@ pub fn spawn(
             )
             .await;
             purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
+            if let Some(written) = backfill {
+                backfill = continue_backfill(&purging.db, written).await;
+            }
         }
     });
     ledger.track(purge);
@@ -1842,6 +1846,41 @@ async fn run_purge(
     match purged {
         Ok(purged) => tracing::debug!(?purged, ?history, "ledger retention ran"),
         Err(error) => tracing::warn!(%error, ?history, "ledger retention failed"),
+    }
+}
+
+/// The rest of the serving facts' backfill in one pass, so a ledger whose router stays up fills the rows a start left
+/// before they age out: slice after slice, each a write of its own under the purge handoff, until a slice leaves none.
+/// `written` is what this task filled since the start. Answers `None` once none is left, logging that count where it
+/// is above zero, and the task then asks no more until the next start. Answers the count so far where the ledger
+/// refused a slice, which ends the pass, and the next pass goes on from it.
+async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usize> {
+    loop {
+        // One blocking call per slice: a shutdown's abort lands at this await, between two slices, so the stop waits
+        // for the slice in flight and no further one starts.
+        match blocking(db, backfill_serving_facts).await {
+            Ok(slice) => {
+                written += slice.written;
+                if slice.left > 0 {
+                    continue;
+                }
+                // A start whose own slice left none leaves this task nothing to report.
+                if written > 0 {
+                    tracing::info!(
+                        written,
+                        "filled the serving attempt's facts on every request row written before the columns existed"
+                    );
+                }
+                return None;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "a slice of the serving attempt's facts could not be written, so the next pass goes on"
+                );
+                return Some(written);
+            }
+        }
     }
 }
 

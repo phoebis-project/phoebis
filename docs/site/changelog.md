@@ -621,23 +621,23 @@ with the ledger's own words for a range that needs more points than a chart carr
 as one ([API reference](api-reference.md)). A model filter that names a model's `[1m]` spelling selects that model's
 rows on the request log, the analytics reads and the cache placements ([Requests](console.md#requests),
 [Analytics](console.md#analytics)). A request row carries the serving attempt's account, speed, outcome and token
-counts, written when it lands, and the start fills the rows written before the columns existed a slice at a time,
-logging the rows left ([Statistics](statistics.md#the-ledger)). Refusals count by the request's model and the category
-and the count answers the fallbacks in range, a request that presented a refusal's fallback credit carries the credit's
-digest beside the refused attempt's, and the request log filters on it ([Refused
-requests](statistics.md#refused-requests)). The `slowed_long` condition holds on the time the slow-down held the
-account's requests over the trailing day, against twice the stretch and at least an hour, and names the held time and
-the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges)). The hourly purge's slice of captured
-bodies ends after the body in progress once a write is waiting, so a write waits for one body at most
-([Retention](statistics.md#retention)). A response head's `7d_oi` window is filed as the Fable week, so a head and a
-poll of one bucket write one Fable row and the gauge holds one Fable series ([Quota
-samples](statistics.md#quota-samples)). The request log orders by its arrival, attempts, duration, time to first byte,
-tokens in or tokens out, either way, and the routing log by its time either way, each page continuing at its last row
-([API reference](api-reference.md)). The request log prices each attempt through the one price rule the fold uses, so a
-probe on a model the price list lacks reads no dollars, as the model's other requests do
-([Pricing](statistics.md#pricing)). An account's pause and resume land in the routing log as a registry change carrying
-the `enabled` pair, and a registry change names the account or the key it changed, so the routing log filtered by the
-account or the key lists it ([Routing log](console.md#routing-log)).
+counts, written when it lands, and the rows written before the columns existed fill a slice at a time, one at each
+start, which logs the rows left, and the rest in the hourly purge while the router runs
+([Statistics](statistics.md#the-ledger)). Refusals count by the request's model and the category and the count answers
+the fallbacks in range, a request that presented a refusal's fallback credit carries the credit's digest beside the
+refused attempt's, and the request log filters on it ([Refused requests](statistics.md#refused-requests)). The
+`slowed_long` condition holds on the time the slow-down held the account's requests over the trailing day, against twice
+the stretch and at least an hour, and names the held time and the requests held ([Conditions and
+gauges](statistics.md#conditions-and-gauges)). The hourly purge's slice of captured bodies ends after the body in
+progress once a write is waiting, so a write waits for one body at most ([Retention](statistics.md#retention)). A
+response head's `7d_oi` window is filed as the Fable week, so a head and a poll of one bucket write one Fable row and
+the gauge holds one Fable series ([Quota samples](statistics.md#quota-samples)). The request log orders by its arrival,
+attempts, duration, time to first byte, tokens in or tokens out, either way, and the routing log by its time either way,
+each page continuing at its last row ([API reference](api-reference.md)). The request log prices each attempt through
+the one price rule the fold uses, so a probe on a model the price list lacks reads no dollars, as the model's other
+requests do ([Pricing](statistics.md#pricing)). An account's pause and resume land in the routing log as a registry
+change carrying the `enabled` pair, and a registry change names the account or the key it changed, so the routing log
+filtered by the account or the key lists it ([Routing log](console.md#routing-log)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by the date or the UTC
