@@ -4445,8 +4445,8 @@ let cardReadings = {};
  * speed chip that closes a slowed account's 5-hour cell, which the mock pass requires on the story's studio. Every live
  * window's meter carries its pace mark inside the meter's horizontal bounds and taller than the track. In a 375 by 800
  * window the story's secondary card, whose chip row holds the Plan chip, the plan's end, the trial and a Resets chip,
- * draws every chip of that row inside the row's content box and its plan's end whole. The router's seed has no
- * subscription account, so only the story's pass has chips to read.
+ * draws every chip of that row inside the row's content box, its plan's end whole and no Resets chip. The router's
+ * seed has no subscription account, so only the story's pass has chips to read.
  */
 async function quotaChips(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -4524,7 +4524,8 @@ async function quotaChips(theme) {
   if (mock && expired.length === 0) measurements.push(`${theme} /quota chips: no listed card draws an expired window, so none is read`);
   for (const reset of expired.filter((r) => !r.title.startsWith('no reading since the reset, '))) say(`the expired cell ${JSON.stringify(reset.text)} does not read its reset on its title`);
   // A 375 px card's row cannot hold all of secondary's chips, and the row's overflow cuts every chip but its last with
-  // no ellipsis, so a chip that ends past the row's content box is a cut one. A chip with no box is not read.
+  // no ellipsis, so a chip that ends past the row's content box is a cut one. A chip with no box is not read. A Resets
+  // chip squeezed in beside the trial ends inside the row too, so the row's Resets chip is read for a box of its own.
   const row = await inPhoneWindow(() =>
     page.evaluate(() => {
       const card = [...document.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'secondary');
@@ -4538,6 +4539,7 @@ async function quotaChips(theme) {
             const box = el.getBoundingClientRect();
             return { client: el.clientWidth, end: /^End(s in|ed) /.test(el.textContent?.trim() ?? ''), left: tenth(box.left), right: tenth(box.right), scroll: el.scrollWidth, text: el.innerText.trim() };
           }),
+        drawsResets: (chips.querySelector('.chip--resets')?.getClientRects().length ?? 0) > 0,
         edge: tenth(chips.getBoundingClientRect().right - parseFloat(getComputedStyle(chips).paddingRight)),
         resets: chips.querySelector('.chip--resets') !== null,
       };
@@ -4546,6 +4548,7 @@ async function quotaChips(theme) {
   measurements.push(`${theme} /quota chip row at 375 ${JSON.stringify(row && { chips: row.chips.map((c) => [c.text, c.left, c.right]), edge: row.edge })}`);
   if (mock && row === null) say("the story's secondary card draws no chip row at 375 px");
   if (mock && row && !row.resets) say("secondary's chip row holds no Resets chip at 375 px, though the story gives it a reset");
+  if (mock && row?.drawsResets) say("secondary's chip row draws its Resets chip at 375 px, though a row with the plan's end and the trial has no room for it");
   if (mock && row && !row.chips.some((c) => c.end)) say("secondary's chip row draws no plan's end chip at 375 px, though the story cancels its plan");
   for (const chip of row?.chips ?? []) {
     if (chip.right > row.edge + 0.5) say(`secondary's chip ${JSON.stringify(chip.text)} ends ${Math.round((chip.right - row.edge) * 10) / 10}px past its row's content box at 375 px`);
