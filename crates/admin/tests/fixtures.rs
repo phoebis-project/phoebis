@@ -1802,6 +1802,109 @@ async fn every_route_is_captured_and_holds_its_shape() {
             turn_end: phoebis_routing::RenewalEnd::Turn,
         })
         .await;
+    // A session no companion reports, placed on `direct` a day and an hour back and failed over to `business` a second
+    // later, as the relay's report of a rate limit on its pin's account leaves it, so `sessions.json` carries a stamped
+    // pin written later than its agent's first placement. The router's clock stands at each report's instant and the
+    // cooldown ends a few seconds in, so the move and the cooldown's rows land outside the day the analytics read and
+    // before the routing log's hour, and no account answer carries the cooldown. Its id sorts after `s-fixture`, which
+    // stays the list's first row.
+    let moved_at = now - DAY - 3_600_000;
+    let sonnet_on = |account: &str| -> Vec<_> {
+        phoebis_routing::resolve(&snapshot, &key_row, "claude-sonnet-5", "claude-sonnet-5")
+            .expect("the pool's model rules allow claude-sonnet-5")
+            .into_iter()
+            .filter(|c| c.account_id == account)
+            .collect()
+    };
+    let source = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            candidates: sonnet_on("direct"),
+            now: moved_at,
+            received_at: moved_at,
+            ..asked(&parts, key_generation, "r-moved", 1, Some("s-moved"))
+        })
+        .await
+        .unwrap();
+    let source_pin = match &source.result {
+        phoebis_routing::SelectResult::Selected(selection) => selection.pin.clone(),
+        other => panic!("the moved session's one member answers a selection, not {other:?}"),
+    };
+    drop(source);
+    let direct = snapshot
+        .account("direct")
+        .expect("the direct account is in the snapshot");
+    parts
+        .clock_cell
+        .store(moved_at + 500, std::sync::atomic::Ordering::SeqCst);
+    parts
+        .router
+        .report(phoebis_routing::Report::Cooldown {
+            account_id: "direct".into(),
+            row: phoebis_store::CooldownRow {
+                account_id: "direct".into(),
+                scope: CooldownScope::Account,
+                until: moved_at + 30_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: Some("r-moved".into()),
+                incarnation: direct.incarnation,
+            },
+            pin: source_pin,
+            incarnation: direct.incarnation,
+            lifecycle_generation: direct.lifecycle_generation,
+            credential_generation: snapshot.credential_generation("direct").unwrap_or(1),
+        })
+        .await;
+    let landing = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            attempt: 2,
+            candidates: sonnet_on("business"),
+            attempted: vec!["direct".into()],
+            now: moved_at + 1_000,
+            received_at: moved_at,
+            ..asked(&parts, key_generation, "r-moved", 2, Some("s-moved"))
+        })
+        .await
+        .unwrap();
+    let landed_pin = match &landing.result {
+        phoebis_routing::SelectResult::Selected(selection) => {
+            assert_eq!(
+                (selection.account.id.as_str(), selection.trace.moved),
+                ("business", Some("cooldown")),
+                "the session's next attempt lands on the sibling as the failover's landing"
+            );
+            selection.pin.clone()
+        }
+        other => panic!("the sibling answers the failover's landing, not {other:?}"),
+    };
+    drop(landing);
+    // Past the cooldown's end, a reload's purge drops it on the same clock.
+    parts
+        .clock_cell
+        .store(moved_at + 31_000, std::sync::atomic::Ordering::SeqCst);
+    parts.router.reload().await.unwrap();
+    // Renewed at the capture's instant before the clock returns there, inside the non-companion timeout: a purge at the
+    // capture's clock would find the landed pin unused for longer than the pool's TTL and drop it. The router answers
+    // its mailbox in order, so the ask after the report returns once the renewal landed.
+    parts
+        .router
+        .report(phoebis_routing::Report::PinRenewed {
+            pin: landed_pin.expect("a session's selection holds a pin"),
+            now,
+            usage: None,
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            turn_end: phoebis_routing::RenewalEnd::Turn,
+        })
+        .await;
+    parts.router.pins().await.unwrap();
+    parts
+        .clock_cell
+        .store(now, std::sync::atomic::Ordering::SeqCst);
     // The two agents register and each sends one turn, so the keepalive's view carries their recipes and the row lists
     // their lines. Main's later `state` event takes a sequence past theirs.
     for (sequence, agent, model, account) in [
@@ -1879,6 +1982,35 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 finished_at: now,
             }));
     }
+    // The mod releases `worker-2` and starts it again under the record's request generation before its next request,
+    // so its recipe and its line read `registered` while its earlier request stays on record, and its pin reads ended
+    // until that request.
+    for (sequence, event, state) in [(4, "state", Some("released")), (5, "agent_start", None)] {
+        let request_generation = parts
+            .keepalive
+            .agent_status("desktop", "s1", "worker-2")
+            .unwrap()
+            .request_generation;
+        parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                key_generation,
+                phoebis_keepalive::Event {
+                    event: event.into(),
+                    session_id: "s1".into(),
+                    instance_id: "i1".into(),
+                    sequence,
+                    agent_id: Some("worker-2".into()),
+                    state: state.map(String::from),
+                    request_generation: Some(request_generation),
+                    ..Default::default()
+                }
+                .try_into()
+                .unwrap(),
+            )
+            .unwrap();
+    }
     parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None }));
     parts
         .keepalive
@@ -1931,6 +2063,34 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
+    // A later turn of `worker-1` on a second model, so the companion row's entry for the agent sums its requests over
+    // both models and names the newer one's. It lands after the requests capture, so the request list keeps its rows,
+    // and after the session's first request, so the session's fork stands.
+    let second_model_at = hour_ago + 2_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            agent_id: Some("worker-1".into()),
+            request_class: Some("subagent".into()),
+            ..request(
+                key_generation,
+                "r-worker-1-second-model",
+                second_model_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-worker-1-second-model",
+            1,
+            "business",
+            200,
+            "succeeded",
+            second_model_at,
+        )],
+        bodies: None,
+    });
     // A plan-funded answer on a Fable model, which both shipped tables price, in an hour no other row lands in, so the
     // burn capture carries a point whose Fable week figure, 5-hour figure and plan dollars each read a number. It lands
     // after the requests capture, so the request list keeps its rows, and in no session, so the session rows keep
@@ -2327,7 +2487,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 event: "state".into(),
                 session_id: "s1".into(),
                 instance_id: "i1".into(),
-                sequence: 4,
+                sequence: 6,
                 agent_id: Some("main".into()),
                 state: Some("idle".into()),
                 request_generation: Some(request_generation),

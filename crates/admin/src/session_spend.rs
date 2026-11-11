@@ -66,21 +66,21 @@ impl Default for SessionDay {
     }
 }
 
-/// The session's requests per agent and model, from the ledger.
+/// One agent's requests of the session over every model it ran, from the ledger.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentRequests {
     pub agent_id: String,
-    /// The canonical model.
+    /// The canonical model of the agent's newest client request, or of its newest probe where the ledger holds no
+    /// client request of the agent.
     pub model: String,
     /// The newest request's agent type.
     pub agent_type: Option<String>,
     /// The newest client request's serving account.
     pub account_id: Option<String>,
-    /// Client requests.
-    pub requests: u64,
     /// The newest client request.
     pub last_request_at: Option<i64>,
+    /// The agent's client requests and their spend over every model it ran, `spend.requests` their count.
     pub spend: SessionSpend,
 }
 
@@ -109,8 +109,8 @@ struct Inner {
 struct Accumulator {
     spend: Sums,
     probes: Sums,
-    /// Keyed by agent id and canonical model.
-    agents: BTreeMap<(String, String), AgentSums>,
+    /// Keyed by agent id, each agent's sums over every model it ran.
+    agents: BTreeMap<String, AgentSums>,
     /// The newest client request's receipt and its own user agent, null included, so an older string never stands
     /// in for a newest request that sent none.
     user_agent: Option<(i64, Option<String>)>,
@@ -154,13 +154,27 @@ struct AgentSums {
     spend: Sums,
     probes: Sums,
     newest: Option<NewestRequest>,
+    /// The agent's newest probe, whose model names the entry while the ledger holds no client request of the agent.
+    newest_probe: Option<NewestRequest>,
 }
 
-/// An agent's newest client request: its receipt, its agent type and its serving account.
+/// An agent's newest request: its receipt, its id, its model, its agent type and its serving account.
 struct NewestRequest {
     at: i64,
+    /// The request's id: a row of the same instant replaces the newest where its id is greater.
+    id: String,
+    model: String,
     agent_type: Option<String>,
     account_id: Option<String>,
+}
+
+impl NewestRequest {
+    /// Whether the request received at `at` under `id` replaces `newest`.
+    fn replaces(newest: Option<&NewestRequest>, at: i64, id: &str) -> bool {
+        // Two requests of one instant resolve by their ids, so the pick is the same whichever order a read visits
+        // them: the first fill and the incremental read order the rows apart.
+        newest.is_none_or(|newest| (at, id) > (newest.at, newest.id.as_str()))
+    }
 }
 
 #[derive(Default)]
@@ -293,17 +307,25 @@ impl Accumulator {
         let served = attempt
             .zip(price.as_ref())
             .map(|(a, price)| (a.account_id.as_str(), price));
-        let agent = row.agent_id.map(|agent_id| {
-            self.agents
-                .entry((agent_id, row.canonical_model))
-                .or_default()
-        });
+        let agent = row
+            .agent_id
+            .map(|agent_id| self.agents.entry(agent_id).or_default());
+        let newest = NewestRequest {
+            at: row.received_at,
+            id: row.id,
+            model: row.canonical_model,
+            agent_type: row.agent_type,
+            account_id: attempt.map(|a| a.account_id.clone()),
+        };
         if row.kind == PROBE_KIND {
             self.probes.add(served);
             // The agent's probes alone: a probe is no request of the agent's, so its count and its newest request
             // stay the client's.
             if let Some(agent) = agent {
                 agent.probes.add(served);
+                if NewestRequest::replaces(agent.newest_probe.as_ref(), newest.at, &newest.id) {
+                    agent.newest_probe = Some(newest);
+                }
             }
             return;
         }
@@ -317,16 +339,8 @@ impl Accumulator {
         }
         if let Some(agent) = agent {
             agent.spend.add(served);
-            if agent
-                .newest
-                .as_ref()
-                .is_none_or(|newest| newest.at <= row.received_at)
-            {
-                agent.newest = Some(NewestRequest {
-                    at: row.received_at,
-                    agent_type: row.agent_type,
-                    account_id: attempt.map(|a| a.account_id.clone()),
-                });
+            if NewestRequest::replaces(agent.newest.as_ref(), newest.at, &newest.id) {
+                agent.newest = Some(newest);
             }
         }
         let hour = hour_of(row.received_at);
@@ -361,20 +375,22 @@ impl Accumulator {
             agent_requests: self
                 .agents
                 .iter()
-                .map(|((agent_id, model), sums)| {
+                .map(|(agent_id, sums)| {
                     let newest = sums.newest.as_ref();
                     AgentRequests {
                         agent_id: agent_id.clone(),
-                        model: model.clone(),
+                        // A request or a probe makes the entry, so one of the two names its model.
+                        model: newest
+                            .or(sums.newest_probe.as_ref())
+                            .map(|n| n.model.clone())
+                            .unwrap_or_default(),
                         agent_type: newest.and_then(|n| n.agent_type.clone()),
                         account_id: newest.and_then(|n| n.account_id.clone()),
-                        requests: sums.spend.requests,
                         last_request_at: newest.map(|n| n.at),
                         spend: spend_of(&sums.spend, &sums.probes),
                     }
                 })
                 .collect(),
-            requests: self.spend.requests,
         }
     }
 }
@@ -399,13 +415,12 @@ pub(crate) struct PollRows {
     pub newest: i64,
 }
 
-/// The row's four members and its count, as the fold answers them for one session.
+/// The row's four members, as the fold answers them for one session.
 pub(crate) struct SessionFigures {
     pub user_agent: Option<String>,
     pub spend: Option<SessionSpend>,
     pub day: SessionDay,
     pub agent_requests: Vec<AgentRequests>,
-    pub requests: u64,
 }
 
 /// The fold's reads of one poll, on the closure's transaction after the activity read: the newest landing, which is
@@ -538,7 +553,7 @@ impl SessionSpendFold {
 pub(crate) struct FoldRead<'a>(MutexGuard<'a, Inner>);
 
 impl FoldRead<'_> {
-    /// The row's four members and its count at `now`, `None` where the fold holds nothing for the session.
+    /// The row's four members at `now`, `None` where the fold holds nothing for the session.
     pub(crate) fn answer(&self, key: &SessionSpendKey, now: i64) -> Option<SessionFigures> {
         Some(self.0.sessions.get(key)?.figures(now))
     }
@@ -614,10 +629,16 @@ mod tests {
     }
 
     /// A client request no account served, for the tests whose figures are counts.
-    fn row(session: &str, received_at: i64, landed_at: i64) -> (SessionSpendKey, SessionSpendRow) {
+    fn row(
+        id: &str,
+        session: &str,
+        received_at: i64,
+        landed_at: i64,
+    ) -> (SessionSpendKey, SessionSpendRow) {
         (
             key(session),
             SessionSpendRow {
+                id: id.into(),
                 agent_id: None,
                 agent_type: None,
                 user_agent: None,
@@ -703,11 +724,11 @@ mod tests {
             at,
         );
         let figures = fold.read().answer(&s, at).expect("s is held");
+        let spend = figures.spend.expect("s holds client requests");
         assert_eq!(
-            figures.requests, 2,
+            spend.requests, 2,
             "the rows the first poll folded are at or below the watermark it moved"
         );
-        let spend = figures.spend.expect("s holds client requests");
         assert_eq!(
             spend.shares,
             BTreeMap::from([("a".to_string(), BTreeMap::new())]),
@@ -719,15 +740,20 @@ mod tests {
             .find(|entry| entry.agent_id == "w")
             .expect("the probe's agent has an entry");
         assert_eq!(
-            (w.spend.probes.requests, w.requests, w.last_request_at),
-            (1, 0, None),
-            "a probe adds to its agent's probes alone"
+            (
+                w.spend.probes.requests,
+                w.spend.requests,
+                w.last_request_at,
+                w.model.as_str()
+            ),
+            (1, 0, None, MODEL),
+            "a probe adds to its agent's probes alone, and names the entry of an agent with no client request"
         );
         let t = key("t");
         fold.fold(
             PollRows {
                 fill: vec![t.clone()],
-                fill_rows: vec![row("t", at, 2)],
+                fill_rows: vec![row("r-t", "t", at, 2)],
                 since_rows: Vec::new(),
                 watermark: 2,
                 newest: 2,
@@ -773,6 +799,76 @@ mod tests {
         );
     }
 
+    /// `w` asks on `MODEL` on `a`, then a second later on another model on `b`. `v` asks on both models in one
+    /// millisecond, `r-v-1` on `MODEL` on `a` and `r-v-2` on the other model on `b`, so the greater id names `v`'s
+    /// entry. The rows are folded as the first fill answers them and again reversed.
+    #[test]
+    fn an_agent_answers_one_entry_over_its_models_named_by_its_newest_request_or_the_greater_id_of_one_instant(
+    ) {
+        const OTHER: &str = "claude-sonnet-5";
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = JANUARY_2026;
+        for (id, agent, model, account, received_at) in [
+            ("r-w-1", "w", MODEL, "a", at),
+            ("r-w-2", "w", OTHER, "b", at + 1_000),
+            ("r-v-1", "v", MODEL, "a", at + 2_000),
+            ("r-v-2", "v", OTHER, "b", at + 2_000),
+        ] {
+            db.insert_request(
+                &RequestRecord {
+                    agent_id: Some(agent.into()),
+                    canonical_model: model.into(),
+                    ..request(id, "s", received_at)
+                },
+                &[AttemptRecord {
+                    account_id: account.into(),
+                    ..attempt(id, 1, Some(1_000), received_at)
+                }],
+                None,
+            )
+            .unwrap();
+        }
+        let (prices, tables) = (api_prices(), subscription_costs());
+        let s = key("s");
+        let entries = |fill_rows: Vec<(SessionSpendKey, SessionSpendRow)>| {
+            let fold = SessionSpendFold::default();
+            fold.fold(
+                PollRows {
+                    fill: vec![s.clone()],
+                    fill_rows,
+                    since_rows: Vec::new(),
+                    watermark: 4,
+                    newest: 4,
+                },
+                &prices,
+                &tables,
+                at,
+            );
+            let figures = fold.read().answer(&s, at).expect("s is held");
+            figures
+                .agent_requests
+                .into_iter()
+                .map(|e| (e.agent_id, e.model, e.account_id, e.spend.requests))
+                .collect::<Vec<_>>()
+        };
+        let one_entry_each = vec![
+            ("v".to_string(), OTHER.to_string(), Some("b".to_string()), 2),
+            ("w".to_string(), OTHER.to_string(), Some("b".to_string()), 2),
+        ];
+        assert_eq!(
+            entries(rows_of(&db, "s")),
+            one_entry_each,
+            "each agent's requests over both models in one entry, named by its newest request"
+        );
+        let mut reversed = rows_of(&db, "s");
+        reversed.reverse();
+        assert_eq!(
+            entries(reversed),
+            one_entry_each,
+            "a tie of the instant goes to the greater id whichever row the fold reads first"
+        );
+    }
+
     /// `r2` of `s` reaches both reads of one poll: the fill reads `s` whole and the incremental read the rows landed
     /// after 1. `t` is held by neither the fold nor the fill.
     #[test]
@@ -784,8 +880,8 @@ mod tests {
         fold.fold(
             PollRows {
                 fill: vec![s.clone()],
-                fill_rows: vec![row("s", at, 1), row("s", at + 1, 2)],
-                since_rows: vec![row("s", at + 1, 2), row("t", at + 2, 3)],
+                fill_rows: vec![row("r1", "s", at, 1), row("r2", "s", at + 1, 2)],
+                since_rows: vec![row("r2", "s", at + 1, 2), row("r3", "t", at + 2, 3)],
                 watermark: 1,
                 newest: 3,
             },
@@ -794,7 +890,10 @@ mod tests {
             at,
         );
         assert_eq!(
-            fold.read().answer(&s, at).map(|figures| figures.requests),
+            fold.read()
+                .answer(&s, at)
+                .and_then(|figures| figures.spend)
+                .map(|spend| spend.requests),
             Some(2),
             "the fill read r2 in the same snapshot"
         );
@@ -922,7 +1021,8 @@ mod tests {
         assert_eq!(
             fold.read()
                 .answer(&u, JANUARY_2026)
-                .map(|figures| figures.requests),
+                .and_then(|figures| figures.spend)
+                .map(|spend| spend.requests),
             Some(1),
             "the first fill reads a session landed before the start whole"
         );
@@ -941,8 +1041,8 @@ mod tests {
             PollRows {
                 fill: vec![s.clone()],
                 fill_rows: vec![
-                    row("s", now - 24 * HOUR_MS - 60_000, 1),
-                    row("s", now - 24 * HOUR_MS + 60_000, 2),
+                    row("r1", "s", now - 24 * HOUR_MS - 60_000, 1),
+                    row("r2", "s", now - 24 * HOUR_MS + 60_000, 2),
                 ],
                 since_rows: Vec::new(),
                 watermark: 2,

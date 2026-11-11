@@ -569,6 +569,15 @@ impl BurnRates {
             BurnUnit::WindowShare => Some(own),
         }
     }
+
+    /// The pin's plan copy (`PinRow.burn`) per second in dollars at the set its last prompt selects, read off the
+    /// dollar table's rows alone: `None` for a model the table lists no row for and where a type the copy burns has
+    /// no rate. The table's fallback prices an unlisted model for the shedding order and never for a reader that
+    /// shows a price.
+    pub fn price_plan_usd(&self, pin: &PinRow) -> Option<f64> {
+        self.dollars
+            .price_listed_burn(&pin.model, &pin.burn, pin.last_input_tokens)
+    }
 }
 
 /// The weight the meter puts on a charge landing on a window at an instant, read under the regime of the request's

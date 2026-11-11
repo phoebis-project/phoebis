@@ -488,43 +488,43 @@
           {
             "key": "business",
             "label": "business",
-            "requests": 11,
-            "succeeded": 10,
+            "requests": 12,
+            "succeeded": 11,
             "rate_limited": 0,
             "failed": 0,
             "exhausted": 0,
             "rejected": 0,
-            "attempts": 12,
+            "attempts": 13,
             "failovers": 1,
             "incomplete": 1,
-            "cache_hits": 11,
+            "cache_hits": 12,
             "cache_misses": 0,
             "uncached": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 6000,
+              "cache_read": 6500,
               "cache_write_1h": 0,
-              "cache_write_5m": 2400,
-              "output": 1200,
-              "thinking": 480,
-              "uncached_input": 12000,
+              "cache_write_5m": 2600,
+              "output": 1300,
+              "thinking": 520,
+              "uncached_input": 13000,
               "web_fetch": 0,
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0006500000000000001,
-              "cache_write": 0.0055,
-              "input": 0.022,
-              "output": 0.011
+              "cache_read": 0.0007000000000000001,
+              "cache_write": 0.006,
+              "input": 0.024,
+              "output": 0.012
             },
-            "cost_usd": 0.039150000000000004,
+            "cost_usd": 0.0427,
             "errors": {
               "stream_incomplete": 1
             },
             "refused": 0,
             "refusals": {},
             "cache_miss_reasons": {
-              "none": 11
+              "none": 12
             },
             "histograms": {
               "duration_ms": [
@@ -565,7 +565,7 @@
                 0,
                 0,
                 0,
-                11,
+                12,
                 0,
                 0,
                 0,
@@ -622,7 +622,7 @@
                 0,
                 0,
                 0,
-                10,
+                11,
                 0,
                 0,
                 0,
@@ -686,7 +686,7 @@
                 0,
                 0,
                 0,
-                10,
+                11,
                 0,
                 0,
                 0,
@@ -757,7 +757,7 @@
                 0,
                 0,
                 0,
-                10,
+                11,
                 0,
                 0,
                 0,
@@ -839,15 +839,15 @@
             "wasted_probe_usd": 0.0,
             "wasted_probe_reasons": {},
             "cost_shares": {
-              "five_hour": 0.00007931250000000001,
-              "seven_day": 0.00002115
+              "five_hour": 0.00008812500000000001,
+              "seven_day": 0.0000235
             },
-            "plan_requests": 10,
-            "plan_output_tokens": 1000,
-            "cost_equivalent": 0.0002115,
+            "plan_requests": 11,
+            "plan_output_tokens": 1100,
+            "cost_equivalent": 0.000235,
             "cache_equivalent": {
-              "read": 1.5e-6,
-              "write": 0.00003
+              "read": 1.6666666666666667e-6,
+              "write": 0.000033333333333333335
             },
             "probe_equivalent": {
               "cost": 0.0,
@@ -863,10 +863,10 @@
               "output": 0.002
             },
             "equivalent_split": {
-              "input": 0.00012,
-              "cache_read": 1.5e-6,
-              "cache_write": 0.00003,
-              "output": 0.00006
+              "input": 0.00013333333333333334,
+              "cache_read": 1.6666666666666667e-6,
+              "cache_write": 0.000033333333333333335,
+              "output": 0.00006666666666666667
             }
           },
           {

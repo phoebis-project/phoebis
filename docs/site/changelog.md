@@ -231,12 +231,12 @@ with their effort and their warmth, a session no companion reports leaving the l
 the sessions block ([API reference](api-reference.md), [Installation](installation.md#sessions),
 [Keepalive](keepalive.md#in-the-console)). A row also carries the newest client request's `user_agent`, the session's
 spend over its life under its key as `spend`, its client requests of the last 24 hours by class and their spend as
-`day`, whether its pin's account still holds the prompt cache as `warm`, its requests per agent and model as
-`agent_requests` and main's lifecycle word as `lifecycle`, and each agent line carries its pin's burn per hour as
-`burn`, `burn_unit`, `burn_window`, `burn_equivalent` and `burn_at` and its agent's own `lifecycle`
-([API reference](api-reference.md)). The admin API is documented by an OpenAPI document the router serves, with an
-interactive reference page on the admin listener ([API reference](api-reference.md)). The account's
-`has_extra_usage_enabled` reads the stored profile's `organization` member, as its rate-limit tier does
+`day`, whether its pin's account still holds the prompt cache as `warm`, one entry per agent as `agent_requests`, with
+its requests and their spend over every model the agent ran, and main's lifecycle word as `lifecycle`, and each agent
+line carries its pin's burn per hour as `burn`, `burn_unit`, `burn_window`, `burn_equivalent` and `burn_at` and its
+agent's own `lifecycle` ([API reference](api-reference.md)). The admin API is documented by an OpenAPI document the
+router serves, with an interactive reference page on the admin listener ([API reference](api-reference.md)). The
+account's `has_extra_usage_enabled` reads the stored profile's `organization` member, as its rate-limit tier does
 ([API reference](api-reference.md)). The account create and edit refuse a body that is not a JSON object with
 `body must be a JSON object`, and the pool members route answers `body must carry a members list` to an object without
 one ([API reference](api-reference.md)). A key or pool create that loses the race for its id to another create answers

@@ -1263,8 +1263,13 @@ mod tests {
                 .unwrap_or_else(|| panic!("no pinned row for {line}"));
             assert!(paired.insert(session), "one line per pin: {screen}");
             assert!(
-                line.contains(&label_of(row["account_id"].as_str().unwrap()))
-                    && line.contains("pinned"),
+                line.contains(&label_of(row["account_id"].as_str().unwrap())),
+                "{line}"
+            );
+            // A stamped row reads its stamp's words in the place of `pinned`.
+            assert_eq!(
+                line.contains("pinned"),
+                row["shed_from"].is_null(),
                 "{line}"
             );
             assert_eq!(
@@ -1532,7 +1537,8 @@ mod tests {
     #[test]
     fn a_label_column_is_as_wide_as_its_widest_label_where_the_row_has_room() {
         // Two labels that agree on their first twenty columns stay apart on the member lines and the pin line. The
-        // member lines carry no reset or cooldown here, since either one keeps its width ahead of the label.
+        // member lines carry no reset or cooldown and the pin lines no stamp here, since each keeps its width ahead of
+        // the label.
         let one = "engineering-shared-1@corp.io";
         let two = "engineering-shared-2@corp.io";
         let mut roomy = labelled(one, two);
@@ -1543,6 +1549,14 @@ mod tests {
             account["cooldowns"] = json!([]);
             for window in account["windows"].as_array_mut().unwrap() {
                 window["resets_at"] = Value::Null;
+            }
+        }
+        for row in roomy.sessions.as_mut().unwrap()["sessions"]
+            .as_array_mut()
+            .unwrap()
+        {
+            for member in ["shed_from", "shed_reason", "shed_at"] {
+                row[member] = Value::Null;
             }
         }
         let screen = render(

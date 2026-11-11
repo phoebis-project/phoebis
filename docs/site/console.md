@@ -547,7 +547,8 @@ ceiling, up to this.", `Shed dwell (s)` and Warm sessions, and closes on a "Prev
 fields stand. `Burn average (s)` sits under Windows and `Migrate when spent` under Failover, which opens on "How long a
 request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window
 moves the session at once." The Preview replays the trigger from the projections the accounts route serves for each
-member and window and from the sessions' served burn, an estimate of what the router reads.
+member and window and from the sessions' served burn, an estimate of what the router reads. It leaves the line of an
+agent that ended out of its round, as the router's walk does, and the Sessions view keeps drawing that line.
 
 With the switch off the Preview opens on `Load shedding is off: no round runs.` and names the projection alone. It reads
 `No member projects over the ceiling on any window: the closest is {label}, {window} {p} {horizon}.` while no member's
@@ -1196,10 +1197,11 @@ and the instant on hover. Agents counts the session's agents less the ones the m
 names it, over the agents by word (`1 busy, 2 idle, 1 parked`). Model reads main's model, short with the id on hover,
 and a "+N" badge where N agents of the session are pinned on another model, its hover naming each agent with its model
 and account in the lines' order. Account links to the pinned account's page with its kind on hover, then the speed chip
-on a slowed session with the Quota view's hover, the warning badge `leaving` where a shedding round or a failover marked
-the session to leave the account, its hover naming the account and the reason, and a "+N" for the agents pinned on
-another account. While a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the
-agents it names matches every Agents filter. A row with no account reads a dash.
+on a slowed session with the Quota view's hover, the warning badge `leaving` while a shedding round's mark stands on the
+session's pin, its hover naming the account the mark was made on and its window, and a "+N" for the agents pinned on
+another account. A session that a round's move or a failover's landing already took off an account reads no badge. While
+a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the agents it names matches
+every Agents filter. A row with no account reads a dash.
 
 Requests counts the session's client requests over its life under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists
@@ -1209,26 +1211,29 @@ Native the session's share of the chosen week, and under the other positions its
 reads a request, then a `+$` badge where its requests billed dollars beside a plan figure and a "+N" naming the other
 accounts whose plan windows they spent on. Its hover counts the requests, reads the figure in full with the account's
 shares of its windows where the requests spent on one account, the dollars billed by funding and the probes' figure.
-Under the figure stands the pin's burn per hour, `0.09% Ultra week/h` or `$0.12/h`, its share of the account's own
-window on hover. A session with no ledgered request reads a dash with "No ledgered request yet". Last used, the last use
-the sort reads, is the newest use across the session's conversation pins, main's and its agents', with `expires in
-{span}` under it. Cache reads main's pin `warm` within its cache TTL or `cold` past it, with the recipe's state word
-under it (main's recipe, or the newest other agent's where main holds none) or `no recipe`, and `no pin` on a row with
-no pin, the pin's, the state's and the cause's sentences and the next probe on hover. Of the optional columns, Companion
-reads the mod's state, `reporting` with `seen {ago}` under it, `silent` with how long it has been silent, or `none`.
-Context reads main's context in tokens, `184K`, with a dash for a session with no pin or no figure, and Effort the
-effort of its pin's last turn, `high`, with a dash for none, both from main's conversation pin (or, where main holds
-none, the newest conversation pin of another agent). Created reads the session's first placement as an age with the
-instant on hover, and Key links to the key's row in the Keys view, with `deleted holder` under an earlier holder's. Last
-request reads the last request's instant, or `none`. Next probe reads the instant, "pending" or "not scheduled". Runway
-reads the time until the projection of the pin's account reaches the ceiling on the window that binds, among those the
-pin's model draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing burns or
-where the runway would pass the binding window's next reset, and a dash for an unpinned row or a pinned row with no
-projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the session's
-requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with "A session
-appears here on its first request, or as soon as the companion mod registers it, and drops off once it passes the
-session expiry." While the filters hide every row the router lists, the card reads "No sessions kept by the filters"
-with `{h} sessions hidden by the filters.`
+Under the figure stands the pin's burn per hour as the Unit setting reads it. A plan pin reads its share of the chosen
+week per hour under Native, `0.09% Ultra week/h`, its plan dollars per hour at the API price list under All in dollars
+and Dollar equivalent, `$0.12/h`, and a dash under Billed dollars. A billed pin reads its dollars per hour under Native,
+All in dollars and Billed dollars, and a dash under Dollar equivalent. The hover keeps the pin's share of the account's
+own window, and no line stands where the figure its position needs reads null. A session with no ledgered request reads
+a dash with "No ledgered request yet". Last used, the last use the sort reads, is the newest use across the session's
+conversation pins, main's and its agents', with `expires in {span}` under it. Cache reads main's pin `warm` within its
+cache TTL or `cold` past it, with the recipe's state word under it (main's recipe, or the newest other agent's where
+main holds none) or `no recipe`, and `no pin` on a row with no pin, the pin's, the state's and the cause's sentences and
+the next probe on hover. Of the optional columns, Companion reads the mod's state, `reporting` with `seen {ago}` under
+it, `silent` with how long it has been silent, or `none`. Context reads main's context in tokens, `184K`, with a dash
+for a session with no pin or no figure, and Effort the effort of its pin's last turn, `high`, with a dash for none, both
+from main's conversation pin (or, where main holds none, the newest conversation pin of another agent). Created reads
+the session's first placement as an age with the instant on hover, and Key links to the key's row in the Keys view, with
+`deleted holder` under an earlier holder's. Last request reads the last request's instant, or `none`. Next probe reads
+the instant, "pending" or "not scheduled". Runway reads the time until the projection of the pin's account reaches the
+ceiling on the window that binds, among those the pin's model draws: a span such as `6 h 55 min`, `none` where the
+runway is gone, `unbounded` where nothing burns or where the runway would pass the binding window's next reset, and a
+dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin carries a cycle its hover reads
+`cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from. Before the first session the
+card reads "No live sessions" with "A session appears here on its first request, or as soon as the companion mod
+registers it, and drops off once it passes the session expiry." While the filters hide every row the router lists, the
+card reads "No sessions kept by the filters" with `{h} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has a ledgered request, each disabled
 with "No ledgered request yet" on hover before it, and "View in routing log", which opens the log on that session's
@@ -1242,9 +1247,11 @@ its row in the Keys view, or `{key}, deleted holder` on an earlier holder's), Cl
 on hover), Fork (the base cut to 13 characters and whole on hover, a link to its row where the list holds it, the depth
 and the relation to the base's account, or `none`), Epoch and Companion, the Companion column's badge with `seen {ago}`
 or the time since it went silent. Routing reads Account (the link and `subscription` or `API key`, or `none`), Pinned
-since (main's pin's creation, else the session's), Shed mark (the `leaving` badge with the account and the reason, or
-`none`), Runway, Speed (the speed chip on a slowed session, else `full speed`) and Cycle (or `not measured yet`), and
-its title carries "View in routing log", the row menu's link.
+since (the instant main's pin was written on the account it stands on, else the row's pin's, so a move starts it again),
+Shed mark (the `leaving` badge with the account the mark stands on and its window, or `none`), Moved (the stamp, a move
+that happened: `shed from {account}` after a shedding round or `failed over from {account}` after a failover's landing,
+with the instant, or `none`), Runway, Speed (the speed chip on a slowed session, else `full speed`) and Cycle (or `not
+measured yet`), and its title carries "View in routing log", the row menu's link.
 
 The Agents table under the facts lists one line per agent, main first (from its conversation pin or its recipe, or from
 the row where neither names main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`,
@@ -1255,16 +1262,16 @@ the agent's type from the ledger, breaking at its hyphen (`general-purpose`) whe
 Model reads the line's model, short with the id on hover, and the effort of its pin's last turn under it. Account links
 to the line's account with its kind on hover, then the row's speed chip and `leaving` badge where the line sits on the
 row's account and the account's speed chip elsewhere while it is slowed, and reads `none` where the line's request was
-refused before any account served it. Context reads the pin's tokens, Burn the pin's burn per hour as the Cost cell's
-line reads the row's, and Requests and Cost the agent's requests over every model it ran and their spend, read as the
-row's Cost cell reads the session's, its "+N" naming the accounts other than the line's. Status reads the line's
-lifecycle word with its sentence and a parked agent's park on hover, or `unreported` where no mod reports the agent or
-the session, and Cache reads the pin's `warm` or `cold` with the recipe's state word under it, or `no pin`. Each line's
-menu offers "View in analytics", "View in requests" and "View in routing log", each narrowed to the session and the
-agent, the routing log an hour either side of the agent's last request, and an open one holds auto reload as a row's
-does. While an Agents filter stands, the table lists the matching lines alone, and the earlier agents line gives way to
-a line under the table, `{k} agents hidden by the filters`, which counts the row's other lines and its earlier agents
-and opens them under the matching lines.
+refused before any account served it. Context reads the pin's tokens, Burn the pin's burn per hour under the Unit
+setting as the Cost cell's line reads the row's, and Requests and Cost the agent's requests over every model it ran and
+their spend, read as the row's Cost cell reads the session's, its "+N" naming the accounts other than the line's. Status
+reads the line's lifecycle word with its sentence and a parked agent's park on hover, or `unreported` where no mod
+reports the agent or the session, and Cache reads the pin's `warm` or `cold` with the recipe's state word under it, or
+`no pin`. Each line's menu offers "View in analytics", "View in requests" and "View in routing log", each narrowed to
+the session and the agent, the routing log an hour either side of the agent's last request, and an open one holds auto
+reload as a row's does. While an Agents filter stands, the table lists the matching lines alone, and the earlier agents
+line gives way to a line under the table, `{k} agents hidden by the filters`, which counts the row's other lines and its
+earlier agents and opens them under the matching lines.
 
 The earlier agents, the ones the ledger holds requests of that draw no line, such as a subagent whose pin and recipe are
 gone, share one line under the table, `{n} earlier agents · {k} requests · {cost}`, with a `+$` badge where they

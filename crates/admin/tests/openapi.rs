@@ -777,15 +777,19 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines() {
             "burn_at",
             "burn_equivalent",
             "burn_unit",
+            "burn_usd",
             "burn_window",
             "cache_ttl_ms",
             "created_at",
             "effort",
+            "ended",
             "last_input_tokens",
             "last_used_at",
             "lifecycle",
             "model",
-            "warm"
+            "pinned_at",
+            "warm",
+            "warm_until"
         ])
     );
     for member in ["created_at", "effort"] {

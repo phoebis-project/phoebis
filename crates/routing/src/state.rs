@@ -742,6 +742,17 @@ fn priced(count: f64, rate: Option<f64>) -> Option<f64> {
     }
 }
 
+/// One second of `burn` at `rates`, each type `priced`, or `None` where a type the pin burns has no rate.
+fn burn_at_rates(burn: &PinBurn, rates: Rates) -> Option<f64> {
+    Some(
+        priced(burn.input, rates.input)?
+            + priced(burn.cache_read, rates.cache_read)?
+            + priced(burn.write_5m, rates.write_5m)?
+            + priced(burn.write_1h, rates.write_1h)?
+            + priced(burn.output, rates.output)?,
+    )
+}
+
 /// A price per token by model and token type; `long_context` the second set of the models priced by prompt length,
 /// and `fallback` prices any model the table does not list.
 #[derive(Clone, Debug, PartialEq)]
@@ -765,17 +776,21 @@ impl RateTable {
     /// resolves it), at its `long_context` rates when that same key carries them and `prompt_tokens` is above
     /// their `over`, else at its own. A model `rows` has no key for reads `fallback`.
     pub fn rates_for(&self, canonical_model: &str, prompt_tokens: u64) -> Rates {
+        // An id the table does not list reads `fallback`: no rate on the cost model's tables, where its pin ranks
+        // last, and the dearest listed rate on the dollar tables.
+        self.listed_rates(canonical_model, prompt_tokens)
+            .unwrap_or(self.fallback)
+    }
+
+    /// The rates `rates_for` reads off `rows`, `None` for a model `rows` has no key for.
+    fn listed_rates(&self, canonical_model: &str, prompt_tokens: u64) -> Option<Rates> {
         // One key wins for both maps, the exact id before the undated one as the ledger's `entry` resolves it, so
         // a dated row without the block never prices at the undated row's long-context rates.
-        let Some((key, rates)) = row_for(canonical_model, |k| self.rows.get_key_value(k)) else {
-            // An id the table does not list reads `fallback`: no rate on the cost model's tables, where its pin ranks
-            // last, and the dearest listed rate on the dollar tables.
-            return self.fallback;
-        };
-        match self.long_context.get(key) {
+        let (key, rates) = row_for(canonical_model, |k| self.rows.get_key_value(k))?;
+        Some(match self.long_context.get(key) {
             Some(long) if prompt_tokens > long.over => long.rates,
             _ => *rates,
-        }
+        })
     }
 
     /// The price of one second of a pin's burn at the set its `prompt_tokens` select; `None` when a type the pin
@@ -786,14 +801,18 @@ impl RateTable {
         burn: &PinBurn,
         prompt_tokens: u64,
     ) -> Option<f64> {
-        let rates = self.rates_for(canonical_model, prompt_tokens);
-        Some(
-            priced(burn.input, rates.input)?
-                + priced(burn.cache_read, rates.cache_read)?
-                + priced(burn.write_5m, rates.write_5m)?
-                + priced(burn.write_1h, rates.write_1h)?
-                + priced(burn.output, rates.output)?,
-        )
+        burn_at_rates(burn, self.rates_for(canonical_model, prompt_tokens))
+    }
+
+    /// `price_burn` off the rows alone: `None` for a model `rows` has no key for, which `price_burn` prices at
+    /// `fallback`.
+    pub(crate) fn price_listed_burn(
+        &self,
+        canonical_model: &str,
+        burn: &PinBurn,
+        prompt_tokens: u64,
+    ) -> Option<f64> {
+        burn_at_rates(burn, self.listed_rates(canonical_model, prompt_tokens)?)
     }
 
     /// Each count times its rate at the set `prompt_tokens` select, summed; `None` when a type with a count has no

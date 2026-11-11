@@ -5572,6 +5572,57 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
     );
 }
 
+#[tokio::test]
+async fn a_plan_pins_dollars_per_hour_price_its_plan_copy_at_the_listed_rows_and_a_billed_or_unlisted_pin_reads_none(
+) {
+    use common::{get, json, login};
+    let now = common::NOW;
+    // One Haiku 5.5 row at $1 a million tokens in every cell, so the dearest cells the dollar table's fallback prices an
+    // unlisted model at are $1 too.
+    let revisions = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-haiku-5-5: {input: 1, cache_write_5m: 1, \
+         cache_write_1h: 1, cache_read: 1, output: 1}\n",
+        "test",
+    )
+    .unwrap();
+    // Each pin burns 100 input tokens a second in its plan copy. The plan pin on `business` carries 50 more a second of
+    // the client's classifier calls, the billed pin sits on the API-key account `direct`, and the unlisted pin burns
+    // Opus 5, which the case's table does not list.
+    let parts = sessions_harness_priced(revisions, |generation| {
+        let pin = |session: &str, account: &str, model: &str| phoebis_store::PinRow {
+            model: model.into(),
+            ..burning_opus_pin(session, account, generation, now, 100.0, 100.0)
+        };
+        vec![
+            phoebis_store::PinRow {
+                burn_unmetered: phoebis_store::PinBurn {
+                    input: 50.0,
+                    ..phoebis_store::PinBurn::default()
+                },
+                ..pin("s-plan", "business", "claude-haiku-5-5")
+            },
+            pin("s-billed", "direct", "claude-haiku-5-5"),
+            pin("s-unlisted", "business", "claude-opus-5"),
+        ]
+    })
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let usd = |session: &str| session_row(&sessions, session)["burn_usd"].as_f64();
+    // 100 plan tokens a second for an hour are 360,000 tokens, $0.36 at $1 a million.
+    assert!(
+        close(usd("s-plan"), 0.36),
+        "the plan pin reads its plan copy alone at the listed row's rate: {}",
+        session_row(&sessions, "s-plan")
+    );
+    assert_eq!(
+        (usd("s-billed"), usd("s-unlisted")),
+        (None, None),
+        "a pin billed in dollars reads no plan dollars, and neither does a plan pin on a model the price list lacks: \
+         {sessions}"
+    );
+}
+
 /// The case's own rates: a pin burning a thousand input tokens a second burns five points of the 5-hour window an hour
 /// and two tenths of a point of the 7-day window, whatever the account tier, model or instant.
 fn round_rates(
@@ -7012,7 +7063,7 @@ async fn a_pin_used_within_the_hour_names_its_session_to_the_fork_facts_when_its
         (
             row["forked_from"].as_str(),
             row["fork_depth"].as_i64(),
-            row["requests"].as_u64()
+            row["spend"]["requests"].as_u64()
         ),
         (Some("base"), Some(2), Some(1)),
         "the pin lists the session with no request in the window, still names it to the fork facts and counts the \
@@ -7126,7 +7177,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["requests"].as_u64() == Some(1))
+            .any(|r| r["spend"]["requests"].as_u64() == Some(1))
     })
     .await;
     let rows = sessions["sessions"].as_array().unwrap();
@@ -7139,7 +7190,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin() {
         (
             rows[0]["session_id"].as_str(),
             rows[0]["pinned"].as_bool(),
-            rows[0]["requests"].as_u64(),
+            rows[0]["spend"]["requests"].as_u64(),
         ),
         (Some("s1"), Some(true), Some(1)),
         "the row is the session's own"
@@ -7289,8 +7340,10 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
 /// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record, with
 /// the agent's lifecycle word where the engine holds its record. The harness pins burn nothing, so a line's burn reads
 /// 0 with `burn_at` at the rig's clock, in the unit of the account its own pin sits on: a share of the 5-hour window
-/// on `business`, whose tier the harness names, and dollars with no window and no Pro-week figure on the API-key
-/// account `direct`.
+/// on `business`, whose tier the harness names, with plan dollars of 0 on a model the harness's price list names, as
+/// it names every model these cases pin, and dollars with no window, no Pro-week figure and no plan dollars on the
+/// API-key account `direct`. A `context_pin` was written ten milliseconds before the rig's clock and refreshed at its
+/// last use, so its cache stays warm until that use plus the TTL.
 // Each argument is a member the case pins, so a struct of them would only rename the call sites.
 #[allow(clippy::too_many_arguments)]
 fn agent_line(
@@ -7313,12 +7366,16 @@ fn agent_line(
         "cache_ttl_ms": 300_000,
         "last_used_at": last_used_at,
         "warm": warm,
+        "warm_until": last_used_at + 300_000,
         "burn": 0.0,
         "burn_unit": if plan { "window_share" } else { "usd" },
         "burn_window": plan.then_some("five_hour"),
         "burn_equivalent": plan.then_some(0.0),
+        "burn_usd": plan.then_some(0.0),
         "burn_at": common::NOW,
         "created_at": null,
+        "pinned_at": common::NOW - 10,
+        "ended": false,
         "lifecycle": lifecycle,
     })
 }
@@ -7573,7 +7630,7 @@ async fn a_session_whose_requests_named_the_long_context_twin_answers_its_pins_p
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|r| r["session_id"] == *session && r["requests"] == *requests)
+                    .any(|r| r["session_id"] == *session && r["spend"]["requests"] == *requests)
             })
     })
     .await;
@@ -7742,11 +7799,12 @@ async fn a_conversation_pin_reads_cold_on_its_row_and_line_from_its_last_refresh
         (
             row["warm"].clone(),
             row["agent_contexts"][0]["agent_id"].clone(),
-            row["agent_contexts"][0]["warm"].clone()
+            row["agent_contexts"][0]["warm"].clone(),
+            row["agent_contexts"][0]["warm_until"].clone()
         ),
-        (json!(false), json!("main"), json!(false)),
+        (json!(false), json!("main"), json!(false), json!(NOW - 60_000)),
         "the cache entry lives from the pin's last refresh, so the row and main's line read cold though a request used \
-         the pin inside the TTL: {row}"
+         the pin inside the TTL, and the line's entry ended a minute back, five minutes after that refresh: {row}"
     );
 }
 
@@ -7887,7 +7945,7 @@ async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["session_id"] == "s1" && r["requests"] == 1)
+            .any(|r| r["session_id"] == "s1" && r["spend"]["requests"] == 1)
     })
     .await;
     let row = session_row(&sessions, "s1");
@@ -8063,11 +8121,16 @@ async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = session_row(&sessions, "s2");
     assert_eq!(
-        (row["model"].as_str(), row["created_at"].as_i64()),
-        (Some("claude-opus-5"), Some(NOW)),
-        "the row reads main's newest conversation pin and the session's first placement: {row}"
+        (
+            row["model"].as_str(),
+            row["created_at"].as_i64(),
+            row["pinned_at"].as_i64()
+        ),
+        (Some("claude-opus-5"), Some(NOW), Some(NOW + 2_000)),
+        "the row reads main's newest conversation pin, the session's first placement and the instant that pin was \
+         written: {row}"
     );
-    let lines: Vec<(&str, &str, Option<i64>)> = row["agent_contexts"]
+    let lines: Vec<(&str, &str, Option<i64>, Option<i64>)> = row["agent_contexts"]
         .as_array()
         .unwrap()
         .iter()
@@ -8076,17 +8139,24 @@ async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and
                 line["agent_id"].as_str().unwrap(),
                 line["model"].as_str().unwrap(),
                 line["created_at"].as_i64(),
+                line["pinned_at"].as_i64(),
             )
         })
         .collect();
     assert_eq!(
         lines,
         [
-            ("main", "claude-opus-5", Some(NOW)),
-            ("main", "claude-sonnet-5", Some(NOW)),
-            ("worker-1", "claude-sonnet-5", Some(NOW + 3_000)),
+            ("main", "claude-opus-5", Some(NOW), Some(NOW + 2_000)),
+            ("main", "claude-sonnet-5", Some(NOW), Some(NOW + 1_000)),
+            (
+                "worker-1",
+                "claude-sonnet-5",
+                Some(NOW + 3_000),
+                Some(NOW + 3_000)
+            ),
         ],
-        "each line reads its own agent's first placement"
+        "each line reads its own agent's first placement and the instant its pin was written on its account, the \
+         failover's landing for main's first pin"
     );
 }
 
@@ -8133,7 +8203,7 @@ async fn a_pinless_row_whose_main_holds_an_auxiliary_pin_alone_reads_mains_recor
             .as_array()
             .unwrap()
             .iter()
-            .any(|r| r["session_id"] == "s1" && r["requests"] == 1)
+            .any(|r| r["session_id"] == "s1" && r["spend"]["requests"] == 1)
     })
     .await;
     let row = session_row(&sessions, "s1");

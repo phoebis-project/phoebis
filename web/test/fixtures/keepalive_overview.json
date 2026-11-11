@@ -2,7 +2,7 @@
   "route": "GET /admin/keepalive/overview",
   "body": {
     "agents": {
-      "busy": 2,
+      "busy": 1,
       "idle": 1,
       "parked": 0
     },
@@ -15,7 +15,7 @@
         "max": 1024
       },
       "retained_bytes": {
-        "count": 352,
+        "count": 232,
         "max": 268435456
       },
       "sessions": {

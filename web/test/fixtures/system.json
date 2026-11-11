@@ -10,7 +10,7 @@
     "dead": [],
     "ledger": {
       "schema_version": 3,
-      "written": 57,
+      "written": 64,
       "dropped": 0,
       "write_failures": 0,
       "cache_map_orphans": 1,
@@ -87,7 +87,7 @@
     "keepalive": {
       "agents": 3,
       "bus_gaps": 0,
-      "retained_bytes": 352,
+      "retained_bytes": 232,
       "running_probes": 0,
       "sessions": 1
     }

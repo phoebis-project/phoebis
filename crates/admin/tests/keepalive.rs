@@ -400,11 +400,11 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes() {
             row["companion"].as_str(),
             row["agents"].as_u64(),
             row["pinned"].as_bool(),
-            row["requests"].as_u64(),
+            row["spend"].is_null(),
             row["keepalive"]["state"].is_null(),
             row["keepalive"]["cause"].is_null()
         ),
-        (Some("reporting"), Some(1), Some(false), Some(0), true, true)
+        (Some("reporting"), Some(1), Some(false), true, true, true)
     );
     assert!(
         row["companion_since"].is_null()
@@ -1694,7 +1694,7 @@ async fn lines(
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|r| r["session_id"] == *session && r["requests"] == *requests)
+                .any(|r| r["session_id"] == *session && r["spend"]["requests"] == *requests)
         })
     })
     .await;
@@ -1714,7 +1714,9 @@ async fn lines(
 
 /// The line the route answers for a `line_pin` of `agent` under `model` used at `last_used_at`, with the agent's
 /// lifecycle word where the engine holds its record. A `line_pin` burns nothing on the plan account `business`, whose
-/// tier `lines_harness` leaves unnamed, so its burn is a 5-hour share the route cannot size and its Pro-week figure 0.
+/// tier `lines_harness` leaves unnamed, so its burn is a 5-hour share the route cannot size, its Pro-week figure 0 and
+/// its plan dollars 0 on a model the harness's price list names, as it names every model these cases pin. Its cache
+/// stays warm until its refresh five milliseconds back plus its TTL, and it was written ten milliseconds back.
 fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
@@ -1725,12 +1727,16 @@ fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) ->
         "cache_ttl_ms": 300_000,
         "last_used_at": last_used_at,
         "warm": true,
+        "warm_until": common::NOW + 299_995,
         "burn": null,
         "burn_unit": "window_share",
         "burn_window": "five_hour",
         "burn_equivalent": 0.0,
+        "burn_usd": 0.0,
         "burn_at": common::NOW,
         "created_at": null,
+        "pinned_at": common::NOW - 10,
+        "ended": false,
         "lifecycle": lifecycle,
     })
 }
@@ -1866,6 +1872,64 @@ async fn a_raw_callers_session_with_no_companion_lists_its_pin_as_mains_line() {
             None
         )])],
         "the unclassed session's pin is main's line on a row no companion reports"
+    );
+}
+
+/// The mod registers main's session again under its instance after the session's end, as a resume does: main is busy
+/// awaiting its next request with its earlier request on record, so its recipe stands and its pin draws its line.
+#[tokio::test]
+async fn a_main_registered_again_after_its_sessions_end_reads_registered_on_its_row_its_line_and_its_recipe(
+) {
+    let parts = lines_harness(|g| vec![line_pin("s1", "main", "claude-opus-5", g)]).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    register_with_the_engine(&parts, "s1", &[]);
+    let generation = common::generation(&parts.store, "desktop");
+    for (sequence, event) in [(2, "session_end"), (3, "session_start")] {
+        parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                generation,
+                Event {
+                    event: event.into(),
+                    session_id: "s1".into(),
+                    instance_id: "i1".into(),
+                    sequence,
+                    ..Default::default()
+                }
+                .try_into()
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .unwrap_or_else(|| panic!("no row for s1: {listed}"));
+    let recipes = json(get(&parts.app, "/admin/keepalive/recipes", Some(&cookie)).await).await;
+    let recipe = recipes["recipes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1" && r["agent_id"] == "main")
+        .unwrap_or_else(|| panic!("no recipe for main: {recipes}"));
+    assert_eq!(
+        (
+            row["lifecycle"].as_str(),
+            row["agent_contexts"][0]["agent_id"].as_str(),
+            row["agent_contexts"][0]["lifecycle"].as_str(),
+            recipe["agent_state"].as_str()
+        ),
+        (
+            Some("registered"),
+            Some("main"),
+            Some("registered"),
+            Some("registered")
+        ),
+        "the row, main's line and main's recipe read one word: {row} {recipe}"
     );
 }
 

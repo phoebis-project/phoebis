@@ -1717,7 +1717,7 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
   assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
   assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
-  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 8, hashesStamped: true, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 10, hashesStamped: true, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
   assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
   assert.equal(r.outcome.completion.hit, true);
   assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
@@ -2355,7 +2355,8 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.cause, 'scheduled');
   assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
-  assert.equal(s1.requests, 5);
+  // The route answers the count in the spend alone, and the decoder reads the member the row lost as 0.
+  assert.equal(s1.requests, 0);
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);

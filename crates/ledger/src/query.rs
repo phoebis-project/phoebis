@@ -5062,6 +5062,8 @@ pub type SessionSpendKey = (String, i64, String);
 /// by session, `received_at` and request id, the incremental read by `landed_at`.
 #[derive(Debug)]
 pub struct SessionSpendRow {
+    /// The request's id, which orders two requests of one instant for the session fold's newest pick.
+    pub id: String,
     pub agent_id: Option<String>,
     pub agent_type: Option<String>,
     pub user_agent: Option<String>,
@@ -5096,11 +5098,11 @@ impl SpendAttempt {
 /// The request half of the session spend reads, ahead of `PRICED_ATTEMPT_COLUMNS`, in the order
 /// `SessionSpendRow::read` reads them.
 const SESSION_SPEND_COLUMNS: &str =
-    "r.session_id, r.key_id, r.key_generation, r.agent_id, r.agent_type, \
+    "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
      r.user_agent, r.request_class, r.landed_at, a.account_id";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
-const SESSION_SPEND_PRICED_FROM: usize = 9;
+const SESSION_SPEND_PRICED_FROM: usize = 10;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
@@ -5115,7 +5117,7 @@ impl SessionSpendRow {
     /// their place there whether an attempt joined or not.
     fn read(row: &Row) -> rusqlite::Result<(SessionSpendKey, SessionSpendRow)> {
         let first = SESSION_SPEND_PRICED_FROM;
-        let attempt = match row.get::<_, Option<String>>(8)? {
+        let attempt = match row.get::<_, Option<String>>(9)? {
             Some(account_id) => Some(SpendAttempt {
                 account_id,
                 priced: PricedAttempt::read(row, first)?,
@@ -5125,11 +5127,12 @@ impl SessionSpendRow {
         Ok((
             (row.get(1)?, row.get(2)?, row.get(0)?),
             SessionSpendRow {
-                agent_id: row.get(3)?,
-                agent_type: row.get(4)?,
-                user_agent: row.get(5)?,
-                request_class: row.get(6)?,
-                landed_at: row.get(7)?,
+                id: row.get(3)?,
+                agent_id: row.get(4)?,
+                agent_type: row.get(5)?,
+                user_agent: row.get(6)?,
+                request_class: row.get(7)?,
+                landed_at: row.get(8)?,
                 canonical_model: row.get(first + PricedAttempt::MODEL)?,
                 received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
                 kind: row.get(first + PricedAttempt::KIND)?,

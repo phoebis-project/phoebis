@@ -5,7 +5,9 @@ use std::time::Duration;
 use common::{delete, get, json, login, post, wait_json};
 use fake_upstream::{stays_for, wait_for};
 use phoebis_ledger::{AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord};
-use phoebis_store::{AccountKind, AccountRow, AccountState, Cancellation, ShedStamp, StateCause};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, Cancellation, PinMark, ShedStamp, StateCause,
+};
 
 const HOUR: i64 = 3_600_000;
 
@@ -1140,7 +1142,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
     assert_eq!(
         (
             rows[0]["session_id"].as_str(),
-            rows[0]["requests"].as_u64(),
+            rows[0]["spend"]["requests"].as_u64(),
             rows[0]["last_request_at"].as_i64(),
             rows[0]["pinned"].as_bool(),
             rows[0]["account_id"].as_str()
@@ -1445,8 +1447,8 @@ async fn the_breakdown_counts_the_plan_served_credits_and_probes_and_nulls_the_p
     );
 }
 
-/// The request count on a session row is the ledger's over the session's life, so a pin the ledger has no row for
-/// counts none.
+/// The request count on a session row is the ledger's over the session's life, its spend's, so a pin the ledger has no
+/// row for answers no spend, which a reader counts as no request.
 #[tokio::test]
 async fn a_pin_the_ledger_has_no_row_for_reads_a_zero_request_count() {
     // The router loads the pins at spawn and purges any whose key names no pool, so the pool, the key, and
@@ -1524,16 +1526,16 @@ async fn a_pin_the_ledger_has_no_row_for_reads_a_zero_request_count() {
     };
     assert_eq!(
         (
-            row("served")["requests"].as_u64(),
+            row("served")["spend"]["requests"].as_u64(),
             row("served")["pinned"].as_bool()
         ),
         (Some(3), Some(true)),
         "a pin the ledger saw carries the ledger's count"
     );
     assert_eq!(
-        row("silent")["requests"].as_u64(),
-        Some(0),
-        "a pin with no ledger row counts no request"
+        row("silent")["spend"],
+        serde_json::Value::Null,
+        "a pin with no ledger row answers no spend"
     );
     assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
 }
@@ -5810,59 +5812,104 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
     let seeding = login(&seed.app, "admin-secret").await;
     routed(&seed, &seeding).await;
     let now = common::NOW;
+    let stamped = phoebis_store::PinRow {
+        key_id: "desktop".into(),
+        session_id: "s1".into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: "direct".into(),
+        epoch: 1,
+        created_at: now - 60_000,
+        last_used_at: now - 5,
+        key_generation: common::generation(&seed.store, "desktop"),
+        incarnation: 1,
+        burn: phoebis_store::PinBurn::default(),
+        burn_at: None,
+        burn_banded: phoebis_store::PinBurn::default(),
+        burn_fast: phoebis_store::PinBurn::default(),
+        burn_unmetered: phoebis_store::PinBurn::default(),
+        burn_unmetered_model: None,
+        last_input_tokens: 0,
+        last_refresh_at: now - 5,
+        cache_ttl_ms: 300_000,
+        shed: Some(ShedStamp {
+            from: "business".into(),
+            at: now - 60_000,
+            reason: Some("cooldown".into()),
+        }),
+        static_hash: None,
+        tail_hash: None,
+        lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+        entrypoint: None,
+        mark: None,
+        auxiliary_only: false,
+        effort: None,
+        ended: false,
+    };
+    seed.store.upsert_pin(&stamped).unwrap();
+    // A round marked the second session's pin on the subscription account it still stands on, and no move stamped it.
     seed.store
         .upsert_pin(&phoebis_store::PinRow {
-            key_id: "desktop".into(),
-            session_id: "s1".into(),
-            agent_id: "main".into(),
-            model: "claude-sonnet-5".into(),
-            account_id: "direct".into(),
-            epoch: 1,
-            created_at: now - 60_000,
-            last_used_at: now - 5,
-            key_generation: common::generation(&seed.store, "desktop"),
-            incarnation: 1,
-            burn: phoebis_store::PinBurn::default(),
-            burn_at: None,
-            burn_banded: phoebis_store::PinBurn::default(),
-            burn_fast: phoebis_store::PinBurn::default(),
-            burn_unmetered: phoebis_store::PinBurn::default(),
-            burn_unmetered_model: None,
-            last_input_tokens: 0,
-            last_refresh_at: now - 5,
-            cache_ttl_ms: 300_000,
-            shed: Some(ShedStamp {
-                from: "business".into(),
-                at: now - 60_000,
-                reason: Some("cooldown".into()),
+            session_id: "s2".into(),
+            account_id: "business".into(),
+            shed: None,
+            mark: Some(PinMark {
+                at: now - 30_000,
+                on: "business".into(),
+                window: "five_hour".into(),
             }),
-            static_hash: None,
-            tail_hash: None,
-            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
-            entrypoint: None,
-            mark: None,
-            auxiliary_only: false,
-            effort: None,
-            ended: false,
+            ..stamped.clone()
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let row = sessions["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["session_id"] == "s1")
-        .unwrap_or_else(|| panic!("no row for s1: {sessions}"))
-        .clone();
+    let row_of = |session: &str| {
+        sessions["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["session_id"] == session)
+            .unwrap_or_else(|| panic!("no row for {session}: {sessions}"))
+            .clone()
+    };
+    let row = row_of("s1");
+    let stamp_and_mark = |row: &serde_json::Value| {
+        [
+            "shed_from",
+            "shed_reason",
+            "shed_at",
+            "marked_on",
+            "marked_at",
+            "marked_window",
+        ]
+        .map(|member| row[member].clone())
+    };
+    let null = serde_json::Value::Null;
     assert_eq!(
-        (&row["shed_from"], &row["shed_reason"]),
-        (
-            &serde_json::json!("business"),
-            &serde_json::json!("cooldown")
-        ),
-        "the row names the stamp's word beside the account the pin left"
+        stamp_and_mark(&row),
+        [
+            serde_json::json!("business"),
+            serde_json::json!("cooldown"),
+            serde_json::json!(now - 60_000),
+            null.clone(),
+            null.clone(),
+            null.clone(),
+        ],
+        "the row names the stamp's word beside the account the pin left and its instant, and no mark: {row}"
+    );
+    let marked = row_of("s2");
+    assert_eq!(
+        stamp_and_mark(&marked),
+        [
+            null.clone(),
+            null.clone(),
+            null.clone(),
+            serde_json::json!("business"),
+            serde_json::json!(now - 30_000),
+            serde_json::json!("five_hour"),
+        ],
+        "a marked pin with no stamp reads the mark it stands under and no move: {marked}"
     );
     let answer = parts
         .router

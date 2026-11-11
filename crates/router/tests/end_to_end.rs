@@ -2664,7 +2664,10 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         .await
         .unwrap();
     assert_eq!(sessions["sessions"].as_array().unwrap().len(), 3);
-    assert_eq!(sessions["sessions"][0]["requests"].as_u64(), Some(1));
+    assert_eq!(
+        sessions["sessions"][0]["spend"]["requests"].as_u64(),
+        Some(1)
+    );
     let system: serde_json::Value = client
         .get(admin("/system"))
         .send()

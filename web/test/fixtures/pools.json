@@ -103,7 +103,7 @@
                 "period_end": 1793491200000
               }
             ],
-            "active_pins": 4,
+            "active_pins": 5,
             "pace_score": 0.005952380952380952,
             "burn": null,
             "factor": null,
@@ -155,11 +155,11 @@
           }
         ],
         "status": "active",
-        "requests_24h": 19,
-        "cost_24h": 0.078175,
+        "requests_24h": 20,
+        "cost_24h": 0.08172499999999999,
         "billed_24h": 0.0178,
         "equivalent_24h": null,
-        "active_pins": 6,
+        "active_pins": 7,
         "traffic_24h": [
           {
             "at": 1791633600000,
@@ -370,12 +370,12 @@
           },
           {
             "at": 1791716400000,
-            "requests": 13,
+            "requests": 14,
             "failed": 1,
-            "tokens": 25200,
-            "cost_usd": 0.04624999999999999,
+            "tokens": 27000,
+            "cost_usd": 0.0498,
             "billed_usd": 0.0142,
-            "equivalent": 0.00021150000000000002
+            "equivalent": 0.000235
           },
           {
             "at": 1791720000000,

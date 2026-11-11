@@ -39,7 +39,7 @@
       },
       "attempted": [],
       "holds": [],
-      "registry_revision": 67,
+      "registry_revision": 68,
       "body_tokens": 0
     },
     "pin": {
@@ -421,7 +421,7 @@
       "in_overage": false,
       "pin_written": {
         "action": "created",
-        "epoch": 8,
+        "epoch": 10,
         "lane": "claude-sonnet-5|standard|none|-",
         "refresh_stamped": true,
         "hashes_stamped": true

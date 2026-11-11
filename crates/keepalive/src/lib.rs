@@ -40,8 +40,8 @@ pub use recipe::{
 pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
 pub use view::{
-    recipe_state, AgentCounts, CompanionState, KeepaliveSummary, RecipeState, RecipeView,
-    SessionView,
+    recipe_state, AgentCounts, CompanionState, KeepaliveSummary, Lifecycle, RecipeState,
+    RecipeView, SessionView,
 };
 
 /// What a probe declares to the relay when the engine sends it: the key it runs under and the key's generation,

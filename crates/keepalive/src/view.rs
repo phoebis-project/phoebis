@@ -85,13 +85,41 @@ pub enum CompanionState {
     Silent,
 }
 
+/// An agent's lifecycle as the views word it: the engine's five states, and `Registered` for a record that is
+/// busy awaiting a real request since it registered or started again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Lifecycle {
+    Busy,
+    Idle,
+    Parked,
+    Registered,
+    Released,
+    Unknown,
+}
+
+impl Lifecycle {
+    /// The agent's word, read off its state and its reason together, so every view words one record alike.
+    fn of(agent: &Agent) -> Lifecycle {
+        match agent.state {
+            AgentState::Busy if agent.reason == Reason::AwaitingRequest => Lifecycle::Registered,
+            AgentState::Busy => Lifecycle::Busy,
+            AgentState::Idle => Lifecycle::Idle,
+            AgentState::Parked => Lifecycle::Parked,
+            AgentState::Released => Lifecycle::Released,
+            AgentState::Unknown => Lifecycle::Unknown,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct RecipeView {
     /// The account the agent is pinned to.
     pub account_id: Option<String>,
     pub agent_id: String,
-    /// The mod's lifecycle word for the agent.
-    pub agent_state: AgentState,
+    /// The agent's lifecycle word, `registered` for a record busy awaiting a real request since it registered or
+    /// started again.
+    pub agent_state: Lifecycle,
     pub cause: Reason,
     pub credited_today: u64,
     pub deadline: Option<i64>,
@@ -132,12 +160,9 @@ pub struct SessionView {
     pub key_generation: i64,
     pub keepalive: KeepaliveSummary,
     /// Every agent record's lifecycle word by agent id, main's among them, so a line reads its own agent's word.
-    pub lifecycles: BTreeMap<String, AgentState>,
+    pub lifecycles: BTreeMap<String, Lifecycle>,
     /// How long ago main's last presence report arrived, in seconds, `null` before the first one.
     pub presence_age_seconds: Option<i64>,
-    /// True where main's record reads `Busy` with the reason `AwaitingRequest`: a registration with no real request
-    /// yet, which the sessions route words `registered`.
-    pub registered: bool,
     pub session_id: String,
 }
 
@@ -154,7 +179,7 @@ fn recipe_of(agent: &Agent, key_id: &str, session_id: &str, now: i64) -> RecipeV
     RecipeView {
         account_id: agent.account.clone(),
         agent_id: agent.id.clone(),
-        agent_state: agent.state,
+        agent_state: Lifecycle::of(agent),
         cause: agent.reason,
         credited_today,
         deadline,
@@ -228,14 +253,11 @@ impl Engine {
                     lifecycles: s
                         .agents
                         .iter()
-                        .map(|(id, a)| (id.clone(), a.state))
+                        .map(|(id, a)| (id.clone(), Lifecycle::of(a)))
                         .collect(),
                     presence_age_seconds: main
                         .and_then(|a| a.last_presence_at)
                         .map(|at| (now - at).max(0) / 1_000),
-                    registered: main.is_some_and(|a| {
-                        a.state == AgentState::Busy && a.reason == Reason::AwaitingRequest
-                    }),
                     session_id: key.1.clone(),
                 }
             })

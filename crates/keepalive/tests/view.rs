@@ -4,7 +4,7 @@
 mod common;
 
 use common::*;
-use phoebis_keepalive::{AgentState, Event, ParkKind, Reason, RecipeState, RecipeView};
+use phoebis_keepalive::{AgentState, Event, Lifecycle, ParkKind, Reason, RecipeState, RecipeView};
 
 const DAY: i64 = 86_400_000;
 
@@ -84,7 +84,7 @@ async fn a_recipe_row_carries_the_state_the_cause_the_park_and_the_counts() {
         (
             RecipeState::Retained,
             Reason::Scheduled,
-            AgentState::Parked,
+            Lifecycle::Parked,
             Some(ParkKind::Background),
             Some(deadline),
             None,
@@ -393,8 +393,8 @@ async fn a_session_whose_main_holds_no_recipe_reads_the_newest_other_agents_reci
 }
 
 /// Main's word stands on the row whether or not a recipe stands, so a registered main that reports `idle` before any
-/// request reads `idle` beside an empty summary. A state report leaves the reason at `AwaitingRequest`, so the
-/// registration's flag reads false here, where a flag read from the reason alone would read true.
+/// request reads `idle` beside an empty summary. A state report leaves the reason at `AwaitingRequest`, so main's word
+/// reads `idle` here, where a word read from the reason alone would read `registered`.
 #[tokio::test]
 async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no_recipe() {
     let mut r = rig(RigSpec::default()).await;
@@ -402,32 +402,29 @@ async fn mains_lifecycle_word_stands_beside_an_empty_summary_while_main_holds_no
     assert_eq!(r.status("main").reason, Reason::AwaitingRequest);
     let view = &r.engine.sessions()[0];
     assert_eq!(
-        (
-            view.lifecycles.get("main").copied(),
-            view.keepalive.state,
-            view.registered
-        ),
-        (Some(AgentState::Idle), None, false),
+        (view.lifecycles.get("main").copied(), view.keepalive.state),
+        (Some(Lifecycle::Idle), None),
         "{view:?}"
     );
 }
 
 /// A registration with no real request is main `Busy` under `AwaitingRequest`, which reads `registered`. Main's first
-/// real request keeps it `Busy` under the recipe's own reason, which does not, so a flag read from the state alone
-/// would still read true.
+/// real request keeps it `Busy` under the recipe's own reason, which does not, so a word read from the state alone
+/// would still read `registered`.
 #[tokio::test]
 async fn a_registered_main_reads_registered_until_its_first_real_request() {
     let mut r = rig(RigSpec::default()).await;
     let registered = &r.engine.sessions()[0];
-    assert!(registered.registered, "{registered:?}");
+    assert_eq!(
+        registered.lifecycles.get("main").copied(),
+        Some(Lifecycle::Registered),
+        "{registered:?}"
+    );
     r.observe("main").await;
     let requested = &r.engine.sessions()[0];
     assert_eq!(
-        (
-            requested.registered,
-            requested.lifecycles.get("main").copied()
-        ),
-        (false, Some(AgentState::Busy)),
+        requested.lifecycles.get("main").copied(),
+        Some(Lifecycle::Busy),
         "{requested:?}"
     );
 }
@@ -462,12 +459,7 @@ async fn an_ended_recipe_keeps_its_row_with_the_cause() {
             ended.agent_state,
             ended.next_probe_at
         ),
-        (
-            RecipeState::Ended,
-            Reason::IdleLimit,
-            AgentState::Idle,
-            None
-        ),
+        (RecipeState::Ended, Reason::IdleLimit, Lifecycle::Idle, None),
         "{ended:?}"
     );
 }

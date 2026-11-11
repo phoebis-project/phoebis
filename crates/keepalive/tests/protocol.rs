@@ -10,8 +10,8 @@ use common::*;
 use fake_upstream::Respond;
 use http_body_util::BodyExt;
 use phoebis_keepalive::{
-    keepalive_router, AgentState, CompanionState, Event, EventError, Park, ParkKind, Reason,
-    EVENTS_PATH,
+    keepalive_router, AgentState, CompanionState, Event, EventError, Lifecycle, Park, ParkKind,
+    Reason, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use phoebis_store::{ApiKeyRow, CompanionPermissions, RulesMode};
@@ -1200,7 +1200,7 @@ async fn a_released_agents_recipe_line_leaves_the_sessions_read_with_its_record(
             .collect::<Vec<_>>()
     };
     r.advance_attended(3_599_999);
-    assert_eq!(lines(&r), vec![AgentState::Released]);
+    assert_eq!(lines(&r), vec![Lifecycle::Released]);
     r.advance_attended(1);
     r.step().await;
     assert!(lines(&r).is_empty(), "the line went with the record");

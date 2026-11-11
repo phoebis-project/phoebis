@@ -20,7 +20,7 @@ pub(crate) struct SessionList {
     pub sessions: Vec<Session>,
 }
 
-/// One session row. On a row with no pin the keys from `burn` to `shed_reason` read null.
+/// One session row. On a row with no pin `pinned_at` and the keys from `burn` to `marked_window` read null.
 #[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
@@ -34,17 +34,18 @@ pub(crate) struct Session {
     /// The first placement of the session's main agent under the key and session, kept until the session's last pin
     /// leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin.
     pub created_at: Option<i64>,
+    /// The instant the row's pin was written on the account it stands on, where `created_at` keeps the agent's first
+    /// placement under the key and session, which a move leaves alone. Null on a row with no pin.
+    pub pinned_at: Option<i64>,
     /// The newest use across the session's conversation pins, main's and its agents', null without a pin.
     pub last_used_at: Option<i64>,
     pub last_request_at: Option<i64>,
-    /// The session's client requests over its life under its key, the ones `spend` counts, 0 where the ledger holds
-    /// none.
-    pub requests: u64,
     /// The user agent of the session's newest client request as the client sent it, the newest served one's where the
     /// session has one.
     pub user_agent: Option<String>,
     /// The session's spend over its life under its key, null where the ledger holds no request of it the router did
-    /// not refuse.
+    /// not refuse. Its `requests` is the session's count of client requests, which a reader takes as 0 where `spend`
+    /// is null.
     pub spend: Option<SessionSpend>,
     /// The session's client requests of the last 24 hours by class, and their spend.
     pub day: SessionDay,
@@ -65,6 +66,11 @@ pub(crate) struct Session {
     /// spend on it, whatever account tier the pin sits on, null where `burn_unit` is not `window_share` and where the
     /// model has no weight on the window.
     pub burn_equivalent: Option<f64>,
+    /// The display pin's plan copy per hour in dollars at the API price list in force, priced in the read. Null
+    /// where `burn_unit` is not `window_share`, on a row with no pin and where the dollar table lists no row for the
+    /// pin's model or a token type the pin burns has no rate in it. It answers a figure where `burn` reads null for a
+    /// tier the cost model does not size or a model it does not weigh, since the dollar table reads neither.
+    pub burn_usd: Option<f64>,
     /// The instant the served burn is decayed to, the read's own, so a reader that decays it again from here adds
     /// nothing at the read. Null for a pin never renewed with usage, whose burn has nothing to decay.
     pub burn_at: Option<i64>,
@@ -97,13 +103,25 @@ pub(crate) struct Session {
     pub effort: Option<String>,
     /// The pin's last main, subagent or compaction turn, or a keepalive probe's renewal.
     pub last_refresh_at: Option<i64>,
-    /// The account a shed round marked the pin's session to leave.
+    /// The account a shedding round's move or a failover's landing took the pin from, which keeps the pin off that
+    /// account for the dwell. No mark: the pin's mark is `marked_on`. Null with no stamp and on a row with no pin.
     pub shed_from: Option<String>,
-    /// Why the pin was stamped from `shed_from`: `round` for a shedding round's move, the failover's reason word
-    /// (`cooldown`, `fast_lane`, `mark`) for a failover's landing. Null with no stamp and on a pin stamped before the
-    /// pin carried a reason, which reads as shed.
+    /// Why the move that wrote the stamp took the pin off `shed_from`: `round` for a shedding round's move, the
+    /// failover's reason word (`cooldown`, `fast_lane`, `mark`) for a failover's landing. The stamp records a move
+    /// that happened, never a mark. Null with no stamp and on a pin stamped before the pin carried a reason, which
+    /// reads as a round's move.
     #[schema(example = "round")]
     pub shed_reason: Option<String>,
+    /// The instant of the stamp `shed_from` names. Null with no stamp and on a row with no pin.
+    pub shed_at: Option<i64>,
+    /// The account a shedding round's mark on the pin was made on, the account the session is to leave. The mark
+    /// stands while this is the pin's account. Null where the pin holds no mark and on a row with no pin.
+    pub marked_on: Option<String>,
+    /// When the round made the mark, null with `marked_on`.
+    pub marked_at: Option<i64>,
+    /// The window whose trigger made the mark, null with `marked_on`.
+    #[schema(example = "five_hour")]
+    pub marked_window: Option<String>,
     pub historical: bool,
     /// `reporting`, `silent`, or `none`.
     #[schema(example = "reporting")]
@@ -114,14 +132,14 @@ pub(crate) struct Session {
     /// on a companion row the pins of the agents the engine holds and has not released, on a row whose `companion`
     /// is `none` the pins used within `sessions.non_companion_idle_seconds`. Empty where none draws.
     pub agent_contexts: Vec<AgentContext>,
-    /// The session's requests per agent and model, from the ledger, with each agent's type, the account and the
-    /// instant of its newest request and its spend.
+    /// One entry per agent the ledger holds requests of, its requests and their spend over every model it ran, with
+    /// the model, the type, the account and the instant of its newest request.
     pub agent_requests: Vec<AgentRequests>,
     /// Main's recipe, or the newest other agent's where main holds none.
     pub keepalive: SessionKeepalive,
     /// Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands: `busy`, `idle`,
-    /// `parked`, `released` or `unknown`, or `registered` for a main the mod registered that has sent no real request
-    /// yet. Null where no mod reports the session.
+    /// `parked`, `registered`, `released` or `unknown`, where `registered` is a main busy awaiting a real request
+    /// since the mod registered it or started it again. Null where no mod reports the session.
     #[schema(example = "busy")]
     pub lifecycle: Option<String>,
     /// The seconds since main's last presence report, null before the first one.
@@ -154,6 +172,8 @@ pub(crate) struct AgentContext {
     /// Whether the cache entry the pin warms is still alive at the read: `now` is before the pin's last refresh plus
     /// `cache_ttl_ms`, as the selector reads it.
     pub warm: bool,
+    /// The first instant `warm` answers false for the pin, Unix milliseconds.
+    pub warm_until: i64,
     /// The pin's typed burn per hour in `burn_unit`, priced as the row's `burn` is for this pin.
     pub burn: Option<f64>,
     /// `window_share` or `usd` for this pin, as the row's `burn_unit`.
@@ -164,12 +184,20 @@ pub(crate) struct AgentContext {
     pub burn_window: Option<String>,
     /// The pin's burn per hour as the Pro-week figure, as the row's `burn_equivalent`.
     pub burn_equivalent: Option<f64>,
+    /// The pin's plan copy per hour in dollars, as the row's `burn_usd`.
+    pub burn_usd: Option<f64>,
     /// The instant the pin's served burn is decayed to, as the row's `burn_at`. Null for a pin never renewed with
     /// usage.
     pub burn_at: Option<i64>,
     /// The first placement of the pin's agent under the key and session, null where no record stands.
     pub created_at: Option<i64>,
-    /// The agent's lifecycle word from the keepalive engine's record, null where no mod reports it.
+    /// The instant the pin was written on the account it stands on, as the row's `pinned_at`. `created_at` keeps
+    /// the agent's first placement.
+    pub pinned_at: i64,
+    /// The pin's agent ended and its next request has not arrived. The router leaves such a pin out of a round.
+    pub ended: bool,
+    /// The agent's lifecycle word from the keepalive engine's record, in the row's six words, null where no mod
+    /// reports it.
     #[schema(example = "idle")]
     pub lifecycle: Option<String>,
 }
@@ -193,7 +221,7 @@ impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
             cause: summary.cause,
             last_guard: summary.last_guard,
             next_probe_at: summary.next_probe_at,
-            state: summary.state.map(|state| lifecycle_word(state).into()),
+            state: summary.state.map(word),
         }
     }
 }
@@ -407,6 +435,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 burn_unit: Some(standing.burn_unit),
                 burn_window: priced.window.map(String::from),
                 burn_equivalent: priced.equivalent,
+                burn_usd: priced.usd,
                 burn_at: priced.at,
                 runway_ms: standing.runway_ms,
                 runway_bounded: standing.runway_bounded,
@@ -420,6 +449,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 last_refresh_at: Some(p.last_refresh_at),
                 shed_from: p.shed.as_ref().map(|shed| shed.from.clone()),
                 shed_reason: p.shed.as_ref().and_then(|shed| shed.reason.clone()),
+                shed_at: p.shed.as_ref().map(|shed| shed.at),
+                marked_on: p.mark.as_ref().map(|mark| mark.on.clone()),
+                marked_at: p.mark.as_ref().map(|mark| mark.at),
+                marked_window: p.mark.as_ref().map(|mark| mark.window.clone()),
+                pinned_at: Some(p.created_at),
                 ..unpinned_row(
                     &key.0,
                     key.1,
@@ -467,13 +501,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.companion_since = view.companion_since;
         entry.agents = view.agents as u64;
         entry.keepalive = SessionKeepalive::from(&view.keepalive);
-        entry.lifecycle = view.lifecycles.get(MAIN_AGENT).map(|&state| {
-            if view.registered {
-                "registered".into()
-            } else {
-                lifecycle_word(state).into()
-            }
-        });
+        entry.lifecycle = view
+            .lifecycles
+            .get(MAIN_AGENT)
+            .map(|&lifecycle| lifecycle_word(lifecycle).into());
         entry.presence_age_seconds = view.presence_age_seconds;
     }
     for (key, entry) in rows.iter_mut() {
@@ -506,7 +537,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         let Some(&generation) = live.get(&recipe.key_id) else {
             continue;
         };
-        if recipe.agent_state != phoebis_keepalive::AgentState::Released {
+        if recipe.agent_state != phoebis_keepalive::Lifecycle::Released {
             unreleased.insert((
                 recipe.key_id.clone(),
                 generation,
@@ -557,15 +588,19 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     cache_ttl_ms: pin.cache_ttl_ms,
                     last_used_at: pin.last_used_at,
                     warm: phoebis_routing::warm(pin, pin.auxiliary_only, now),
+                    warm_until: phoebis_routing::warm_until(pin, pin.auxiliary_only),
                     burn: priced.burn,
                     burn_unit: Some(standing.burn_unit),
                     burn_window: priced.window.map(String::from),
                     burn_equivalent: priced.equivalent,
+                    burn_usd: priced.usd,
                     burn_at: priced.at,
                     created_at: standing.first_seen_at,
+                    pinned_at: pin.created_at,
+                    ended: pin.ended,
                     lifecycle: view
                         .and_then(|view| view.lifecycles.get(&pin.agent_id))
-                        .map(|&state| lifecycle_word(state).into()),
+                        .map(|&lifecycle| lifecycle_word(lifecycle).into()),
                 }
             })
             .collect();
@@ -613,8 +648,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.forked_from = identity.and_then(|i| i.forked_from.clone());
         entry.fork_depth = identity.and_then(|i| i.fork_depth);
     }
-    // The count is the fold's over the session's life, so Requests and Cost read the same requests. The activity's
-    // `last_request_at` stays, which the listing's cutoff and the retention above read.
+    // The spend is the fold's over the session's life and carries the count Requests reads, so Requests and Cost read
+    // the same requests. The activity's `last_request_at` stays, which the listing's cutoff and the retention above
+    // read.
     let fold = state.spend.read();
     for (key, entry) in rows.iter_mut() {
         let Some(figures) = fold.answer(key, now) else {
@@ -626,7 +662,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.spend = figures.spend;
         entry.day = figures.day;
         entry.agent_requests = figures.agent_requests;
-        entry.requests = figures.requests;
         // The fold prices by the tier a row recorded, so a share of a window the account's set lacks today is dropped
         // at the answer, as the request list drops it. The account's key stays, since it marks that a plan paid.
         if let Some(spend) = entry.spend.as_mut() {
@@ -656,12 +691,13 @@ struct BurnPricing<'a> {
     now: i64,
 }
 
-/// The pin's burn per hour in its unit, its window, its Pro-week figure and the instant it is decayed to, priced on the
-/// account the pin sits on: the figures the row carries for its display pin and a line for its own.
+/// The pin's burn per hour in its unit, its window, its Pro-week figure, its plan dollars and the instant it is decayed
+/// to, priced on the account the pin sits on: the figures the row carries for its display pin and a line for its own.
 struct PricedBurn {
     burn: Option<f64>,
     window: Option<&'static str>,
     equivalent: Option<f64>,
+    usd: Option<f64>,
     at: Option<i64>,
 }
 
@@ -711,10 +747,17 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
             (burn, Some(window), equivalent)
         }
     };
+    // The plan copy at the list price, and no other copy: fast usage draws usage credits and a classifier call takes no
+    // share of a plan window, so neither is plan traffic. A model the price list lacks answers no figure.
+    let usd = (unit == BurnUnit::WindowShare)
+        .then(|| rates.price_plan_usd(p))
+        .flatten()
+        .map(|b| b * 3_600.0);
     PricedBurn {
         burn,
         window,
         equivalent,
+        usd,
         at: p.burn_at,
     }
 }
@@ -759,13 +802,14 @@ fn unpinned_row(
     }
 }
 
-/// The engine's word on the wire, the match with no wildcard so a sixth word fails to build.
-fn lifecycle_word(state: phoebis_keepalive::AgentState) -> &'static str {
-    use phoebis_keepalive::AgentState::*;
-    match state {
+/// The view's lifecycle word on the wire, the match with no wildcard so a word the view gains fails to build here.
+fn lifecycle_word(lifecycle: phoebis_keepalive::Lifecycle) -> &'static str {
+    use phoebis_keepalive::Lifecycle::*;
+    match lifecycle {
         Busy => "busy",
         Idle => "idle",
         Parked => "parked",
+        Registered => "registered",
         Released => "released",
         Unknown => "unknown",
     }
