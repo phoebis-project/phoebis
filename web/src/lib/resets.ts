@@ -1,6 +1,7 @@
-import type { LimitResets, RateLimitWindow, ResetGrant, WindowId } from '@/api/types';
+import { ApiError } from '@/api/http';
+import type { LimitResets, RateLimitWindow, ResetGrant, ResetUse, WindowId } from '@/api/types';
 import { lookup } from './counts';
-import { fmtAbsolute, fmtEndsIn, fmtPct, instant, listWords } from './format';
+import { fmtAbsolute, fmtDate, fmtEndsIn, fmtPct, instant, listWords, messageOf, upperFirst } from './format';
 import { isExpired, remainingOf } from './quota';
 import { DAY } from './time';
 
@@ -73,3 +74,94 @@ export const resetMarks = (resets: LimitResets | null): WindowId[] => [...new Se
 // The printed figure decides, so a window the chip prints as full carries no mark and no line that promises a change.
 /** Whether a window's chip prints "100% left" now: live, and full by the printed figure. */
 export const readsFull = (window: RateLimitWindow | null, now: number): boolean => window !== null && !isExpired(window, now) && fmtPct(remainingOf(window)) === '100%';
+
+/** The first page's rows: the usable grants first, each part in the block's order. */
+export function resetRows(resets: LimitResets): ResetGrant[] {
+  return [...resets.grants.filter((g) => g.state === 'usable'), ...resets.grants.filter((g) => g.state !== 'usable')];
+}
+
+/** What stands beside a row that cannot be used: the reason's words with a capital, "Used at 13:00", "Used" or
+ *  "Ended Mar 09, 2027". Null for a usable row. */
+export function resetRowNote(grant: ResetGrant, cooldownUntil: string | null, now: number): string | null {
+  switch (grant.state) {
+    case 'usable':
+      return null;
+    case 'used':
+      return grant.usedAt === null ? 'Used' : `Used at ${instant(Date.parse(grant.usedAt), now)}`;
+    case 'ended':
+      return `Ended ${fmtDate(grant.endsAt)}`;
+    default:
+      return upperFirst(resetReason(grant, cooldownUntil, now));
+  }
+}
+
+/** The confirmation's line on the 7-day window. `figure` is the share left after the use as `fmtPct` prints it,
+ *  null where the row carries no share. Null where the line leaves the page. */
+export function resetEstimate(grant: Pick<ResetGrant, 'clears' | 'kind'>, fableWeekShare: number | null, week: RateLimitWindow | null, fable: RateLimitWindow | null, now: number): { figure: string | null } | null {
+  if (grant.kind !== 'fable' || !grant.clears.includes('7d_fable') || grant.clears.includes('7d')) return null;
+  const live = (w: RateLimitWindow | null) => (w !== null && !isExpired(w, now) ? w : null);
+  const sevenDay = live(week);
+  // An unused Fable week holds no share of the 7-day window.
+  if (sevenDay === null || (live(fable)?.utilization ?? 0) <= 0) return null;
+  if (fableWeekShare === null) return { figure: null };
+  const figure = fmtPct(Math.max(0, Math.min(1, 1 - Math.max(0, sevenDay.utilization - fableWeekShare))));
+  // The printed figures decide: a share that rounds away would print the reading as its own estimate.
+  return figure === fmtPct(remainingOf(sevenDay)) ? null : { figure };
+}
+
+/** How the dialog files a use's answer: `used` closes it, and the other two keep it open under `sentence`. */
+export interface ResetAnswer {
+  kind: 'refused' | 'unconfirmed' | 'used';
+  /** The callout's sentence, empty for `used`. */
+  sentence: string;
+}
+
+/** Files what `api.useLimitReset` answered (`use`) or threw (`thrown`), by the router's outcome and its codes.
+ *  `account` is the account's label and `grant` the claimed grant as the dialog confirmed it. */
+export function resetAnswer(result: { use: ResetUse } | { thrown: unknown }, account: string, grant: Pick<ResetGrant, 'id' | 'resetsTotal'>, now: number): ResetAnswer {
+  const refused = (sentence: string): ResetAnswer => ({ kind: 'refused', sentence: `Refused: ${sentence}` });
+  const open = (sentence: string): ResetAnswer => ({ kind: 'unconfirmed', sentence: `Not confirmed: ${sentence}` });
+  if ('thrown' in result) {
+    const e = result.thrown;
+    const message = messageOf(e);
+    const code = e instanceof ApiError ? e.code : null;
+    if (code === 'limit_reset_not_sent') return refused(`the claim did not reach the upstream, so the reset was not used (${message}).`);
+    if (code === 'limit_reset_refused') return refused(`the upstream turned the claim away, so the reset was not used (${message}).`);
+    if (code === 'limit_reset_unanswered') return open(`the upstream gave no usable answer (${message}), so the reset may have been used.`);
+    if (e instanceof ApiError && e.status >= 400 && e.status < 500) return refused(`${message}, so the reset was not used.`);
+    // A call that got no answer, and a 5xx without a code, may follow a claim that left.
+    return open(`the router did not answer (${message}), so the reset may have been used.`);
+  }
+  const { use } = result;
+  if (use.outcome === 'used') return { kind: 'used', sentence: '' };
+  const reason = use.reason === null ? '' : ` (${use.reason})`;
+  if (use.outcome === 'unsettled') {
+    if (use.result === 'unavailable') return open(`the upstream answered that this reset is not available now${reason}.`);
+    if (use.result === 'cooldown') return open('the upstream answered a cooldown to a repeated claim, so the first attempt may have used the reset.');
+    return open(`the upstream answered ${use.result}, which this console does not know.`);
+  }
+  const left = use.limitResets?.grants.find((g) => g.id === grant.id)?.resetsLeft ?? use.resetsLeft ?? 0;
+  const until = use.cooldownUntil === null ? '' : ` until ${instant(Date.parse(use.cooldownUntil), now)}`;
+  switch (use.result) {
+    case 'already_used':
+      return refused(`this reset was already used, and ${account} holds ${left} of ${grant.resetsTotal} now.`);
+    case 'cooldown':
+      return refused(`${account} is on a cooldown${until}, so the reset was not used.`);
+    case 'ineligible':
+      return refused(`${account} cannot take this reset${reason}, so it was not used.`);
+    case 'not_limited':
+      return refused(`${account} stands at no limit this reset clears, so it was not used.`);
+    default:
+      return refused(`the upstream answered ${use.result}, so the reset was not used.`);
+  }
+}
+
+/** The line after a "Not confirmed" sentence: the claimed grant's count in the member read after the claim, or
+ *  what will show it where none is at hand. */
+export const resetHolds = (account: string, after: Pick<ResetGrant, 'resetsLeft' | 'resetsTotal'> | null): string =>
+  after === null ? `The next read of ${account} shows whether it was used.` : `${account} holds ${after.resetsLeft} of ${after.resetsTotal} now.`;
+
+// One window with use left is something to clear, so the warning waits for every one of them to read full.
+/** Whether a use would clear nothing yet: every window the grant clears reads 100% left now. `cleared` holds one
+ *  entry per window of the grant's `clears`, null where the account reads none. */
+export const resetClearsNothing = (cleared: readonly (RateLimitWindow | null)[], now: number): boolean => cleared.every((window) => readsFull(window, now));

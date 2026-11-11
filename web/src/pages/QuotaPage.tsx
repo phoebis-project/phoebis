@@ -1,17 +1,18 @@
 import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
-import type { Account, AccountSlowDown, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend } from '@/api/types';
+import type { Account, AccountSlowDown, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
+import { ResetDialog } from '@/components/ResetDialog';
 import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconReset, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
-import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, listWords, messageOf, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { readsFull, resetChip, resetMarks } from '@/lib/resets';
@@ -193,6 +194,17 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   const chip = resetChip(account.limitResets, now, warningDays);
   const marks = resetMarks(account.limitResets);
+  const [opening, setOpening] = useState<LimitResetsRead | null>(null);
+  const [readingResets, setReadingResets] = useState(false);
+  const openResets = async () => {
+    setReadingResets(true);
+    // The stored block stands in where the fresh read fails, so the click always gets an answer.
+    const read = await api.readLimitResets(account.id).catch((e: unknown): LimitResetsRead => ({ error: messageOf(e), limitResets: account.limitResets }));
+    setReadingResets(false);
+    if ((read.limitResets?.grants.length ?? 0) === 0) onRefreshed();
+    else setOpening(read);
+  };
+  const resetWindow = (id: WindowId) => <WindowChip absent={`no ${windowWord(id)} window`} className="reset-dialog__chip" name={windowTag(id)} now={now} resettable={marks.includes(id)} window={windowOf(account, id)} />;
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
   // spend reading with neither amounts nor a share counts as none.
   const failed = Boolean(snapshot?.error) && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
@@ -279,7 +291,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         )}
       </div>
 
-      <footer className="qcard__foot">
+      <footer className={`qcard__foot ${chip ? 'qcard__foot--use' : ''}`}>
         <div className="qcard__status">
           {reading.lines.map((line, i) => (
             <span key={i} className={`qcard__poll ${line.tone === 'serious' ? 'qcard__backoff' : 'muted'}`} title={i === 0 && reading.title ? reading.title : undefined}>
@@ -288,6 +300,18 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             </span>
           ))}
         </div>
+        {chip && (
+          <Button
+            size="sm"
+            className="qcard__use"
+            disabled={chip.usable === null || readingResets}
+            title={chip.usable ? `Clears ${listWords(chip.usable.clears.map(windowTag))} on ${account.label}` : upperFirst(chip.state)}
+            onClick={() => void openResets()}
+          >
+            {readingResets ? 'Reading…' : 'Use reset'}
+          </Button>
+        )}
+        {(chip || opening) && <ResetDialog account={account} chip={resetWindow} now={now} onAnswered={onRefreshed} onClose={() => setOpening(null)} opening={opening} />}
         <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
           Refresh
         </Pill>

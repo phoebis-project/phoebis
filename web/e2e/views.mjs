@@ -4362,28 +4362,41 @@ async function accountLines(theme, path) {
 }
 
 /**
- * Each Quota card's poll lines against the Refresh pill beside them: the lines end before the pill starts and
- * inside the card, the backoff line reads in the serious ink rather than the muted ink of the line above it, and
- * no line wraps. The router's seed has no subscription account, so only the story's pass has lines to read.
+ * Each Quota card's poll lines against the foot's leftmost control beside them, Use reset where the card carries it
+ * and else the Refresh pill: the lines end before the control starts and inside the card, the backoff line reads in
+ * the serious ink rather than the muted ink of the line above it, and no line wraps. A second read in a 375 by 800
+ * window records each card's lines, their heights and the control's left edge and fails nothing, since the foot's own
+ * rules keep the lines inside its status box there. The router's seed has no subscription account, so only the
+ * story's pass has lines to read.
  */
 async function quotaPollLines(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
-  const cards = await page.evaluate(() =>
-    [...document.querySelectorAll('.qcard')].map((card) => {
-      const pill = card.querySelector('.qcard__foot .pill');
-      const lines = [...card.querySelectorAll('.qcard__poll')].map((line) => {
-        const box = line.getBoundingClientRect();
-        return { color: getComputedStyle(line).color, height: Math.round(box.height), lineHeight: parseFloat(getComputedStyle(line).lineHeight), right: Math.round(box.right), serious: line.classList.contains('qcard__backoff'), text: line.textContent?.trim() ?? '' };
-      });
-      return { cardRight: Math.round(card.getBoundingClientRect().right), lines, name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '', pillLeft: pill ? Math.round(pill.getBoundingClientRect().left) : null };
-    }),
-  );
-  const polled = cards.filter((c) => c.lines.some((l) => /^(polled |not yet polled)/.test(l.text)));
-  measurements.push(`${theme} /quota poll lines ${JSON.stringify(polled.map((c) => ({ name: c.name, lines: c.lines.map((l) => [l.text, l.right, l.height]), pillLeft: c.pillLeft })))}`);
+  const read = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.qcard')].map((card) => {
+        const control = card.querySelector('.qcard__foot .qcard__use') ?? card.querySelector('.qcard__foot .pill');
+        const lines = [...card.querySelectorAll('.qcard__poll')].map((line) => {
+          const box = line.getBoundingClientRect();
+          return { color: getComputedStyle(line).color, height: Math.round(box.height), lineHeight: parseFloat(getComputedStyle(line).lineHeight), right: Math.round(box.right), serious: line.classList.contains('qcard__backoff'), text: line.textContent?.trim() ?? '' };
+        });
+        return {
+          cardRight: Math.round(card.getBoundingClientRect().right),
+          control: control === null ? null : control.classList.contains('qcard__use') ? 'Use reset button' : 'Refresh pill',
+          controlLeft: control ? Math.round(control.getBoundingClientRect().left) : null,
+          lines,
+          name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '',
+        };
+      }),
+    );
+  const polledOf = (cards) => cards.filter((c) => c.lines.some((l) => /^(polled |not yet polled)/.test(l.text)));
+  const recorded = (cards) => JSON.stringify(polledOf(cards).map((c) => ({ name: c.name, lines: c.lines.map((l) => [l.text, l.right, l.height]), control: c.control, controlLeft: c.controlLeft })));
+  const cards = await read();
+  const polled = polledOf(cards);
+  measurements.push(`${theme} /quota poll lines ${recorded(cards)}`);
   if (mock && polled.length === 0) say('the story has subscription accounts, yet no card draws a poll line');
   for (const card of polled) {
     for (const line of card.lines) {
-      if (card.pillLeft !== null && line.right > card.pillLeft) say(`${card.name}'s line ${JSON.stringify(line.text)} ends at ${line.right}px, past the Refresh pill at ${card.pillLeft}px`);
+      if (card.controlLeft !== null && line.right > card.controlLeft) say(`${card.name}'s line ${JSON.stringify(line.text)} ends at ${line.right}px, past the ${card.control} at ${card.controlLeft}px`);
       if (line.right > card.cardRight) say(`${card.name}'s line ${JSON.stringify(line.text)} runs past its card`);
       if (line.height > Math.ceil(line.lineHeight) + 1) say(`${card.name}'s line ${JSON.stringify(line.text)} wraps (${line.height}px)`);
     }
@@ -4409,6 +4422,7 @@ async function quotaPollLines(theme) {
     if (!r.inside) say(`the reason ${JSON.stringify(r.text)} runs past its line`);
     if (!r.title.split('\n').includes(r.text)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
   }
+  measurements.push(`${theme} /quota poll lines at 375 ${recorded(await inPhoneWindow(read))}`);
 }
 
 /**
@@ -5014,6 +5028,41 @@ async function quotaCardHeights(theme) {
     if (values.some((v) => v === null) || Math.max(...values) - Math.min(...values) > 0.5) say(`the cards' ${key} differs: ${cards.map((c) => `${c.name} ${c[key]}`).join(', ')}`);
   }
   measurements.push(`${theme} /quota card heights at 375 ${JSON.stringify(await inPhoneWindow(read))}`);
+}
+
+/**
+ * Back on the reset dialog keeps the focus inside it: on the story's primary, whose first page lists two resets, the
+ * card's Use reset opens the first page, the first row's Use reset the confirmation, and Back returns to the first page
+ * with the focus on that row's button, since the page change unmounts the Back that held it. The walk sends no claim,
+ * closes the dialog through Cancel and ends at rest, so the view's shot draws the cards with no focus ring and no hover.
+ */
+async function quotaResetDialog(theme) {
+  const say = (what) => failures.push(`${theme} /quota reset dialog: ${what}`);
+  const dialog = page.locator('dialog[open].reset-dialog');
+  const card = page.locator('.qcard').filter({ has: page.locator('.qcard__name', { hasText: /^primary$/ }) });
+  try {
+    await card.locator('.qcard__use').click();
+    // The mock answers the read before the dialog after 400 ms on the paused clock.
+    await advance(600);
+    await dialog.waitFor({ state: 'visible', timeout: 5_000 });
+    const row = dialog.locator('.reset-dialog__row button[data-grant]').first();
+    const grant = await row.getAttribute('data-grant');
+    await row.click();
+    await advance(CLOCK_STEP_MS);
+    await dialog.locator('.reset-dialog__back').click();
+    await advance(CLOCK_STEP_MS);
+    const focus = await page.evaluate(() => {
+      const active = document.activeElement;
+      return active instanceof HTMLElement ? { grant: active.dataset.grant ?? null, tag: active.tagName.toLowerCase(), text: (active.textContent ?? '').trim().slice(0, 40) } : null;
+    });
+    measurements.push(`${theme} /quota reset dialog focus after Back ${JSON.stringify({ focus, grant })}`);
+    if (grant === null || focus?.grant !== grant) say(`Back left the focus on ${JSON.stringify(focus)}, not on the first row's button for ${grant}`);
+    await dialog.locator('[data-reset-cancel]').click();
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+  } catch (e) {
+    say(`the walk from primary's Use reset through Back stopped: ${e.message.split('\n')[0]}`);
+  }
+  await atRest();
 }
 
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */
@@ -13661,6 +13710,7 @@ try {
         await quotaChips(theme);
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
+        if (mock) await quotaResetDialog(theme);
         await quotaMeters(theme);
         await quotaMeterRow(theme);
       }

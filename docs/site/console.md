@@ -316,6 +316,29 @@ the chip out. An account with no reset left draws no chip. A window that a reset
 counter-clockwise arrow in its chip unless it reads 100% left or has no live reading, and the chip's hover adds ", a
 reset can clear it now".
 
+A card with a reset left carries "Use reset" beside "Refresh". It is disabled while no reset can be used now, and its
+hover then names the reason. A click reads the account's limit resets first, so the button reads "Reading…" for a
+moment, and then opens a dialog, or reads the list again where no reset is left. Where that read fails, the dialog opens
+on the stored resets under a line that says how old they are.
+
+The dialog's first page, "Resets on primary", lists the account's resets, the usable ones first: the label, what the
+reset clears, how many are left and the date to use it by, with the reason beside a row that cannot be used ("Used at
+14:30", "Waits for the other reset"). An account whose only reset is usable opens on the second page. The second page,
+"Use reset on primary", names each window the reset clears with its reading now and what the use does to it ("clears to
+100% left", or "starts anew" for the 5-hour window), how many resets are left after, the date to use it by, and that a
+used reset cannot be returned. A Fable reset also gives the 7-day window back its Fable share, and the page prints the
+share left after as an estimate from the upstream's own figures. Where the windows read 100% left, the page says the
+reset has nothing to clear yet. While the claim is on its way the button reads "Using…" and the dialog cannot be
+closed.
+
+After a use the dialog closes under the toast "Reset used", and the card reads the cleared windows. Any other answer
+keeps the dialog open under one of two classes. "Refused" means the reset was not used, and the sentence says why. "Not
+confirmed" means the router cannot tell: the upstream's answer leaves the use open, no usable answer came, or the router
+itself did not answer, so the reset may have been used. The line after it reads the account's count once it is known.
+Read the card after a refresh. Where the reset still reads as usable, "Use reset" is enabled again. After a "Not
+confirmed", a second try inside ten minutes repeats the same claim under its request id, so it cannot spend a second
+reset where the first one landed.
+
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
 Weekly or 5-hour, an "Account" axis and a now marker over the bars at the instant's place in the span. It draws one lane

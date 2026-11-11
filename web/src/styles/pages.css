@@ -522,6 +522,19 @@
   min-width: 0;
 }
 
+/* Use reset stands against Refresh, so the reading keeps the foot's left on every card. */
+.qcard__use {
+  flex: none;
+  margin-left: auto;
+}
+
+/* On a narrow card a reading of one line breaks into the second line every foot holds room for. */
+@media (max-width: 900px) {
+  .qcard__foot--use .qcard__poll:only-child {
+    white-space: normal;
+  }
+}
+
 /*
  * One line per window: chip, meter, reset. The chip and the reset size to their content and the meter takes what is
  * left, at least 120 px, so the meters read at the card widths the two-section layout leaves. The meters' starts

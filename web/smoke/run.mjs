@@ -2337,6 +2337,163 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
     missing: [...backoff.map((b) => b.textContent?.trim() ?? ''), JSON.stringify(backoffTitle)],
   });
 }
+// The uses below change the run's one mock: nightly then reads a cooldown, primary its cleared Fable week and one
+// reset, and the Routing log three more rows, so they come after every check of the cards that reads those seeds.
+// Each card with a chip keeps one closed reset dialog under the body, outside the mount's container, so the open
+// one is read from the document.
+const resetDialogs = () => [...document.querySelectorAll('dialog.reset-dialog[open]')];
+const resetCardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use') ?? null;
+{
+  // Use reset stands on a card with a reset left, enabled while one is usable now, its hover naming what the first
+  // usable reset clears or why none can be used (`RESET_BLOCKS` in `web/src/mock/resets.ts`): both of primary's resets
+  // clear the Fable week, workshop's waits out the block's cooldown, and studio's one reset is used.
+  const read = (label) => {
+    const button = resetButtonOf(label);
+    return resetCardOf(label) === undefined ? 'no card' : button && [button.disabled, button.getAttribute('title') ?? ''];
+  };
+  const drawn = { primary: read('primary'), studio: read('studio'), workshop: read('workshop') };
+  results.push({
+    name: "/quota a card's Use reset is enabled while a reset is usable, its hover naming what it clears or why none can be used, and a card with none left draws none (seeds primary, workshop and studio)",
+    ok: JSON.stringify(drawn.primary) === JSON.stringify([false, 'Clears Fable on primary']) && Array.isArray(drawn.workshop) && drawn.workshop[0] === true && drawn.workshop[1].startsWith('On a cooldown until') && drawn.studio === null,
+    missing: [JSON.stringify(drawn)],
+  });
+}
+{
+  // nightly's card keeps its chip from the list while the fresh read lists no grant, the one state in which the
+  // click must open nothing.
+  const member = (await api.listAccounts()).find((a) => a.id === 'nightly').limitResets;
+  const { readLimitResets } = api;
+  await chooseInterval(m, 'Off');
+  api.readLimitResets = async () => ({ error: null, limitResets: { ...member, grants: [], left: 0 } });
+  const reads = countCalls('listAccounts');
+  resetButtonOf('nightly')?.click();
+  await m.settle(400);
+  reads.restore();
+  api.readLimitResets = readLimitResets;
+  results.push({
+    name: "/quota a read with no grant opens no dialog: nightly's Use reset reads the list again (seed nightly)",
+    ok: resetDialogs().length === 0 && reads.calls.length === 1,
+    missing: [`${resetDialogs().length} open`, `listAccounts ${reads.calls.length}`],
+  });
+  await chooseInterval(m, '5 s');
+}
+{
+  // A fresh read that fails still opens the dialog, on the block the list holds, under a line that says how old it
+  // is. secondary's poll waits out a backoff until 4 minutes after the mock's load (`SEEDS` in
+  // `web/src/mock/accounts.ts`), so its read answers the stored block with the service's sentence, and nightly's read
+  // fails as a router that never answered. Every block was read 20 minutes before the mock's load (`READ_AT` in
+  // `web/src/mock/resets.ts`).
+  const opened = async (label) => {
+    resetButtonOf(label)?.click();
+    await m.settle(600);
+    const open = resetDialogs();
+    const line = open[0]?.querySelector('.reset-dialog__stale')?.textContent?.trim() ?? 'no line';
+    await escapeOn(m);
+    return { line, open: open.length };
+  };
+  const next = (await api.listAccounts()).find((a) => a.id === 'secondary').usage.poll.nextAttemptAt;
+  const secondary = await opened('secondary');
+  failNextCall('readLimitResets', '/admin/accounts/nightly/limit-resets/read', 'the router did not answer', { network: true, quiet: true });
+  const nightly = await opened('nightly');
+  results.push({
+    name: '/quota a failed opening read still opens the dialog on the stored resets under a line that says how old they are (seeds secondary and nightly)',
+    ok:
+      secondary.open === 1 &&
+      /^Read \d+m ago\. A fresh read failed: the account is waiting out a rate limit$/.test(secondary.line) &&
+      nightly.open === 1 &&
+      /^Read \d+m ago\. A fresh read failed: the router did not answer$/.test(nightly.line) &&
+      resetDialogs().length === 0,
+    missing: [JSON.stringify({ nightly, secondary }), `the clock at ${new Date(Date.now()).toISOString()}, secondary's next attempt at ${next}`],
+  });
+}
+{
+  // A claim on its way holds its dialog: Escape and a click on the backdrop leave it open with Use reset disabled, and
+  // the same request closes it after the answer. nightly's one reset is usable, so its dialog opens on the
+  // confirmation, and a use of it answers a cooldown 25 minutes after the mock's load (`RESET_ANSWERS` in
+  // `web/src/mock/resets.ts`), which the run's UTC zone prints as its own hour and minute.
+  resetButtonOf('nightly')?.click();
+  await m.settle(600);
+  const use = () => resetDialogs()[0]?.querySelector('.dialog__foot .btn--primary') ?? null;
+  const held = deferNextCall('useLimitReset');
+  use()?.click();
+  await m.settle(200);
+  await escapeOn(m);
+  const escaped = resetDialogs().length;
+  await outsideOf(m, resetDialogs()[0]);
+  const backdrop = resetDialogs().length;
+  const out = { disabled: use()?.disabled ?? null, text: use()?.textContent?.trim() ?? 'no button' };
+  held.release();
+  await m.settle(800);
+  held.restore();
+  const callout = resetDialogs()[0]?.querySelector('.callout--critical')?.textContent?.trim() ?? 'no callout';
+  await escapeOn(m);
+  const closed = resetDialogs().length;
+  results.push({
+    name: '/quota the dialog waits for its claim: Escape and the backdrop leave it open with Use reset disabled until the answer, and Escape closes it after (seed nightly)',
+    ok: escaped === 1 && backdrop === 1 && out.disabled === true && out.text === 'Using…' && /^Refused: nightly is on a cooldown until \d{2}:\d{2}, so the reset was not used\.$/.test(callout) && closed === 0,
+    missing: [`${escaped} open after Escape, ${backdrop} after the backdrop`, JSON.stringify(out), callout, `${closed} open after the answer's Escape`],
+  });
+}
+{
+  // An unsettled use reads "Not confirmed" and never "not used", and Use reset stays enabled while the list read after
+  // it holds the reset as usable. secondary's one reset opens on the confirmation, and a use of it answers the route's
+  // 502 under limit_reset_unanswered with the upstream's 503 (`RESET_ANSWERS`), which folds nothing.
+  resetButtonOf('secondary')?.click();
+  await m.settle(600);
+  resetDialogs()[0]?.querySelector('.dialog__foot .btn--primary')?.click();
+  await m.settle(600);
+  const dialog = resetDialogs()[0];
+  const read = {
+    callout: dialog?.querySelector('.callout--critical')?.textContent?.trim() ?? 'no callout',
+    notUsed: (dialog?.textContent ?? '').includes('not used'),
+    open: resetDialogs().length,
+    use: dialog?.querySelector('.dialog__foot .btn--primary')?.disabled ?? null,
+  };
+  await escapeOn(m);
+  results.push({
+    name: '/quota an unsettled use reads Not confirmed with the count read after it, never not used, and leaves Use reset enabled (seed secondary)',
+    ok:
+      read.open === 1 &&
+      read.callout.includes('Not confirmed: the upstream gave no usable answer (upstream: HTTP 503), so the reset may have been used.') &&
+      read.callout.includes('secondary holds 1 of 1 now.') &&
+      !read.notUsed &&
+      read.use === false,
+    missing: [JSON.stringify(read)],
+  });
+}
+{
+  // After a use the dialog closes under the toast, the chip counts the reset left, and the first page lists the other
+  // reset first and the used one with the time of its use. primary's two resets clear the Fable week, the first usable
+  // and the second waiting, and a use answers `reset` (`RESET_BLOCKS` and `RESET_ANSWERS`), stamped at the mock's clock
+  // and printed in the run's UTC zone.
+  resetButtonOf('primary')?.click();
+  await m.settle(600);
+  resetDialogs()[0]?.querySelector('.reset-dialog__row button[data-grant]')?.click();
+  await m.settle(100);
+  resetDialogs()[0]?.querySelector('.dialog__foot .btn--primary')?.click();
+  await m.settle(800);
+  const toasts = [...m.container.querySelectorAll('.toast')].map((t) => t.textContent?.trim() ?? '');
+  const open = resetDialogs().length;
+  const chip = resetCardOf('primary')?.querySelector('.qcard__chips .chip--resets .chip__long')?.textContent?.trim() ?? 'no chip';
+  resetButtonOf('primary')?.click();
+  await m.settle(600);
+  const rows = [...(resetDialogs()[0]?.querySelectorAll('.reset-dialog__row') ?? [])].map((r) => [r.querySelector('button[data-grant]')?.getAttribute('data-grant') ?? '', r.querySelector('.reset-dialog__note')?.textContent?.trim() ?? null]);
+  await escapeOn(m);
+  results.push({
+    name: "/quota after a use the toast reads Reset used, the chip counts the reset left, and the first page lists the other reset first and the used one with its time (seed primary)",
+    ok:
+      toasts.includes('Reset used') &&
+      open === 0 &&
+      chip === '1 available' &&
+      rows.length === 2 &&
+      rows[0][0] === 'rg-primary-2' &&
+      rows[0][1] === null &&
+      rows[1][0] === 'rg-primary-1' &&
+      /^Used at \d{2}:\d{2}$/.test(rows[1][1] ?? ''),
+    missing: [JSON.stringify({ chip, open, rows, toasts })],
+  });
+}
 // The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
 // chips to be read against: the cards and the lanes draw the three windows in one order.
 const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));
