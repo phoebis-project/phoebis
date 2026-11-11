@@ -1,27 +1,32 @@
 //! Parses the OAuth usage payload and caches it per account, coalescing concurrent fetches.
 
 use std::collections::{BTreeSet, HashMap};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
 use phoebis_store::{AccountRow, Store};
 use phoebis_transport::control::ControlClient;
+use phoebis_transport::response::ResponseHead;
 use phoebis_transport::TransportError;
 use serde_json::Value;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::exchange::{
-    claim_request, control_request, instant_ms, parse_profile, ControlKind, OauthError,
-    ProfileResponse,
+    claim_request, control_request, instant_ms, json_object, parse_profile, usage_json,
+    ControlKind, OauthError, ProfileResponse,
 };
 use crate::limit_resets::{
     fold_claim_answer, grant_states, parse_claim_answer, parse_limit_resets, ClaimAnswer,
     GrantStatus, LimitResets, SEVEN_DAY_FABLE,
 };
-use crate::manager::{retry_after_ms, AcquireError, Clock, CredentialManager, LandedMark};
+use crate::manager::{
+    retry_after_ms, AccessToken, AcquireError, Clock, CredentialManager, LandedMark,
+};
 use crate::random;
 
 // A poisoned mutex means a prior panic happened while the cache or in-flight map was being mutated, so the
@@ -241,7 +246,8 @@ pub struct LatestStanding {
     pub has_windows: bool,
 }
 
-#[derive(Debug, thiserror::Error)]
+/// `Clone`, since every caller joined to a limit resets read takes a copy.
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum UsageError {
     #[error("{0}")]
     Unavailable(String),
@@ -267,6 +273,12 @@ impl PollFault {
     /// Whether the request failed in transport, the fault that carries no status.
     pub fn transport(&self) -> bool {
         self.status.is_none()
+    }
+
+    /// The status a fault's warning logs, `transport` for a fault with none.
+    pub fn status_text(&self) -> String {
+        self.status
+            .map_or_else(|| "transport".to_string(), |status| status.to_string())
     }
 }
 
@@ -330,10 +342,7 @@ impl PollIssue {
 /// extra-usage amounts where they carry the used credits, a currency and `decimal_places`, and is none
 /// otherwise.
 pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
-    let root: Value = serde_json::from_slice(body).map_err(usage_json)?;
-    let map = root
-        .as_object()
-        .ok_or_else(|| OauthError::Malformed("usage response is not an object".into()))?;
+    let map = json_object(body, "usage response")?;
 
     let raw_keys: Vec<String> = map.keys().cloned().collect();
 
@@ -355,7 +364,7 @@ pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
                 // The alias is the same quota under the name an older response used, so leaving it among the
                 // windows would show the operator one limit twice.
                 windows.retain(|window| !FABLE_KEY_ALIASES.contains(&window.key.as_str()));
-                (Some(window), fable_week_share(map, index))
+                (Some(window), fable_week_share(&map, index))
             }
             None => (None, None),
         },
@@ -375,10 +384,6 @@ pub fn parse_usage(body: &[u8]) -> Result<ParsedUsage, OauthError> {
         raw_keys,
         fable_week_share,
     })
-}
-
-fn usage_json(error: serde_json::Error) -> OauthError {
-    OauthError::UsageJson(error.to_string())
 }
 
 fn spend_reading(spend: Option<&Value>, extra: Option<&ExtraUsage>) -> Option<SpendReading> {
@@ -681,17 +686,55 @@ fn ladder_step(in_a_row: u32) -> i64 {
         .unwrap_or(BACKOFF_CAP_MS)
 }
 
-type FetchOutcome = Result<(UsageSnapshot, Option<PollIssue>), String>;
-type SharedFetch = Shared<BoxFuture<'static, FetchOutcome>>;
+type Joined<T> = Shared<BoxFuture<'static, T>>;
 
-/// Why a limit resets read failed. `Clone`, since every caller joined to the read takes a copy.
-#[derive(Clone, Debug)]
-enum ResetsFailure {
-    Unavailable(String),
-    Fault(PollFault),
+type FetchOutcome = Result<(UsageSnapshot, Option<PollIssue>), String>;
+type SharedFetch = Joined<FetchOutcome>;
+
+type SharedResetsRead = Joined<Result<Option<LimitResets>, UsageError>>;
+
+/// Each account's entry beside the holder it was written for, so an entry an earlier holder of the id left never
+/// answers for a later one.
+#[derive(Default)]
+struct HolderMap<T>(HashMap<String, (Identity, T)>);
+
+impl<T> HolderMap<T> {
+    fn get(&self, account_id: &str, holder: Identity) -> Option<&T> {
+        self.0
+            .get(account_id)
+            .filter(|entry| entry.0 == holder)
+            .map(|entry| &entry.1)
+    }
+
+    fn get_mut(&mut self, account_id: &str, holder: Identity) -> Option<&mut T> {
+        self.0
+            .get_mut(account_id)
+            .filter(|entry| entry.0 == holder)
+            .map(|entry| &mut entry.1)
+    }
+
+    fn insert(&mut self, account_id: &str, holder: Identity, value: T) {
+        self.0.insert(account_id.to_string(), (holder, value));
+    }
+
+    fn remove(&mut self, account_id: &str) {
+        self.0.remove(account_id);
+    }
 }
 
-type SharedResetsRead = Shared<BoxFuture<'static, Result<Option<LimitResets>, ResetsFailure>>>;
+impl<T: Default> HolderMap<T> {
+    /// The holder's entry, started over where another holder's stands.
+    fn slot(&mut self, account_id: &str, holder: Identity) -> &mut T {
+        let entry = self
+            .0
+            .entry(account_id.to_string())
+            .or_insert_with(|| (holder, T::default()));
+        if entry.0 != holder {
+            *entry = (holder, T::default());
+        }
+        &mut entry.1
+    }
+}
 
 struct Inner {
     cache: Mutex<HashMap<String, CachedEntry>>,
@@ -701,7 +744,7 @@ struct Inner {
     /// snapshot or a profile, neither of which carries the mark, and the routing hears of it only from a report.
     landed_marks: Mutex<HashMap<String, LandedMark>>,
     /// The limit resets read each account's poll slot decides by, beside the holder it was written for.
-    resets_memory: Mutex<HashMap<String, (Identity, LimitResetsMemory)>>,
+    resets_memory: Mutex<HolderMap<LimitResetsMemory>>,
     /// One lock over the kept request ids and the claims on their way, so `invalidate` and a claim's settling never
     /// interleave.
     claim_memory: Mutex<ClaimMemory>,
@@ -714,33 +757,64 @@ struct Inner {
     clock: Clock,
 }
 
-/// Removes an account's in-flight entry once its fetch task ends, however it ends, so a panic never leaves
+/// Removes an account's in-flight entry from `map` once its task ends, however it ends, so a panic never leaves
 /// every later caller joined to a future that has already resolved.
-struct InflightGuard {
+struct InflightGuard<V: 'static> {
     account_id: String,
     inner: Arc<Inner>,
+    map: InflightMap<V>,
 }
 
-impl Drop for InflightGuard {
+type InflightMap<V> = fn(&Inner) -> &Mutex<HashMap<String, V>>;
+
+impl<V: 'static> Drop for InflightGuard<V> {
     fn drop(&mut self) {
-        if let Ok(mut inflight) = self.inner.inflight.lock() {
+        if let Ok(mut inflight) = (self.map)(&self.inner).lock() {
             inflight.remove(&self.account_id);
         }
     }
 }
 
-/// `InflightGuard` for a limit resets read's entry.
-struct ResetsReadGuard {
-    account_id: String,
-    inner: Arc<Inner>,
-}
-
-impl Drop for ResetsReadGuard {
-    fn drop(&mut self) {
-        if let Ok(mut inflight) = self.inner.resets_inflight.lock() {
-            inflight.remove(&self.account_id);
+/// The account's task already in `map`, joined, or else `task` spawned and recorded there, with whether this call
+/// spawned it.
+fn join_or_spawn<T, F>(
+    inner: &Arc<Inner>,
+    map: InflightMap<Joined<T>>,
+    account_id: &str,
+    panicked: fn() -> T,
+    task: impl FnOnce(Arc<Inner>, String) -> F,
+) -> (Joined<T>, bool)
+where
+    T: Clone + Send + Sync + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
+    let mut inflight = map(inner).lock().expect(LOCK_POISONED);
+    if let Some(existing) = inflight.get(account_id) {
+        return (existing.clone(), false);
+    }
+    let work = task(inner.clone(), account_id.to_string());
+    let guarded = inner.clone();
+    let id = account_id.to_string();
+    // Spawned so a caller that goes away stops neither the task other callers are joined to nor its writes. The map's
+    // lock is held across the spawn so a task finishing at once cannot remove the entry before it is inserted.
+    let handle = tokio::spawn(async move {
+        let _guard = InflightGuard {
+            account_id: id,
+            inner: guarded,
+            map,
+        };
+        work.await
+    });
+    let shared = async move {
+        match handle.await {
+            Ok(outcome) => outcome,
+            Err(_) => panicked(),
         }
     }
+    .boxed()
+    .shared();
+    inflight.insert(account_id.to_string(), shared.clone());
+    (shared, true)
 }
 
 pub struct UsageService {
@@ -783,19 +857,52 @@ impl ClaimOutcome {
 /// One claim that left, as the service answers it.
 #[derive(Clone, Debug)]
 pub struct Claim {
-    /// The answer where the upstream sent one that parsed and names a `result`.
-    pub answer: Option<ClaimAnswer>,
     /// The instant the answer arrived or the request failed, on the service's clock.
     pub at: i64,
-    /// The transport error's text for a claim with no answer.
-    pub error: Option<String>,
     /// The grant's label in the stored block the claim was checked on.
     pub label: String,
     pub outcome: ClaimOutcome,
+    pub reply: ClaimReply,
     /// The request id the claim sent.
     pub request_id: String,
+}
+
+/// What came back for a claim that left: a head, or the transport error of a request that got none.
+#[derive(Clone, Debug)]
+pub enum ClaimReply {
+    Answered {
+        /// The answer where the upstream sent one that parsed and names a `result`.
+        answer: Option<ClaimAnswer>,
+        status: u16,
+    },
+    /// The transport error's text.
+    Failed(String),
+}
+
+impl Claim {
+    /// The answer where the upstream sent one that parsed and names a `result`.
+    pub fn answer(&self) -> Option<&ClaimAnswer> {
+        match &self.reply {
+            ClaimReply::Answered { answer, .. } => answer.as_ref(),
+            ClaimReply::Failed(_) => None,
+        }
+    }
+
+    /// The transport error's text, `None` where a head arrived.
+    pub fn error(&self) -> Option<&str> {
+        match &self.reply {
+            ClaimReply::Answered { .. } => None,
+            ClaimReply::Failed(error) => Some(error),
+        }
+    }
+
     /// The HTTP status, `None` where no head arrived.
-    pub status: Option<u16>,
+    pub fn status(&self) -> Option<u16> {
+        match &self.reply {
+            ClaimReply::Answered { status, .. } => Some(*status),
+            ClaimReply::Failed(_) => None,
+        }
+    }
 }
 
 /// Why a claim sent nothing.
@@ -839,9 +946,9 @@ type KeptIds = HashMap<String, (String, i64)>;
 struct ClaimMemory {
     /// The kept request ids by account id and grant id, with the holder they were kept under and the instant
     /// the unsettled outcome arrived.
-    kept: HashMap<String, (Identity, KeptIds)>,
-    /// The accounts with a claim on its way, each with whether an `invalidate` crossed it: a crossed claim whose
-    /// request has not left sends nothing, and one whose request left keeps no id.
+    kept: HolderMap<KeptIds>,
+    /// The accounts with a claim on its way, each with whether an `invalidate` crossed it: a claim crossed before its
+    /// token is acquired sends nothing, and one crossed after that keeps no id.
     on_their_way: HashMap<String, bool>,
 }
 
@@ -866,35 +973,22 @@ impl Drop for ClaimGuard<'_> {
     }
 }
 
-/// A claim whose head arrived, classed as the client classes it: a 401, 403 or 429 refuses with no answer, any other
-/// status but 200 and a 200 whose body does not parse leave the claim unsettled, and a parsed answer takes its class
-/// from its word. Beside it, the parse's refusal of a 200's body.
+/// The outcome and the answer of a claim whose head arrived, classed as the client classes it: a 401, 403 or 429
+/// refuses with no answer, any other status but 200 leaves the claim unsettled, and a parsed answer takes its class
+/// from its word. A 200 whose body does not parse answers the parse's refusal.
 fn answered(
     status: u16,
     body: &[u8],
     repeated: bool,
-    at: i64,
-    label: String,
-    request_id: String,
-) -> (Claim, Option<OauthError>) {
-    let (outcome, answer, unparsed) = match status {
-        401 | 403 | 429 => (ClaimOutcome::Refused, None, None),
-        200 => match parse_claim_answer(body) {
-            Ok(answer) => (class_of(&answer.result, repeated), Some(answer), None),
-            Err(error) => (ClaimOutcome::Unsettled, None, Some(error)),
-        },
-        _ => (ClaimOutcome::Unsettled, None, None),
-    };
-    let claim = Claim {
-        answer,
-        at,
-        error: None,
-        label,
-        outcome,
-        request_id,
-        status: Some(status),
-    };
-    (claim, unparsed)
+) -> Result<(ClaimOutcome, Option<ClaimAnswer>), OauthError> {
+    match status {
+        401 | 403 | 429 => Ok((ClaimOutcome::Refused, None)),
+        200 => {
+            let answer = parse_claim_answer(body)?;
+            Ok((class_of(&answer.result, repeated), Some(answer)))
+        }
+        _ => Ok((ClaimOutcome::Unsettled, None)),
+    }
 }
 
 /// The class of a parsed answer's `result`. A word the router does not know leaves the claim unsettled, since it
@@ -924,7 +1018,7 @@ impl UsageService {
                 inflight: Mutex::new(HashMap::new()),
                 resets_inflight: Mutex::new(HashMap::new()),
                 landed_marks: Mutex::new(HashMap::new()),
-                resets_memory: Mutex::new(HashMap::new()),
+                resets_memory: Mutex::new(HolderMap::default()),
                 claim_memory: Mutex::new(ClaimMemory::default()),
                 on_backoff: Mutex::new(None),
                 semaphore: Semaphore::new(concurrency),
@@ -1085,6 +1179,24 @@ impl UsageService {
         (Some(entry.status(now)), latest)
     }
 
+    /// The Fable week's share in the snapshot `latest_for` answers for the row, with no copy of the snapshot.
+    pub fn fable_week_share_for(&self, account: &AccountRow) -> Option<f64> {
+        let identity = Identity::of(account);
+        self.inner
+            .cache
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(&account.id)
+            .filter(|entry| entry.identity == identity)
+            .and_then(|entry| entry.snapshot.fable_week_share)
+    }
+
+    /// The windows at their limit in the snapshot `latest_for` answers for the row, with no copy of the snapshot.
+    pub fn windows_at_limit_for(&self, account: &AccountRow) -> Option<BTreeSet<String>> {
+        self.inner
+            .windows_at_limit_of(&account.id, Identity::of(account))
+    }
+
     /// The reauth mark the account's last failed acquisition landed, once: the poll and the profile refresh take it
     /// after their call to report it to the routing.
     pub fn take_landed_mark(&self, account_id: &str) -> Option<LandedMark> {
@@ -1103,8 +1215,8 @@ impl UsageService {
     /// Drops what the service holds for the account: the cached snapshot, the remembered limit resets read with its
     /// limit set and its due mark, and the kept request ids. A pairing keeps the holder those are keyed by, so the
     /// remembered hour would hold back the read that fills the block the pairing cleared, and a kept id would go out
-    /// for the next pairing. A claim on its way across the call keeps no id, and where its request has not left yet it
-    /// sends none.
+    /// for the next pairing. A claim on its way across the call keeps no id, and where the call crosses its token's
+    /// acquisition, it sends none.
     pub fn invalidate(&self, account_id: &str) {
         self.inner
             .cache
@@ -1119,7 +1231,7 @@ impl UsageService {
         let mut claims = self.inner.claim_memory.lock().expect(LOCK_POISONED);
         claims.kept.remove(account_id);
         // A claim on its way was reserved under the pairing before this call, so it keeps no id for the next one, and
-        // where its request has not left yet it sends none.
+        // where the call crosses its token's acquisition, it sends none.
         if let Some(crossed) = claims.on_their_way.get_mut(account_id) {
             *crossed = true;
         }
@@ -1129,38 +1241,13 @@ impl UsageService {
         &self,
         account_id: &str,
     ) -> Result<(UsageSnapshot, Option<PollIssue>), UsageError> {
-        let mut started = false;
-        let shared = {
-            let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
-            match inflight.get(account_id) {
-                Some(existing) => existing.clone(),
-                None => {
-                    started = true;
-                    let inner = self.inner.clone();
-                    let id = account_id.to_string();
-                    // Spawned so a caller that goes away mid-fetch does not stop the fetch other callers are
-                    // joined to; the guard's map lock is held across the spawn so a fetch finishing at once
-                    // cannot remove the entry before it is inserted.
-                    let handle = tokio::spawn(async move {
-                        let guard = InflightGuard {
-                            account_id: id,
-                            inner,
-                        };
-                        guard.inner.fetch_and_cache(&guard.account_id).await
-                    });
-                    let shared = async move {
-                        match handle.await {
-                            Ok(outcome) => outcome,
-                            Err(_) => Err("usage fetch panicked".to_string()),
-                        }
-                    }
-                    .boxed()
-                    .shared();
-                    inflight.insert(account_id.to_string(), shared.clone());
-                    shared
-                }
-            }
-        };
+        let (shared, started) = join_or_spawn(
+            &self.inner,
+            |inner| &inner.inflight,
+            account_id,
+            || Err("usage fetch panicked".to_string()),
+            |inner, id| async move { inner.fetch_and_cache(&id).await },
+        );
         shared
             .await
             .map(|(snapshot, issue)| (snapshot, issue.filter(|_| started)))
@@ -1170,59 +1257,17 @@ impl UsageService {
     /// The profile document, fetched now: the usage cache's `not_before` gates it and a 429 here counts against
     /// that gate, so the two endpoints share one backoff per account.
     pub async fn profile(&self, account_id: &str) -> Result<ProfileResponse, UsageError> {
-        let now = (self.inner.clock)();
-        if self.inner.next_attempt_at(account_id, now).is_some() {
-            return Err(UsageError::Unavailable(
-                "the account is waiting out a rate limit".into(),
-            ));
-        }
-        let token = self
+        self.inner.refuse_while_held(account_id)?;
+        let (_, body) = self
             .inner
-            .manager
-            .acquire(account_id)
-            .await
-            .map_err(|error| {
-                self.inner.keep_landed_mark(account_id, &error);
-                UsageError::Unavailable(format!("acquire: {error}"))
-            })?;
-        let permit = self
-            .inner
-            .semaphore
-            .acquire()
-            .await
-            .expect("usage semaphore is never closed");
-        let req = control_request(
-            self.inner.profile,
-            ControlKind::Profile,
-            Some(token.secret.expose()),
-            None,
-        );
-        let host = ControlKind::Profile.host(self.inner.profile);
-        let sent = self.inner.control.send(req, host, FETCH_TIMEOUT).await;
-        drop(permit);
-        let (head, body) = sent.map_err(|error| {
-            UsageError::Fault(transport_fault(PROFILE_ENDPOINT, &error.to_string()))
-        })?;
-        if head.status == 429 {
-            // The hold runs from the answer's arrival, as a usage 429's does; `now` predates the credential and
-            // permit waits.
-            let received_at = (self.inner.clock)();
-            self.inner.rate_limited(
+            .read_control(
                 account_id,
+                ControlKind::Profile,
                 PROFILE_ENDPOINT,
-                received_at,
-                retry_after_ms(&head, received_at, BACKOFF_CAP_MS),
-            );
-            return Err(UsageError::Unavailable(
-                "profile request rate limited".into(),
-            ));
-        }
-        if head.status != 200 {
-            return Err(UsageError::Fault(status_fault(
                 PROFILE_ENDPOINT,
-                head.status,
-            )));
-        }
+                || (),
+            )
+            .await?;
         parse_profile(&body).map_err(|error| UsageError::Unavailable(format!("parse: {error}")))
     }
 
@@ -1231,73 +1276,37 @@ impl UsageService {
     /// stays due for the account's next poll slot, and the caller reads what the row holds. Refused while the account
     /// waits out its hold, and a 429 counts on that hold.
     pub async fn limit_resets(&self, account_id: &str) -> Result<Option<LimitResets>, UsageError> {
-        let now = (self.inner.clock)();
-        if self.inner.next_attempt_at(account_id, now).is_some() {
-            return Err(UsageError::Unavailable(
-                "the account is waiting out a rate limit".into(),
-            ));
-        }
-        let shared = {
-            let mut inflight = self.inner.resets_inflight.lock().expect(LOCK_POISONED);
-            match inflight.get(account_id) {
-                Some(existing) => existing.clone(),
-                None => {
-                    let inner = self.inner.clone();
-                    let id = account_id.to_string();
-                    // Spawned so a caller that goes away cuts neither the request nor the store's write, with the
-                    // map's lock held across the spawn as `join_or_start` holds it.
-                    let handle = tokio::spawn(async move {
-                        let guard = ResetsReadGuard {
-                            account_id: id,
-                            inner,
-                        };
-                        let outcome = guard.inner.read_limit_resets(&guard.account_id).await;
-                        // Logged here, once per read, however many callers joined it.
-                        if let Err(ResetsFailure::Fault(fault)) = &outcome {
-                            let status = fault.status.map_or_else(
-                                || "transport".to_string(),
-                                |status| status.to_string(),
-                            );
-                            tracing::warn!(
-                                account = %guard.account_id,
-                                status = %status,
-                                error = %fault.text,
-                                "a read of the limit resets failed"
-                            );
-                        }
-                        outcome
-                    });
-                    let shared = async move {
-                        match handle.await {
-                            Ok(outcome) => outcome,
-                            Err(_) => Err(ResetsFailure::Unavailable(
-                                "limit resets read panicked".into(),
-                            )),
-                        }
-                    }
-                    .boxed()
-                    .shared();
-                    inflight.insert(account_id.to_string(), shared.clone());
-                    shared
+        self.inner.refuse_while_held(account_id)?;
+        let (shared, _) = join_or_spawn(
+            &self.inner,
+            |inner| &inner.resets_inflight,
+            account_id,
+            || Err(UsageError::Unavailable("limit resets read panicked".into())),
+            |inner, id| async move {
+                let outcome = inner.read_limit_resets(&id).await;
+                // Logged here, once per read, however many callers joined it.
+                if let Err(UsageError::Fault(fault)) = &outcome {
+                    tracing::warn!(
+                        account = %id,
+                        status = %fault.status_text(),
+                        error = %fault.text,
+                        "a read of the limit resets failed"
+                    );
                 }
-            }
-        };
-        shared.await.map_err(|failure| match failure {
-            ResetsFailure::Unavailable(message) => UsageError::Unavailable(message),
-            ResetsFailure::Fault(fault) => UsageError::Fault(fault),
-        })
+                outcome
+            },
+        );
+        shared.await
     }
 
     /// The limit resets read the service remembers for the row's holder, the default where it remembers none.
     pub fn limit_resets_memory(&self, account: &AccountRow) -> LimitResetsMemory {
-        let holder = Identity::of(account);
         self.inner
             .resets_memory
             .lock()
             .expect(LOCK_POISONED)
-            .get(&account.id)
-            .filter(|(written_for, _)| *written_for == holder)
-            .map(|(_, memory)| memory.clone())
+            .get(&account.id, Identity::of(account))
+            .cloned()
             .unwrap_or_default()
     }
 
@@ -1343,10 +1352,10 @@ impl UsageService {
         let (label, epoch) = inner
             .usable_grant(account_id, grant_id)
             .ok_or(ClaimRefusal::NotUsable)?;
-        let token = inner.manager.acquire(account_id).await.map_err(|error| {
-            inner.keep_landed_mark(account_id, &error);
-            ClaimRefusal::NotSent(format!("acquire: {error}"))
-        })?;
+        let token = inner
+            .acquire_token(account_id)
+            .await
+            .map_err(ClaimRefusal::NotSent)?;
         // The acquisition can wait on a refresh, long enough for the id to pass to another holder or for a pairing to
         // land, and a pairing keeps the holder, so the reservation's flag tells of it.
         if inner.identity(account_id) != Some(holder)
@@ -1371,34 +1380,40 @@ impl UsageService {
             .send(request, inner.profile.control.usage.host, CLAIM_TIMEOUT)
             .await;
         let at = (inner.clock)();
-        let claim = match sent {
+        let (outcome, reply) = match sent {
             Err(TransportError::Unreachable(detail)) => return Err(ClaimRefusal::NotSent(detail)),
-            Err(error) => Claim {
-                answer: None,
-                at,
-                error: Some(error.to_string()),
-                label,
-                outcome: ClaimOutcome::Unsettled,
-                request_id,
-                status: None,
-            },
+            Err(error) => (
+                ClaimOutcome::Unsettled,
+                ClaimReply::Failed(error.to_string()),
+            ),
             Ok((head, body)) => {
-                let (claim, unparsed) =
-                    answered(head.status, &body, repeated, at, label, request_id);
-                // The claim reads as unsettled with no answer, so this line is the one trace of why.
-                if let Some(error) = unparsed {
-                    tracing::warn!(
-                        account = %account_id,
-                        status = %head.status,
-                        error = %error,
-                        "the answer to a limit reset claim could not be read"
-                    );
-                }
-                claim
+                let (outcome, answer) =
+                    answered(head.status, &body, repeated).unwrap_or_else(|error| {
+                        // The claim reads as unsettled with no answer, so this line is the one trace of why.
+                        tracing::warn!(
+                            account = %account_id,
+                            status = %head.status,
+                            error = %error,
+                            "the answer to a limit reset claim could not be read"
+                        );
+                        (ClaimOutcome::Unsettled, None)
+                    });
+                let reply = ClaimReply::Answered {
+                    answer,
+                    status: head.status,
+                };
+                (outcome, reply)
             }
         };
+        let claim = Claim {
+            at,
+            label,
+            outcome,
+            reply,
+            request_id,
+        };
         inner.settle_request_id(account_id, holder, grant_id, &claim, repeated);
-        if let Some(answer) = &claim.answer {
+        if let Some(answer) = claim.answer() {
             inner.fold_claim(account_id, holder, epoch, grant_id, answer);
         }
         // An account deleted and created again while the request was out has another holder, whose memory the mark
@@ -1411,72 +1426,43 @@ impl UsageService {
 }
 
 impl Inner {
-    async fn read_limit_resets(
-        &self,
-        account_id: &str,
-    ) -> Result<Option<LimitResets>, ResetsFailure> {
+    async fn read_limit_resets(&self, account_id: &str) -> Result<Option<LimitResets>, UsageError> {
         // Taken together before anything is sent, and before the token, so a token acquired before a pairing never
         // writes its answer under the pairing's epoch: the store refuses the write of an answer that lands for
         // another holder, or after a claim's fold or a pairing moved the epoch.
         let holder = self
             .identity(account_id)
-            .ok_or_else(|| ResetsFailure::Unavailable("account not found".into()))?;
+            .ok_or_else(|| UsageError::Unavailable("account not found".into()))?;
         let epoch = match self.store.account_extras_of(account_id) {
             Ok(Some(extras)) => extras.limit_resets_epoch,
-            Ok(None) => return Err(ResetsFailure::Unavailable("account not found".into())),
-            Err(error) => return Err(ResetsFailure::Unavailable(format!("store: {error}"))),
+            Ok(None) => return Err(UsageError::Unavailable("account not found".into())),
+            Err(error) => return Err(UsageError::Unavailable(format!("store: {error}"))),
         };
-        let token = self.manager.acquire(account_id).await.map_err(|error| {
-            self.keep_landed_mark(account_id, &error);
-            ResetsFailure::Unavailable(format!("acquire: {error}"))
-        })?;
-        let permit = self
-            .semaphore
-            .acquire()
-            .await
-            .expect("usage semaphore is never closed");
-        let sent_at = (self.clock)();
-        // The due mark ends here, where the request goes out. No line below ends it, so a mark set while this
-        // read is out stands for the next slot.
-        self.remember_resets_read(account_id, holder, sent_at);
-        let request = control_request(
-            self.profile,
-            ControlKind::LimitResets,
-            Some(token.secret.expose()),
-            None,
-        );
-        let host = ControlKind::LimitResets.host(self.profile);
-        let sent = self.control.send(request, host, FETCH_TIMEOUT).await;
-        drop(permit);
-        let (head, body) = sent.map_err(|error| {
-            ResetsFailure::Fault(transport_fault(LIMIT_RESETS_ENDPOINT, &error.to_string()))
-        })?;
-        if head.status == 429 {
-            // The two reads share the endpoint's limit, so the hold is the usage read's own.
-            let received_at = (self.clock)();
-            let retry_after = retry_after_ms(&head, received_at, BACKOFF_CAP_MS);
-            self.rate_limited(account_id, USAGE_ENDPOINT, received_at, retry_after);
-            return Err(ResetsFailure::Unavailable(
-                "limit resets request rate limited".into(),
-            ));
-        }
-        if head.status != 200 {
-            return Err(ResetsFailure::Fault(status_fault(
+        let (sent_at, body) = self
+            .read_control(
+                account_id,
+                ControlKind::LimitResets,
                 LIMIT_RESETS_ENDPOINT,
-                head.status,
-            )));
-        }
+                // The two reads share the endpoint's limit, so the hold is the usage read's own.
+                USAGE_ENDPOINT,
+                || {
+                    let sent_at = (self.clock)();
+                    // The due mark ends here, where the request goes out. No line below ends it, so a mark set while
+                    // this read is out stands for the next slot.
+                    self.remember_resets_read(account_id, holder, sent_at);
+                    sent_at
+                },
+            )
+            .await?;
         let block = parse_limit_resets(&body).map_err(|error| {
-            ResetsFailure::Fault(PollFault {
+            UsageError::Fault(PollFault {
                 endpoint: LIMIT_RESETS_ENDPOINT,
                 status: Some(200),
                 text: format!("parse: {error}"),
             })
         })?;
         warn_pinned_client(account_id, block.as_ref());
-        let text = block
-            .as_ref()
-            .map(|block| serde_json::to_string(block).expect("a block serializes"));
+        let text = block.as_ref().map(LimitResets::to_stored);
         let (incarnation, lifecycle) = (holder.incarnation, holder.lifecycle_generation);
         match self.store.set_limit_resets(
             account_id,
@@ -1499,50 +1485,49 @@ impl Inner {
                 }
                 Ok(self.stored_limit_resets(account_id))
             }
-            Err(error) => Err(ResetsFailure::Unavailable(format!("store: {error}"))),
+            Err(error) => Err(UsageError::Unavailable(format!("store: {error}"))),
         }
     }
 
     /// The block on the account's row, `None` without one and for a row that is gone.
     fn stored_limit_resets(&self, account_id: &str) -> Option<LimitResets> {
-        let extras = self.store.account_extras_of(account_id).ok().flatten()?;
-        serde_json::from_value(extras.limit_resets?).ok()
+        LimitResets::stored(&self.store.account_extras_of(account_id).ok().flatten()?)
+    }
+
+    /// The windows the holder's cached snapshot reads at their limit, `None` where the cache holds none for it.
+    fn windows_at_limit_of(&self, account_id: &str, holder: Identity) -> Option<BTreeSet<String>> {
+        self.cache
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(account_id)
+            .filter(|entry| entry.identity == holder)
+            .map(|entry| entry.snapshot.windows_at_limit())
     }
 
     /// Writes the holder's entry of the memory as a read's request goes out: its instant, the windows the cached
     /// snapshot of the same holder reads at their limit, and the due mark's end.
     fn remember_resets_read(&self, account_id: &str, holder: Identity, sent_at: i64) {
         let at_limit = self
-            .cache
-            .lock()
-            .expect(LOCK_POISONED)
-            .get(account_id)
-            .filter(|entry| entry.identity == holder)
-            .map(|entry| entry.snapshot.windows_at_limit())
+            .windows_at_limit_of(account_id, holder)
             .unwrap_or_default();
         self.resets_memory.lock().expect(LOCK_POISONED).insert(
-            account_id.to_string(),
-            (
-                holder,
-                LimitResetsMemory {
-                    at_limit,
-                    due: false,
-                    last_sent_at: Some(sent_at),
-                },
-            ),
+            account_id,
+            holder,
+            LimitResetsMemory {
+                at_limit,
+                due: false,
+                last_sent_at: Some(sent_at),
+            },
         );
     }
 
     /// Sets the due mark in the holder's entry of the memory.
     fn mark_resets_due(&self, account_id: &str, holder: Identity) {
-        let mut memory = self.resets_memory.lock().expect(LOCK_POISONED);
-        let entry = memory
-            .entry(account_id.to_string())
-            .or_insert_with(|| (holder, LimitResetsMemory::default()));
-        if entry.0 != holder {
-            *entry = (holder, LimitResetsMemory::default());
-        }
-        entry.1.due = true;
+        self.resets_memory
+            .lock()
+            .expect(LOCK_POISONED)
+            .slot(account_id, holder)
+            .due = true;
     }
 
     /// Reserves the account for one claim, `None` while another is on its way.
@@ -1562,7 +1547,7 @@ impl Inner {
     /// clock, `None` for another state, for a grant the block does not list and for a row with no block.
     fn usable_grant(&self, account_id: &str, grant_id: &str) -> Option<(String, u64)> {
         let extras = self.store.account_extras_of(account_id).ok().flatten()?;
-        let block: LimitResets = serde_json::from_value(extras.limit_resets?).ok()?;
+        let block = LimitResets::stored(&extras)?;
         let at = block.grants.iter().position(|grant| grant.id == grant_id)?;
         let usable = grant_states(&block, (self.clock)())[at].state == GrantStatus::Usable;
         usable.then(|| (block.grants[at].label.clone(), extras.limit_resets_epoch))
@@ -1576,9 +1561,8 @@ impl Inner {
         let claims = self.claim_memory.lock().expect(LOCK_POISONED);
         let kept = claims
             .kept
-            .get(account_id)
-            .filter(|(kept_under, _)| *kept_under == holder)
-            .and_then(|(_, ids)| ids.get(grant_id))
+            .get(account_id, holder)
+            .and_then(|ids| ids.get(grant_id))
             .filter(|(_, kept_at)| now - kept_at < reuse);
         match kept {
             Some((id, _)) => (id.clone(), true),
@@ -1604,22 +1588,14 @@ impl Inner {
         match claim.outcome {
             ClaimOutcome::Unsettled if repeated => {}
             ClaimOutcome::Unsettled => {
-                let entry = claims
+                claims
                     .kept
-                    .entry(account_id.to_string())
-                    .or_insert_with(|| (holder, HashMap::new()));
-                if entry.0 != holder {
-                    *entry = (holder, HashMap::new());
-                }
-                entry
-                    .1
+                    .slot(account_id, holder)
                     .insert(grant_id.to_string(), (claim.request_id.clone(), claim.at));
             }
             ClaimOutcome::Refused | ClaimOutcome::Used => {
-                if let Some((kept_under, ids)) = claims.kept.get_mut(account_id) {
-                    if *kept_under == holder {
-                        ids.remove(grant_id);
-                    }
+                if let Some(ids) = claims.kept.get_mut(account_id, holder) {
+                    ids.remove(grant_id);
                 }
             }
         }
@@ -1636,12 +1612,9 @@ impl Inner {
         sent_at: i64,
     ) {
         let mut claims = self.claim_memory.lock().expect(LOCK_POISONED);
-        let Some((kept_under, ids)) = claims.kept.get_mut(account_id) else {
+        let Some(ids) = claims.kept.get_mut(account_id, holder) else {
             return;
         };
-        if *kept_under != holder {
-            return;
-        }
         let cooling = block
             .and_then(|block| block.cooldown_until)
             .is_some_and(|until| until > sent_at);
@@ -1676,7 +1649,7 @@ impl Inner {
             |stored| {
                 let mut block: LimitResets = serde_json::from_str(stored).ok()?;
                 fold_claim_answer(&mut block, grant_id, answer);
-                Some(serde_json::to_string(&block).expect("a block serializes"))
+                Some(block.to_stored())
             },
         );
         // The claim left, so its outcome stands whatever the store does with its answer.
@@ -1726,6 +1699,86 @@ impl Inner {
         (now < entry.not_before).then_some(entry.not_before)
     }
 
+    fn refuse_while_held(&self, account_id: &str) -> Result<(), UsageError> {
+        match self.next_attempt_at(account_id, (self.clock)()) {
+            Some(_) => Err(UsageError::Unavailable(
+                "the account is waiting out a rate limit".into(),
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// The account's token, keeping the mark a failed acquisition landed for the caller's report.
+    async fn acquire_token(&self, account_id: &str) -> Result<AccessToken, String> {
+        self.manager.acquire(account_id).await.map_err(|error| {
+            self.keep_landed_mark(account_id, &error);
+            format!("acquire: {error}")
+        })
+    }
+
+    async fn permit(&self) -> SemaphorePermit<'_> {
+        self.semaphore
+            .acquire()
+            .await
+            .expect("usage semaphore is never closed")
+    }
+
+    async fn send_read(
+        &self,
+        kind: ControlKind,
+        endpoint: &'static str,
+        bearer: &str,
+        permit: SemaphorePermit<'_>,
+    ) -> Result<(ResponseHead, Bytes), PollFault> {
+        let request = control_request(self.profile, kind, Some(bearer), None);
+        let sent = self
+            .control
+            .send(request, kind.host(self.profile), FETCH_TIMEOUT)
+            .await;
+        drop(permit);
+        sent.map_err(|error| transport_fault(endpoint, &error.to_string()))
+    }
+
+    /// A profile read or a limit resets read under the account's shared backoff, with `before_send` run once the token
+    /// and the permit are held, as the request goes out.
+    async fn read_control<T>(
+        &self,
+        account_id: &str,
+        kind: ControlKind,
+        endpoint: &'static str,
+        hold: &'static str,
+        before_send: impl FnOnce() -> T,
+    ) -> Result<(T, Bytes), UsageError> {
+        let token = self
+            .acquire_token(account_id)
+            .await
+            .map_err(UsageError::Unavailable)?;
+        let permit = self.permit().await;
+        let noted = before_send();
+        let (head, body) = self
+            .send_read(kind, endpoint, token.secret.expose(), permit)
+            .await
+            .map_err(UsageError::Fault)?;
+        if head.status == 429 {
+            // The hold runs from the answer's arrival, as a usage 429's does, so the credential and permit waits
+            // never eat into it.
+            let received_at = (self.clock)();
+            self.rate_limited(
+                account_id,
+                hold,
+                received_at,
+                retry_after_ms(&head, received_at, BACKOFF_CAP_MS),
+            );
+            return Err(UsageError::Unavailable(format!(
+                "{endpoint} request rate limited"
+            )));
+        }
+        if head.status != 200 {
+            return Err(UsageError::Fault(status_fault(endpoint, head.status)));
+        }
+        Ok((noted, body))
+    }
+
     async fn fetch_and_cache(&self, account_id: &str) -> FetchOutcome {
         let now = (self.clock)();
         if let Some(held) = self.held(account_id, now) {
@@ -1746,21 +1799,11 @@ impl Inner {
         account_id: &str,
         lineage: Identity,
     ) -> (i64, Result<ParsedUsage, FetchFailure>) {
-        let token = match self.manager.acquire(account_id).await {
+        let token = match self.acquire_token(account_id).await {
             Ok(token) => token,
-            Err(error) => {
-                self.keep_landed_mark(account_id, &error);
-                return (
-                    (self.clock)(),
-                    Err(FetchFailure::Message(format!("acquire: {error}"))),
-                );
-            }
+            Err(message) => return ((self.clock)(), Err(FetchFailure::Message(message))),
         };
-        let permit = self
-            .semaphore
-            .acquire()
-            .await
-            .expect("usage semaphore is never closed");
+        let permit = self.permit().await;
         let sent_at = (self.clock)();
         let fence = lineage.at(token.generation);
         let result = self
@@ -1773,18 +1816,12 @@ impl Inner {
         &self,
         bearer: &str,
         fence: Refused,
-        permit: tokio::sync::SemaphorePermit<'_>,
+        permit: SemaphorePermit<'_>,
     ) -> Result<ParsedUsage, FetchFailure> {
-        let req = control_request(self.profile, ControlKind::Usage, Some(bearer), None);
-        let host = ControlKind::Usage.host(self.profile);
-        let sent = self.control.send(req, host, FETCH_TIMEOUT).await;
-        drop(permit);
-        let (head, body) = sent.map_err(|error| {
-            FetchFailure::Issue(PollIssue::Fault(transport_fault(
-                USAGE_ENDPOINT,
-                &error.to_string(),
-            )))
-        })?;
+        let (head, body) = self
+            .send_read(ControlKind::Usage, USAGE_ENDPOINT, bearer, permit)
+            .await
+            .map_err(|fault| FetchFailure::Issue(PollIssue::Fault(fault)))?;
         if head.status == 429 {
             let received_at = (self.clock)();
             return Err(FetchFailure::RateLimited {

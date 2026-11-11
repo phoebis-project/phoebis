@@ -2438,20 +2438,21 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "admin",
         "rg-used-1",
         &phoebis_oauth::Claim {
-            answer: Some(phoebis_oauth::ClaimAnswer {
-                cleared: vec![],
-                cooldown_until: None,
-                reason: None,
-                resets_left: None,
-                result: "reset".into(),
-                weekly_resets_at: None,
-            }),
             at: now,
-            error: None,
             label: "Launch reset".into(),
             outcome: phoebis_oauth::ClaimOutcome::Used,
+            reply: phoebis_oauth::ClaimReply::Answered {
+                answer: Some(phoebis_oauth::ClaimAnswer {
+                    cleared: vec![],
+                    cooldown_until: None,
+                    reason: None,
+                    resets_left: None,
+                    result: "reset".into(),
+                    weekly_resets_at: None,
+                }),
+                status: 200,
+            },
             request_id: "00000000-0000-4000-8000-0000000000c1".into(),
-            status: Some(200),
         },
     ));
     fake_upstream::wait_for(std::time::Duration::from_secs(5), || {

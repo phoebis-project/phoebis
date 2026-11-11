@@ -542,9 +542,9 @@ impl ResetFacts<'_> {
 
     /// The stored block of an account the poll asks. A block that does not parse reads as none.
     fn block(&self, account: &AccountRow) -> Option<LimitResets> {
-        let stored = self.extras.get(&account.id)?.limit_resets.clone()?;
+        let extras = self.extras.get(&account.id)?;
         self.asked(account)
-            .then(|| serde_json::from_value(stored).ok())
+            .then(|| LimitResets::stored(extras))
             .flatten()
     }
 }
@@ -1059,8 +1059,8 @@ fn routing_conditions(
                     .iter()
                     .find(|a| a.id == account_id)
                     .and_then(|account| {
-                        let reading = usage?.latest_for(account)?;
-                        wall_reset(&resets.block(account)?, &reading.windows_at_limit(), now)
+                        let at_limit = usage?.windows_at_limit_for(account)?;
+                        wall_reset(&resets.block(account)?, &at_limit, now)
                     });
                 if let Some(reset) = reset {
                     detail["reset"] = reset;

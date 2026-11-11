@@ -20,9 +20,9 @@ use phoebis_ledger::{lead_over_pace, polled, QuotaPoll};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, grant_states,
     loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput, Claim,
-    ClaimOutcome, ClaimRefusal, ControlKind, LimitResets, LoginKind, OauthError, PairingError,
-    PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus, ProfileResponse,
-    Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
+    ClaimOutcome, ClaimRefusal, ClaimReply, ControlKind, LimitResets, LoginKind, OauthError,
+    PairingError, PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus,
+    ProfileResponse, Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
@@ -1143,11 +1143,15 @@ async fn claim_response(
     grant: &str,
     claim: Claim,
 ) -> Response {
-    let Some(answer) = claim.answer else {
+    let ClaimReply::Answered {
+        answer: Some(answer),
+        ..
+    } = claim.reply
+    else {
         // By the status where a head arrived, so a 200 the router cannot parse reads `HTTP 200`.
-        let detail = match claim.status {
-            Some(status) => format!("HTTP {status}"),
-            None => claim.error.unwrap_or_default(),
+        let detail = match claim.reply {
+            ClaimReply::Answered { status, .. } => format!("HTTP {status}"),
+            ClaimReply::Failed(error) => error,
         };
         // Every reader of a claim takes its class from the service's outcome, so no status rule is repeated here.
         return match claim.outcome {
@@ -3226,7 +3230,7 @@ fn limit_resets_view(
     if !asked(row, extras) {
         return None;
     }
-    let block: LimitResets = serde_json::from_value(extras.limit_resets.clone()?).ok()?;
+    let block = LimitResets::stored(extras)?;
     let grants = block
         .grants
         .iter()
@@ -3258,10 +3262,7 @@ fn limit_resets_view(
         // Null once passed, so no page compares it with a clock to hide it.
         cooldown_until: block.cooldown_until.filter(|until| *until > now),
         eligible: block.eligible,
-        fable_week_share: state
-            .usage
-            .latest_for(row)
-            .and_then(|reading| reading.fable_week_share),
+        fable_week_share: state.usage.fable_week_share_for(row),
         grants,
         ineligible_reason: block.ineligible_reason.clone(),
         left: resets_left(&block, now),

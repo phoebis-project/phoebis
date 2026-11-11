@@ -571,7 +571,7 @@ fn plan_event(
 /// such fact, and `cleared` an empty array where the claim has no parsed answer. The row's `request_id` column stays
 /// null, since it names a relayed request.
 pub fn limit_reset_claimed(account_id: &str, actor: &str, grant_id: &str, claim: &Claim) -> Record {
-    let answer = claim.answer.as_ref();
+    let answer = claim.answer();
     Record::Event(EventRecord {
         at: claim.at,
         kind: LIMIT_RESET_CLAIMED.into(),
@@ -581,7 +581,7 @@ pub fn limit_reset_claimed(account_id: &str, actor: &str, grant_id: &str, claim:
             json!({
                 "cleared": answer.map_or(&[][..], |answer| answer.cleared.as_slice()),
                 "cooldown_until": answer.and_then(|answer| answer.cooldown_until),
-                "error": claim.error,
+                "error": claim.error(),
                 "grant_id": grant_id,
                 "label": claim.label,
                 "outcome": claim.outcome.as_str(),
@@ -589,7 +589,7 @@ pub fn limit_reset_claimed(account_id: &str, actor: &str, grant_id: &str, claim:
                 "request_id": claim.request_id,
                 "resets_left": answer.and_then(|answer| answer.resets_left),
                 "result": answer.map(|answer| answer.result.as_str()),
-                "status": claim.status,
+                "status": claim.status(),
                 "weekly_resets_at": answer.and_then(|answer| answer.weekly_resets_at),
             })
             .to_string(),

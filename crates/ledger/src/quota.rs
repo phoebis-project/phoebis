@@ -769,12 +769,9 @@ impl QuotaPoll {
     /// One warning line and one `poll_failed` row for a poll that faulted, as often as polls fault: a fault arms no
     /// hold, so the poll interval spaces the rows.
     fn record_fault(usage: &UsageService, ledger: &Ledger, account_id: &str, fault: &PollFault) {
-        let status = fault
-            .status
-            .map_or_else(|| "transport".to_string(), |status| status.to_string());
         tracing::warn!(
             account = %account_id,
-            status = %status,
+            status = %fault.status_text(),
             error = %fault.text,
             "a poll of the {} endpoint failed",
             fault.endpoint
@@ -826,8 +823,8 @@ impl QuotaPoll {
             return false;
         };
         let holds_reset = extras
-            .and_then(|extras| extras.limit_resets)
-            .and_then(|block| serde_json::from_value::<LimitResets>(block).ok())
+            .as_ref()
+            .and_then(LimitResets::stored)
             .is_some_and(|block| resets_left(&block, now) > 0);
         holds_reset && reading.windows_at_limit() != memory.at_limit
     }

@@ -1818,20 +1818,21 @@ async fn claimed_rows(
 /// A claim the upstream answered with `result` at `at`, as the service answers one, for the event's builder.
 fn claimed(result: &str, outcome: phoebis_oauth::ClaimOutcome, at: i64) -> phoebis_oauth::Claim {
     phoebis_oauth::Claim {
-        answer: Some(phoebis_oauth::ClaimAnswer {
-            cleared: vec![],
-            cooldown_until: None,
-            reason: None,
-            resets_left: Some(0),
-            result: result.into(),
-            weekly_resets_at: None,
-        }),
         at,
-        error: None,
         label: "Launch reset".into(),
         outcome,
+        reply: phoebis_oauth::ClaimReply::Answered {
+            answer: Some(phoebis_oauth::ClaimAnswer {
+                cleared: vec![],
+                cooldown_until: None,
+                reason: None,
+                resets_left: Some(0),
+                result: result.into(),
+                weekly_resets_at: None,
+            }),
+            status: 200,
+        },
         request_id: "00000000-0000-4000-8000-0000000000a1".into(),
-        status: Some(200),
     }
 }
 

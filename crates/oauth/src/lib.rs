@@ -27,7 +27,7 @@ pub use session::{
 };
 pub use usage::{
     parse_usage, BackoffEdge, BackoffEndCause, BackoffHook, Claim, ClaimOutcome, ClaimRefusal,
-    ExtraUsage, LatestStanding, LimitResetsMemory, ParsedUsage, PollFault, PollIssue, PollOutcome,
-    PollStatus, Refused, SpendReading, UsageError, UsageService, UsageSnapshot, UsageWindow,
-    BACKOFF_CAP_MS, FABLE_WINDOW_KEY,
+    ClaimReply, ExtraUsage, LatestStanding, LimitResetsMemory, ParsedUsage, PollFault, PollIssue,
+    PollOutcome, PollStatus, Refused, SpendReading, UsageError, UsageService, UsageSnapshot,
+    UsageWindow, BACKOFF_CAP_MS, FABLE_WINDOW_KEY,
 };

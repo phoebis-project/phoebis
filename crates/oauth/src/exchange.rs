@@ -25,6 +25,17 @@ pub enum OauthError {
     UsageJson(String),
 }
 
+pub(crate) fn usage_json(error: serde_json::Error) -> OauthError {
+    OauthError::UsageJson(error.to_string())
+}
+
+pub(crate) fn json_object(body: &[u8], what: &str) -> Result<Map<String, Value>, OauthError> {
+    match serde_json::from_slice(body).map_err(usage_json)? {
+        Value::Object(map) => Ok(map),
+        _ => Err(OauthError::Malformed(format!("{what} is not an object"))),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControlKind {
     Token,
@@ -146,7 +157,7 @@ pub fn control_request(
 
 /// The claim of a limit reset as the client sends it: a `POST` to the organization's `reset_rate_limits` on the
 /// usage endpoint's host, under the usage read's head with the body's length before `Accept-Encoding`.
-pub fn claim_request(
+pub(crate) fn claim_request(
     profile: &Profile,
     organization_uuid: &str,
     bearer: &str,

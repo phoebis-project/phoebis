@@ -2212,7 +2212,7 @@ mod service {
         tokio::time::resume();
         let claim = claiming.await.unwrap().unwrap();
         assert_eq!(
-            (claim.outcome, claim.status),
+            (claim.outcome, claim.status()),
             (ClaimOutcome::Unsettled, None)
         );
         assert_eq!(claims_sent(&up).len(), 1, "nothing sends the claim again");

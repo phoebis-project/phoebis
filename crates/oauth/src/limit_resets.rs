@@ -1,8 +1,10 @@
 //! The usage body's limit reset block in a typed form, and the state of each of its grants at an instant.
 
+use phoebis_store::AccountExtras;
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::exchange::{instant_ms, OauthError};
+use crate::exchange::{instant_ms, json_object, OauthError};
 
 /// The router's name for the Fable week in a grant's windows. It has to equal `phoebis_routing::SEVEN_DAY_FABLE`,
 /// which this crate cannot name because the routing crate depends on it.
@@ -24,6 +26,17 @@ pub struct LimitResets {
     pub eligible: bool,
     pub grants: Vec<Grant>,
     pub ineligible_reason: Option<String>,
+}
+
+impl LimitResets {
+    /// The block stored on an account's row. A block that does not parse reads as none.
+    pub fn stored(extras: &AccountExtras) -> Option<LimitResets> {
+        LimitResets::deserialize(extras.limit_resets.as_ref()?).ok()
+    }
+
+    pub(crate) fn to_stored(&self) -> String {
+        serde_json::to_string(self).expect("a block serializes")
+    }
 }
 
 /// One grant of the block. `blocking` and `clears` carry the router's window names.
@@ -82,11 +95,7 @@ pub struct GrantState {
 /// member the parse needs that is absent or of another type fails the whole block, so a block read in part never
 /// hides a grant.
 pub fn parse_limit_resets(body: &[u8]) -> Result<Option<LimitResets>, OauthError> {
-    let root: Value =
-        serde_json::from_slice(body).map_err(|error| OauthError::UsageJson(error.to_string()))?;
-    let map = root
-        .as_object()
-        .ok_or_else(|| OauthError::Malformed("usage response is not an object".into()))?;
+    let map = json_object(body, "usage response")?;
     let block = match map.get("cedar_ember") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Object(block)) => block,
@@ -171,6 +180,17 @@ fn optional<'a, T>(
         None | Some(Value::Null) => Ok(None),
         Some(value) => read(value).map(Some).ok_or_else(|| malformed(member)),
     }
+}
+
+/// `required` and `optional` refuse in the block's words, so a claim answer's refusal is written here. An absent
+/// optional member reads as none, so only its type can refuse it.
+fn answer_member<'a, T>(
+    answer: &'a Map<String, Value>,
+    member: &str,
+    read: impl FnOnce(&'a Value) -> Option<T>,
+) -> Result<Option<T>, OauthError> {
+    optional(answer, member, read)
+        .map_err(|_| OauthError::Malformed(format!("claim answer: {member} is of another type")))
 }
 
 fn malformed(member: &str) -> OauthError {
@@ -270,29 +290,16 @@ pub struct ClaimAnswer {
 /// Reads a claim's answer. A member present with another type than its own fails the whole answer, as a member of the
 /// block does, so no count or instant is folded from an answer read in part.
 pub(crate) fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError> {
-    let root: Value =
-        serde_json::from_slice(body).map_err(|error| OauthError::UsageJson(error.to_string()))?;
-    let answer = root
-        .as_object()
-        .ok_or_else(|| OauthError::Malformed("claim answer is not an object".into()))?;
-    // `required` and `optional` refuse in the block's words, so the answer's refusal is written here. An absent
-    // optional member reads as none, so only its type can refuse it.
-    let mistyped = |member: &'static str| {
-        move |_| OauthError::Malformed(format!("claim answer: {member} is of another type"))
-    };
+    let answer = json_object(body, "claim answer")?;
     Ok(ClaimAnswer {
-        cleared: optional(answer, "cleared", window_names)
-            .map_err(mistyped("cleared"))?
-            .unwrap_or_default(),
-        cooldown_until: optional(answer, "cooldown_until", instant_ms)
-            .map_err(mistyped("cooldown_until"))?,
-        reason: optional(answer, "reason", as_string).map_err(mistyped("reason"))?,
-        resets_left: optional(answer, "resets_left", count).map_err(mistyped("resets_left"))?,
-        result: required(answer, "result", as_string).map_err(|_| {
+        cleared: answer_member(&answer, "cleared", window_names)?.unwrap_or_default(),
+        cooldown_until: answer_member(&answer, "cooldown_until", instant_ms)?,
+        reason: answer_member(&answer, "reason", as_string)?,
+        resets_left: answer_member(&answer, "resets_left", count)?,
+        result: required(&answer, "result", as_string).map_err(|_| {
             OauthError::Malformed("claim answer: result is absent or of another type".into())
         })?,
-        weekly_resets_at: optional(answer, "weekly_resets_at", instant_ms)
-            .map_err(mistyped("weekly_resets_at"))?,
+        weekly_resets_at: answer_member(&answer, "weekly_resets_at", instant_ms)?,
     })
 }
 
