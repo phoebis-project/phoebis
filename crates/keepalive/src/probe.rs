@@ -156,8 +156,8 @@ pub(crate) struct ProbeRecord {
     /// counts, on the revision in force at `at`.
     pub(crate) band: Band,
     /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
-    /// the router's snapshot: its settlement's credit row keys the tier the probe ran under. `None` for a probe that
-    /// settles in dollars.
+    /// the router's snapshot: its settlement's credit row keys the tier the probe ran under. `None` where the probe's
+    /// funding is not the window share or the snapshot prices no tier.
     pub(crate) tier: Option<String>,
 }
 

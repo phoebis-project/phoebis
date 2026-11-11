@@ -546,7 +546,7 @@ fn one_day_retained(spec: RigSpec) -> RigSpec {
         policy: KeepalivePolicy::default(),
         timing: KeepaliveTiming {
             idle_return_retention_days: 1,
-            ..RigSpec::default().timing
+            ..spec.timing
         },
         ..spec
     }
