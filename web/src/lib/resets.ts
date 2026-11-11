@@ -18,7 +18,7 @@ const BLOCKED_WORDS: Readonly<Record<string, string>> = {
 const cooldownWords = (until: string | null, now: number) => (until === null ? 'cooldown' : `cooldown until ${instant(Date.parse(until), now)}`);
 
 /** Why a grant with a reset left cannot be used now, lower case as the chip draws it. */
-export function resetReason(grant: Pick<ResetGrant, 'reason' | 'state'>, cooldownUntil: string | null, now: number): string {
+function resetReason(grant: Pick<ResetGrant, 'reason' | 'state'>, cooldownUntil: string | null, now: number): string {
   switch (grant.state) {
     case 'cooldown':
       return `on a ${cooldownWords(cooldownUntil, now)}`;
