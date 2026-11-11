@@ -4861,7 +4861,8 @@ fn top_sessions_by_tokens(
 }
 
 /// The columns of `attempts a JOIN requests r` an attempt is priced from, in the order `PricedAttempt::read` reads
-/// them. The completion is aliased `completed`, so a statement's `WHERE` can bound it.
+/// them, beside the request's `kind`, which `PricedAttempt::read` skips and `SessionSpendRow::read` alone takes. The
+/// completion is aliased `completed`, so a statement's `WHERE` can bound it.
 pub(crate) const PRICED_ATTEMPT_COLUMNS: &str =
     "COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, r.canonical_model, \
      a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.output_tokens, \
