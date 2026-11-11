@@ -179,7 +179,7 @@ export const RESET_ANSWERS: Readonly<Record<string, MockAnswer>> = {
  * The block a claim's answer leaves, folded as the router's store folds it, the use stamped at `at` where it was used.
  */
 export function foldAnswer(block: MockBlock, grantId: string, answer: MockUse, at: number): MockBlock {
-  const count = (g: MockGrant): number => answer.resets_left ?? (answer.result === 'reset' ? Math.max(0, g.resets_left - 1) : answer.result === 'already_used' ? 0 : g.resets_left);
+  const count = (g: MockGrant): number => (answer.result === 'already_used' ? 0 : (answer.resets_left ?? (answer.result === 'reset' ? Math.max(0, g.resets_left - 1) : g.resets_left)));
   const used = answer.outcome === 'used';
   // The share was the Fable week's part of the 7-day window, and a use that gives the week back spends it.
   const givesBack = used && block.grants.some((g) => g.id === grantId && g.gives_back_weekly);
