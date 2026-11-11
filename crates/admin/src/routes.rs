@@ -16,7 +16,7 @@ use axum::middleware::{from_fn_with_state, map_response, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get};
 use axum::{Extension, Json, Router};
-use phoebis_ledger::{lead_over_pace, polled, QuotaPoll};
+use phoebis_ledger::{asked, lead_over_pace, QuotaPoll};
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, grant_states,
     loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput, Claim,
@@ -904,20 +904,10 @@ async fn limit_resets_read(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
 ) -> Response {
-    let row = match account(&state, &id) {
+    let row = match limit_reset_account(&state, &id) {
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    if row.kind != AccountKind::Oauth {
-        return failure(StatusCode::BAD_REQUEST, NOT_SUBSCRIPTION);
-    }
-    let extras = match state.store.account_extras_of(&id) {
-        Ok(extras) => extras.unwrap_or_default(),
-        Err(error) => return store_failure(error),
-    };
-    if !asked(&row, &extras) {
-        return failure_with_code(StatusCode::CONFLICT, "limit_reset_not_polled", NOT_POLLED);
-    }
     // A read that fails or that the hold refuses still opens the dialog, on the stored block and its age.
     let error = state
         .usage
@@ -926,20 +916,30 @@ async fn limit_resets_read(
         .err()
         .map(|error| error.to_string());
     let uses = reset_uses_of(&state, &id).await;
-    match state.store.account_extras_of(&id) {
-        Ok(extras) => Json(LimitResetsRead {
+    match current_limit_resets(&state, &row, &uses) {
+        Ok(limit_resets) => Json(LimitResetsRead {
             error,
-            limit_resets: limit_resets_view(
-                &state,
-                &row,
-                &extras.unwrap_or_default(),
-                Some(&uses),
-                (state.clock)(),
-            ),
+            limit_resets,
         })
         .into_response(),
         Err(error) => store_failure(error),
     }
+}
+
+/// The account's `limit_resets` member at the route's clock, from the extras read now.
+fn current_limit_resets(
+    state: &AdminState,
+    row: &AccountRow,
+    uses: &BTreeMap<String, i64>,
+) -> Result<Option<AccountLimitResets>, StoreError> {
+    let extras = state.store.account_extras_of(&row.id)?.unwrap_or_default();
+    Ok(limit_resets_view(
+        state,
+        row,
+        &extras,
+        uses,
+        (state.clock)(),
+    ))
 }
 
 /// One account's uses of a limit reset by grant id, for a route that answers that account alone. A ledger read that
@@ -951,16 +951,26 @@ async fn reset_uses_of(state: &AdminState, account_id: &str) -> BTreeMap<String,
         .read(phoebis_ledger::limit_reset_uses)
         .await
     {
-        Ok(uses) => uses
-            .into_iter()
-            .filter(|used| used.account_id == account_id)
-            .map(|used| (used.grant_id, used.at))
-            .collect(),
+        Ok(uses) => uses_by_account(uses).remove(account_id).unwrap_or_default(),
         Err(error) => {
             tracing::warn!(account = %account_id, %error, "the limit resets' uses could not be read from the ledger");
             BTreeMap::new()
         }
     }
+}
+
+/// The ledger's uses of the limit resets by account id, then by grant id.
+fn uses_by_account(
+    uses: Vec<phoebis_ledger::LimitResetUsed>,
+) -> BTreeMap<String, BTreeMap<String, i64>> {
+    let mut by_account: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+    for used in uses {
+        by_account
+            .entry(used.account_id)
+            .or_default()
+            .insert(used.grant_id, used.at);
+    }
+    by_account
 }
 
 /// Use one of an account's limit resets now.
@@ -999,20 +1009,10 @@ async fn limit_reset_use(
     State(state): State<Arc<AdminState>>,
     Path((id, grant)): Path<(String, String)>,
 ) -> Response {
-    let row = match account(&state, &id) {
+    let row = match limit_reset_account(&state, &id) {
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    if row.kind != AccountKind::Oauth {
-        return failure(StatusCode::BAD_REQUEST, NOT_SUBSCRIPTION);
-    }
-    let extras = match state.store.account_extras_of(&id) {
-        Ok(extras) => extras.unwrap_or_default(),
-        Err(error) => return store_failure(error),
-    };
-    if !asked(&row, &extras) {
-        return failure_with_code(StatusCode::CONFLICT, "limit_reset_not_polled", NOT_POLLED);
-    }
     let (answer, answered) = tokio::sync::oneshot::channel();
     // Joined here and handed to the task. A task joins nothing until it first runs, and a stop that began in
     // between would find the set empty and close the ledger under the claim.
@@ -1026,9 +1026,12 @@ async fn limit_reset_use(
         first_stage,
         answer,
     )));
-    answered
-        .await
-        .unwrap_or_else(|_| unanswered("no answer was read before the claim ended"))
+    answered.await.unwrap_or_else(|_| {
+        upstream_failure(
+            "limit_reset_unanswered",
+            "no answer was read before the claim ended",
+        )
+    })
 }
 
 /// The claim's work from the request to the answer the route waits for: the first stage (the request, the fold and
@@ -1067,32 +1070,46 @@ async fn claim_and_record(
             let _ = poll.poll_account(&row).await;
         }
     }
-    if claim.outcome == ClaimOutcome::Unsettled {
-        let mut landed = read_limit_resets_after_poll(&state, &row.id).await;
-        // A joined read can carry a block from before the attempt, which an open outcome leaves on the card as
-        // usable, so a block read before the claim's answer is read once more.
-        if landed {
-            match state.store.account_extras_of(&row.id) {
-                Ok(extras) => {
-                    let read_at = extras.and_then(|extras| extras.limit_resets_read_at);
-                    if read_at.is_none_or(|at| at < claim.at) {
-                        landed = read_limit_resets_after_poll(&state, &row.id).await;
-                    }
-                }
-                Err(error) => tracing::warn!(
-                    account = %row.id,
-                    %error,
-                    "the instant of the limit resets read after a claim could not be read"
-                ),
-            }
-        }
-        // Only this read shows whether an open claim spent the reset, so one that failed, or that the plan's pause
-        // kept back, stays due for the next slot that reads the account.
-        if !landed {
-            state.usage.mark_limit_resets_due(&row);
-        }
+    // Only this read shows whether an open claim spent the reset, so one that failed, or that the plan's pause kept
+    // back, stays due for the next slot that reads the account.
+    if claim.outcome == ClaimOutcome::Unsettled
+        && !read_limit_resets_after_claim(&state, &row.id, claim.at).await
+    {
+        state.usage.mark_limit_resets_due(&row);
     }
     let _ = answer.send(claim_response(&state, &row, &grant, claim).await);
+}
+
+/// Reads the account's limit resets after a claim answered at `claimed_at`, and answers whether a read landed.
+async fn read_limit_resets_after_claim(
+    state: &AdminState,
+    account_id: &str,
+    claimed_at: i64,
+) -> bool {
+    if !read_limit_resets_after_poll(state, account_id).await {
+        return false;
+    }
+    match state.store.account_extras_of(account_id) {
+        // A joined read can carry a block from before the attempt, which an open outcome leaves on the card as
+        // usable, so a block read before the claim's answer is read once more.
+        Ok(extras)
+            if extras
+                .as_ref()
+                .and_then(|extras| extras.limit_resets_read_at)
+                .is_none_or(|at| at < claimed_at) =>
+        {
+            read_limit_resets_after_poll(state, account_id).await
+        }
+        Ok(_) => true,
+        Err(error) => {
+            tracing::warn!(
+                account = %account_id,
+                %error,
+                "the instant of the limit resets read after a claim could not be read"
+            );
+            true
+        }
+    }
 }
 
 /// The answer to a claim the service refused before its request left. The match has no catch-all arm, so a refusal
@@ -1114,22 +1131,18 @@ fn refused(refusal: ClaimRefusal) -> Response {
             "limit_reset_no_organization",
             "the account's identity names no organization, so pair it again",
         ),
-        ClaimRefusal::NotSent(detail) => failure_with_code(
-            StatusCode::BAD_GATEWAY,
-            "limit_reset_not_sent",
-            &format!("upstream: {detail}"),
-        ),
+        ClaimRefusal::NotSent(detail) => upstream_failure("limit_reset_not_sent", &detail),
         ClaimRefusal::NotUsable => {
             failure_with_code(StatusCode::CONFLICT, "limit_reset_not_usable", NOT_USABLE)
         }
     }
 }
 
-/// The 502 of a claim that may have left and whose answer names no `result`.
-fn unanswered(detail: &str) -> Response {
+/// A claim's 502 under `code`, with the upstream's detail as its message.
+fn upstream_failure(code: &'static str, detail: &str) -> Response {
     failure_with_code(
         StatusCode::BAD_GATEWAY,
-        "limit_reset_unanswered",
+        code,
         &format!("upstream: {detail}"),
     )
 }
@@ -1155,12 +1168,10 @@ async fn claim_response(
         };
         // Every reader of a claim takes its class from the service's outcome, so no status rule is repeated here.
         return match claim.outcome {
-            ClaimOutcome::Refused => failure_with_code(
-                StatusCode::BAD_GATEWAY,
-                "limit_reset_refused",
-                &format!("upstream: {detail}"),
-            ),
-            ClaimOutcome::Unsettled | ClaimOutcome::Used => unanswered(&detail),
+            ClaimOutcome::Refused => upstream_failure("limit_reset_refused", &detail),
+            ClaimOutcome::Unsettled | ClaimOutcome::Used => {
+                upstream_failure("limit_reset_unanswered", &detail)
+            }
         };
     };
     let mut uses = reset_uses_of(state, &row.id).await;
@@ -1169,23 +1180,14 @@ async fn claim_response(
         let at = uses.entry(grant.to_string()).or_insert(claim.at);
         *at = (*at).max(claim.at);
     }
-    let limit_resets = match state.store.account_extras_of(&row.id) {
-        Ok(extras) => limit_resets_view(
-            state,
-            row,
-            &extras.unwrap_or_default(),
-            Some(&uses),
-            (state.clock)(),
-        ),
-        Err(error) => {
-            tracing::warn!(
-                account = %row.id,
-                %error,
-                "the answer to a limit reset claim could not read the account's block"
-            );
-            None
-        }
-    };
+    let limit_resets = current_limit_resets(state, row, &uses).unwrap_or_else(|error| {
+        tracing::warn!(
+            account = %row.id,
+            %error,
+            "the answer to a limit reset claim could not read the account's block"
+        );
+        None
+    });
     Json(LimitResetUse {
         cleared: answer.cleared,
         cooldown_until: answer.cooldown_until,
@@ -2261,6 +2263,29 @@ pub(crate) fn account(state: &AdminState, id: &str) -> Result<AccountRow, Respon
     found(state.store.account(id), "account not found")
 }
 
+/// The row a limit reset route acts on: a subscription account the poll asks.
+// The error is a rendered HTTP response, as `found`'s is.
+#[allow(clippy::result_large_err)]
+fn limit_reset_account(state: &AdminState, id: &str) -> Result<AccountRow, Response> {
+    let row = account(state, id)?;
+    if row.kind != AccountKind::Oauth {
+        return Err(failure(StatusCode::BAD_REQUEST, NOT_SUBSCRIPTION));
+    }
+    let extras = state
+        .store
+        .account_extras_of(id)
+        .map_err(store_failure)?
+        .unwrap_or_default();
+    if !asked(&row, &extras) {
+        return Err(failure_with_code(
+            StatusCode::CONFLICT,
+            "limit_reset_not_polled",
+            NOT_POLLED,
+        ));
+    }
+    Ok(row)
+}
+
 // The error is a rendered HTTP response, as `found`'s is.
 #[allow(clippy::result_large_err)]
 pub(crate) fn api_key(state: &AdminState, id: &str) -> Result<ApiKeyRow, Response> {
@@ -2465,13 +2490,6 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
             Default::default()
         }
     };
-    let mut reset_uses: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
-    for used in uses {
-        reset_uses
-            .entry(used.account_id)
-            .or_default()
-            .insert(used.grant_id, used.at);
-    }
     // The read takes the six days before the day, so the day's rows are read once, and the week joins the two here:
     // integer sums add exactly in any split.
     let week = crate::lifetime::lifetime_of(six_days, &day);
@@ -2492,7 +2510,7 @@ pub(crate) async fn account_context(state: &AdminState, rows: &[AccountRow]) -> 
         overages: overages.unwrap_or_default().into_iter().collect(),
         quota,
         reported,
-        reset_uses,
+        reset_uses: uses_by_account(uses),
         spend_windows: spend_windows.unwrap_or_default().into_iter().collect(),
         week,
     }
@@ -3176,7 +3194,13 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         windows,
         slow_down: slow_down_view(ctx, &row.id),
         fast_lane,
-        limit_resets: limit_resets_view(state, row, extras, ctx.reset_uses.get(&row.id), now),
+        limit_resets: limit_resets_view(
+            state,
+            row,
+            extras,
+            ctx.reset_uses.get(&row.id).unwrap_or(&NO_USES),
+            now,
+        ),
         // The amounts come from the newest polled row, since a head row carries none, the share from the newest row
         // that carries one, and the rest from the newest row of any source.
         extra_usage: ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| {
@@ -3212,18 +3236,15 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     }
 }
 
-/// Whether the poll asks the account, the set whose limit resets the router reads, shows and uses.
-fn asked(row: &AccountRow, extras: &AccountExtras) -> bool {
-    polled(row.kind, row.state) && extras.term.plan_ended_at.is_none()
-}
+static NO_USES: BTreeMap<String, i64> = BTreeMap::new();
 
 /// The row's `limit_resets` member at `now`: null for an account the poll does not ask and for one with no stored
-/// block. `uses` is the account's uses by grant id, none where they were not read.
+/// block. `uses` is the account's uses by grant id.
 fn limit_resets_view(
     state: &AdminState,
     row: &AccountRow,
     extras: &AccountExtras,
-    uses: Option<&BTreeMap<String, i64>>,
+    uses: &BTreeMap<String, i64>,
     now: i64,
 ) -> Option<AccountLimitResets> {
     // Nothing refreshes the block of an account the poll does not ask, so no card offers a reset from it.
@@ -3231,31 +3252,32 @@ fn limit_resets_view(
         return None;
     }
     let block = LimitResets::stored(extras)?;
+    let states = grant_states(&block, now);
+    let left = resets_left(&block, now);
     let grants = block
         .grants
-        .iter()
-        .zip(grant_states(&block, now))
-        .map(|(grant, state)| AccountLimitResetGrant {
-            blocking: grant.blocking.clone(),
-            clears: grant.clears.clone(),
-            ends_at: grant.ends_at,
-            id: grant.id.clone(),
-            kind: grant.kind.clone(),
-            label: grant.label.clone(),
-            reason: state.reason,
-            resets_left: grant.resets_left,
-            resets_total: grant.resets_total,
-            starts_at: grant.starts_at,
-            state: state.state.as_str().into(),
+        .into_iter()
+        .zip(states)
+        .map(|(grant, state)| {
             // A use dated before the row was created belongs to an earlier holder of the id.
-            used_at: (grant.resets_left == 0)
-                .then(|| {
-                    uses?
-                        .get(&grant.id)
-                        .copied()
-                        .filter(|at| *at >= extras.created_at)
-                })
-                .flatten(),
+            let used_at = uses
+                .get(&grant.id)
+                .copied()
+                .filter(|at| grant.resets_left == 0 && *at >= extras.created_at);
+            AccountLimitResetGrant {
+                blocking: grant.blocking,
+                clears: grant.clears,
+                ends_at: grant.ends_at,
+                id: grant.id,
+                kind: grant.kind,
+                label: grant.label,
+                reason: state.reason,
+                resets_left: grant.resets_left,
+                resets_total: grant.resets_total,
+                starts_at: grant.starts_at,
+                state: state.state.as_str().into(),
+                used_at,
+            }
         })
         .collect();
     Some(AccountLimitResets {
@@ -3264,8 +3286,8 @@ fn limit_resets_view(
         eligible: block.eligible,
         fable_week_share: state.usage.fable_week_share_for(row),
         grants,
-        ineligible_reason: block.ineligible_reason.clone(),
-        left: resets_left(&block, now),
+        ineligible_reason: block.ineligible_reason,
+        left,
         read_at: extras.limit_resets_read_at?,
     })
 }

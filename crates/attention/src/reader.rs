@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
-    polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, SHED_CAP_SETTING,
+    asked, polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, SHED_CAP_SETTING,
     SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS, WINDOW_CEILING_SETTING,
 };
 use phoebis_oauth::{grant_states, resets_left, Grant, GrantStatus, LimitResets, UsageService};
@@ -533,11 +533,9 @@ pub(crate) struct ResetFacts<'a> {
 impl ResetFacts<'_> {
     /// Whether the poll asks the account, the set whose blocks the router reads.
     fn asked(&self, account: &AccountRow) -> bool {
-        polled(account.kind, account.state)
-            && self
-                .extras
-                .get(&account.id)
-                .is_some_and(|extras| extras.term.plan_ended_at.is_none())
+        self.extras
+            .get(&account.id)
+            .is_some_and(|extras| asked(account, extras))
     }
 
     /// The stored block of an account the poll asks. A block that does not parse reads as none.
@@ -581,6 +579,11 @@ pub(crate) fn conditions(
 ) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
     let pools_of = account_pools(&snapshot);
+    // Each asked account's block is parsed once per read, for the reset-ending item and the wall's join both.
+    let blocks: HashMap<&str, (&AccountRow, LimitResets)> = accounts
+        .iter()
+        .filter_map(|account| Some((account.id.as_str(), (account, resets.block(account)?))))
+        .collect();
     let mut out = Vec::new();
     // A deleted pool's exhaustion goes with it, so a pool created later under the same id starts clear.
     state.exhausted.retain(|id, _| snapshot.pool(id).is_some());
@@ -799,13 +802,18 @@ pub(crate) fn conditions(
                 }),
             ));
             if resets.asked(account) {
-                let (holds, since, detail) = reset_ending(
+                let (since, detail) = reset_ending(
                     &account.id,
-                    resets.block(account).as_ref(),
+                    blocks.get(account.id.as_str()).map(|(_, block)| block),
                     resets.warning_days,
                     now,
                 );
-                out.push(condition(Kind::LimitResetEnding, holds, since, detail));
+                out.push(condition(
+                    Kind::LimitResetEnding,
+                    since.is_some(),
+                    since,
+                    detail,
+                ));
             }
         }
     }
@@ -825,7 +833,7 @@ pub(crate) fn conditions(
     }
     if let Some(rows) = ledger.map(|l| l.routing.as_slice()) {
         out.extend(routing_conditions(
-            &snapshot, &pools_of, accounts, rows, resets, usage, now,
+            &snapshot, &pools_of, accounts, rows, &blocks, usage, now,
         ));
     }
     // `bus_gaps` counts since the start, so the item reads the last gap's instant: on the counter alone it would
@@ -892,14 +900,14 @@ pub(crate) fn conditions(
     Ok(out)
 }
 
-/// Whether an unused reset of the block ends within the warning's days, since when, and the item's detail, which is
-/// about the grant that ends first.
+/// Since when an unused reset of the block ends within the warning's days, `None` while none does, and the item's
+/// detail, which is about the grant that ends first.
 fn reset_ending(
     account_id: &str,
     block: Option<&LimitResets>,
     warning_days: u32,
     now: i64,
-) -> (bool, Option<i64>, serde_json::Value) {
+) -> (Option<i64>, serde_json::Value) {
     let threshold = i64::from(warning_days) * DAY_MS;
     let ending: Vec<&Grant> = block
         .into_iter()
@@ -921,7 +929,7 @@ fn reset_ending(
     });
     // Dated from the end, so a restart keeps the date, and never from before the grant existed.
     let since = first.map(|g| g.starts_at.max(g.ends_at - threshold));
-    (first.is_some(), since, detail)
+    (since, detail)
 }
 
 /// The five conditions the ledger's hourly fold wrote: one per pool for `shed_no_runway` and one per OAuth account for
@@ -937,7 +945,7 @@ fn routing_conditions(
     pools_of: &HashMap<String, Vec<String>>,
     accounts: &[AccountRow],
     rows: &[RoutingCondition],
-    resets: &ResetFacts,
+    blocks: &HashMap<&str, (&AccountRow, LimitResets)>,
     usage: Option<&UsageService>,
     now: i64,
 ) -> Vec<Condition> {
@@ -1055,12 +1063,11 @@ fn routing_conditions(
             if *kind == Kind::WallReached && held.is_some() {
                 // Joined at each read, as `setting_values` is: the fold writes the wall once an hour, so a member
                 // written there would offer a reset for up to an hour after it was used.
-                let reset = accounts
-                    .iter()
-                    .find(|a| a.id == account_id)
-                    .and_then(|account| {
+                let reset = blocks
+                    .get(account_id.as_str())
+                    .and_then(|(account, block)| {
                         let at_limit = usage?.windows_at_limit_for(account)?;
-                        wall_reset(&resets.block(account)?, &at_limit, now)
+                        wall_reset(block, &at_limit, now)
                     });
                 if let Some(reset) = reset {
                     detail["reset"] = reset;

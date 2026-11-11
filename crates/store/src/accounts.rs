@@ -539,9 +539,18 @@ impl Store {
     ) -> Result<bool, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let wrote = conn.execute(
-            "UPDATE accounts SET limit_resets_json = ?5, limit_resets_read_at = ?6 \
-             WHERE id = ?1 AND incarnation = ?2 AND lifecycle_generation = ?3 AND limit_resets_epoch = ?4",
-            params![id, incarnation as i64, lifecycle_generation as i64, epoch as i64, block, read_at],
+            &format!(
+                "UPDATE accounts SET limit_resets_json = ?5, limit_resets_read_at = ?6 \
+                 WHERE {LIMIT_RESETS_FENCE}"
+            ),
+            params![
+                id,
+                incarnation as i64,
+                lifecycle_generation as i64,
+                epoch as i64,
+                block,
+                read_at
+            ],
         )?;
         Ok(wrote == 1)
     }
@@ -563,9 +572,13 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let stored: Option<Option<String>> = tx
             .query_row(
-                "SELECT limit_resets_json FROM accounts \
-                 WHERE id = ?1 AND incarnation = ?2 AND lifecycle_generation = ?3 AND limit_resets_epoch = ?4",
-                params![id, incarnation as i64, lifecycle_generation as i64, epoch as i64],
+                &format!("SELECT limit_resets_json FROM accounts WHERE {LIMIT_RESETS_FENCE}"),
+                params![
+                    id,
+                    incarnation as i64,
+                    lifecycle_generation as i64,
+                    epoch as i64
+                ],
                 |row| row.get(0),
             )
             .optional()?;
@@ -601,8 +614,8 @@ impl Store {
         subscription_term_in(&conn, id)
     }
 
-    /// Every account's profile document, term and limit reset block by account id, in one statement, so a list of
-    /// accounts reads them once where `account_extras_of` and `subscription_term` read one row each.
+    /// Every account's extras by account id, in one statement, so a list of accounts reads them once where
+    /// `account_extras_of` and `subscription_term` read one row each.
     pub fn account_extras(&self) -> Result<BTreeMap<String, AccountExtras>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(&format!("SELECT {TERM_COLUMNS} FROM accounts"))?;
@@ -673,6 +686,11 @@ pub(crate) fn subscription_term_in(
         .map_err(StoreError::from)
 }
 
+// The holder and the epoch that both block writers, the read's write and the claim's fold, fence on, so a column added
+// here reaches both fences.
+const LIMIT_RESETS_FENCE: &str =
+    "id = ?1 AND incarnation = ?2 AND lifecycle_generation = ?3 AND limit_resets_epoch = ?4";
+
 // The columns `row_to_term` reads, in its order, then the ones `row_to_extras` alone reads.
 pub(crate) const TERM_COLUMNS: &str =
     "id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
@@ -683,20 +701,17 @@ static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
 
 pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
-    let profile = profile_of(row)?;
+    let profile = json_column(row, 7)?;
     term_of(row, profile.as_ref())
 }
 
 fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
-    let profile = profile_of(row)?;
+    // Parsed once, so the term's class, its plan and the extras share it.
+    let profile = json_column(row, 7)?;
     let term = term_of(row, profile.as_ref())?;
-    let limit_resets: Option<String> = row.get(9)?;
     let extras = AccountExtras {
         created_at: row.get(12)?,
-        // A document that does not parse reads as absent, as the profile does.
-        limit_resets: limit_resets
-            .as_deref()
-            .and_then(|raw| serde_json::from_str(raw).ok()),
+        limit_resets: json_column(row, 9)?,
         limit_resets_epoch: row.get::<_, i64>(11)? as u64,
         limit_resets_read_at: row.get(10)?,
         profile,
@@ -705,11 +720,10 @@ fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
     Ok((extras.term.account_id.clone(), extras))
 }
 
-/// The profile document of a `TERM_COLUMNS` row, parsed once so the term's class, its plan and the extras share it. A
-/// document that does not parse reads as absent.
-fn profile_of(row: &Row<'_>) -> rusqlite::Result<Option<serde_json::Value>> {
-    let profile_json: Option<String> = row.get(7)?;
-    Ok(profile_json
+/// The JSON document in a text column of a `TERM_COLUMNS` row. A document that does not parse reads as absent.
+fn json_column(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<serde_json::Value>> {
+    let raw: Option<String> = row.get(index)?;
+    Ok(raw
         .as_deref()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()))
 }

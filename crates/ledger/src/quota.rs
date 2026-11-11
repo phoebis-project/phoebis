@@ -14,7 +14,7 @@ use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, SEVEN_DAY_FABLE,
 };
-use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
+use phoebis_store::{AccountExtras, AccountKind, AccountRow, AccountState, Store};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -227,6 +227,12 @@ pub fn polled(kind: AccountKind, state: AccountState) -> bool {
         )
 }
 
+/// Whether the poll asks the account, `polled` with no plan-ended flag: the set whose limit resets the router reads,
+/// shows and uses.
+pub fn asked(account: &AccountRow, extras: &AccountExtras) -> bool {
+    polled(account.kind, account.state) && extras.term.plan_ended_at.is_none()
+}
+
 /// What the startup step found before the bound: `reported` accounts reached the router with a sample,
 /// `failed` answered no clean snapshot, `pending` had reported nothing when the bound passed, and `paused` stand
 /// flagged plan ended, so the step read their profile alone and asked no usage of them.
@@ -422,13 +428,12 @@ impl QuotaPoll {
                     let handle = attempts.spawn(async move {
                         // A slot of an account whose plan ended keeps its cadence for the third poll's profile read.
                         let paused = Self::plan_paused(&poll.store, &account.id);
-                        let mut profile_read = false;
-                        let mut reading = None;
-                        if !paused {
+                        let (reading, profile_read) = if paused {
+                            (None, false)
+                        } else {
                             let (answer, read) = poll.poll_reading(&account).await;
-                            profile_read = read;
-                            reading = answer.ok();
-                        }
+                            (answer.ok(), read)
+                        };
                         // The profile endpoint shares the usage endpoint's limit, so a read the poll made serves the
                         // slot's.
                         if profile_due && !profile_read {
@@ -798,10 +803,10 @@ impl QuotaPoll {
     fn limit_resets_due(&self, account: &AccountRow, reading: Option<&UsageSnapshot>) -> bool {
         // The memory is keyed by the holder, and the slot's row is the one its pass drew: a disconnect and a re-pair
         // between two passes leave that row a lifecycle generation behind, under which the memory reads as empty.
-        let Some(stored) = self.store.account(&account.id).ok().flatten() else {
+        let Some(holder) = self.store.account(&account.id).ok().flatten() else {
             return false;
         };
-        let memory = self.usage.limit_resets_memory(&stored);
+        let memory = self.usage.limit_resets_memory(&holder);
         if memory.due {
             return true;
         }
