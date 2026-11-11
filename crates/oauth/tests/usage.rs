@@ -2602,6 +2602,57 @@ mod service {
     }
 
     #[tokio::test]
+    async fn a_kept_request_id_stays_with_its_holder() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let before = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&before, "rg-a-1").await.unwrap();
+        // No `invalidate` tells the service of the new row, since it would drop the kept id before the holder is read.
+        store.delete_account("a", "test").unwrap();
+        store
+            .insert_account(&AccountRow {
+                identity: Some(phoebis_store::Identity {
+                    account_uuid: "00000000-0000-4000-8000-000000000001".into(),
+                    email: "test@example.invalid".into(),
+                    organization_uuid: Some(ORGANIZATION.into()),
+                }),
+                ..AccountRow::for_tests("a", AccountKind::Oauth)
+            })
+            .unwrap();
+        let after = store.account("a").unwrap().unwrap();
+        store
+            .commit_credentials(
+                "a",
+                after.incarnation,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("rt")),
+                    issued_at: 1_000_000,
+                    expires_at: 1_000_000 + 3_600_000,
+                    refresh_expires_at: None,
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+        store_block(&store, after.incarnation, &block_with(3, 3));
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&after, "rg-a-1").await.unwrap();
+
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 2);
+        assert_ne!(
+            ids[0], ids[1],
+            "the new holder's claim does not repeat the id the deleted holder's claim left unsettled"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn a_re_pair_drops_the_kept_request_id() {
         let now = Arc::new(AtomicI64::new(1_000_000));
         let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;
