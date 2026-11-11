@@ -1664,6 +1664,79 @@ async fn the_read_route_sends_nothing_to_a_plan_that_ended() {
     );
 }
 
+/// Commits a bundle for `business` that sits inside its refresh margin at the rig's clock and answers every refresh
+/// with the token endpoint's `invalid_grant`, so the next acquisition refreshes and lands the re-pair mark.
+fn revoke_on_refresh(h: &common::Polled) {
+    let stored = h.store.credentials("business").unwrap().unwrap();
+    h.store
+        .commit_credentials(
+            "business",
+            1,
+            1,
+            Some(stored.generation),
+            None,
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("sk-ant-oat01-SHORT"),
+                refresh_token: Some(phoebis_store::Secret::new("sk-ant-ort01-SHORT")),
+                issued_at: common::NOW - 3_600_000,
+                expires_at: common::NOW + 60_000,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.up.set_rule_after(
+        0,
+        "/v1/oauth/token",
+        fake_upstream::Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+        },
+    );
+}
+
+/// Waits for the router's snapshot to read `business` as `reauth_required`. The manager's mark is a store write alone,
+/// which starts no registry reload, so only a report reaches the snapshot.
+async fn routing_reads_reauth_required(router: &phoebis_routing::RouterHandle) {
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        router
+            .snapshot()
+            .account("business")
+            .filter(|row| row.state == phoebis_store::AccountState::ReauthRequired)
+            .map(|_| ())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_read_route_reports_a_reauth_mark_its_read_landed() {
+    use common::{json, login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    revoke_on_refresh(&h);
+    let read = post(
+        &h.app,
+        "/admin/accounts/business/limit-resets/read",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    let status = read.status().as_u16();
+    let read = json(read).await;
+    assert_eq!(
+        (status, read["error"].is_string()),
+        (200, true),
+        "the read's refresh found the refresh token revoked, and the dialog still opens: {read}"
+    );
+    assert_eq!(
+        h.store.account("business").unwrap().unwrap().state,
+        phoebis_store::AccountState::ReauthRequired,
+        "the refresh's invalid_grant landed the mark"
+    );
+    routing_reads_reauth_required(&h.router).await;
+}
+
 #[tokio::test]
 async fn the_cards_refresh_reads_the_limit_resets() {
     use common::{get, json, login, post, LIMIT_RESETS_PATH};
@@ -2439,6 +2512,33 @@ async fn an_unanswered_claim_leaves_its_row() {
         ),
         "a claim the fake never answered leaves its row with the id it sent: {detail}"
     );
+}
+
+#[tokio::test]
+async fn the_use_route_reports_a_reauth_mark_its_claim_landed() {
+    use common::{login, post};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    revoke_on_refresh(&h);
+    let refused = post(&h.app, USE_RESET, "", Some(&cookie)).await;
+    let code = refused
+        .headers()
+        .get("x-phoebis-error-code")
+        .map(|code| code.to_str().unwrap().to_string());
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            code.as_deref(),
+            sent(&h.up, "POST /api/organizations/")
+        ),
+        (502, Some("limit_reset_not_sent"), 0),
+        "the claim's refresh found the refresh token revoked, so nothing left"
+    );
+    routing_reads_reauth_required(&h.router).await;
 }
 
 #[tokio::test]

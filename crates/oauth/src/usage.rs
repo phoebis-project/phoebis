@@ -740,8 +740,9 @@ struct Inner {
     cache: Mutex<HashMap<String, CachedEntry>>,
     inflight: Mutex<HashMap<String, SharedFetch>>,
     resets_inflight: Mutex<HashMap<String, SharedResetsRead>>,
-    /// The reauth mark an account's last failed acquisition landed, until a caller takes it: a fetch answers a
-    /// snapshot or a profile, neither of which carries the mark, and the routing hears of it only from a report.
+    /// The reauth mark an account's last failed acquisition landed, until a caller takes it: a call answers a
+    /// snapshot, a profile, a block or a claim, none of which carries the mark, and the routing hears of it only from
+    /// a report.
     landed_marks: Mutex<HashMap<String, LandedMark>>,
     /// The limit resets read each account's poll slot decides by, beside the holder it was written for.
     resets_memory: Mutex<HolderMap<LimitResetsMemory>>,
@@ -1198,8 +1199,8 @@ impl UsageService {
             .windows_at_limit_of(&account.id, Identity::of(account))
     }
 
-    /// The reauth mark the account's last failed acquisition landed, once: the poll and the profile refresh take it
-    /// after their call to report it to the routing.
+    /// The reauth mark the account's last failed acquisition landed, once: the quota poll's reads and the admin's
+    /// reads and claims take it after their call to report it to the routing.
     pub fn take_landed_mark(&self, account_id: &str) -> Option<LandedMark> {
         self.inner
             .landed_marks

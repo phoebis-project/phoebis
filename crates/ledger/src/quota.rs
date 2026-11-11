@@ -524,7 +524,7 @@ impl QuotaPoll {
             }
             Err(error) => Err(error),
         };
-        Self::report_landed_mark(&self.usage, &self.router, &account.id).await;
+        self.report_landed_mark(&account.id).await;
         // A snapshot with an error is a stale one, and a stale sample must not be written under a fresh bucket.
         let answer = match answer {
             Ok(snapshot) if snapshot.error.is_none() => {
@@ -598,7 +598,7 @@ impl QuotaPoll {
     /// `refresh_profile` with the `source` a flag it sets or clears names, answering what the read found.
     async fn read_profile(&self, account: &AccountRow, source: &'static str) -> ProfileRead {
         let answer = self.usage.profile(&account.id).await;
-        Self::report_landed_mark(&self.usage, &self.router, &account.id).await;
+        self.report_landed_mark(&account.id).await;
         // The profile row is the poll's to refresh: nothing else reads the endpoint after pairing, and the
         // admin views show what it says.
         match answer {
@@ -786,10 +786,11 @@ impl QuotaPoll {
 
     /// Reports the reauth mark the service's last acquisition for the account landed, as the relay reports its own:
     /// the manager's store write starts no reload, so without the report the routing would select the account until
-    /// the next one.
-    async fn report_landed_mark(usage: &UsageService, router: &RouterHandle, account_id: &str) {
-        if let Some(mark) = usage.take_landed_mark(account_id) {
-            Self::report_mark(router, mark).await;
+    /// the next one. Every caller of the service's reads and claims sends it after its call, since the poll drops an
+    /// account in `reauth_required` and no later slot of it takes the mark.
+    pub async fn report_landed_mark(&self, account_id: &str) {
+        if let Some(mark) = self.usage.take_landed_mark(account_id) {
+            Self::report_mark(&self.router, mark).await;
         }
     }
 
@@ -839,7 +840,7 @@ impl QuotaPoll {
     /// read due for the next slot, and nothing of the read reaches the ledger.
     async fn read_limit_resets(&self, account: &AccountRow) {
         let answer = self.usage.limit_resets(&account.id).await;
-        Self::report_landed_mark(&self.usage, &self.router, &account.id).await;
+        self.report_landed_mark(&account.id).await;
         // A fault logged its warning in the service.
         if let Err(UsageError::Unavailable(reason)) = answer {
             tracing::debug!(account = %account.id, %reason, "the quota poll read no limit resets");

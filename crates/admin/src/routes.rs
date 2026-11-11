@@ -22,7 +22,7 @@ use phoebis_oauth::{
     loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput, Claim,
     ClaimOutcome, ClaimRefusal, ClaimReply, ControlKind, LimitResets, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus,
-    ProfileResponse, Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
+    ProfileResponse, Started, UsageError, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
@@ -868,7 +868,18 @@ async fn read_limit_resets_after_poll(state: &AdminState, id: &str) -> bool {
     if QuotaPoll::plan_paused(&state.store, id) {
         return false;
     }
-    state.usage.limit_resets(id).await.is_ok()
+    read_limit_resets(state, id).await.is_ok()
+}
+
+/// The account's limit resets read through the service, with the reauth mark the read's acquisition landed reported
+/// to the routing as the poll reports its own.
+async fn read_limit_resets(
+    state: &AdminState,
+    id: &str,
+) -> Result<Option<LimitResets>, UsageError> {
+    let answer = state.usage.limit_resets(id).await;
+    state.quota_poll().report_landed_mark(id).await;
+    answer
 }
 
 const ACCOUNT_CHANGED: &str = "the account changed while its reset was being used";
@@ -909,9 +920,7 @@ async fn limit_resets_read(
         Err(refusal) => return refusal,
     };
     // A read that fails or that the hold refuses still opens the dialog, on the stored block and its age.
-    let error = state
-        .usage
-        .limit_resets(&id)
+    let error = read_limit_resets(&state, &id)
         .await
         .err()
         .map(|error| error.to_string());
@@ -1044,7 +1053,10 @@ async fn claim_and_record(
     first_stage: ClaimRunning,
     answer: tokio::sync::oneshot::Sender<Response>,
 ) {
-    let claim = match state.usage.claim_limit_reset(&row, &grant).await {
+    let claimed = state.usage.claim_limit_reset(&row, &grant).await;
+    // Before the match, since a landed mark comes with a refusal, whose arm returns at once.
+    state.quota_poll().report_landed_mark(&row.id).await;
+    let claim = match claimed {
         Ok(claim) => claim,
         Err(refusal) => {
             let _ = answer.send(refused(refusal));
