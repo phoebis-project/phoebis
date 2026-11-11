@@ -526,8 +526,8 @@ pub struct EngineParts {
     pub relay: Arc<Relay>,
     pub router: RouterHandle,
     pub session_expiry: Duration,
-    /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe is a share
-    /// of, and the sessions and recipes a restart resumes.
+    /// The registry's own store, read for the sessions and recipes a restart resumes and for the key the companion's
+    /// account pseudonyms are digested under.
     pub store: Arc<Store>,
     /// The subscription cost model, for a probe on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
@@ -1542,14 +1542,12 @@ impl Engine {
     }
 
     /// The pools whose policy warms caches, read off the router's snapshot as the scheduler reads a pool's policy
-    /// (`KeepalivePolicy::from_json`).
+    /// (`pool_policies`).
     pub fn warming(&self) -> BTreeSet<String> {
-        self.parts
-            .router
-            .snapshot()
-            .pools()
-            .filter(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled)
-            .map(|pool| pool.id.clone())
+        pool_policies(&self.parts.router.snapshot())
+            .into_iter()
+            .filter(|(_, policy)| policy.enabled)
+            .map(|(pool, _)| pool)
             .collect()
     }
 
@@ -2563,13 +2561,9 @@ impl Inner {
             .filter(|(_, s)| {
                 // A request refused its slot writes its agent's stamp and leaves the session's own unwritten, so the
                 // newest agent's request counts beside the session's two stamps.
-                let requested = s.agents.values().filter_map(|a| a.last_real_at).max();
-                let newest = s
-                    .last_real_at
-                    .max(requested)
-                    .unwrap_or(0)
-                    .max(s.last_report_at);
-                now - newest >= self.session_expiry_ms
+                let stale = |at: i64| now - at >= self.session_expiry_ms;
+                stale(s.last_real_at.unwrap_or(0).max(s.last_report_at))
+                    && s.agents.values().filter_map(|a| a.last_real_at).all(stale)
             })
             .map(|(k, _)| k.clone())
             .collect();

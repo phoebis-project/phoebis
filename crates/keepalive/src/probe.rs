@@ -630,15 +630,10 @@ impl Inner {
             );
             return;
         }
-        // A probe on its own account that read part of the prefix and rebuilt the rest never warmed the whole entry,
-        // and one that read none of it rebuilt the entry, which the cold streak counts instead. A migrated probe is
-        // partial where neither its count nor its uncached input covers.
-        let partial = if migrated {
-            !covered
-        } else {
-            usage.evidence() < job.expected || (usage.read > 0 && !covered)
-        };
-        if partial {
+        // A probe on its own account that read none of the prefix and wrote all of it rebuilt the entry, which the cold
+        // streak counts instead. Any other probe that does not cover never warmed the whole entry.
+        let rebuilt = !migrated && usage.read == 0 && usage.evidence() >= job.expected;
+        if !covered && !rebuilt {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
             return;
         }
