@@ -1394,9 +1394,6 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, CooldownScope), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
-    /// The pins whose agent ended, by key: a subagent's turn answered with `end_turn`, or an agent the companion
-    /// released. Memory only, so a restart reads every such pin as live until its next request.
-    ended: HashSet<PinKey>,
     /// Each agent's first placement by key id and session id, then agent id. It outlives `take_pin`, since a move, a
     /// failover and a rekey take a session's one pin before its new row lands, and leaves once the session's last pin
     /// leaves for good.
@@ -1545,7 +1542,6 @@ impl RoutingState {
                     )
                 })
                 .collect(),
-            ended: HashSet::new(),
             first_seen,
             funding_ordinals: HashMap::new(),
             funding_retries: HashMap::new(),
@@ -1698,34 +1694,47 @@ impl RoutingState {
         self.renewed.contains(&*self.canonical_key(key))
     }
 
-    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release). The shed walk and the
-    /// projection read the mark, the pin and its cache stay, and the pin's next request clears it.
-    pub(crate) fn mark_ended(&mut self, key: &PinKey) {
-        let key = self.canonical_key(key);
-        flag_held(&self.pins, &mut self.ended, key);
+    /// Marks the pin whose agent ended (a subagent's `end_turn`, the companion's release) and answers the row as marked
+    /// for the write, `None` where no pin stands under the key or its mark stood already. The pool's keep reads the
+    /// mark, the pin and its cache stay, and the pin's next request clears it.
+    pub(crate) fn mark_ended(&mut self, key: &PinKey) -> Option<PinRow> {
+        let pin = self.pin_mut(key).filter(|pin| !pin.ended)?;
+        pin.ended = true;
+        Some(pin.clone())
     }
 
-    /// Marks every pin the agent holds under the key and session as `mark_ended` marks one. The pin map's keys are
-    /// the canonical ones, so the set takes them as they stand.
-    pub(crate) fn mark_agent_ended(&mut self, key_id: &str, session_id: &str, agent_id: &str) {
-        self.ended.extend(
-            self.pins
-                .keys()
-                .filter(|key| {
-                    key.key_id == key_id && key.session_id == session_id && key.agent_id == agent_id
-                })
-                .cloned(),
-        );
+    /// Marks every pin the agent holds under the key and session as `mark_ended` marks one, and answers the rows it
+    /// marked for the write.
+    pub(crate) fn mark_agent_ended(
+        &mut self,
+        key_id: &str,
+        session_id: &str,
+        agent_id: &str,
+    ) -> Vec<PinRow> {
+        self.pins
+            .values_mut()
+            .filter(|pin| {
+                pin.key_id == key_id
+                    && pin.session_id == session_id
+                    && pin.agent_id == agent_id
+                    && !pin.ended
+            })
+            .map(|pin| {
+                pin.ended = true;
+                pin.clone()
+            })
+            .collect()
     }
 
-    pub(crate) fn clear_ended(&mut self, key: &PinKey) {
-        let key = self.canonical_key(key);
-        self.ended.remove(&*key);
-    }
-
-    /// Whether the agent of the pin under the key ended since the pin's last request.
-    pub fn ended(&self, key: &PinKey) -> bool {
-        self.ended.contains(&*self.canonical_key(key))
+    /// Clears the mark of the pin under the key and answers whether one stood, so the caller writes the cleared row.
+    pub(crate) fn clear_ended(&mut self, key: &PinKey) -> bool {
+        match self.pin_mut(key) {
+            Some(pin) if pin.ended => {
+                pin.ended = false;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Whether only auxiliary requests have used the pin held under the key (resolved as `pin` resolves it) since
@@ -1800,7 +1809,6 @@ impl RoutingState {
     /// with its mark, which the caller reads off the answer to say what cleared it.
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
-        self.ended.remove(key);
         self.renewed.remove(key);
         self.head_marks.remove(key);
         Some(pin)
@@ -3255,9 +3263,10 @@ impl RoutingState {
         (pins, sum)
     }
 
-    /// The account's burn per plan window in share per second: the kept pins not named by a live reservation and
-    /// not marked ended, each `share.rate` of its plain average on `tier` at `now` decayed with `average_ms`, plus the
-    /// live reservations' `burn`. A window a pin's model does not draw is absent, an unpriced pin adds nothing.
+    /// The account's burn per plan window in share per second: the kept pins not named by a live reservation (the
+    /// pool's keep leaves a pin whose agent ended out), each `share.rate` of its plain average on `tier` at `now`
+    /// decayed with `average_ms`, plus the live reservations' `burn`. A window a pin's model does not draw is absent,
+    /// an unpriced pin adds nothing.
     pub fn burn_shares(
         &self,
         account_id: &str,
@@ -3393,9 +3402,8 @@ impl RoutingState {
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws that the account's
     /// set has, with the pin's entrypoint, in the pin map's order, so every fold over it names the set's windows
     /// alone. A priced pin alone reaches `add`. `keep` decides which rows count, beside the skip of a row a live
-    /// booking names and of a pin whose agent ended, with no idle test: a row idle past the TTL stands until its
-    /// placement replaces it or the purge takes it, and a placement's own reads leave the request's own row out
-    /// through `keep`.
+    /// booking names, with no idle test: a row idle past the TTL stands until its placement replaces it or the purge
+    /// takes it, and a placement's own reads leave the request's own row out through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,
@@ -3413,17 +3421,12 @@ impl RoutingState {
             .live_bookings(account_id)
             .filter_map(|reservation| reservation.pin.as_ref().map(PinKey::parts))
             .collect();
-        for (key, pin) in self
+        for pin in self
             .pins
-            .iter()
-            .filter(|(_, pin)| pin.account_id == account_id && keep(pin))
+            .values()
+            .filter(|pin| pin.account_id == account_id && keep(pin))
         {
             if reserved.contains(&pin.key_parts()) {
-                continue;
-            }
-            // An ended agent sends no new turn, so its decayed burn would hold up a projection nothing will fill. The
-            // pin and its cache stay, and its next request clears the mark and counts it again.
-            if self.ended.contains(key) {
                 continue;
             }
             for window in self.plan_windows_held(account_id, &pin.model) {
@@ -3667,7 +3670,6 @@ impl RoutingState {
             // its flag and its fast and unmetered usage move with it. Its ended agent stays ended there too, since a
             // resolution is no new request from that agent.
             let renewed = self.renewed.contains(&spelled);
-            let ended = self.ended.contains(&spelled);
             // Read ahead of `take_pin`, which drops it: the mark lives as long as its row, so a `Head` report still
             // finds it under the dated id.
             let mark = self.head_marks.remove(&spelled);
@@ -3706,11 +3708,6 @@ impl RoutingState {
                     self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
-                }
-                if ended {
-                    self.ended.insert(dated_key.clone());
-                } else {
-                    self.ended.remove(&dated_key);
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -4237,6 +4234,7 @@ mod tests {
             mark: None,
             auxiliary_only: false,
             effort: None,
+            ended: false,
         };
         (pin, Some(burn))
     }
@@ -4523,7 +4521,7 @@ mod tests {
             ..pin.key()
         };
         assert!(
-            state.ended(&dated),
+            state.pin(&dated).is_some_and(|p| p.ended),
             "the finished agent's pin stays out of the demand under the dated id"
         );
     }
@@ -4549,7 +4547,7 @@ mod tests {
         assert_eq!(
             (
                 state.pin(&dated.key()).map(|p| p.last_used_at),
-                state.ended(&dated.key())
+                state.pin(&dated.key()).is_some_and(|p| p.ended)
             ),
             (Some(2), false),
             "the newer spelled row replaces the dated one, and its live agent keeps its demand"

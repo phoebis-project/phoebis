@@ -1492,6 +1492,7 @@ async fn a_pin_the_ledger_has_no_row_for_reads_a_zero_request_count() {
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }
@@ -1589,6 +1590,7 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
             mark: None,
             auxiliary_only: false,
             effort: None,
+            ended: false,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;
@@ -5668,6 +5670,7 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
             mark: None,
             auxiliary_only: false,
             effort: None,
+            ended: false,
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;

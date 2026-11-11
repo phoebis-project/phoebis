@@ -2635,6 +2635,7 @@ fn fresh_pin(
         mark: None,
         auxiliary_only: placed_auxiliary_only(request),
         effort: request.effort.clone(),
+        ended: false,
     };
     stamp_hashes(&mut row, request);
     row
@@ -2734,23 +2735,40 @@ pub(crate) struct Projection {
 }
 
 /// The pins the account's pool keeps: a pin under a key of a pool the account left is retained until it ends and
-/// counts in neither a round nor a projection, so a former pool's pins never move this pool's figures.
+/// counts in neither a round nor a projection, so a former pool's pins never move this pool's figures. The keep leaves
+/// an ended agent's pin out of every figure as well, until the agent's next request.
 fn in_pool<'a>(snapshot: &'a RegistrySnapshot, pool: &'a PoolRow) -> impl Fn(&PinRow) -> bool + 'a {
     in_pool_without(snapshot, pool, None)
 }
 
 /// The pool's pins without the request's own, the predicate a placement's own reads hand to the sums. `own` is the
-/// request's pin key under `Judge::Placement` and `None` on every other read.
+/// request's pin key under `Judge::Placement` and `None` on every other read. A pin whose agent ended is out, since
+/// its agent sends no new turn: its burn would hold up a projection nothing will fill, and marking it relieves
+/// nothing.
 fn in_pool_without<'a>(
     snapshot: &'a RegistrySnapshot,
     pool: &'a PoolRow,
     own: Option<&'a PinKey>,
 ) -> impl Fn(&PinRow) -> bool + 'a {
     move |p: &PinRow| {
-        snapshot
-            .key(&p.key_id)
-            .is_some_and(|k| k.pool_id == pool.id)
+        !p.ended
+            && snapshot
+                .key(&p.key_id)
+                .is_some_and(|k| k.pool_id == pool.id)
             && own.is_none_or(|own| p.key_parts() != own.parts())
+    }
+}
+
+/// The pool's pins whose agent ended, which the keep leaves out of every figure. A round lists them in its record.
+fn ended_in_pool<'a>(
+    snapshot: &'a RegistrySnapshot,
+    pool: &'a PoolRow,
+) -> impl Fn(&PinRow) -> bool + 'a {
+    move |p: &PinRow| {
+        p.ended
+            && snapshot
+                .key(&p.key_id)
+                .is_some_and(|k| k.pool_id == pool.id)
     }
 }
 
@@ -3169,12 +3187,10 @@ pub(crate) fn slow_down_of(
     let ramp = slow_down_ramp(state, pool, account_id, factor, now);
     let ramped = 1.0 - (1.0 - factor) * ramp;
     // Every kept pin, each weighted by its own priced burn on the window: a pin without a cycle is never held, but its
-    // burn runs at full speed and weighs in the speed the demand divides by. A pin whose agent ended leaves as it
-    // leaves the demand, since its agent sends no new turn to run at any speed.
+    // burn runs at full speed and weighs in the speed the demand divides by.
     let pins: Vec<(PinKey, Option<f64>, f64)> = state
         .pins_on(account_id, &in_pool(snapshot, pool))
         .into_iter()
-        .filter(|p| !state.ended(&p.key()))
         .map(|p| {
             let cycle = state
                 .pin_pace(&p.key())
@@ -5114,6 +5130,13 @@ fn shed_round(
                 .0
         }
     };
+    // The pins whose agent ended join with no burn for the record's rows alone, each written under its word below.
+    pins.extend(
+        state
+            .pins_on(account_id, &ended_in_pool(snapshot, pool))
+            .into_iter()
+            .map(|p| (p.clone(), None)),
+    );
     let is_pin = |p: &PinRow, key: &PinKey| p.key_parts() == key.parts();
     let current_key = current.key();
     let is_current = |p: &PinRow| is_pin(p, &current_key);
@@ -5148,10 +5171,10 @@ fn shed_round(
     // since it has no plan share at all.
     let off_window = |p: &PinRow| !plan_windows(&p.model).any(|window| window == trigger.window);
     pins = leave_out(pins, "off_window", &off_window);
-    // A pin whose agent ended burns its decayed average and no new turn, so marking it relieves nothing: it leaves
-    // before the order and the burn guard, its pin and cache kept for a respawn. A pin off the window keeps that word
-    // whatever its agent did.
-    pins = leave_out(pins, "ended", &|p: &PinRow| state.ended(&p.key()));
+    // The keep left a pin whose agent ended out of every figure, so the round lists it for its record and walks it
+    // nowhere, its pin and cache kept for a respawn. A fast-lane pin and a pin off the window keep their words whatever
+    // their agent did.
+    pins = leave_out(pins, "ended", &|p: &PinRow| p.ended);
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer
     // does not weight, the one case left once the partition above took the pins whose model does not draw the window,

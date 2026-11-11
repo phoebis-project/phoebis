@@ -119,6 +119,9 @@ pub struct PinRow {
     /// `None` for none and on a row written before the column, which spells none as the empty text. A probe's renewal
     /// keeps it.
     pub effort: Option<String>,
+    /// The pin's agent ended and its next request has not arrived: a subagent's turn answered with `end_turn`, or an
+    /// agent the companion released. The pool's keep leaves such a pin out of every figure until that request.
+    pub ended: bool,
 }
 
 impl PinRow {
@@ -445,7 +448,7 @@ impl Store {
                     burn_fast: burn_from(r, 29)?, burn_unmetered: burn_from(r, 34)?,
                     mark: mark_from(r, 39)?,
                     entrypoint: none_if_empty(r.get(42)?),
-                    auxiliary_only: r.get(45)?, effort: none_if_empty(r.get(46)?),
+                    auxiliary_only: r.get(45)?, effort: none_if_empty(r.get(46)?), ended: r.get(47)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: all_resolutions(&tx)?,
@@ -820,7 +823,7 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
      burn_unmetered_write_5m, \
-     marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort";
+     marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort, ended";
 
 fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     Ok(PinBurn {
@@ -935,7 +938,8 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         pin.last_classifier,
         pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
         pin.auxiliary_only,
-        pin.effort.as_deref().unwrap_or_default()
+        pin.effort.as_deref().unwrap_or_default(),
+        pin.ended
     ])?;
     Ok(())
 }

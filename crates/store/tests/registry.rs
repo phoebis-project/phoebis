@@ -88,8 +88,22 @@ fn rename(
 /// The sixth step taken back on a file this build wrote, which every case that takes a file back past version 6
 /// runs before its own statements.
 fn sixth_step_taken_back(conn: &rusqlite::Connection) {
-    conn.execute_batch("ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;")
+    conn.execute_batch(
+        "ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;
+         ALTER TABLE pins DROP COLUMN ended;",
+    )
+    .unwrap();
+}
+
+/// A registry as a version-5 build left it: the build's own file with the sixth step taken back through
+/// `sixth_step_taken_back`, where each of the step's statements keeps its take-back, the version row set to 5, then
+/// `seed`, the rows a case stands at version 5 before its reopen.
+fn at_version_five(path: &std::path::Path, seed: &str) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    sixth_step_taken_back(&conn);
+    conn.execute_batch("UPDATE meta SET value = '5' WHERE key = 'schema_version';")
         .unwrap();
+    conn.execute_batch(seed).unwrap();
 }
 
 #[test]
@@ -132,6 +146,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
                 mark: None,
                 auxiliary_only: true,
                 effort: Some("high".into()),
+                ended: false,
             })
             .unwrap();
         let incarnation = store.account("a").unwrap().unwrap().incarnation;
@@ -243,6 +258,57 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
 }
 
 #[test]
+fn a_pin_saved_before_the_sixth_step_reads_back_as_saved_and_not_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let saved = PinRow {
+        key_id: "k".into(),
+        session_id: "s".into(),
+        agent_id: "main".into(),
+        model: "claude-opus-5".into(),
+        account_id: "a".into(),
+        epoch: 1,
+        created_at: 1,
+        last_used_at: 1,
+        key_generation: 1,
+        incarnation: 1,
+        burn: PinBurn::default(),
+        burn_at: None,
+        burn_banded: PinBurn::default(),
+        burn_fast: PinBurn::default(),
+        burn_unmetered: PinBurn::default(),
+        last_input_tokens: 0,
+        last_classifier: false,
+        last_refresh_at: 1,
+        cache_ttl_ms: 300_000,
+        shed: None,
+        static_hash: None,
+        tail_hash: None,
+        lane: String::new(),
+        entrypoint: None,
+        mark: None,
+        auxiliary_only: false,
+        effort: None,
+        ended: false,
+    };
+    {
+        let store = Store::open(&path, &key).unwrap();
+        store
+            .insert_account(&account("a", AccountKind::Oauth))
+            .unwrap();
+        store.upsert_pin(&saved).unwrap();
+    }
+    at_version_five(&path, "");
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        store.load_routing().unwrap().pins,
+        vec![saved],
+        "the step adds the mark at its default to the pin it finds"
+    );
+}
+
+#[test]
 fn a_pseudonym_holds_across_a_reopen_and_differs_under_another_storage_key() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("registry.sqlite");
@@ -341,6 +407,7 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         mark: None,
         auxiliary_only: false,
         effort: None,
+        ended: false,
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(
@@ -411,6 +478,7 @@ fn a_pins_last_classifier_flag_reads_back_as_written_and_a_standard_renewal_clea
         mark: None,
         auxiliary_only: false,
         effort: None,
+        ended: false,
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(

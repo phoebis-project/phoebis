@@ -3070,9 +3070,8 @@ impl Task {
                 // The agent's own request is its return, cleared ahead of the round it may run so that round walks the
                 // pin. A probe replays a request and a classifier call judges a turn, the ended one among them, so
                 // neither is a return.
-                if !(request.probe || request.classifier) {
-                    self.state.clear_ended(&pin_key);
-                }
+                let cleared =
+                    !(request.probe || request.classifier) && self.state.clear_ended(&pin_key);
                 let before = self.state.pin(&pin_key).cloned();
                 // A failover inside the window lands on the row its source lost: the selection prices the session's
                 // own burn and names the cause on the record. A key that holds a pin again is no landing, and the
@@ -3095,7 +3094,7 @@ impl Task {
                     .unwrap_or_default();
                 let Decided {
                     mut result,
-                    writes,
+                    mut writes,
                     mut record,
                     mut summary,
                     shed_round,
@@ -3113,6 +3112,17 @@ impl Task {
                     }
                     _ => None,
                 });
+                // The cleared mark reaches the store with the selection's own write of the pin, else with this one of
+                // the row as the selection left it. A pin the selection took off the state is not written back.
+                if cleared
+                    && !writes.iter().any(|write| {
+                        matches!(write, StateWrite::UpsertPin(row) if row.key_parts() == pin_key.parts())
+                    })
+                {
+                    if let Some(row) = self.state.pin(&pin_key) {
+                        writes.push(StateWrite::UpsertPin(row.clone()));
+                    }
+                }
                 self.write(writes);
                 if let Some(pin) = record.pin.as_mut() {
                     pin.released = released.clone();
@@ -3664,7 +3674,8 @@ impl Task {
                 agent_id,
             } => {
                 // The companion names no model, so every pin the agent holds under the key and session ends with it.
-                self.state.mark_agent_ended(&key_id, &session_id, &agent_id);
+                let marked = self.state.mark_agent_ended(&key_id, &session_id, &agent_id);
+                self.write(marked.into_iter().map(StateWrite::UpsertPin).collect());
             }
             Report::MemberSpend(rows) => {
                 let snapshot = self.snapshot();
@@ -4057,9 +4068,9 @@ impl Task {
                     }
                     // The agent's end does not hang on the placement that served its last turn, so a pin moved
                     // since is marked as well.
-                    if turn_end == RenewalEnd::AgentEnded {
-                        self.state.mark_ended(&key);
-                    }
+                    let marked = (turn_end == RenewalEnd::AgentEnded)
+                        .then(|| self.state.mark_ended(&key))
+                        .flatten();
                     let renewed = (same_epoch && !left_lane)
                         .then(|| self.state.pin_mut(&key))
                         .flatten();
@@ -4151,6 +4162,10 @@ impl Task {
                                 .note_turn_end(&key, &row.account_id, row.incarnation);
                         }
                         self.write(vec![StateWrite::UpsertPin(row)]);
+                    } else if let Some(marked) = marked {
+                        // A renewal of another epoch or of a lane the pin left writes no row, so the marked row is
+                        // written alone.
+                        self.write(vec![StateWrite::UpsertPin(marked)]);
                     }
                 }
             }
@@ -5677,6 +5692,7 @@ mod tests {
             mark: None,
             auxiliary_only: false,
             effort: None,
+            ended: false,
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -6039,6 +6055,7 @@ mod tests {
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             }],
             ..RoutingLoad::default()
         });

@@ -8282,6 +8282,7 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         mark: None,
         auxiliary_only: false,
         effort: None,
+        ended: false,
     };
     st.record_overage("a", overage(true, 1_000, Some(1_999)));
     let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
@@ -11504,6 +11505,7 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         mark: None,
         auxiliary_only: false,
         effort: None,
+        ended: false,
     }
 }
 
@@ -18848,6 +18850,36 @@ fn a_fresh_sessions_prior_leaves_out_the_warm_pins_a_former_pool_left_on_the_acc
         booked.burn.get(FIVE_HOUR).copied().unwrap_or(0.0),
         0.0,
         "the former pool's pin shapes no prior of p2's: {booked:?}"
+    );
+}
+
+#[test]
+fn a_fresh_sessions_prior_leaves_out_the_warm_pin_of_an_agent_that_ended() {
+    let s = tiered(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        burning("s1", "a", 10_000.0, true, T),
+        PinRow {
+            ended: true,
+            ..burning("s2", "a", 30_000.0, true, T)
+        },
+    ]);
+    st.set_share(ratio_pricer());
+    st.record_sample("a", sample(0.5, 0.1, T), 0);
+    let req = SelectRequest {
+        body_tokens: 1_000,
+        ..request(&s, Some("s9"), "claude-sonnet-5", true, &[], T)
+    };
+    assert_eq!(
+        landed(select(&mut st, &s, &req, &mut rng()).0),
+        ("a".into(), None)
+    );
+    let booked = st.reservation("r-1").expect("the placement books");
+    assert!(
+        close(booked.burn[FIVE_HOUR], 10_000.0 / 10_000_000.0),
+        "the live pin's burn alone, where the median of both would read twice it: {booked:?}"
     );
 }
 

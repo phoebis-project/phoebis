@@ -304,9 +304,11 @@ ALTER TABLE api_keys DROP COLUMN keepalive_opt_out;
 "#;
 
 /// The plan word the exchange built from two profile flags had no reader: the term resolves its plan from the
-/// stored document and the tier.
+/// stored document and the tier. A pin carries its agent's end, so a restart keeps an ended agent's pin out of the
+/// figures.
 const V6: &str = r#"
 ALTER TABLE accounts DROP COLUMN subscription_plan;
+ALTER TABLE pins ADD COLUMN ended INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or

@@ -9091,6 +9091,7 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         mark: None,
         auxiliary_only: false,
         effort: None,
+        ended: false,
     }
 }
 
@@ -9308,6 +9309,123 @@ async fn the_marks_and_the_dwell_gate_survive_a_restart() {
             } if session_id == "s1" && *marked_at == AT - 60_000
         )),
         "the move clears the loaded mark: {later:?}"
+    );
+}
+
+/// Spawns a router again over `store`, as a restart does, beside its read of session `s1`'s `sub` pin: the account the
+/// pin sits on and its ended mark.
+async fn sub_after_a_restart(
+    store: &Arc<Store>,
+    now: &Arc<AtomicI64>,
+) -> (RouterHandle, (String, bool)) {
+    let handle = spawn(store.clone(), clock(now), RouterConfig::default()).unwrap();
+    let pin = handle
+        .pins()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.session_id == "s1" && p.agent_id == "sub")
+        .expect("the restart loads the subagent's pin");
+    (handle, (pin.account_id, pin.ended))
+}
+
+#[tokio::test]
+async fn every_set_and_clear_of_an_ended_agents_mark_reaches_the_store_and_a_restart_reads_it() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let subagent = |handle: &RouterHandle, request_id: &str, at: i64| SelectRequest {
+        request_id: request_id.into(),
+        agent_id: "sub".into(),
+        ..request(handle, Some("s1"), at)
+    };
+
+    // The companion's report ends the agent.
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(subagent(&handle, "r-1", 1_000))
+        .await
+        .unwrap();
+    handle
+        .report(Report::AgentEnded {
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "sub".into(),
+        })
+        .await;
+    handle.shutdown().await.unwrap();
+    let (handle, (home, ended)) = sub_after_a_restart(&store, &now).await;
+    assert!(ended, "the companion's report is written with the pin");
+    let other = if home == "a" { "b" } else { "a" };
+
+    // The agent sends again. Its first attempt failed on the pin's account and the request is bound to its pin, so the
+    // selection is exhausted and writes nothing for the pin: the clear writes the row of its own.
+    now.store(2_000, Ordering::SeqCst);
+    let answer = handle
+        .select(SelectRequest {
+            portable: false,
+            attempt: 2,
+            attempted: vec![home.clone()],
+            ..subagent(&handle, "r-2", 2_000)
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Exhausted(_)),
+        "the bound request finds its pin's account tried: {:?}",
+        answer.result
+    );
+    handle.shutdown().await.unwrap();
+    let (handle, (account, ended)) = sub_after_a_restart(&store, &now).await;
+    assert_eq!(
+        (account.as_str(), ended),
+        (home.as_str(), false),
+        "the agent's request clears the stored mark"
+    );
+
+    // A request of the agent is served on its pin, and the next one, its first attempt failed there, moves the pin to
+    // the other account before the first one's stream ends the agent's turn: the renewal names the pin's old epoch and
+    // writes no renewal of its own, so the mark reaches the store through the marked row alone.
+    now.store(3_000, Ordering::SeqCst);
+    let served = selected_pin(
+        handle
+            .select(subagent(&handle, "r-3", 3_000))
+            .await
+            .unwrap(),
+    );
+    let moved = handle
+        .select(SelectRequest {
+            attempt: 2,
+            attempted: vec![home.clone()],
+            ..subagent(&handle, "r-4", 3_000)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        landed_on(moved).0,
+        other,
+        "the retry places the pin on the other account"
+    );
+    handle
+        .report(Report::PinRenewed {
+            pin: served,
+            now: 4_000,
+            usage: Some(PinUsage {
+                input: 100,
+                ..PinUsage::default()
+            }),
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            classifier: false,
+            turn_end: RenewalEnd::AgentEnded,
+        })
+        .await;
+    handle.shutdown().await.unwrap();
+    let (_, (account, ended)) = sub_after_a_restart(&store, &now).await;
+    assert_eq!(
+        (account.as_str(), ended),
+        (other, true),
+        "the renewal's mark is written with the moved pin"
     );
 }
 

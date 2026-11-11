@@ -40,6 +40,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         mark: None,
         auxiliary_only: false,
         effort: None,
+        ended: false,
     }
 }
 
@@ -379,6 +380,39 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
         marks()[0],
         ("s".to_string(), false, Some("low".to_string())),
         "the renewal's mark and effort replace the stored ones"
+    );
+}
+
+#[test]
+fn a_pins_ended_mark_survives_a_reopen_beside_a_pin_saved_without_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    {
+        let store = Store::open(&path, &storage_key).unwrap();
+        seed_accounts(&store, &["a"]);
+        store
+            .upsert_pin(&PinRow {
+                ended: true,
+                ..pin("k", "ended", "claude-opus-5-5", "a")
+            })
+            .unwrap();
+        store
+            .upsert_pin(&pin("k", "live", "claude-opus-5-5", "a"))
+            .unwrap();
+    }
+    let reopened = Store::open(&path, &storage_key)
+        .unwrap()
+        .load_routing()
+        .unwrap();
+    assert_eq!(
+        reopened
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.ended))
+            .collect::<Vec<_>>(),
+        [("ended", true), ("live", false)],
+        "each pin reads the mark it was saved with"
     );
 }
 
@@ -968,6 +1002,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;
+         ALTER TABLE pins DROP COLUMN ended;
          DROP TABLE usage_window_sets;
          ALTER TABLE refresh_attempts DROP COLUMN cause;
          ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;

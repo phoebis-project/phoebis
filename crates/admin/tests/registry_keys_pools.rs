@@ -760,6 +760,7 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }
@@ -832,6 +833,7 @@ async fn a_main_agents_two_pins_show_whichever_it_used_last_even_when_the_older_
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }
@@ -910,6 +912,7 @@ async fn a_main_pin_beside_a_newer_subagent_pin_still_shows_the_main_pin_and_cou
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }
@@ -1007,6 +1010,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             mark: None,
             auxiliary_only: false,
             effort: None,
+            ended: false,
         })
         .unwrap();
     store
@@ -1038,6 +1042,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
             mark: None,
             auxiliary_only: false,
             effort: None,
+            ended: false,
         })
         .unwrap();
     // A second app over the same store: its router task loads the pins the first one never saw.
@@ -3052,6 +3057,7 @@ async fn the_pool_answer_lists_each_warning_that_holds_and_none_that_does_not() 
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }
@@ -3382,6 +3388,7 @@ async fn each_pool_member_answers_the_pins_under_the_pools_keys_on_its_account()
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }

@@ -3445,6 +3445,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                 mark: None,
                 auxiliary_only: false,
                 effort: None,
+                ended: false,
             })
             .unwrap();
     }

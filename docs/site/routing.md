@@ -658,12 +658,14 @@ pin whose last refreshing request was sent in fast mode is out of the round: fas
 window, so the pin has no share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A
 session that returns to standard requests brings its pin back with the plan burn it still carries. A pin whose model
 does not draw the window that fired is out of the round too (`off_window`), so a 7-day Fable round walks the account's
-Fable sessions alone and an Opus session on the account is neither counted nor moved by it. A pin whose agent ended is
-out of the round as well (`ended`): a subagent whose last answer stopped with `end_turn`, or an agent the companion mod
-released. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
-and the agent's next request brings the pin back into the walk and its burn back into the projection that fires a round
-(see **The projection**, above). The mark is kept in memory, so after a restart the walk and the projection read such a
-pin as live until the agent's next request. A pin with no priced burn on the fired window, such as a classifier pin
+Fable sessions alone and an Opus session on the account is neither counted nor moved by it. A pin whose agent ended, a
+subagent whose last answer stopped with `end_turn` or an agent the companion mod released, is out of the round as well
+and out of every figure the router reads an account's pins for (the burn, a fresh session's prior, the model weeks a
+round tests, a move's fit, the projection and the slow-down's shares), and the round's record keeps its row under
+`ended`. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
+and the agent's next request brings the pin back into the walk and its burn back into every figure and the projection
+that fires a round (see **The projection**, above). The mark is stored with the pin, so a restart keeps such a pin out
+of every figure until the agent's next request. A pin with no priced burn on the fired window, such as a classifier pin
 whose calls took no share of a plan window, is out of the round too (`no_burn`), since it has nothing to shed. The round
 then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
 pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round
