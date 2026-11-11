@@ -177,9 +177,11 @@ with each part on one line inside the cell, the window grid inside its card, an 
 a listed card draws one) and each live window's pace mark (inside its meter and taller than the track) and the chip row
 in a 375 by 800 window (mock pass: the story's `secondary` card, whose chip row holds the Plan chip, the plan's end, the
 trial and a Resets chip, draws every chip of that row inside the row's content box, its plan's end whole and no Resets
-chip), the timeline's chips on the Quota windows section (each inside its column, a chip with a share in the background
-and ink of the card chip of the same tone, primary's used fill at the share the page computed, the now line at the
-chart's now share of primary's track within a pixel, each live bar's body and used fill its lane's color at two
+chip) and the Resets chip's short form in that window (mock pass: on the story's `nightly` and `workshop` cards the long
+form drawing no box and the short form drawing one, `nightly`'s reading "1 ends in 4 days" and `workshop`'s "1 cooldown
+until 15:10"), the timeline's chips on the Quota windows section (each inside its column, a chip with a share in the
+background and ink of the card chip of the same tone, primary's used fill at the share the page computed, the now line
+at the chart's now share of primary's track within a pixel, each live bar's body and used fill its lane's color at two
 strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take, and in the mock pass the
 contract lane's one chip, its amount left of the limit with the estimate's sentence on hover, from primary's chips' left
 edge, of their height and at least their column's width), the timeline at 340 and 400 by 900 (each lane's head above its

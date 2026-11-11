@@ -4445,8 +4445,9 @@ let cardReadings = {};
  * speed chip that closes a slowed account's 5-hour cell, which the mock pass requires on the story's studio. Every live
  * window's meter carries its pace mark inside the meter's horizontal bounds and taller than the track. In a 375 by 800
  * window the story's secondary card, whose chip row holds the Plan chip, the plan's end, the trial and a Resets chip,
- * draws every chip of that row inside the row's content box, its plan's end whole and no Resets chip. The router's
- * seed has no subscription account, so only the story's pass has chips to read.
+ * draws every chip of that row inside the row's content box, its plan's end whole and no Resets chip, and the story's
+ * nightly and workshop cards draw their Resets chip's short form alone, nightly's reading its near end and workshop's
+ * its cooldown. The router's seed has no subscription account, so only the story's pass has chips to read.
  */
 async function quotaChips(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -4554,6 +4555,34 @@ async function quotaChips(theme) {
     if (chip.right > row.edge + 0.5) say(`secondary's chip ${JSON.stringify(chip.text)} ends ${Math.round((chip.right - row.edge) * 10) / 10}px past its row's content box at 375 px`);
     if (chip.end && chip.scroll > chip.client) say(`secondary's plan end chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px at 375 px`);
   }
+  // A row of 400 px or less swaps the Resets chip's long form for its short one through a container query, which only a
+  // browser with the stylesheet draws, so the short form is read here. The mock's `RESET_BLOCKS.nightly` holds one
+  // usable reset that ends 4 days and 12 hours on, inside the warning's five days, and `RESET_BLOCKS.workshop` one
+  // reset under a cooldown that ends 40 minutes on, 15:10 on the pass's clock.
+  const shortForms = await inPhoneWindow(() =>
+    page.evaluate(() =>
+      Object.fromEntries(
+        ['nightly', 'workshop'].map((name) => {
+          const card = [...document.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === name);
+          if (!card) return [name, null];
+          const chip = card.querySelector('.qcard__chips .chip--resets');
+          if (!chip) return [name, { resets: false }];
+          const draws = (el) => el !== null && el.getClientRects().length > 0;
+          const short = chip.querySelector('.chip__short');
+          return [name, { long: draws(chip.querySelector('.chip__long')), resets: true, short: draws(short), text: short?.innerText.trim() ?? null }];
+        }),
+      ),
+    ),
+  );
+  measurements.push(`${theme} /quota resets chip at 375 ${JSON.stringify(shortForms)}`);
+  for (const [name, chip] of Object.entries(shortForms)) {
+    if (mock && chip === null) say(`the story's ${name} card is not drawn at 375 px`);
+    if (mock && chip && !chip.resets) say(`${name}'s chip row holds no Resets chip at 375 px, though the story gives it a reset`);
+    if (mock && chip?.long) say(`${name}'s Resets chip draws its long form at 375 px, where its row is under 400 px`);
+    if (mock && chip?.resets && !chip.short) say(`${name}'s Resets chip draws no short form at 375 px, where its row is under 400 px`);
+  }
+  if (mock && shortForms.nightly?.resets && shortForms.nightly.text !== '1 ends in 4 days') say(`nightly's Resets chip reads ${JSON.stringify(shortForms.nightly.text)} at 375 px, where the near end of RESET_BLOCKS.nightly reads "1 ends in 4 days"`);
+  if (mock && shortForms.workshop?.resets && shortForms.workshop.text !== '1 cooldown until 15:10') say(`workshop's Resets chip reads ${JSON.stringify(shortForms.workshop.text)} at 375 px, where the cooldown of RESET_BLOCKS.workshop reads "1 cooldown until 15:10"`);
 }
 
 /**
