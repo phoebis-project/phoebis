@@ -45,7 +45,7 @@ use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::session::{Authenticated, PERSISTENT_LIFE};
 use crate::{
     accounts, analytics, attention, dashboard, guardrails, keepalive, keys, models, openapi, pools,
-    pricing, requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
+    pricing, requests, sessions, settings, tls, AdminState, ClaimRunning, LoginError, NewAccount,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -1014,12 +1014,16 @@ async fn limit_reset_use(
         return failure_with_code(StatusCode::CONFLICT, "limit_reset_not_polled", NOT_POLLED);
     }
     let (answer, answered) = tokio::sync::oneshot::channel();
+    // Joined here and handed to the task. A task joins nothing until it first runs, and a stop that began in
+    // between would find the set empty and close the ledger under the claim.
+    let first_stage = state.claims.begin();
     // A task of its own, so a console that goes away cuts neither the request nor its record. It takes the row
     // checked here, and the service claims for that row's holder alone.
     state.ledger.track(tokio::spawn(claim_and_record(
         state.clone(),
         row,
         grant,
+        first_stage,
         answer,
     )));
     answered
@@ -1034,6 +1038,7 @@ async fn claim_and_record(
     state: Arc<AdminState>,
     row: AccountRow,
     grant: String,
+    first_stage: ClaimRunning,
     answer: tokio::sync::oneshot::Sender<Response>,
 ) {
     let claim = match state.usage.claim_limit_reset(&row, &grant).await {
@@ -1046,6 +1051,9 @@ async fn claim_and_record(
     // The send that waits for room: a claim that left always leaves its row.
     let event = phoebis_ledger::limit_reset_claimed(&row.id, accounts::ACTOR, &grant, &claim);
     state.ledger.record_request(event).await;
+    // A stop waits for the claim up to here. It does not wait for the reads below: they finish while the listeners'
+    // drain still holds this route's answer, and the next start's poll takes what a stop cuts.
+    drop(first_stage);
     // A slot or a refresh can flag the plan ended while the claim is out, and such an account gets no usage request.
     if claim.outcome != ClaimOutcome::Refused && !QuotaPoll::plan_paused(&state.store, &row.id) {
         let poll = state.quota_poll();

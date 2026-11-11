@@ -110,6 +110,7 @@ pub struct AdminState {
     pub attention: Arc<phoebis_attention::Attention>,
     /// The same reads `/api/ready` answers from, so `GET /admin/system` and the proxy listener agree.
     pub readiness: Arc<Readiness>,
+    pub claims: Arc<Claims>,
 }
 
 impl AdminState {
@@ -142,6 +143,48 @@ impl AdminState {
             tables: self.tables.clone(),
             usage: self.usage.clone(),
         }
+    }
+}
+
+/// The limit reset claims whose first stage is on its way: the request, the fold of its answer and its event. A stop
+/// waits for the set before the store and the ledger close, since a claim's request cannot be taken back and its
+/// record must not be lost.
+pub struct Claims {
+    running: tokio::sync::watch::Sender<usize>,
+}
+
+impl Default for Claims {
+    fn default() -> Claims {
+        Claims {
+            running: tokio::sync::watch::channel(0).0,
+        }
+    }
+}
+
+impl Claims {
+    /// Joins the set until the guard is dropped, which a return, a panic and an abort all do.
+    pub(crate) fn begin(&self) -> ClaimRunning {
+        self.running.send_modify(|running| *running += 1);
+        ClaimRunning {
+            running: self.running.clone(),
+        }
+    }
+
+    /// Waits until no first stage is on its way.
+    pub async fn drain(&self) {
+        let mut running = self.running.subscribe();
+        // The sender lives in `self`, so the wait cannot end on a closed channel.
+        let _ = running.wait_for(|running| *running == 0).await;
+    }
+}
+
+pub(crate) struct ClaimRunning {
+    running: tokio::sync::watch::Sender<usize>,
+}
+
+impl Drop for ClaimRunning {
+    fn drop(&mut self) {
+        self.running.send_modify(|running| *running -= 1);
     }
 }
 

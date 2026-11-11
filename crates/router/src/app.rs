@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{
-    AdminState, EngineFacts, OldTotals, PairingVault, Readiness, SessionSpendFold, Sessions,
-    SettingsView,
+    AdminState, Claims, EngineFacts, OldTotals, PairingVault, Readiness, SessionSpendFold,
+    Sessions, SettingsView,
 };
 use phoebis_bus::Bus;
 use phoebis_keepalive::{
@@ -390,6 +390,7 @@ pub async fn run_until(
     );
     // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
     let refreshes = manager.clone();
+    let claims = Arc::new(Claims::default());
     let admin = Arc::new(AdminState {
         store,
         manager,
@@ -422,6 +423,7 @@ pub async fn run_until(
         keepalive: keepalive.clone(),
         attention: attention.clone(),
         readiness,
+        claims: claims.clone(),
     });
 
     // Before the proxy listener binds, so the first request finds the dated ids and the samples in place; each
@@ -683,6 +685,9 @@ pub async fn run_until(
     // A retry sleeping its backoff would otherwise hold the store past this function's return.
     budget.bound("catalog", catalog.shutdown()).await;
     drop(catalog);
+    // A claim of a limit reset cannot be taken back, so each one on its way folds its answer and hands over its event
+    // while the store and the ledger are open. The manager is still open too, since a claim takes its token there.
+    budget.bound("limit reset claims", claims.drain()).await;
     // A refresh the usage service or the catalog started dies with the runtime otherwise, and the next start
     // quarantines the account for a lost answer that was only unjoined. The drain closes the manager before it
     // takes its set, so a refresh asked for later, as the ledger's quota poll may until the ledger stops below, is

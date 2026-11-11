@@ -1889,6 +1889,58 @@ async fn a_claim_outlives_the_caller_that_went_away() {
 }
 
 #[tokio::test]
+async fn a_stop_waits_for_a_claims_record() {
+    use common::{login, post, CLAIM_PATH};
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
+    );
+    h.up.set_rule_after(
+        0,
+        CLAIM_PATH,
+        fake_upstream::Respond::Gated(Box::new(claim_answer(r#"{"result":"reset"}"#))),
+    );
+    tokio::spawn({
+        let (app, cookie) = (h.app.clone(), cookie.clone());
+        async move { post(&app, USE_RESET, "", Some(&cookie)).await }
+    });
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (sent(&h.up, "POST /api/organizations/") == 1).then_some(())
+    })
+    .await;
+    let waits = tokio::select! {
+        biased;
+        () = h.claims.drain() => false,
+        () = std::future::ready(()) => true,
+    };
+    assert!(waits, "a stop waits while the fake holds the claim");
+    h.up.release();
+    tokio::time::timeout(std::time::Duration::from_secs(5), h.claims.drain())
+        .await
+        .expect("the drain ends once the claim's event is handed to the ledger");
+    // The stop goes on to the ledger, whose shutdown aborts the claim's task and lands what its writer was handed.
+    h.ledger.shutdown().await.unwrap();
+    let uses = h.db.read(phoebis_ledger::limit_reset_uses).await.unwrap();
+    let block = h
+        .store
+        .account_extras_of("business")
+        .unwrap()
+        .and_then(|extras| extras.limit_resets);
+    assert_eq!(
+        (
+            uses.iter()
+                .map(|used| (used.account_id.as_str(), used.grant_id.as_str()))
+                .collect::<Vec<_>>(),
+            block.and_then(|block| block["grants"][0]["resets_left"].as_u64()),
+        ),
+        (vec![("business", "rg-b-1")], Some(0)),
+        "the claim the stop waited for left its event and its fold"
+    );
+}
+
+#[tokio::test]
 async fn the_reading_after_a_claim_is_one_sent_after_it() {
     use common::{get, json, login, post};
     let h = common::admin_parts_polled().await;

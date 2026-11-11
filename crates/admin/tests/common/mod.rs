@@ -10,7 +10,7 @@ use axum::Router;
 use fake_upstream::{wait_for, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_admin::{
-    router, AdminState, EngineFacts, OldTotals, PairingVault, Readiness, SessionSpendFold,
+    router, AdminState, Claims, EngineFacts, OldTotals, PairingVault, Readiness, SessionSpendFold,
     Sessions, SettingsView, TlsReload,
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts, TlsPairs};
@@ -83,6 +83,7 @@ struct Parts {
     attention: Arc<Attention>,
     attention_handles: AttentionHandles,
     bus: Bus,
+    claims: Arc<Claims>,
     clock_cell: Arc<AtomicI64>,
     db: Arc<LedgerDb>,
     keepalive: Arc<Engine>,
@@ -545,6 +546,7 @@ pub async fn admin_app_paired() -> (Router, FakeUpstream) {
 /// A paired slot with its usage service and the router behind it.
 pub struct Polled {
     pub app: Router,
+    pub claims: Arc<Claims>,
     pub clock_cell: Arc<AtomicI64>,
     pub db: Arc<LedgerDb>,
     pub ledger: Ledger,
@@ -570,6 +572,7 @@ pub async fn admin_parts_polled() -> Polled {
     .await;
     Polled {
         app: parts.app,
+        claims: parts.claims,
         clock_cell: parts.clock_cell,
         db: parts.db,
         ledger: parts.ledger,
@@ -1303,6 +1306,7 @@ async fn build_app_bounded(
         )
         .unwrap(),
     );
+    let claims = Arc::new(Claims::default());
     let state = Arc::new(AdminState {
         store: store.clone(),
         manager: manager.clone(),
@@ -1337,12 +1341,14 @@ async fn build_app_bounded(
             router: router_handle.clone(),
             store: store.clone(),
         }),
+        claims: claims.clone(),
     });
     Parts {
         app: router(state),
         attention,
         attention_handles,
         bus,
+        claims,
         clock_cell,
         db,
         keepalive,
