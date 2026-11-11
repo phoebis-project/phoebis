@@ -172,22 +172,24 @@ and the card draws the reading the refresh took the moment it answers, its time 
 Accounts view shows the first reading once the poll lands, a few seconds after the confirm. Neither sends a usage
 request while the account's plan-ended flag stands: a confirm whose profile still reports no plan keeps the flag and
 reads nothing more, and Refresh reads the profile first, then the usage only where that profile finds a plan. A use of a
-limit reset that the upstream did not refuse reads the endpoint at once too, under the same hold, so the routing and the
-cards read the cleared windows before the next slot, and once more where that reading was taken before the upstream
-answered. No read follows a use on an account whose plan ended while the use was out.
+limit reset that reached the upstream and was not refused there reads the endpoint at once too, under the same hold, so
+the routing and the cards read the cleared windows before the next slot, and once more where that reading was taken
+before the use's answer arrived or its request failed. No read follows a use on an account whose plan ended while the
+use was out.
 
 The router reads the endpoint a second time for an account's one-time limit resets, with the query the client sends for
 them, and stores what it reads on the account's row. That read runs after the usage reading in the poll's own slot once
 an hour per account, in the slot whose reading shows another set of windows at their limit than the last read of the
 resets saw while the account holds a reset, and in the slot after the upstream refused a use. It also runs when the
 operator clicks "Use reset" on a Quota card, with the card's Refresh and "Refresh all", and after a use whose outcome
-stayed open. A read whose answer could not be stored, because a pairing or a use changed the account while the read was
-out, is made again in the account's next slot, and so is the read after an open outcome where it failed. A confirmed
-pairing clears the stored resets, and the account's first slot that reads no profile reads them again. The read shares
-the account's hold and its backoff with the usage read, so an account that waits out a 429 is not asked, and a slot
-whose profile read is due leaves it to the next one. An account under a plan-ended pause is not asked, and the startup
-read asks for no resets. A failed read logs one warning, writes no `poll_failed` event, moves the account to no re-pair
-whatever status it answered, and leaves the stored resets as they were.
+stayed open, once more where that read left before the use's answer arrived or its request failed. A read whose answer
+could not be stored, because a pairing or a use changed the account while the read was out, is made again in the
+account's next slot, and so is the read after an open outcome where it failed. A confirmed pairing clears the stored
+resets, and the account's first slot that reads no profile reads them again. The read shares the account's hold and its
+backoff with the usage read, so an account that waits out a 429 is not asked, and a slot whose profile read is due
+leaves it to the next one. An account under a plan-ended pause is not asked, and the startup read asks for no resets. A
+failed read logs one warning, writes no `poll_failed` event, moves the account to no re-pair whatever status it
+answered, and leaves the stored resets as they were.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -695,7 +697,7 @@ ledger's hourly rollups, holds again at the first read.
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `pairing_expiring` | warning | the OAuth account | a re-pair stores an end more than 3 days away, or the account is disconnected or deleted |
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
-| `limit_reset_ending` | warning | the account | every reset that ends within the threshold is used or has ended, the usage poll no longer reads the account, a plan-ended pause included, or the threshold is set to 0 |
+| `limit_reset_ending` | warning | the account | every reset that ends within the threshold is used or has ended, a confirmed pairing clears the stored resets until a read stores them again, the usage poll no longer reads the account, a plan-ended pause included, or the threshold is set to 0 |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `keepalive_bus_gaps` | serious | the keepalive engine | 24 hours pass without a gap, or the router restarts |
 | `poll_backoff` | warning | the polled account | a poll answers clean, or the account is flagged plan ended |

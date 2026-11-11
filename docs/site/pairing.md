@@ -170,7 +170,7 @@ endpoint, or a read that fails in transport, leaves the state as it is: the poll
 `poll_failed` event per poll that failed, while a `429` backs the poll off, and a usage `403` whose error code is
 `oauth_not_allowed_for_organization` writes `plan_ended` in its place where the profile it makes due reports no plan, as
 the next paragraph describes. The poll's second read of the usage endpoint, for the account's limit resets, marks
-nothing on a `401` and writes no event where it fails ([Quota samples](statistics.md#quota-samples)).
+nothing on a `401` and writes no `poll_failed` event where it fails ([Quota samples](statistics.md#quota-samples)).
 
 An OAuth account whose subscription ended keeps its credential and its state, and its profile reports the organization
 holding no plan. A profile read that finds no plan, the third poll's or the start's, stores the document it found and
