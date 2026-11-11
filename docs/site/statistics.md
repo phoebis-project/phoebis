@@ -387,14 +387,15 @@ A model without a weight on a window prices nothing there: the request's figure 
 attention item Model unpriced names it until a weight lands. A model of no model tier has no weight and prices nothing
 the same way. For such a model the prediction adds no charge, the projection adds no burn, the shedding round ranks the
 pin after every priced one and never marks it, the analytics list the share under model unlisted, and the cost reference
-shows a dash in its cells and "not weighed" in its weight cell. Once the model has served a plan-funded request since
-the start, the ledger raises the `model_unpriced` attention item for the `phoebis_attention` gauge,
-`GET /admin/attention` answers it, and the console lists it on the dashboard's attention line as a plain badge in the
-info tone ([Conditions and gauges](#conditions-and-gauges)). An account tier without a capacity on a window prices no
-share there either, and the prediction adds no charge and the projection no burn on that window. While the account runs
-on its plan, a shedding round on that window reads that tier's pins as unpriced, after every priced pin, and marks none
-of them, and in the analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves
-`null` on a listed tier reads model unlisted. A dated model id reads the weight of its undated name.
+shows a dash in its cells and "not weighed" in its weight cell. Once a catalog listing adds the model to the account's
+previous listing, or once the model has served a plan-funded request since the start, the ledger raises the
+`model_unpriced` attention item for the `phoebis_attention` gauge, `GET /admin/attention` answers it, and the console
+lists it on the dashboard's attention line as a plain badge in the info tone ([Conditions and
+gauges](#conditions-and-gauges)). An account tier without a capacity on a window prices no share there either, and the
+prediction adds no charge and the projection no burn on that window. While the account runs on its plan, a shedding
+round on that window reads that tier's pins as unpriced, after every priced pin, and marks none of them, and in the
+analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier
+reads model unlisted. A dated model id reads the weight of its undated name.
 
 The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
 of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
@@ -739,14 +740,18 @@ since the paused poll sends no clean answer. The detail gives when the run start
 many 429s the endpoint answered in a row. The `poll_backoff_ended` event that closes a run names its `cause`,
 `clean_poll` for a clean answer or `plan_ended` for the pause.
 
-**`model_unpriced`** holds while a model the cost model does not weigh has served plan-funded requests since the start,
-each priced at no window share, its figure null ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so it
-starts over at a restart, and the next plan-funded request on the model raises it again. A later plan-funded request
-priced at a cost model entry that weighs the model clears it, and a client classifier call raises nothing, where a call
-recorded `client_off` on a model the cost model does not weigh raises it as any plan-funded call does. The subject
-is the model, the dashboard's line reads the item as "Model unpriced" in the info tone, and it carries no link, since
-the cost reference dialog shows the model's cells as dashes with the weight cell "not weighed". It dates from the run's
-first request, and the detail names the model and the requests served since.
+**`model_unpriced`** holds from the catalog listing that adds a model the cost model does not weigh to the account's
+previous listing, with 0 requests, or from the first plan-funded request on such a model since the start, each such
+request priced at no window share, its figure null ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so
+it starts over at a restart, and the next plan-funded request on the model raises it again. An account's first listing
+after a start raises nothing, since no listing of the account stands before it, so a model listed before a restart and
+not used since reads no item until a plan-funded request lands on it. A later plan-funded request priced at a cost model
+entry that weighs the model clears it, and a client classifier call raises nothing, where a call recorded `client_off`
+on a model the cost model does not weigh raises it as any plan-funded call does. The subject is the model, the
+dashboard's line reads the item as "Model unpriced" in the info tone, and it carries no link, since the cost reference
+dialog shows the model's cells as dashes with the weight cell "not weighed". It dates from the listing or the run's
+first request, whichever came first, and the detail names the model and the plan-funded requests served since, 0 for a
+listed model no request has used yet.
 
 **`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for

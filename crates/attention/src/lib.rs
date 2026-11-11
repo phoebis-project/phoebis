@@ -76,10 +76,11 @@ pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
     pub keepalive: Arc<dyn KeepaliveFacts>,
-    /// The ledger's degraded flag, its parked rows, the unpriced models its landing saw, the routing conditions its
-    /// fold wrote and the expiries between turns its rollups count. `None` where a harness builds no ledger, and then
-    /// `writer_degraded` for the ledger reads 0 and none of `ledger_record_parked`, `model_unpriced`, `meter_drift`,
-    /// `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long` and `expired_between_turns` has a series.
+    /// The ledger's degraded flag, its parked rows, the unpriced models its landing or a catalog listing saw, the
+    /// routing conditions its fold wrote and the expiries between turns its rollups count. `None` where a harness
+    /// builds no ledger, and then `writer_degraded` for the ledger reads 0 and none of `ledger_record_parked`,
+    /// `model_unpriced`, `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long` and
+    /// `expired_between_turns` has a series.
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,

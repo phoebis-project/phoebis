@@ -134,23 +134,24 @@ pub struct Admission {
 #[error("the ledger task has stopped")]
 pub struct LedgerGone;
 
-/// A model the cost model in force gave no weight on the 7-day window when a plan-funded request on it landed, so its
-/// figure was null. Kept once seen, so its gauge series reads 0 rather than vanishing after a revision weights the
-/// model.
+/// A model the cost model in force gave no weight on the 7-day window when a catalog listing added it or a plan-funded
+/// request on it landed, so its figure is null. Kept once seen, so its gauge series reads 0 rather than vanishing after
+/// a revision weights the model.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct UnpricedModel {
     /// The undated model id.
     pub model: String,
-    /// When the first unpriced landing arrived, `None` once a landing found the model weighted, until the next
-    /// unpriced landing dates it again.
+    /// When the listing that added the model or the first unpriced landing arrived, whichever came first, `None` once
+    /// a landing found the model weighted, until the next such listing or unpriced landing dates it again.
     pub since: Option<i64>,
     /// Landed requests with at least one plan-funded attempt with usage that priced nothing since `since`, one per
-    /// request, 0 once a landing found the model weighted.
+    /// request: 0 on a run a listing dated until such a request lands, and 0 once a landing found the model weighted.
     pub requests: u64,
 }
 
-/// The unpriced models by undated id, written by the landing after its commit and read by the attention reader. A
-/// `std` mutex, since the reader asks synchronously from inside the runtime, where a tokio lock would have to block.
+/// The unpriced models by undated id, written by the landing after its commit and by a catalog listing that adds a
+/// model, and read by the attention reader. A `std` mutex, since the reader asks synchronously from inside the
+/// runtime, where a tokio lock would have to block.
 type Unpriced = Arc<std::sync::Mutex<BTreeMap<String, UnpricedModel>>>;
 
 /// What a replay of the parked records did.
@@ -181,6 +182,8 @@ pub struct Ledger {
     stats: Arc<LedgerStats>,
     /// The counters of the bus subscriber that assembles the records the writer takes.
     assembler: Arc<SubscriberStats>,
+    /// The cost model the writer prices with, so a catalog listing is weighed against the same model a landing is.
+    tables: Arc<PlanTables>,
     unpriced: Unpriced,
     metrics: Arc<Metrics>,
     tx: mpsc::Sender<Record>,
@@ -215,8 +218,9 @@ impl Ledger {
         self.retention_days
     }
 
-    /// Every model a plan-funded landing priced nothing since the start, by undated model id, a model a later landing
-    /// found weighted among them with no `since` and no requests. Empty at each start.
+    /// Every model the cost model does not weigh that a catalog listing added or a plan-funded landing served since the
+    /// start, by undated model id, a model a later landing found weighted among them with no `since` and no requests.
+    /// Empty at each start.
     pub fn unpriced_served(&self) -> Vec<UnpricedModel> {
         self.unpriced
             .lock()
@@ -224,6 +228,32 @@ impl Ledger {
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Enters each of `added`, the model ids a catalog change listed, that the cost model in force at `at` weighs
+    /// nothing for on the 7-day window, with `at` as its `since` and no request. An entry that already counts
+    /// requests keeps its `since` and its count, and a weighted model enters nothing.
+    pub fn note_listed(&self, added: &[String], at: i64) {
+        let costs = self.tables.revisions.in_force(at);
+        let unweighted: Vec<&str> = added
+            .iter()
+            .filter(|listed| costs.weight(listed, SEVEN_DAY).is_none())
+            .map(|listed| phoebis_routing::listing::undated_id(listed))
+            .collect();
+        let mut served = self.unpriced.lock().expect(UNPRICED_POISONED);
+        for model in unweighted {
+            // A standing run keeps its date and its count, and a cleared entry starts a new run at the listing.
+            if served.get(model).is_none_or(|entry| entry.since.is_none()) {
+                served.insert(
+                    model.to_string(),
+                    UnpricedModel {
+                        model: model.to_string(),
+                        since: Some(at),
+                        requests: 0,
+                    },
+                );
+            }
+        }
     }
 
     pub fn dropped(&self) -> u64 {
@@ -383,6 +413,7 @@ pub fn spawn(
         db: db.clone(),
         stats: stats.clone(),
         assembler: subscriber.stats.clone(),
+        tables: tables.clone(),
         unpriced: unpriced.clone(),
         metrics: metrics.clone(),
         tx,
@@ -1828,6 +1859,7 @@ mod tests {
             db: Arc::new(LedgerDb::open_in_memory().unwrap()),
             stats: Arc::new(LedgerStats::default()),
             assembler: Arc::default(),
+            tables: Arc::new(PlanTables::shipped()),
             unpriced: Unpriced::default(),
             metrics: Arc::new(Metrics::new()),
             tx,

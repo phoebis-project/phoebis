@@ -5009,6 +5009,119 @@ async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_se
     up.shutdown().await;
 }
 
+/// The listing cases' subscription cost model: `claude-sonnet-5` alone carries a weight, so every other model is
+/// unpriced.
+const LISTING_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
+revisions:
+  - effective: 1970-01-01
+    capacity:
+      default_claude_ai: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5: sonnet
+";
+
+/// A ledger on `LISTING_COSTS` under `dir`, its pool's one member the OAuth account `a`, so a request it serves is
+/// plan-funded.
+async fn on_listing_costs(up: &FakeUpstream, dir: &std::path::Path) -> Harness {
+    harness_on_tables(
+        fresh_store(),
+        Arc::new(LedgerDb::open(&dir.join("ledger.sqlite")).unwrap()),
+        up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig::default(),
+        false,
+        phoebis_ledger::test_tables::api_prices(),
+        phoebis_ledger::test_tables::tables(
+            phoebis_ledger::CostRevisions::from_yaml(LISTING_COSTS)
+                .expect("the listing cost model parses"),
+        ),
+    )
+    .await
+}
+
+/// A catalog change enters each added model the cost model does not weigh under its undated id, dated at the
+/// change and with no request, and enters nothing for an added model the cost model weighs.
+#[tokio::test]
+async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_change_with_no_request(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_listing_costs(&up, dir.path()).await;
+    h.ledger.note_listed(
+        &[
+            "claude-opus-9-20260101".to_string(),
+            "claude-sonnet-5-20260101".to_string(),
+        ],
+        NOW + 60_000,
+    );
+    assert_eq!(
+        h.ledger.unpriced_served(),
+        [phoebis_ledger::UnpricedModel {
+            model: "claude-opus-9".into(),
+            since: Some(NOW + 60_000),
+            requests: 0,
+        }],
+        "the unweighted model enters at the change's instant, and the weighted one stays out"
+    );
+    up.shutdown().await;
+}
+
+/// A catalog change that adds a model whose unpriced run a plan-funded landing already counts leaves the run as the
+/// landing dated and counted it.
+#[tokio::test]
+async fn a_listing_leaves_an_unpriced_run_that_counts_requests_with_its_since_and_its_count() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_listing_costs(&up, dir.path()).await;
+    let landed = phoebis_ledger::UnpricedModel {
+        model: "claude-opus-9".into(),
+        since: Some(NOW),
+        requests: 1,
+    };
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                model: "claude-opus-9-20260101".into(),
+                canonical_model: "claude-opus-9-20260101".into(),
+                ..finished_row("r1")
+            },
+            attempts: vec![AttemptRecord {
+                account_kind: AccountKind::Oauth,
+                ..serving_attempt("r1", true)
+            }],
+            bodies: None,
+        })
+        .await;
+    // The landing enters its run after its commit, so the listing comes once the entry shows, never before it, where
+    // the listing would date the run and the landing count it.
+    wait_for(Duration::from_secs(5), || {
+        (h.ledger.unpriced_served() == [landed.clone()]).then_some(())
+    })
+    .await;
+    h.ledger
+        .note_listed(&["claude-opus-9-20260101".to_string()], NOW + 60_000);
+    assert_eq!(
+        h.ledger.unpriced_served(),
+        [landed],
+        "the listing keeps the landed run's since and count"
+    );
+    up.shutdown().await;
+}
+
 /// A record parked by a build whose attempts carried the dollar members and the table's stamp replays at the next
 /// start: the members are ignored and the landing writes the tier the registry holds for the serving account.
 #[tokio::test]

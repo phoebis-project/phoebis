@@ -3330,8 +3330,9 @@ async fn a_refresh_left_in_flight_is_quarantined_at_the_start_and_the_routing_lo
 }
 
 /// The catalog hook and the first purge's release, through the running router: a listing that changed between two
-/// reads lands a `catalog_changed` row, and a pin the start found past its pool's affinity is purged once the start
-/// releases the held tick, landing a `pin_expired` row.
+/// reads lands a `catalog_changed` row and raises the unpriced item of an added model the cost model does not weigh,
+/// and a pin the start found past its pool's affinity is purged once the start releases the held tick, landing a
+/// `pin_expired` row.
 #[tokio::test]
 async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expires_a_stale_pin() {
     let listing = |ids: &[&str]| Respond::Json {
@@ -3482,10 +3483,11 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
             .is_some_and(|models| !models.is_empty())
     })
     .await;
+    // A made-up model the shipped cost model does not weigh, so the listing that adds it raises its unpriced item.
     up.set_rule_after(
         0,
         "/v1/models",
-        listing(&["claude-opus-5", "claude-sonnet-4-5"]),
+        listing(&["claude-opus-9", "claude-sonnet-4-5"]),
     );
     let refreshed: serde_json::Value = client
         .get(admin("/accounts/a/catalog?refresh=1"))
@@ -3517,8 +3519,33 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
     };
     assert_eq!(
         row("catalog_changed")["detail"],
-        serde_json::json!({ "added": ["claude-opus-5"], "removed": [], "count": 2 }),
+        serde_json::json!({ "added": ["claude-opus-9"], "removed": [], "count": 2 }),
         "{log}"
+    );
+    // The hook enters the model before it hands the change to the ledger, so the item stands once the row has landed.
+    let attention: serde_json::Value = client
+        .get(admin("/attention"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let unpriced: Vec<_> = attention["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "model_unpriced")
+        .map(|item| (&item["subject"]["id"], &item["since"], &item["detail"]))
+        .collect();
+    assert_eq!(
+        unpriced,
+        [(
+            &serde_json::json!("claude-opus-9"),
+            &row("catalog_changed")["at"],
+            &serde_json::json!({ "model": "claude-opus-9", "requests": 0 })
+        )],
+        "the listing raises the added model's item at the change with no request: {attention}"
     );
     let expired = row("pin_expired");
     assert_eq!(

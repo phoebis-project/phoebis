@@ -113,7 +113,9 @@ otherwise. The line keeps one row of items and folds the badges past it behind a
 list, so the tiles hold still. An item with no such place (a drift refusal that named no key, a parked record without a
 pool, a pool deleted since, one of the router's own writers, the unpriced model item, whose model the cost reference
 dialog's Plan rates draws with dashes, a page unknown to the console or a condition the console does not know, which
-reads "Unknown condition" with its kind on hover) stays a plain badge. The conditions are the ones the
+reads "Unknown condition" with its kind on hover) stays a plain badge. The unpriced model item of a model that a catalog
+listing added carries no requests until a plan-funded one lands, and its line then says that the model has no weight in
+the cost model and that a plan-funded request on it will price no window share. The conditions are the ones the
 `phoebis_attention` gauge exports ([Conditions and gauges](statistics.md#conditions-and-gauges)), and the pool exhausted
 item opens the [routing log](#routing-log) on the pool's exhausted decisions from the moment the condition began. The
 four routing conditions read as one sentence each, the subject first, then the count, the settings they name (with the

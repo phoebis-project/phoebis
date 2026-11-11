@@ -281,7 +281,11 @@ pub async fn run_until(
     ));
     catalog.set_on_change(Arc::new({
         let ledger = ledger.clone();
-        move |change| ledger.record(phoebis_ledger::catalog_changed(&change))
+        move |change| {
+            // A listed model the cost model does not weigh is unpriced from its listing on, before any request.
+            ledger.note_listed(&change.added, change.at);
+            ledger.record(phoebis_ledger::catalog_changed(&change))
+        }
     }));
     let mark = ShutdownMark::default();
     let relay = Arc::new(
