@@ -1486,7 +1486,8 @@ impl Recorder {
 
     /// The fallback credit's directed placement shows under the `pin` step, which step 1 has already pushed: it gains
     /// the fact `key` naming the account, so the record keeps its stations and its verdict words. Its verdict reads
-    /// `match`, but on the client's classifier call (`classifier`), whose step keeps `none` since the call holds no pin.
+    /// `match`, but on the client's classifier call (`classifier`), whose step keeps `none` since the call holds no
+    /// pin.
     fn directed_placed(&mut self, key: &'static str, account_id: &str, classifier: bool) {
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
             if !classifier {

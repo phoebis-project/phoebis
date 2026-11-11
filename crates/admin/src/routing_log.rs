@@ -380,7 +380,8 @@ pub(crate) struct DecisionRecord {
     /// classifier call, which runs without a pin. Such a call's `pin` walk step reads `none` with the facts `reason`
     /// (`classifier`), `judged_agent` and `judged_model` (the turn the call judges, absent with no turn), `judged` (the
     /// account that turn's stream ended on, or the one its pin stands on where no end is recorded, `none` with no turn
-    /// to judge) and `direction` (`turn_account`, `pin_account` or `strategy`, where the call went).
+    /// to judge) and `direction` (`turn_account`, `pin_account` or `strategy`, where the call went), or the fact
+    /// `credit` in its place where a fallback credit directed the call.
     #[schema(example = "pinning_off")]
     pub pin_reason: Option<String>,
     /// The values that entered the decision, each named by the `PoolRow` field it is read from: `strategy`,
