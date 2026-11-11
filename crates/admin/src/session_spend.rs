@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use phoebis_ledger::{
     add_figures, hour_of, Connection, Funding, LedgerError, PlanTables, PriceRevisions,
-    RequestPrice, SessionSpendRow, PROBE_KIND,
+    RequestPrice, SessionSpendKey, SessionSpendRow, PROBE_KIND,
 };
 use phoebis_routing::{DAY_MS, HOUR_MS};
 use utoipa::ToSchema;
@@ -100,7 +100,7 @@ struct Inner {
     /// The `effective` date of the cost revision whose anchor priced the sums, `None` before the first poll. A poll
     /// under another revision starts the fold over, since the Pro-week figures would mix anchors.
     priced_under: Option<String>,
-    sessions: BTreeMap<(String, i64, String), Accumulator>,
+    sessions: BTreeMap<SessionSpendKey, Accumulator>,
 }
 
 /// One session's figures over its life under its key.
@@ -382,15 +382,15 @@ impl Accumulator {
 pub(crate) struct FoldCursor {
     /// `None` where the fold starts: `read_poll` takes the snapshot's newest `landed_at` then.
     pub watermark: Option<i64>,
-    pub held: BTreeSet<(String, i64, String)>,
+    pub held: BTreeSet<SessionSpendKey>,
 }
 
 /// One poll's rows as the sessions closure read them under its transaction, the watermark the incremental read ran
 /// with and the snapshot's newest landing.
 pub(crate) struct PollRows {
-    pub fill: Vec<(String, i64, String)>,
-    pub fill_rows: Vec<((String, i64, String), SessionSpendRow)>,
-    pub since_rows: Vec<((String, i64, String), SessionSpendRow)>,
+    pub fill: Vec<SessionSpendKey>,
+    pub fill_rows: Vec<(SessionSpendKey, SessionSpendRow)>,
+    pub since_rows: Vec<(SessionSpendKey, SessionSpendRow)>,
     pub watermark: i64,
     /// `newest_landed_at` in the snapshot, since the incremental read leaves out the rows the fold passes over and
     /// their landings still move the watermark.
@@ -413,7 +413,7 @@ pub(crate) struct SessionFigures {
 pub(crate) fn read_poll(
     conn: &Connection,
     cursor: &FoldCursor,
-    keys: &[(String, i64, String)],
+    keys: &[SessionSpendKey],
 ) -> Result<PollRows, LedgerError> {
     // A fold that starts takes the snapshot's newest landing, never 0: the first fill answers the listed sessions whole
     // and fills a session that returns to the list whole later, so nothing landed before the start is needed here, and
@@ -421,7 +421,7 @@ pub(crate) fn read_poll(
     // seek serves the start watermark and the poll's newest landing alike.
     let newest = phoebis_ledger::newest_landed_at(conn)?;
     let watermark = cursor.watermark.unwrap_or(newest);
-    let fill: Vec<(String, i64, String)> = keys
+    let fill: Vec<SessionSpendKey> = keys
         .iter()
         .filter(|key| !cursor.held.contains(*key))
         .cloned()
@@ -537,14 +537,14 @@ pub(crate) struct FoldRead<'a>(MutexGuard<'a, Inner>);
 
 impl FoldRead<'_> {
     /// The row's four members and its count at `now`, `None` where the fold holds nothing for the session.
-    pub(crate) fn answer(&self, key: &(String, i64, String), now: i64) -> Option<SessionFigures> {
+    pub(crate) fn answer(&self, key: &SessionSpendKey, now: i64) -> Option<SessionFigures> {
         Some(self.0.sessions.get(key)?.figures(now))
     }
 
     /// Drops the sessions not listed for `expiry` and the buckets older than 25 hours.
     pub(crate) fn retain(
         mut self,
-        listed: impl Fn(&(String, i64, String)) -> bool,
+        listed: impl Fn(&SessionSpendKey) -> bool,
         now: i64,
         expiry: Duration,
     ) {
@@ -576,7 +576,7 @@ mod tests {
     /// A tier the test cost model does not size, so a plan request on it prices no window share.
     const UNSIZED_TIER: &str = "default_claude_enterprise";
 
-    fn key(session: &str) -> (String, i64, String) {
+    fn key(session: &str) -> SessionSpendKey {
         ("k".into(), 0, session.into())
     }
 
@@ -612,11 +612,7 @@ mod tests {
     }
 
     /// A client request no account served, for the tests whose figures are counts.
-    fn row(
-        session: &str,
-        received_at: i64,
-        landed_at: i64,
-    ) -> ((String, i64, String), SessionSpendRow) {
+    fn row(session: &str, received_at: i64, landed_at: i64) -> (SessionSpendKey, SessionSpendRow) {
         (
             key(session),
             SessionSpendRow {
@@ -634,7 +630,7 @@ mod tests {
     }
 
     /// The ledger's rows of `session`, as the first fill reads them.
-    fn rows_of(db: &LedgerDb, session: &str) -> Vec<((String, i64, String), SessionSpendRow)> {
+    fn rows_of(db: &LedgerDb, session: &str) -> Vec<(SessionSpendKey, SessionSpendRow)> {
         db.read_blocking(|c| phoebis_ledger::session_spend_rows_of(c, &[key(session)]))
             .unwrap()
     }
@@ -899,7 +895,7 @@ mod tests {
         let (prices, tables) = (api_prices(), subscription_costs());
         let (s, u) = (key("s"), key("u"));
         let fold = SessionSpendFold::default();
-        let poll = |keys: &[(String, i64, String)]| {
+        let poll = |keys: &[SessionSpendKey]| {
             let cursor = fold.cursor(&tables, JANUARY_2026);
             db.read_blocking(|c| read_poll(c, &cursor, keys)).unwrap()
         };

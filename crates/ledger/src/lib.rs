@@ -77,8 +77,9 @@ pub use query::{
     PlacementRow, ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor, RequestFilter,
     RequestPrice, RollupFilter, RoutingCondition, RoutingLogCursor, RoutingLogFilter,
     RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity,
-    SessionSpendRow, Span, SpendAttempt, Totals, TrafficBucket, DECISION_KINDS, EVENT_KINDS,
-    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    SessionSpendKey, SessionSpendRow, Span, SpendAttempt, Totals, TrafficBucket, DECISION_KINDS,
+    EVENT_KINDS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS, MAX_RANGE_MS,
+    PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};

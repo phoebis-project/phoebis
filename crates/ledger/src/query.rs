@@ -5050,6 +5050,9 @@ fn read_session_attempts(
         .map_err(LedgerError::from)
 }
 
+/// The key the session spend reads hand beside each row, its `key_id`, `key_generation` and `session_id` in order.
+pub type SessionSpendKey = (String, i64, String);
+
 /// A request the session fold prices, with its serving attempt where an account served it. The reads hand its key
 /// beside it, so the fold's row names none. Neither read answers a refused request, which the spend leaves out, or one
 /// with no key or no session, which has no row to land on, as the activity read drops it. The first fill answers them
@@ -5107,7 +5110,7 @@ impl SessionSpendRow {
     /// A request no account served joins no attempt, so its attempt half reads null and must not reach
     /// `PricedAttempt::read`. Its model, receipt and kind are request columns inside `PRICED_ATTEMPT_COLUMNS`, read by
     /// their place there whether an attempt joined or not.
-    fn read(row: &Row) -> rusqlite::Result<((String, i64, String), SessionSpendRow)> {
+    fn read(row: &Row) -> rusqlite::Result<(SessionSpendKey, SessionSpendRow)> {
         let first = SESSION_SPEND_PRICED_FROM;
         let attempt = match row.get::<_, Option<String>>(8)? {
             Some(account_id) => Some(SpendAttempt {
@@ -5174,21 +5177,20 @@ pub(crate) fn session_spend_of_statement(
 
 /// Every request landed after `landed_after` with a key and a session and not refused, with its serving attempt, each
 /// beside its key `(key_id, key_generation, session_id)`.
-#[allow(clippy::type_complexity)]
 pub fn session_spend_rows_since(
     conn: &Connection,
     landed_after: i64,
-) -> Result<Vec<((String, i64, String), SessionSpendRow)>, LedgerError> {
+) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
     let (sql, binds) = session_spend_since_statement(landed_after);
     read_session_spend_rows(conn, &sql, binds)
 }
 
-/// Chunks of `SESSION_IDENTITY_CHUNK` named sessions, merged, each row beside its key, the tuple `sessions` holds.
-#[allow(clippy::type_complexity)]
+/// Chunks of `SESSION_IDENTITY_CHUNK` named sessions, merged, as `session_identities` chunks its own, each row beside
+/// its key, the tuple `sessions` holds.
 pub fn session_spend_rows_of(
     conn: &Connection,
     sessions: &[(String, i64, String)],
-) -> Result<Vec<((String, i64, String), SessionSpendRow)>, LedgerError> {
+) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
     let mut out = Vec::new();
     for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {
         let (sql, binds) = session_spend_of_statement(chunk);
@@ -5197,12 +5199,11 @@ pub fn session_spend_rows_of(
     Ok(out)
 }
 
-#[allow(clippy::type_complexity)]
 fn read_session_spend_rows(
     conn: &Connection,
     sql: &str,
     binds: Vec<rusqlite::types::Value>,
-) -> Result<Vec<((String, i64, String), SessionSpendRow)>, LedgerError> {
+) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(params_from_iter(binds), SessionSpendRow::read)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -5472,7 +5473,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let served = |rows: Vec<((String, i64, String), SessionSpendRow)>| -> Vec<Option<String>> {
+        let served = |rows: Vec<(SessionSpendKey, SessionSpendRow)>| -> Vec<Option<String>> {
             rows.into_iter()
                 .map(|(_, row)| row.attempt.map(|a| a.account_id))
                 .collect()
@@ -5541,7 +5542,7 @@ mod tests {
             None,
         )
         .unwrap();
-        let receipts = |rows: Vec<((String, i64, String), SessionSpendRow)>| {
+        let receipts = |rows: Vec<(SessionSpendKey, SessionSpendRow)>| {
             rows.into_iter()
                 .map(|(_, row)| row.received_at)
                 .collect::<Vec<_>>()
