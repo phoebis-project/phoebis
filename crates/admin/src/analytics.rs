@@ -796,7 +796,9 @@ pub(crate) async fn accounts(
 /// The burn series per group: an API key account's tokens in dollars, and a subscription account's as the share of
 /// its own 5-hour and 7-day window and of its model's own week, and as the Pro-week figure. `unit` and the shares
 /// answer under `group_by=account` and under any grouping whose `accounts` filter names exactly one account, and read
-/// null otherwise, since shares of different accounts' windows do not add. The figure answers under every grouping.
+/// null otherwise, since shares of different accounts' windows do not add. The figure answers under every grouping. So
+/// do a plan-funded row's list dollars in `plan_usd` beside the billed dollars in `usd`, and the Pro 5-hour figure in
+/// `five_hour_equivalent` and the Fable week's in `fable_equivalent` beside the Pro-week figure.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Burn {

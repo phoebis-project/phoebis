@@ -1770,6 +1770,15 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             && close_to(&fable["fable_equivalent"], fable_figure),
         "the Opus bucket's 5-hour figure and Fable week figure, then the Fable bucket's: {point} {fable}"
     );
+    // The rig prices dollars on the shipped list, so the plan row's list dollars take no literal here: they read a
+    // number of their own, apart from the bucket's billed dollars and its two figures.
+    let plan_usd = point["plan_usd"].as_f64().unwrap_or(0.0);
+    assert!(
+        plan_usd > 0.0
+            && point["equivalent"] != plan_usd
+            && point["five_hour_equivalent"] != plan_usd,
+        "plan_usd reads the plan row's own list dollars: {point}"
+    );
     let mut keys: Vec<&str> = point
         .as_object()
         .unwrap()

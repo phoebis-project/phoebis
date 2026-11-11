@@ -1497,12 +1497,12 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
 
 test('an account-grouped breakdown row carries its shares keyed by window and a key-grouped one null', () => {
   const business = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'business');
+  const businessWire = fixture('analytics_breakdown_accounts').rows.find((r) => r.key === 'business');
   // The capture's day holds a request on a model without a weight, so the route leaves both shared windows out, while
   // its Fable request keeps the Fable week, which the unweighted model does not draw.
-  assert.deepEqual(Object.keys(business.costShares), ['seven_day_fable'], 'the windows a row could not be priced on are absent');
+  assert.deepEqual(business.costShares, { seven_day_fable: businessWire.cost_shares.seven_day_fable }, 'the windows a row could not be priced on are absent');
   assert.equal(typeof business.planRequests, 'number');
   assert.equal(typeof business.planOutputTokens, 'number');
-  const businessWire = fixture('analytics_breakdown_accounts').rows.find((r) => r.key === 'business');
   assert.deepEqual([business.costEquivalent, business.cacheEquivalent], [businessWire.cost_equivalent, businessWire.cache_equivalent], 'the account grouping reads the Pro-week figures beside the shares');
   const directWire = fixture('analytics_breakdown_accounts').rows.find((r) => r.key === 'direct');
   const direct = fixture('analytics_breakdown_accounts').rows.map(d.decodeAnalyticsGroup).find((g) => g.key === 'direct');
