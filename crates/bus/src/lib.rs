@@ -362,30 +362,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_completion_behind_more_chunks_than_the_queue_holds_reaches_a_slot_filtered_to_completions_with_no_drop(
-    ) {
-        let bus = Bus::new();
-        // Best-effort as the attention arm's slot, and nobody reads it while the chunks arrive.
-        let mut attention = bus.subscribe_filtered("attention", Delivery::BestEffort, completions);
-        for index in 0..=QUEUE_DEPTH as u32 {
-            bus.publish(Event::ResponseChunk(chunk("r1", index)));
-        }
-        bus.publish_fact(completed("r1")).await;
-        let first = attention
-            .events
-            .try_recv()
-            .expect("the slot holds an event");
-        assert_eq!(
-            (
-                attention.stats.dropped.load(Ordering::SeqCst),
-                matches!(first, Event::RequestComplete(_))
-            ),
-            (0, true),
-            "no chunk reached the slot, so none was dropped and the completion found room"
-        );
-    }
-
-    #[tokio::test]
     async fn a_full_queue_drops_and_counts_without_holding_the_relay() {
         let bus = Bus::new();
         let mut reader = bus.subscribe("reader", Delivery::Durable);

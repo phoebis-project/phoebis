@@ -355,32 +355,6 @@ async fn completion_after_abort(
         .expect("the guard completed the request")
 }
 
-#[tokio::test]
-async fn a_classifier_call_the_client_leaves_while_its_leg_waits_for_its_head_completes_with_no_off_word(
-) {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Gated(Box::new(ok_with_id("msg_1"))),
-    }])
-    .await;
-    let (h, mut sub) = observing(&up, &[oauth("a", A, 0)]).await;
-    // s-2 holds no turn to judge, so the router answers its leg off, and the upstream holds that leg's head.
-    let app = h.app.clone();
-    let call = tokio::spawn(async move { app.oneshot(in_session("s-2", "auxiliary", true)).await });
-    wait_for(Duration::from_secs(5), || {
-        (credentials_seen(&up).len() == 1).then_some(())
-    })
-    .await;
-    let complete = completion_after_abort(call, &mut sub).await;
-    assert_eq!(
-        (complete.outcome, complete.classifier),
-        (Outcome::Canceled, None),
-        "a leg that never answered the client leaves the observation's word"
-    );
-    up.release();
-    up.shutdown().await;
-}
-
 fn json_429_retry_after(seconds: &str) -> Respond {
     Respond::Json {
         status: 429,

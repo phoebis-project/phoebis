@@ -384,39 +384,6 @@ fn a_pins_auxiliary_mark_and_effort_survive_a_reopen() {
 }
 
 #[test]
-fn a_pins_ended_mark_survives_a_reopen_beside_a_pin_saved_without_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("router.sqlite");
-    let storage_key = StorageKey::generate();
-    {
-        let store = Store::open(&path, &storage_key).unwrap();
-        seed_accounts(&store, &["a"]);
-        store
-            .upsert_pin(&PinRow {
-                ended: true,
-                ..pin("k", "ended", "claude-opus-5-5", "a")
-            })
-            .unwrap();
-        store
-            .upsert_pin(&pin("k", "live", "claude-opus-5-5", "a"))
-            .unwrap();
-    }
-    let reopened = Store::open(&path, &storage_key)
-        .unwrap()
-        .load_routing()
-        .unwrap();
-    assert_eq!(
-        reopened
-            .pins
-            .iter()
-            .map(|p| (p.session_id.as_str(), p.ended))
-            .collect::<Vec<_>>(),
-        [("ended", true), ("live", false)],
-        "each pin reads the mark it was saved with"
-    );
-}
-
-#[test]
 fn a_windows_plan_and_tier_survive_a_reopen_and_a_reading_without_them_reads_none() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");

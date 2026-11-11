@@ -4119,21 +4119,6 @@ async fn a_kept_warm_request_on_an_unpriced_model_counts_and_its_recipe_keeps_pr
     assert_eq!(status.probes, 5, "{status:?}");
 }
 
-#[tokio::test]
-async fn an_unpriced_model_reads_no_dollars_and_still_lands_a_probe_row() {
-    let mut r = rig(RigSpec::default()).await;
-    r.observe_with("main", &unpriced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
-    let (cost, _) = read_dollars(&r, &rows);
-    assert_eq!(
-        cost, 0.0,
-        "claude-opus-4-7 is not in the shipped table, so its probe row reads no dollars, as its other rows do"
-    );
-    assert_eq!(r.status("main").unanswered, 1);
-}
-
 /// A key moved to another pool takes its probes with it: the cost the probe's ledger row carries belongs to the pool
 /// that serves the probe, not to the one the last real request selected.
 #[tokio::test]

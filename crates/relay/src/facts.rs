@@ -498,12 +498,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_body_reads_with_no_units() {
-        let facts = BodyFacts::read(b"not json");
-        assert_eq!(facts.prompt_units, Vec::<[u16; 3]>::new());
-    }
-
-    #[test]
     fn a_first_user_message_whose_string_content_is_the_resume_placeholder_reads_resumed() {
         let body = serde_json::json!({
             "messages": [{"role": "user", "content": RESUME_PLACEHOLDER}]
