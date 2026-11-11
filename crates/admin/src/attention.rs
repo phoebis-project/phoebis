@@ -35,23 +35,25 @@ pub(crate) struct AttentionItem {
     /// registry no longer holds.
     pub pools: Vec<String>,
     /// Unix milliseconds: the start of the backoff run, the first failed attempt of a refresh run, the first exhaustion
-    /// or refusal of a run, the oldest parked row, the refused certificate reload, 30 days before a certificate's end,
-    /// the catalog listing that added an unpriced model or the first plan-funded landing of its run, whichever came
-    /// first, the `window_end` of the oldest window the detail's `windows` lists, or the fold's instant where that end
-    /// lies after it, for `meter_drift`, the oldest qualifying event of the trailing 24 hours for `wall_reached`,
-    /// `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down span counted for `slowed_long`,
-    /// which can predate the day for a span open from before it, or for the two account states, a degraded writer,
-    /// `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` the first read of this process that saw the
-    /// state.
+    /// or refusal of a run, the oldest parked row, the refused certificate reload, 3 days before a refresh token's end,
+    /// 30 days before a certificate's end, the catalog listing that added an unpriced model or the first plan-funded
+    /// landing of its run, whichever came first, the `window_end` of the oldest window the detail's `windows` lists, or
+    /// the fold's instant where that end lies after it, for `meter_drift`, the oldest qualifying event of the trailing
+    /// 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down span
+    /// counted for `slowed_long`, which can predate the day for a span open from before it, or for the two account
+    /// states, a degraded writer, `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` the first read of
+    /// this process that saw the state.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`, or
     /// `component`, or `accounts`, `count` and `pool`. In that last set the pool is null for a record without one. The
     /// two certificate items carry `cert_file`. `certificate_reload_failed` adds `key_file`, `error` (the loader's
     /// line) and `serving_since` (when the pair the listener still serves was loaded). `certificate_expiring` adds
-    /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `model_unpriced`
-    /// carries `model` and `requests` (the plan-funded requests its run served, 0 for a model a catalog listing added
-    /// that no request has used yet). `meter_drift` carries `windows` (per window whose newest reconciled row among
+    /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `pairing_expiring`
+    /// carries `account`, `label`, `expires` (the refresh token's end) and `days_left` (whole days from the read,
+    /// negative once past). `model_unpriced` carries `model` and `requests` (the plan-funded requests its run served, 0
+    /// for a model a catalog listing added that no request has used yet).
+    /// `meter_drift` carries `windows` (per window whose newest reconciled row among
     /// those that ended in the last eight days with a rise of at least 0.05 read a ratio under 0.8 or over 1.25 over a
     /// priced share of at least 0.05, so a newer row with a smaller rise leaves it standing: `window`, `ratio`,
     /// `observed_rise`, `predicted_share`, `window_end` and `requests`),
@@ -104,13 +106,13 @@ pub(crate) struct AttentionLink {
 /// Read the conditions that hold now.
 ///
 /// Answers the operator conditions that hold now, worst first (`pool_exhausted`, `client_drift`, `writer_degraded`,
-/// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `certificate_expiring`,
-/// `ledger_record_parked`, `keepalive_bus_gaps`, `poll_backoff`, `model_unpriced`, `meter_drift`, `wall_reached`,
-/// `destination_spent`, `shed_no_runway`, `slowed_long`, `keepalive_cap`, `expired_between_turns`) and the oldest
-/// first within a kind. `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long` read the
-/// ledger: the reconciliation rows the hourly fold writes and the routing log of the trailing 24 hours.
-/// `expired_between_turns` reads the ledger's rollups of the trailing 24 hours. The same reader feeds the
-/// `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never disagree.
+/// `certificate_reload_failed`, `reauth_required`, `funding_required`, `refresh_failed`, `pairing_expiring`,
+/// `certificate_expiring`, `ledger_record_parked`, `keepalive_bus_gaps`, `poll_backoff`, `model_unpriced`,
+/// `meter_drift`, `wall_reached`, `destination_spent`, `shed_no_runway`, `slowed_long`, `keepalive_cap`,
+/// `expired_between_turns`) and the oldest first within a kind. `meter_drift`, `wall_reached`, `destination_spent`,
+/// `shed_no_runway` and `slowed_long` read the ledger: the reconciliation rows the hourly fold writes and the routing
+/// log of the trailing 24 hours. `expired_between_turns` reads the ledger's rollups of the trailing 24 hours. The same
+/// reader feeds the `phoebis_attention` gauge on the metrics listener, so a scrape and this answer never disagree.
 #[utoipa::path(
     get,
     path = "/admin/attention",

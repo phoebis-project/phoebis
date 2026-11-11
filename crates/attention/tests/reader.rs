@@ -1,4 +1,4 @@
-//! The nineteen conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The twenty conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
 //! refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
 //! ledger's landing saw, the keepalive engine's standing, and the gauge the metrics listener scrapes from the same
@@ -19,7 +19,8 @@ use phoebis_bus::{Kind as RequestKind, Origin, Outcome, QUEUE_DEPTH};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
-    AccountKind, AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AttemptOutcome, NewBundle, Secret, StateCause,
+    StorageKey, Store,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -2099,6 +2100,70 @@ async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_t
         );
         assert_eq!((c.holds, c.since), expiring, "at {at}");
     }
+}
+
+#[tokio::test]
+async fn a_refresh_token_within_three_days_of_its_end_holds_pairing_expiring_since_three_days_before_it(
+) {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let inside = NOW + 3 * DAY - 1_000;
+    let outside = NOW + 3 * DAY + 1_000;
+    for (id, label, end) in [("near", "Near", inside), ("far", "Far", outside)] {
+        rig.store
+            .insert_account(&AccountRow {
+                id: id.into(),
+                kind: AccountKind::Oauth,
+                label: label.into(),
+                enabled: true,
+                identity: None,
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+                state_cause: StateCause::Paired,
+            })
+            .unwrap();
+        rig.store
+            .commit_credentials(
+                id,
+                1,
+                1,
+                None,
+                None,
+                &NewBundle {
+                    access_token: Secret::new("sk-ant-oat01-PLACEHOLDER"),
+                    refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                    issued_at: NOW,
+                    expires_at: NOW + HOUR,
+                    refresh_expires_at: Some(end),
+                    scopes: "user:profile user:inference".into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::PairingExpiring, "near").unwrap();
+    assert_eq!(
+        (held.holds, held.since, &held.link, &held.detail),
+        (
+            true,
+            Some(NOW - 1_000),
+            &Some(Link {
+                page: "accounts",
+                id: "near".into()
+            }),
+            &json!({ "account": "near", "days_left": 2, "expires": inside, "label": "Near" })
+        ),
+        "an end a second inside the three days holds, dated three days before it"
+    );
+    let clear = find(&conditions, Kind::PairingExpiring, "far").unwrap();
+    assert_eq!(
+        (clear.holds, clear.since, &clear.detail["days_left"]),
+        (false, None, &json!(3)),
+        "an end a second outside the three days reads clear"
+    );
 }
 
 #[tokio::test]

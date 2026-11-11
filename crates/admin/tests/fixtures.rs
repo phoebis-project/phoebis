@@ -542,7 +542,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 refresh_token: Some(Secret::new(refresh_token)),
                 issued_at: now,
                 expires_at: now + 3_600_000,
-                refresh_expires_at: None,
+                // Two days before the refresh token's end, inside the attention list's three days, so the captured
+                // list holds the item and the account list the end.
+                refresh_expires_at: Some(now + 2 * 86_400_000),
                 scopes: "user:profile user:inference".into(),
             },
         )

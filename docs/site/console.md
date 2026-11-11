@@ -131,15 +131,17 @@ held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_se
 shedding rounds, the account's moves and spent windows, its spent windows, or its slow-down starts and ends, from the
 moment the condition began. An account whose meter drifted reads `acct-a: 5h charged 2.0x the table, 7d 1.3x, since
 14:20`, each off window with the ratio the meter charged against the cost model, under the label "Meter drift against
-the table", and opens the [Meter](#meter) view on the account. The keepalive engine's three items open the
-[Sessions](#sessions) view: `Keepalive bus gaps: {n} since the start` in the serious tone while the engine missed bus
-events in the last 24 hours, `Keepalive cap at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent
-records or retained prompts) stands at 90 percent of its max or more, and `Expired between turns: {n} in 24h` in the
-warning tone while prompt caches expired between turns and a pool's keepalive policy is on. A parked ledger record adds
-"Replay parked records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the
-"+N more" badge and that button with its answer together, the button and its answer take a second row. The line also
-reads again when the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a
-slow read lands and the next tick reads again.
+the table", and opens the [Meter](#meter) view on the account. An account whose refresh token nears its fixed end reads
+its days left as `expires in 2 days`, or `expired 3 days ago` past the end, in the warning tone, and the item carries
+the account's Re-pair action. The keepalive engine's three items open the [Sessions](#sessions) view: `Keepalive bus
+gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24 hours, `Keepalive cap
+at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained prompts) stands at 90
+percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while prompt caches expired
+between turns and a pool's keepalive policy is on. A parked ledger record adds "Replay parked records", which answers
+`Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge and that button with its
+answer together, the button and its answer take a second row. The line also reads again when the window regains focus,
+and a tick or a focus that finds its previous read still out is skipped, so a slow read lands and the next tick reads
+again.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",

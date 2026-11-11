@@ -1166,6 +1166,7 @@ mod tests {
             block(&lines, "  attention:"),
             [
                 "    pool_exhausted Main since 12:16",
+                "    pairing_expiring Seat since 10-10 12:16",
                 "    ledger_record_parked Main since 12:16",
                 "    model_unpriced claude-opus-99 since 12:15",
                 "    meter_drift Business since 10:16",

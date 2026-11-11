@@ -559,7 +559,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "credential": {
             "access_expires_at": 1791724600000,
-            "refresh_expires_at": null,
+            "refresh_expires_at": 1791893800000,
             "generation": 1,
             "last_refresh_at": null,
             "last_error": null,
@@ -10408,6 +10408,28 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "key": "desktop",
             "pool": "main"
+          }
+        },
+        {
+          "kind": "pairing_expiring",
+          "subject": {
+            "type": "account",
+            "id": "usage-seat",
+            "label": "Seat"
+          },
+          "link": {
+            "page": "accounts",
+            "id": "usage-seat"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1791634600000,
+          "detail": {
+            "account": "usage-seat",
+            "label": "Seat",
+            "days_left": 2,
+            "expires": 1791893800000
           }
         },
         {

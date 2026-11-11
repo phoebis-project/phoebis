@@ -162,6 +162,7 @@ impl Attention {
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
         let refresh_runs = reader::refresh_runs(&self.store, &accounts)?;
+        let refresh_ends = reader::refresh_ends(&self.store, &accounts)?;
         // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
         // disk.
         let pairs = self.tls.as_ref().map(|tls| tls.pairs());
@@ -177,6 +178,7 @@ impl Attention {
             &mut state,
             &accounts,
             &refresh_runs,
+            &refresh_ends,
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             ledger.as_ref(),

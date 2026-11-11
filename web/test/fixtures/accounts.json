@@ -265,7 +265,7 @@
         },
         "credential": {
           "access_expires_at": 1791724600000,
-          "refresh_expires_at": null,
+          "refresh_expires_at": 1791893800000,
           "generation": 1,
           "last_refresh_at": null,
           "last_error": null,

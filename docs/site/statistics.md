@@ -662,6 +662,7 @@ holds again at the first read.
 | `reauth_required` | critical | the account | the account is paired again, or an API-key account gets a new secret |
 | `funding_required` | serious | the API-key account | a retry succeeds after five minutes (or the [model rejection interval](routing.md#cooldowns-and-failover) when that is shorter), or the operator clears funding |
 | `refresh_failed` | serious | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
+| `pairing_expiring` | warning | the OAuth account | a re-pair stores an end more than 3 days away, or the account is disconnected or deleted |
 | `certificate_expiring` | warning | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | serious | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `keepalive_bus_gaps` | serious | the keepalive engine | 24 hours pass without a gap, or the router restarts |
@@ -723,6 +724,11 @@ is.
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
 re-pairing settles a refresh still pending. A pairing records its own committed attempt, so it ends the run even when
 nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
+
+**`pairing_expiring`** holds while an OAuth account's refresh token is within 3 days of its fixed end, past the end
+included. No refresh moves that end, so the account needs a new pairing. The subject is the account, and the item opens
+the Accounts page on it. It dates from 3 days before the end, so a restart keeps the date, and the detail names the
+account, the end and the whole days left, negative once past.
 
 **`certificate_expiring`** holds while the leaf a listener serves is within 30 days of its end, past the end included.
 It reads the pair the router loaded rather than the files, so a pair replaced on disk counts once `phoebis tls reload`

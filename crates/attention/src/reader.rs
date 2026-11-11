@@ -1,9 +1,9 @@
-//! The nineteen conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs from the store, the parked records, the ledger's degraded state, the unpriced models its landing or a catalog
-//! listing saw, the routing conditions its hourly fold wrote and the expiries between turns its rollups count from the
-//! ledger, the routing state writer's and the listeners' pairs from the router, the bus gaps and the caps from the
-//! keepalive engine, the poll's standing from the usage service, and the exhaustions and drift refusals from the
-//! request outcomes the bus arm keeps.
+//! The twenty conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! runs and the refresh token ends from the store, the parked records, the ledger's degraded state, the unpriced models
+//! its landing or a catalog listing saw, the routing conditions its hourly fold wrote and the expiries between turns its
+//! rollups count from the ledger, the routing state writer's and the listeners' pairs from the router, the bus gaps and
+//! the caps from the keepalive engine, the poll's standing from the usage service, and the exhaustions and drift
+//! refusals from the request outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
 
@@ -27,6 +27,10 @@ pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
 /// A loaded leaf holds `certificate_expiring` from this many days before its `not_after`. The router's
 /// `EXPIRY_WARNING_DAYS`, which `check-config` and `status` warn under, reads this constant.
 pub const CERTIFICATE_WARNING_DAYS: i64 = 30;
+
+/// An OAuth credential holds `pairing_expiring` from this many days before its refresh token's fixed end, which no
+/// refresh moves: three days leave a weekend to re-pair the account.
+pub const PAIRING_WARNING_DAYS: i64 = 3;
 
 /// How many of a holder's newest settled refresh attempts one read walks: two make the condition, and the rest date
 /// the run's start as far back as the read reaches, which bounds the scan a scrape pays per account.
@@ -54,16 +58,17 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
-/// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
-/// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
-/// lands them, a keepalive engine that missed bus events in the last day, windows that read stale, a model that served
-/// plan-funded traffic and prices nothing, while nothing is broken, and an account whose meter charged its windows off
-/// the cost model's figures. That last one names a pricing that is off and ranks above the four routing conditions,
-/// whose causes it can explain. Those four stop no traffic and rank under every kind that does, worst first among
-/// themselves: an account that reached its wall, a move whose destination was spent within the hour, a pool whose
-/// rounds found no destination with runway, and an account whose requests waited past twice its pool's stretch
-/// threshold in the day, a slow-down that worked for long. The keepalive engine's two warnings rank last: a cap filled
-/// to 90 percent or more, then cache entries that expired between turns while a pool warms caches.
+/// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, an
+/// account's refresh token near its fixed end, the router's own certificate about to lapse, priced records the ledger
+/// file keeps until the next start or a replay lands them, a keepalive engine that missed bus events in the last day,
+/// windows that read stale, a model that served plan-funded traffic and prices nothing, while nothing is broken, and an
+/// account whose meter charged its windows off the cost model's figures. That last one names a pricing that is off and
+/// ranks above the four routing conditions, whose causes it can explain. Those four stop no traffic and rank under
+/// every kind that does, worst first among themselves: an account that reached its wall, a move whose destination was
+/// spent within the hour, a pool whose rounds found no destination with runway, and an account whose requests waited
+/// past twice its pool's stretch threshold in the day, a slow-down that worked for long. The keepalive engine's two
+/// warnings rank last: a cap filled to 90 percent or more, then cache entries that expired between turns while a pool
+/// warms caches.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -73,6 +78,7 @@ pub enum Kind {
     ReauthRequired,
     FundingRequired,
     RefreshFailed,
+    PairingExpiring,
     CertificateExpiring,
     LedgerRecordParked,
     KeepaliveBusGaps,
@@ -97,6 +103,7 @@ impl Kind {
             Kind::ReauthRequired => "reauth_required",
             Kind::FundingRequired => "funding_required",
             Kind::RefreshFailed => "refresh_failed",
+            Kind::PairingExpiring => "pairing_expiring",
             Kind::CertificateExpiring => "certificate_expiring",
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::KeepaliveBusGaps => "keepalive_bus_gaps",
@@ -128,6 +135,7 @@ impl Kind {
             | Kind::ReauthRequired
             | Kind::FundingRequired
             | Kind::RefreshFailed
+            | Kind::PairingExpiring
             | Kind::CertificateExpiring
             | Kind::LedgerRecordParked
             | Kind::KeepaliveBusGaps
@@ -489,22 +497,42 @@ pub(crate) fn refresh_runs(
         .collect()
 }
 
+/// Each OAuth account's refresh token end as its stored credential holds it, read at each read rather than kept here,
+/// so the later end a re-pair stores clears the item at the next read.
+pub(crate) fn refresh_ends(
+    store: &Store,
+    accounts: &[AccountRow],
+) -> Result<HashMap<String, Option<i64>>, StoreError> {
+    accounts
+        .iter()
+        .filter(|account| account.kind == AccountKind::Oauth)
+        .map(|account| {
+            let end = store
+                .credential_metadata(&account.id)?
+                .and_then(|credential| credential.refresh_expires_at);
+            Ok((account.id.clone(), end))
+        })
+        .collect()
+}
+
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
 /// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
-/// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and their
-/// `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the whole
-/// answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the parked rows,
-/// the fold's routing conditions and the count of expiries between turns over the last 24 hours. It is `None` where
-/// no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions
+/// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
+/// `refresh_runs` and `refresh_ends`, and the parked rows, before it takes the reader's state, and a read that fails
+/// fails the whole answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the
+/// parked rows, the fold's routing conditions and the count of expiries between turns over the last 24 hours. It is
+/// `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions
 /// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and `expired_between_turns` then has a
 /// series. Where one is built, `destination_spent` stops holding once a `window_cleared` followed its spent window.
-/// `pairs` is `None` where no listener is built, and neither certificate kind then has a series. `unpriced` is the
-/// ledger's map, empty where no ledger is built.
+/// `pairs` is `None` where no listener is built, and neither certificate kind then has a series. `pairing_expiring` has
+/// a series for an OAuth account whose credential holds a refresh token end and for no other account. `unpriced` is
+/// the ledger's map, empty where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
     accounts: &[AccountRow],
     refresh_runs: &HashMap<String, Vec<ResolvedAttempt>>,
+    refresh_ends: &HashMap<String, Option<i64>>,
     router: &RouterHandle,
     ledger_degraded: bool,
     ledger: Option<&LedgerFacts>,
@@ -700,6 +728,25 @@ pub(crate) fn conditions(
                     "outcome": newest.map(|a| a.outcome.as_str()),
                 }),
             ));
+            // The refresh token ends at a fixed instant no refresh moves, so the item rises ahead of the failed
+            // refresh that would otherwise be its first sign. Dated from the lead's start, so a restart keeps the
+            // date, and held past the end until a re-pair stores an end more than 3 days away, or the account is
+            // disconnected or deleted.
+            if let Some(expires) = refresh_ends.get(&account.id).copied().flatten() {
+                let warning_from = expires - PAIRING_WARNING_DAYS * DAY_MS;
+                let expiring = now >= warning_from;
+                out.push(condition(
+                    Kind::PairingExpiring,
+                    expiring,
+                    expiring.then_some(warning_from),
+                    json!({
+                        "account": account.id,
+                        "label": account.label,
+                        "days_left": (expires - now).div_euclid(DAY_MS),
+                        "expires": expires,
+                    }),
+                ));
+            }
         }
         if polled(account.kind, account.state) {
             // A series from before the account's first poll status exists, as after a restart, reading 0.
