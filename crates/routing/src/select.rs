@@ -5364,7 +5364,7 @@ fn shed_round(
     let mut cheapest: Option<usize> = None;
     for (index, walked) in ordered.iter().enumerate() {
         let p = &walked.row;
-        // A covering pin the pick read at an earlier position keeps what its gate found there.
+        // A covering pin the pick read at an earlier position keeps what the pick's loop found there.
         let mut read = std::mem::take(&mut reads[index]);
         if mark_holds(p) {
             read.skip = Some("standing");

@@ -21378,6 +21378,43 @@ fn a_standing_mark_counts_as_removed_and_is_skipped_standing() {
     );
     assert_eq!((round.outcome.as_str(), round.marks.len()), ("marked 1", 1));
     assert!((round.removed - 0.28).abs() < 1e-9, "{}", round.removed);
+
+    // A pending move's pin counts as marked for the burn guard too. a at 0.90 projects 1.08 at its reset, a target of
+    // 0.08 of which s1's standing 0.04 counts as removed, and s2's 0.14 covers the rest. s2's mark would leave no
+    // unmarked burn beside it, under a tenth of the round's 0.18, so s2 stays though b fits it.
+    let mut st = rounding(vec![
+        PinRow {
+            mark: Some(PinMark {
+                at: T - 1_000_000,
+                on: "a".into(),
+                window: FIVE_HOUR.into(),
+            }),
+            ..burning("s1", "a", 4.0, false, T)
+        },
+        burning("s2", "a", 14.0, false, T),
+    ]);
+    st.record_sample("a", refreshing(0.90, T + HOUR, T + 72 * HOUR, T), 0);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    let d = decide(&mut st, &s, &auxiliary(&s, "s2", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    let round = d.shed_round.expect("the round ran").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.marked, p.skip))
+            .collect::<Vec<_>>(),
+        [
+            ("s2", false, Some("last_pin")),
+            ("s1", true, Some("standing"))
+        ],
+        "s2's mark would take the account's last unmarked burn beside a pending move"
+    );
+    assert_eq!(
+        (round.outcome.as_str(), round.reason),
+        ("nothing_to_mark", Some("last_pin"))
+    );
 }
 
 #[test]
