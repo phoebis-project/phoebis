@@ -469,6 +469,8 @@ export interface MeterAddress {
 export const METER_CODEC = codecOf<MeterAddress>({ accounts: list('accounts') });
 /** The Meter view on one account's groups. */
 export const accountMeterHref = (accountId: string): string => `/meter?${METER_CODEC.toParams({ accounts: [accountId] })}`;
+/** The Quota view on one account's card. */
+export const quotaCardHref = (accountId: string): string => `/quota#${encodeURIComponent(accountId)}`;
 
 export interface KeysAddress extends SortFields<(typeof KEY_SORT_KEYS)[number]['id']> {
   pools: string[];

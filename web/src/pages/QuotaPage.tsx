@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
+import { useHashLanding } from '@/app/useHashLanding';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
 import { ResetDialog } from '@/components/ResetDialog';
@@ -39,6 +40,10 @@ export function QuotaPage() {
   const dir = sortDirOf(QUOTA_SORT_KEYS, filters);
   const [refreshing, setRefreshing] = useState(false);
   const [shown, choose] = useHashSection(QUOTA_SECTIONS, 'accounts');
+  const pageRef = useRef<HTMLDivElement>(null);
+  // `/quota#<account id>` lands on the card once the list has drawn it. An id names no section, so the section
+  // reader falls back to Accounts, where the card is.
+  useHashLanding(pageRef, '.qcard', () => accounts.data !== null && shown === 'accounts', [accounts.data, shown]);
 
   // An API-key account carries no quota window, and an account disconnected or awaiting re-authentication reports none,
   // so the page reads the other subscription accounts alone, whatever windows such a row still carries.
@@ -80,7 +85,7 @@ export function QuotaPage() {
 
   return (
     <PopoverHost.Provider value={host}>
-      <div className="stack">
+      <div className="stack" ref={pageRef}>
         <FilterBar
           address={address}
           count={
@@ -228,7 +233,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   // spend reading with neither amounts nor a share counts as none.
   const failed = Boolean(snapshot?.error) && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
   return (
-    <article className={`qcard ${failed ? 'is-error' : ''}`}>
+    <article className={`qcard ${failed ? 'is-error' : ''}`} id={account.id} tabIndex={-1}>
       <header className="qcard__head">
         <span className="qcard__icon qcard__icon--oauth" title="Claude.ai subscription">
           <IconUser size={15} />

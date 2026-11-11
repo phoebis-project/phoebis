@@ -134,15 +134,20 @@ moment the condition began. An account whose meter drifted reads `acct-a: 5h cha
 14:20`, each off window with the ratio the meter charged against the cost model, under the label "Meter drift against
 the table", and opens the [Meter](#meter) view on the account. An account whose refresh token nears its fixed end reads
 its days left as `expires in 2 days`, or `expired 3 days ago` past the end, in the warning tone, and the item carries
-the account's Re-pair action. The keepalive engine's three items open the [Sessions](#sessions) view: `Keepalive bus
-gaps: {n} since the start` in the serious tone while the engine missed bus events in the last 24 hours, `Keepalive cap
-at {pct}: {cap}` in the warning tone while one of its caps (sessions, agent records or retained prompts) stands at 90
-percent of its max or more, and `Expired between turns: {n} in 24h` in the warning tone while prompt caches expired
-between turns on a pool whose keepalive policy is on, under a key the keepalive may probe for. A parked ledger record
-adds "Replay parked records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead,
-the "+N more" badge and that button with its answer together, the button and its answer take a second row. The line also
-reads again when the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a
-slow read lands and the next tick reads again.
+the account's Re-pair action. An account whose unused limit reset ends within the warning's days reads, under the label
+"Reset ending", `nightly: a reset ends in 4 days` in the warning tone, `the first of 2 resets ends in 4 days` where
+several end within those days, and `ends today` on the last day, and opens the account's card on the [Quota](#quota)
+view. A wall on an account that holds a reset usable now for a window at its limit adds `, a reset can clear it` after
+its own words and opens that card in place of the routing log. Both point at the card's "Use reset", and the Dashboard
+uses no reset. The keepalive engine's three items open the [Sessions](#sessions) view: `Keepalive bus gaps: {n} since
+the start` in the serious tone while the engine missed bus events in the last 24 hours, `Keepalive cap at {pct}: {cap}`
+in the warning tone while one of its caps (sessions, agent records or retained prompts) stands at 90 percent of its max
+or more, and `Expired between turns: {n} in 24h` in the warning tone while prompt caches expired between turns on a pool
+whose keepalive policy is on, under a key the keepalive may probe for. A parked ledger record adds "Replay parked
+records", which answers `Landed {n}, {n} still parked`. Where the line is too narrow for its lead, the "+N more" badge
+and that button with its answer together, the button and its answer take a second row. The line also reads again when
+the window regains focus, and a tick or a focus that finds its previous read still out is skipped, so a slow read lands
+and the next tick reads again.
 
 Five tiles follow, each with a sparkline over the last 24 hours: "Requests, 24h" with `{n} per hour`, "Tokens, 24h"
 with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate, 24h" with "No requests",
@@ -339,6 +344,9 @@ Read the card after a refresh. Where the reset still reads as usable, "Use reset
 confirmed", a second try inside ten minutes repeats the same claim under its request id, so it cannot spend a second
 reset where the first one landed.
 
+The address `/quota#<account id>` opens the Accounts section, scrolls to that account's card and focuses it, which is
+where the Dashboard's Reset ending item and a wall that a reset can clear lead.
+
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
 Weekly or 5-hour, an "Account" axis and a now marker over the bars at the instant's place in the span. It draws one lane
@@ -516,7 +524,10 @@ a line of their own under the badge. The pool's own exhausted row and its Rounds
 [routing log](#routing-log) on its exhausted decisions or its shedding rounds since the condition began, and an
 account's Destination spent within the hour row opens it on the account's moves and spent windows, its Wall reached
 under the ceiling row on its spent windows, and its Slowed past twice the stretch row on its slow-down starts and ends.
-An account's Meter drift against the table row opens the [Meter](#meter) view on the account.
+An account's Meter drift against the table row opens the [Meter](#meter) view on the account. An account's Reset ending
+row reads `a reset ends in 4 days (Sep 21, 2026, 02:30:00) and clears 5h and Fable: Launch reset`, the end, the windows
+the reset clears and its label, and opens the account's card on the [Quota](#quota) view, as does a Wall reached under
+the ceiling row whose words carry `, a reset can clear it`.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `metered P{n}` where the pool
 prefers subscription accounts, the metered tier holding the API-key accounts and the usage-based seats), Account,

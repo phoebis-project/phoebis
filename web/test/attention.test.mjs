@@ -181,6 +181,19 @@ test("the four routing conditions open the routing log on their subject's moves,
   assert.equal(attentionTitle(item('shed_no_runway', pool), NOW).split('\n').pop(), `Opens the Routing log: pool all, shedding rounds, since ${at}`, 'the title ends with what the log opens on');
 });
 
+test("a wall a reset can clear opens the account's Quota card", () => {
+  const wall = { walls: 1, windows: ['five_hour'] };
+  const resettable = item('wall_reached', { detail: { ...wall, reset: { clears: ['five_hour'], grant: 'rg-a-1', label: 'Launch reset' } }, link: { id: 'a b', page: 'accounts' } });
+  assert.equal(attentionHref(resettable, NOW), '/quota#a%20b', "the card's Use reset is where the wall is acted on, the id encoded");
+  assert.equal(attentionLogLine(resettable, NOW), null, 'a badge that opens the card names no Routing log on its title');
+  const url = new URL(attentionHref(item('wall_reached', { detail: wall, link: { id: 'a b', page: 'accounts' } }), NOW), 'http://console.test');
+  assert.deepEqual(
+    [url.pathname, Object.fromEntries(url.searchParams)],
+    ['/routing-log', { accounts: 'a b', from: '2026-09-18T10:00:00.000Z', kinds: 'window_spent', to: '2026-09-18T12:00:00.000Z' }],
+    'a wall no reset can clear keeps the routing log on its spent windows',
+  );
+});
+
 test('the four routing conditions read the count, the setting and the start on the dashboard line and the pool card', () => {
   const since = '2026-09-18T10:41:00.000Z';
   const at = fmtShortTime(since);

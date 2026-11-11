@@ -1,6 +1,6 @@
 import { isoOrNull, list, num, numOrNull, rec, strings } from '@/api/decode';
 import type { AttentionItem, AttentionKind } from '@/api/types';
-import { accountMeterHref } from './address';
+import { accountMeterHref, quotaCardHref } from './address';
 import { lookup } from './counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, joinPresent, listWords, messageOf, noun, percentText, plural } from './format';
 import { entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
@@ -58,7 +58,10 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'seriou
 /** How often a page with a reader open asks the route again, so an exhaustion or a cleared failure shows unprompted. */
 export const ATTENTION_REFRESH_MS = 30_000;
 
-type LinkedItem = Pick<AttentionItem, 'kind' | 'link' | 'since'>;
+type LinkedItem = Pick<AttentionItem, 'detail' | 'kind' | 'link' | 'since'>;
+
+/** Whether a wall's detail carries a reset that can clear it now, which the route joins at the read. */
+const resettable = ({ detail, kind }: LinkedItem): boolean => kind === 'wall_reached' && typeof detail.reset === 'object' && detail.reset !== null;
 
 /**
  * The pool whose exhausted decisions a `pool_exhausted` item opens in the routing log. The pool link alone names the
@@ -68,14 +71,16 @@ const exhaustedPool = ({ kind, link }: LinkedItem): string | null => (kind === '
 
 /**
  * The routing log a routing condition opens, on the subject's rows of the kinds that make it hold, with the words that
- * name them, null for any other kind or a link that names no subject of the kind's own.
+ * name them, null for any other kind, a link that names no subject of the kind's own, or a wall a reset can clear,
+ * which opens the account's Quota card.
  */
-function conditionLog({ kind, link }: LinkedItem): { log: Pick<LogLink, 'accounts' | 'kinds' | 'pools'>; words: string } | null {
+function conditionLog(item: LinkedItem): { log: Pick<LogLink, 'accounts' | 'kinds' | 'pools'>; words: string } | null {
+  const { kind, link } = item;
   if (link === null) return null;
   if (kind === 'shed_no_runway' && link.page === 'pools') return { log: { kinds: ['shedding_round'], pools: [link.id] }, words: `pool ${link.id}, shedding rounds` };
   if (link.page !== 'accounts') return null;
   if (kind === 'destination_spent') return { log: { accounts: [link.id], kinds: ['pin_migrated', 'window_spent'] }, words: `account ${link.id}, moves and spent windows` };
-  if (kind === 'wall_reached') return { log: { accounts: [link.id], kinds: ['window_spent'] }, words: `account ${link.id}, spent windows` };
+  if (kind === 'wall_reached') return resettable(item) ? null : { log: { accounts: [link.id], kinds: ['window_spent'] }, words: `account ${link.id}, spent windows` };
   if (kind === 'slowed_long') return { log: { accounts: [link.id], kinds: ['slow_down_ended', 'slow_down_started'] }, words: `account ${link.id}, slow-downs` };
   return null;
 }
@@ -90,11 +95,11 @@ export const attentionKey = (item: Pick<AttentionItem, 'kind' | 'rawKind' | 'sub
 
 /**
  * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start, and a
- * routing condition on its subject's rounds, moves, walls and slow-downs since then. A meter drift opens the Meter view
- * narrowed to the account, where its reconciled windows are listed. The keepalive engine's conditions open the Sessions
- * view, though their link names no page. Every other kind opens the account, pool or key where it is fixed. Null when
- * the item names none, and for a kind this console does not know whatever its link, since the console cannot say what
- * the page would fix.
+ * routing condition on its subject's rounds, moves, walls and slow-downs since then. A reset that ends soon and a wall
+ * a reset can clear open the account's Quota card. A meter drift opens the Meter view narrowed to the account, where
+ * its reconciled windows are listed. The keepalive engine's conditions open the Sessions view, though their link names
+ * no page. Every other kind opens the account, pool or key where it is fixed. Null when the item names none, and for a
+ * kind this console does not know whatever its link, since the console cannot say what the page would fix.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
   const { link } = item;
@@ -105,6 +110,8 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
   if (pool !== null) return logHref({ pools: [pool], kinds: ['exhausted'], ...since });
   const condition = conditionLog(item);
   if (condition !== null) return logHref({ ...condition.log, ...since });
+  // The card's Use reset is where either one is acted on, so both open the card and neither opens the log.
+  if ((item.kind === 'limit_reset_ending' || resettable(item)) && link.page === 'accounts') return quotaCardHref(link.id);
   if (item.kind === 'meter_drift' && link.page === 'accounts') return accountMeterHref(link.id);
   return entityHref(PAGE_ENTITY[link.page], link.id);
 }
@@ -250,7 +257,7 @@ function conditionWords(item: AttentionItem, now: number): string {
         const earlyMs = numOrNull(d.early_ms);
         const early = earlyMs === null ? null : earlyMs > 0 ? `, the wall came ${formatFact(earlyMs, 'ms', now)} before the reset` : ', the wall came at the reset';
         const on = windowsOf(strings(d.windows));
-        return `${plural(num(d.walls), 'wall')} reached${on ? ` on${on}` : ''}${early ?? error}`;
+        return `${plural(num(d.walls), 'wall')} reached${on ? ` on${on}` : ''}${early ?? error}${resettable(item) ? ', a reset can clear it' : ''}`;
       }
     }
   })();
