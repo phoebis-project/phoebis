@@ -345,12 +345,12 @@ cannot be closed.
 After a use the dialog closes under the toast "Reset used", and the card reads the cleared windows. Any other answer
 keeps the dialog open under one of two classes. "Refused" means the reset was not used, and the sentence says why. A
 dialog that stayed open while its account was paired again, deleted and created again, or had a reset used from another
-window reads "Refused" with the account changed, and a new click on "Use reset" reads the account as it is now. "Not
-confirmed" means the router cannot tell: the upstream's answer leaves the use open, no usable answer came, or the
-router itself did not answer, so the reset may have been used. The line after it reads the account's count once it is
-known. Read the card after a refresh. Where the reset still reads as usable, "Use reset" is enabled again. After a "Not
-confirmed", a second try inside ten minutes repeats the same claim under its request id, so it cannot spend a second
-reset where the first one landed.
+window reads "Refused", and a new click on "Use reset" reads the account as it is now. "Not confirmed" means the router
+cannot tell: the upstream's answer leaves the use open, no usable answer came, or the router itself did not answer, so
+the reset may have been used. The line after it reads the account's count once it is known. Read the card after a
+refresh. Where the reset still reads as usable, "Use reset" is enabled again. After a "Not confirmed", a second try
+inside ten minutes repeats the same claim under its request id, so it cannot spend a second reset where the first one
+landed.
 
 The address `/quota#<account id>` opens the Accounts section, scrolls to that account's card and focuses it, which is
 where the Dashboard's Reset ending item and a wall that a reset can clear lead.
