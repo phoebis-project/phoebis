@@ -387,43 +387,44 @@ presented a fallback token, the Fallback filter lists them, and the Classifier f
 ([Requests](console.md#requests)). The Requests, Sessions and Routing log tables lay their columns out by one rule, with
 a minimum per column kind, one fill column and a set wider than the card scrolling inside it, so the Requests table fits
 1280 px with its default columns ([Requests](console.md#requests), [Sessions](console.md#sessions),
-[Routing log](console.md#routing-log)). The Requests table orders by Time, Attempts, Duration or TTFB through the Sort
-control and offers a Duration column ([Requests](console.md#requests)). The Requests view's empty state reads "Widen the
-range or clear a filter.", as the Routing log's does, and a request the router refused before it resolved a model reads
-a dash for its model ([Requests](console.md#requests)). Unchecking Select all in a filter's list clears every check, the
-inverse of checking it, and an empty list keeps its meaning ([Requests](console.md#requests),
-[Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted, created <time>)`, its creation
-instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts cards offer the three windows the router
-reads, and the Accounts in range table reads the Fable week's peak as Peak Fable ([Analytics](console.md#analytics)).
-The Accounts section's card "Unused allowance by account" ranks the subscription accounts by the figure of their weekly
-windows left unused over the last four weeks, in the chosen week, with the fleet's figures
-([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent filter of the
-Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its links to the
-request log carrying the agent, the filter disabled until a session is picked and leaving with the session
+[Routing log](console.md#routing-log)). The Requests table orders by Time, Attempts, Duration, TTFB, Uncached input or
+Output tokens through the Sort control and offers a Duration column ([Requests](console.md#requests)). The Requests
+view's empty state reads "Widen the range or clear a filter.", as the Routing log's does, and a request the router
+refused before it resolved a model reads a dash for its model ([Requests](console.md#requests)). Unchecking Select all
+in a filter's list clears every check, the inverse of checking it, and an empty list keeps its meaning
+([Requests](console.md#requests), [Routing log](console.md#routing-log)). A deleted key's group reads `<id> (deleted,
+created <time>)`, its creation instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts cards
+offer the three windows the router reads, and the Accounts in range table reads the Fable week's peak as Peak Fable
+([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
+accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week, with the
+fleet's figures ([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent
+filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
+links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session
 ([Analytics](console.md#analytics)). The Analytics session view reads the session's rows through the route's session
 filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
 breakdown tables head a failed read with the table's name ([Analytics](console.md#analytics)). The Analytics view's Burn
 tab draws three plan cards, Plan per hour, 5-hour per hour and Fable week per hour, the subscription traffic per hour in
-the chosen week, the burn route's 5-hour figure scaled to the chosen tier's 5-hour window, and the weekly figure scaled
-to its Fable week, a bucket the cost model could not price staying a gap under a "model unlisted" entry
-([Analytics](console.md#analytics)). The Analytics
-view's Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab does
-([Analytics](console.md#analytics)). The Analytics view's group tables order through the bar's Sort control by Name or
-the open tab's columns ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused
-before it resolved a model under "no model" ([Analytics](console.md#analytics)). The Burn section closes on Member
-budgets, its reconciliation rows listed on the Meter view ([Analytics](console.md#analytics),
-[Meter](console.md#meter)). The Cache warming tab shows what the probes saved and the net saving after their cost, as
-tiles, a chart and a Saved column per pool ([Analytics](console.md#analytics)). The Client and User agent filters list
-the range's values and take a typed pattern, each value a chip ([Analytics](console.md#analytics)). The Cost by chart's
-note names the unpriced groups it draws as gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring
-and the Plan per hour legend read their figures in the chosen week ([Analytics](console.md#analytics)). The ledger
-records a null diagnostics member on a request that named a message as `none` and a comparison the upstream was still
-running as `pending`, which Misses by reason and its per-group table read as No divergence and Pending
-([Analytics](console.md#analytics)). The Refusals by category card narrows under the Client and User agent filters and
-its links carry the client pattern ([Analytics](console.md#analytics)). The Refusals by category card splits its bars by
-model and counts the requests that presented a fallback token ([Analytics](console.md#analytics)). The Traffic section's
-Refusals by category card counts the answers the upstream refused by category, each bar opening the Requests view on
-them ([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
+the chosen week, the burn route's 5-hour figure scaled to the chosen tier's 5-hour window, and the traffic of the models
+that draw the Fable week, and of those alone, scaled to its Fable week, where a group with no such traffic over the
+whole range draws no line, a bucket the cost model could not price staying a gap under a "model unlisted" entry
+([Analytics](console.md#analytics)). The Analytics view's Cache warming tab spans its last card across the row where
+that card would sit alone, as the Burn tab does ([Analytics](console.md#analytics)). The Analytics view's group tables
+order through the bar's Sort control by Name or the open tab's columns ([Analytics](console.md#analytics)). The
+Analytics view's model grouping lists a request refused before it resolved a model under "no model"
+([Analytics](console.md#analytics)). The Burn section closes on Member budgets, its reconciliation rows listed on the
+Meter view ([Analytics](console.md#analytics), [Meter](console.md#meter)). The Cache warming tab shows what the probes
+saved and the net saving after their cost, as tiles, a chart and a Saved column per pool
+([Analytics](console.md#analytics)). The Client and User agent filters list the range's values and take a typed pattern,
+each value a chip ([Analytics](console.md#analytics)). The Cost by chart's note names the unpriced groups it draws as
+gaps ([Analytics](console.md#analytics)). The Cost split's subscription ring and the Plan per hour legend read their
+figures in the chosen week ([Analytics](console.md#analytics)). The ledger records a null diagnostics member on a
+request that named a message as `none` and a comparison the upstream was still running as `pending`, which Misses by
+reason and its per-group table read as No divergence and Pending ([Analytics](console.md#analytics)). The Refusals by
+category card narrows under the Client and User agent filters and its links carry the client pattern
+([Analytics](console.md#analytics)). The Refusals by category card splits its bars by model and counts the requests that
+presented a fallback token ([Analytics](console.md#analytics)). The Traffic section's Refusals by category card counts
+the answers the upstream refused by category, each bar opening the Requests view on them
+([Analytics](console.md#analytics)). The Traffic table's Error rate reads a dash for a group with no requests
 ([Analytics](console.md#analytics)). The unused allowance card and the Accounts detail's allowance block read their
 figures in the chosen week under every position and wait on the cost model, so a failed settings read draws their error
 ([Analytics](console.md#analytics), [Accounts](console.md#accounts)). Under the Analytics classifier grouping the
@@ -440,20 +441,20 @@ such as a subagent whose pin and recipe are gone, on one earlier agents line und
 and their cost, and the line opens to one row per agent ([Sessions](console.md#sessions)). At a phone's width the
 Sessions table scrolls sideways inside its card while an open row's detail keeps to the card's visible width at its left
 edge, the Session facts above the Routing facts and the Agents table scrolling on its own
-([Sessions](console.md#sessions)). On the Sessions view a released subagent's record keeps its slot of the agent cap for
-one cache TTL after the release and then leaves the engine ([Sessions](console.md#sessions)). Opening a Sessions row
-reads the session's facts in a Session grid and a Routing grid, then the Agents table, one line per agent with its type,
-model, account, context, burn, requests, cost, status and cache, the agent linking to the request log and the account to
-its page, and each line's menu opens the analytics session view, the request log and the routing log on the session and
-the agent ([Sessions](console.md#sessions)). The Sessions card's summary line counts the agents of the rows the filters
-keep by lifecycle word, with the client requests of the last 24 hours and their spend, and the bar's count reads
-`{n} sessions · {k} agents` ([Sessions](console.md#sessions)). The Sessions row's "+N" badges count every agent pinned
-on another model in the Model cell and on another account in the Account cell, a pin without a recipe among them
-([Sessions](console.md#sessions)). The Sessions row's Cache reads `warm` or `cold` by the pin's cache TTL with the
-recipe state word under it, from main's recipe or, where main holds none, the newest other agent's, as the row's
-`keepalive` summary on `GET /admin/sessions` carries it ([Sessions](console.md#sessions)). The Sessions row's Cost reads
-the spend of the requests its Requests cell counts, under Native the session's share of the chosen week and under the
-other positions its dollars, with a `+$` badge where they billed dollars beside a plan figure and the pin's burn per
+([Sessions](console.md#sessions)). On the Sessions view a released subagent's record leaves the engine one cache TTL
+after the release, and one that held a slot of the agent cap keeps it until then ([Sessions](console.md#sessions)).
+Opening a Sessions row reads the session's facts in a Session grid and a Routing grid, then the Agents table, one line
+per agent with its type, model, account, context, burn, requests, cost, status and cache, the agent linking to the
+request log and the account to its page, and each line's menu opens the analytics session view, the request log and the
+routing log on the session and the agent ([Sessions](console.md#sessions)). The Sessions card's summary line counts the
+agents of the rows the filters keep by lifecycle word, with the client requests of the last 24 hours and their spend,
+and the bar's count reads `{n} sessions · {k} agents` ([Sessions](console.md#sessions)). The Sessions row's "+N" badges
+count every agent pinned on another model in the Model cell and on another account in the Account cell, a pin without a
+recipe among them ([Sessions](console.md#sessions)). The Sessions row's Cache reads `warm` or `cold` by the pin's cache
+TTL with the recipe state word under it, from main's recipe or, where main holds none, the newest other agent's, as the
+row's `keepalive` summary on `GET /admin/sessions` carries it ([Sessions](console.md#sessions)). The Sessions row's Cost
+reads the spend of the requests its Requests cell counts, under Native the session's share of the chosen week and under
+the other positions its dollars, with a `+$` badge where they billed dollars beside a plan figure and the pin's burn per
 hour under it ([Sessions](console.md#sessions)). The Sessions row's Last used reads the newest use across the session's
 conversation pins, main's and its agents' ([Sessions](console.md#sessions)). The Sessions row's Requests counts the
 session's client requests over its life under its key, the ones the router refused before any account was asked left
