@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use common::*;
-use fake_upstream::{install, install_at, Captured, Respond, SseEvent};
+use fake_upstream::{install_at, Captured, Respond, SseEvent};
 use phoebis_bus::Outcome;
 use phoebis_keepalive::{
     CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, FIVE_MINUTES_MS,
@@ -2465,99 +2465,4 @@ async fn a_fast_recipe_served_fast_settles_its_waste_in_dollars_at_the_fast_cell
         (cost - fast).abs() < 1e-12 && (wasted - fast).abs() < 1e-12,
         "the cost and the waste at the fast cells: {cost} and {wasted} against {fast}"
     );
-}
-
-/// A tier the store cannot read leaves a plan-funded probe no window to size a share by, so its unit falls back to
-/// dollars as on an account the store names no tier for, and the log says why, naming the account and the error. One
-/// line marks the start of a failing streak, and a restart alone starts the next.
-#[tokio::test]
-async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
-    let captured = Captured::default();
-    let _guard = install(&captured);
-    // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
-    let mut weighted = phoebis_ledger::CostRevisions::shipped().latest().clone();
-    weighted
-        .model_weight
-        .insert("claude-sonnet-4-5".to_string(), Some(1.0));
-    let tables = phoebis_ledger::PlanTables {
-        revisions: phoebis_ledger::CostRevisions::new(
-            phoebis_ledger::CostRevisions::shipped().unit().clone(),
-            vec![weighted],
-        )
-        .unwrap(),
-        ..phoebis_ledger::PlanTables::shipped()
-    };
-    let mut r = rig(RigSpec {
-        on_disk: true,
-        tables,
-        ..plan_funded_spec()
-    })
-    .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
-    r.observe("main").await;
-    // The tier reads name the column, and the router serves on from the registry it already loaded.
-    let conn = rusqlite::Connection::open(r.store_path.as_ref().expect("an on-disk rig")).unwrap();
-    conn.execute_batch(
-        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
-    )
-    .unwrap();
-    drop(conn);
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1);
-    let warnings = || -> Vec<String> {
-        captured
-            .text()
-            .lines()
-            .filter(|line| {
-                line.contains(
-                    "the account's tier could not be read, so the settlement falls back to dollars",
-                )
-            })
-            .map(String::from)
-            .collect()
-    };
-    let settled = warnings();
-    assert_eq!(
-        settled.len(),
-        1,
-        "one line for the one settlement:\n{}",
-        captured.text()
-    );
-    assert!(
-        settled[0].contains(" WARN ")
-            && settled[0].contains("account=o")
-            && settled[0].contains("no such column: subscription_tier")
-            && !settled[0].contains(OAUTH_SECRET),
-        "{}",
-        settled[0]
-    );
-    let (_, agents) = r.engine.persist_rows();
-    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
-    assert_eq!(
-        payload["unanswered"][0]["unit"].as_str(),
-        Some("usd"),
-        "the probe settled in dollars: {}",
-        payload["unanswered"]
-    );
-    // The read still fails at the next probe's settlement, which is the same streak.
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 2);
-    assert_eq!(warnings().len(), 1, "{:?}", warnings());
-    // A restart starts with no streak, so the registry that is still unreadable warns once more.
-    r.engine.flush_persisted().await;
-    let second = r.restart().await;
-    second.load_persisted().await;
-    r.advance(270_000);
-    second.step().await;
-    second.wait_idle().await;
-    assert_eq!(
-        second
-            .agent_status("desktop", "session", "main")
-            .unwrap()
-            .probes,
-        3
-    );
-    assert_eq!(warnings().len(), 2, "{:?}", warnings());
 }

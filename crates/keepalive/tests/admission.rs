@@ -820,6 +820,51 @@ async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes
     );
 }
 
+/// A request refused the slot writes its agent's request time and leaves the session's own unwritten, so a session
+/// whose refused requests keep arriving with no report between them is held until one expiry after the newest of them
+/// and leaves then.
+#[tokio::test]
+async fn a_session_refused_the_slot_expires_one_expiry_after_its_newest_refused_request() {
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        },
+        session_expiry: Duration::from_secs(600),
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(session_start("other"))
+        .expect("the rig's session has sent nothing, so it holds no slot");
+    arm(&r, "first", "session", "main", 1_000);
+    arm(&r, "second", "other", "main", 1_000);
+    // Under one expiry, so the rig's session still holds the slot.
+    r.advance(300_000);
+    arm(&r, "third", "other", "main", 1_000);
+    assert_eq!(
+        (
+            r.engine
+                .agent_status("desktop", "other", "main")
+                .map(|status| status.reason),
+            r.engine.recipes_for("desktop", "other"),
+        ),
+        (Some(Reason::SessionLimit), Vec::<String>::new()),
+        "the session's next request was refused the slot too"
+    );
+    r.advance(600_000 - 1);
+    r.engine.expire();
+    assert!(
+        r.engine.agent_status("desktop", "other", "main").is_some(),
+        "one millisecond short of one expiry after the newest refused request"
+    );
+    r.advance(1);
+    r.engine.expire();
+    assert!(
+        r.engine.agent_status("desktop", "other", "main").is_none(),
+        "one expiry after the newest refused request"
+    );
+}
+
 /// With room for two recipes and a half, a third evicts one: the oldest idle recipe before a newer one, an unattended
 /// session's before an older idle one of an attended session, and none at all when evicting every candidate would
 /// still leave the newest without room, which is then refused.

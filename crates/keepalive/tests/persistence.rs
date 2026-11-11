@@ -16,7 +16,7 @@ use phoebis_keepalive::{
     KeepalivePolicy, KeepaliveTiming, Park, ParkKind, Reason, LEASE_MS,
 };
 use phoebis_ledger::{hour_of, read_rollups, KeepaliveDelta, Record, RollupSelect};
-use phoebis_store::{KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
+use phoebis_store::{IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow};
 
 const DAY: i64 = 86_400_000;
 
@@ -516,6 +516,71 @@ async fn a_save_after_the_roll_carries_the_purge_while_no_pool_is_dirty() {
         saved_days(&r),
         BTreeSet::new(),
         "the save carried the purge"
+    );
+}
+
+/// A day of counters saved, then the roll at the next day's first tick, which drops it under a retention of one day and
+/// leaves its purge the one change the next save carries. Answers the dropped day.
+async fn the_only_day_rolled_off(r: &mut Rig) -> i64 {
+    let today = NOW / DAY;
+    r.observe("main").await;
+    r.state("main", "idle");
+    r.advance_attended(6 * MINUTE);
+    r.step().await;
+    r.observe_with("main", &next_turn()).await;
+    r.engine.flush_persisted().await;
+    assert_eq!(saved_days(r), BTreeSet::from([today]));
+    r.advance_attended(DAY);
+    r.engine.flush_persisted().await;
+    r.step().await;
+    assert!(
+        r.engine.idle_returns().is_empty(),
+        "the roll dropped the only day"
+    );
+    today
+}
+
+/// `spec` under a retention of one day with keepalive off, so no recipe or probe adds a row the saves carry.
+fn one_day_retained(spec: RigSpec) -> RigSpec {
+    RigSpec {
+        policy: KeepalivePolicy::default(),
+        timing: KeepaliveTiming {
+            idle_return_retention_days: 1,
+            ..RigSpec::default().timing
+        },
+        ..spec
+    }
+}
+
+/// The save that carried the purge settles it, so a later flush with nothing changed saves nothing and leaves a row of
+/// the dropped day the registry holds again.
+#[tokio::test]
+async fn a_flush_after_the_purge_landed_carries_it_no_more() {
+    let mut r = rig(one_day_retained(RigSpec::default())).await;
+    let dropped = the_only_day_rolled_off(&mut r).await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_days(&r),
+        BTreeSet::new(),
+        "the save carried the purge"
+    );
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            counters: vec![IdleReturnsRow {
+                pool_id: "main".into(),
+                day: dropped,
+                bucket: 0,
+                reached: 1,
+                returned: 0,
+            }],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_days(&r),
+        BTreeSet::from([dropped]),
+        "a flush with nothing changed carries no purge"
     );
 }
 
@@ -2488,70 +2553,29 @@ async fn a_lapsed_pending_probe_reaches_the_ledger_once_across_a_failed_save_and
     );
 }
 
-// A tier read under the engine's lock would leave the completion's thread holding that lock behind the store and the
-// tick's thread waiting on it, so both run apart from the workers.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_kept_warm_credits_tier_read_behind_a_held_store_connection_leaves_the_tick_free() {
-    // Well inside the store's own five-second busy wait, which the held save sits in.
-    const TICK_BOUND: Duration = Duration::from_secs(2);
-    let mut r = rig(on_disk()).await;
-    r.observe("main").await;
-    r.advance_attended(270_000);
-    r.step().await;
-    r.advance_attended(40_000);
-    let read = Usage {
-        cache_read_tokens: Some(2_000),
-        ..Default::default()
-    };
-    r.engine.observe(r.observed("second", "main", BODY));
-    r.engine.observe(r.selected("second", "a"));
-    r.engine
-        .observe(BusEvent::ResponseChunk(phoebis_bus::ResponseChunk {
-            request_id: "second".into(),
-            attempt: 1,
-            index: 0,
-            body: Default::default(),
-            phase: Some(phoebis_bus::Phase::MessageStart {
-                usage: read.clone(),
-            }),
-        }));
-    let completion = r.complete("second", Outcome::Succeeded, Some(read));
-
-    // A save waiting out another writer holds the store's one connection, as the periodic flush does.
-    let (entries, snapshots) = (r.engine.persist_entries(), r.engine.persist_snapshots());
-    let held = registry(&r);
-    held.execute_batch("BEGIN IMMEDIATE").unwrap();
-    let engine = r.engine.clone();
-    let save = on_own_thread(async move { engine.flush_persisted().await });
-    r.engine.persist_reached(entries + 1, snapshots + 1).await;
-
-    // The completion earns the credit, whose tier read waits on that connection. The tick's second section follows
-    // a round trip to the router, by which the completion has reached the read.
-    let engine = r.engine.clone();
-    let (started, credit_started) = std::sync::mpsc::channel();
-    let credit = on_own_thread(async move {
-        started.send(()).unwrap();
-        engine.observe(completion);
-    });
-    credit_started.recv().unwrap();
-    let engine = r.engine.clone();
-    let (ticked, tick_done) = std::sync::mpsc::channel();
-    let tick = on_own_thread(async move {
-        engine.step().await;
-        ticked.send(()).unwrap();
-    });
-    let free = tick_done.recv_timeout(TICK_BOUND).is_ok();
-    held.execute_batch("COMMIT").unwrap();
-    save.join().unwrap();
-    credit.join().unwrap();
-    tick.join().unwrap();
+/// A save that fails keeps the roll's cutoff, so the dropped day's counters stay in the registry until the save that
+/// lands carries the purge.
+#[tokio::test]
+async fn a_failed_save_keeps_the_purge_for_the_save_that_lands() {
+    let mut r = rig(one_day_retained(on_disk())).await;
+    let dropped = the_only_day_rolled_off(&mut r).await;
+    let conn = registry(&r);
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_delete BEFORE DELETE ON keepalive_idle_returns \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )
+    .unwrap();
+    r.engine.flush_persisted().await;
     assert_eq!(
-        r.status("main").credited_today,
-        1,
-        "the completion earned the credit whose tier read the save held"
+        saved_days(&r),
+        BTreeSet::from([dropped]),
+        "the failed save purged nothing"
     );
-    assert!(
-        free,
-        "the tick ran while the credit's tier read waited on the held connection"
+    conn.execute_batch("DROP TRIGGER refuse_delete;").unwrap();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_days(&r),
+        BTreeSet::new(),
+        "the save that lands carries the purge"
     );
 }

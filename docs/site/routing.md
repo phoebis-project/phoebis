@@ -1243,9 +1243,9 @@ A trial end still ahead counts as an end the same way, even on an account nobody
 Inside `wind_down_minutes` (default 30) of its end, an account is no destination for any move, leaves the set a fresh
 placement keeps for its fit, takes a fresh session only as the last resort, and a cold pin moves off it once another
 account can serve ([Moves](#moves)). A warm session stays (the **Drain** rule of [Moves](#moves)). With
-`wind_down_minutes` at 0 nothing happens before the end. Past the end, a canceled account is the obstacle
-`subscription_ended`, and the upstream refuses the dead credential, so the session's next request fails over to a
-sibling.
+`wind_down_minutes` at 0 nothing happens before the end, apart from the keepalive, which holds a probe whose interval
+passes the end ([Keepalive](keepalive.md)). Past the end, a canceled account is the obstacle `subscription_ended`, and
+the upstream refuses the dead credential, so the session's next request fails over to a sibling.
 
 An end that falls before a window's horizon becomes that horizon ([The windows the router works
 from](#the-windows-the-router-works-from)). Such a window sheds only once the account's projection at the end passes the

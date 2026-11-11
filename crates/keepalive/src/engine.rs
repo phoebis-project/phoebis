@@ -18,10 +18,7 @@ use phoebis_routing::{
     budget_deadline, listing, seconds_ms, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle,
     DAY_MS, SEVEN_DAY,
 };
-use phoebis_store::{
-    AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store, StoreError,
-    SubscriptionTerm,
-};
+use phoebis_store::{AccountKind, AccountState, CooldownScope, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -1459,10 +1456,6 @@ pub struct Engine {
     /// be trusted: the terminal event of any request among them may be one the gap dropped. Apart from the engine's
     /// lock, so an event that takes no lock of its own counts down without one.
     gap_backlog: AtomicUsize,
-    /// The accounts whose last tier read failed, so a registry that stays unreadable is logged once per account and
-    /// streak rather than at every probe it settles. Held in memory alone, so a restart starts each streak over, and
-    /// behind its own lock, since the reads it follows run without the engine's.
-    unreadable_tiers: Mutex<BTreeSet<String>>,
 }
 
 impl Engine {
@@ -1494,43 +1487,7 @@ impl Engine {
             persist_snapshots: AtomicU64::new(0),
             persist_progress: Notify::new(),
             gap_backlog: AtomicUsize::new(0),
-            unreadable_tiers: Mutex::new(BTreeSet::new()),
         })
-    }
-
-    /// The tier the router prices `account` by, off `read`, the store's term for it: `None` for a free organization,
-    /// a usage-based seat or a read that failed. A failure is logged once per account and streak, naming `fallback`,
-    /// what the caller does without the tier. The read waits on the store's one connection, which a save holds
-    /// through its write, so the probe's settlement makes it without the engine's lock.
-    pub(crate) fn tier_from(
-        &self,
-        account: &str,
-        read: Result<Option<SubscriptionTerm>, StoreError>,
-        fallback: &str,
-    ) -> Option<String> {
-        match read {
-            Ok(term) => {
-                self.unreadable_tiers().remove(account);
-                term.and_then(|t| t.priced_tier().map(String::from))
-            }
-            Err(error) => {
-                if self.unreadable_tiers().insert(account.to_string()) {
-                    tracing::warn!(
-                        account = %account,
-                        %error,
-                        "the account's tier could not be read, so {fallback}"
-                    );
-                }
-                None
-            }
-        }
-    }
-
-    fn unreadable_tiers(&self) -> std::sync::MutexGuard<'_, BTreeSet<String>> {
-        // The set spaces out a warning and guards no invariant, so a panic that poisoned it leaves nothing to protect.
-        self.unreadable_tiers
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a
@@ -2602,7 +2559,15 @@ impl Inner {
             .sessions
             .iter()
             .filter(|(_, s)| {
-                now - s.last_real_at.unwrap_or(0).max(s.last_report_at) >= self.session_expiry_ms
+                // A request refused its slot writes its agent's stamp and leaves the session's own unwritten, so the
+                // newest agent's request counts beside the session's two stamps.
+                let requested = s.agents.values().filter_map(|a| a.last_real_at).max();
+                let newest = s
+                    .last_real_at
+                    .max(requested)
+                    .unwrap_or(0)
+                    .max(s.last_report_at);
+                now - newest >= self.session_expiry_ms
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -3477,8 +3442,9 @@ impl Engine {
                 // The gap that poisoned it is what this request proved nothing under.
                 inner.discard(&key, &agent_id, Reason::BusGap, None);
             } else {
-                // The pool's toggle and the credential are properties that do not vary between attempts of one
-                // request, so ending the observation must not recount a reason the request already carries.
+                // The credential's standing does not vary between attempts of one request, and the pool's toggle
+                // reaches this arm through the tick's hold, so ending the observation must not recount a reason the
+                // request already carries.
                 match current {
                     Some(Reason::KeepaliveOff | Reason::IneligibleCredential) if !ready => {
                         inner.end_observation(&key, &agent_id, None, Unanswered::Settle);
@@ -3782,10 +3748,6 @@ impl Engine {
         // trip apiece, and a tick with no retained recipe pays none of them. `drop_sessions_of_dead_keys` reads the
         // snapshot alone, which `RouterHandle::snapshot` answers without a command.
         let snapshot = self.parts.router.snapshot();
-        // A deleted account's failing streak goes with it, so a later account under the same id warns afresh.
-        // Pruned on every tick, since a probe orphaned while nothing is retained still writes the set.
-        self.unreadable_tiers()
-            .retain(|id| snapshot.account(id).is_some());
         let retained_models = {
             let mut inner = self.lock();
             if inner.closed {

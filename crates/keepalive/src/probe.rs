@@ -156,8 +156,8 @@ pub(crate) struct ProbeRecord {
     /// counts, on the revision in force at `at`.
     pub(crate) band: Band,
     /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
-    /// the store: its settlement's credit row keys the tier the probe ran under. `None` for a probe that settles in
-    /// dollars and for an account whose tier could not be read.
+    /// the router's snapshot: its settlement's credit row keys the tier the probe ran under. `None` for a probe that
+    /// settles in dollars.
     pub(crate) tier: Option<String>,
 }
 
@@ -316,35 +316,18 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
         }
         _ => SavingsUnit::Usd,
     };
-    // The tier the router prices the account by, as the store's term resolves it now: a share is of the window the
-    // account has at this settlement, and the record keeps that tier as the key its rows file under, as the request row
-    // keeps its own, none for a free organization. The unit reads it where the snapshot prices the account too, so a
-    // plan the cost model does not price settles in dollars as an untiered account does. Read on a blocking worker
-    // ahead of the engine's lock, since a save may hold the store's connection, and `apply_probe` fences a change that
-    // lands meanwhile. A worker that panicked reads no tier, as a failed read does.
-    record.tier = if default_unit == SavingsUnit::WindowShare {
-        let store = engine.parts.store.clone();
-        let account = record.account.clone();
-        match tokio::task::spawn_blocking(move || store.subscription_term(&account)).await {
-            Ok(read) => engine.tier_from(
-                &record.account,
-                read,
-                "the settlement falls back to dollars",
-            ),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
     let snapshot = engine.parts.router.snapshot();
-    let priced_tier = snapshot
-        .priced_tier(&record.account)
-        .and(record.tier.as_deref());
+    // The tier the router prices the account by, as its snapshot holds it, the read the kept-warm credit makes, so
+    // the probe's row, its cost and its credit carry one tier. None for a free organization, a usage-based seat and
+    // a plan the cost model does not price, which settle in dollars.
+    record.tier = (default_unit == SavingsUnit::WindowShare)
+        .then(|| snapshot.priced_tier(&record.account).map(String::from))
+        .flatten();
     let unit = settled_unit(
         default_unit,
         &tables,
         job.entrypoint.as_deref(),
-        priced_tier,
+        record.tier.as_deref(),
         &record.account,
         &record.canonical_model,
         record.usage,

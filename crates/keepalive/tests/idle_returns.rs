@@ -918,6 +918,22 @@ async fn a_request_with_no_chain_counts_no_return_on_a_one_message_anchor() {
     assert_eq!(returned(&r), [0; 10], "no chain");
 }
 
+/// A one-message request's anchor holds no boundary before its last, whatever the anchor before it held, so a later
+/// request that holds the earlier chain's boundary before its last alone counts no return.
+#[tokio::test]
+async fn a_one_message_request_keeps_no_boundary_before_the_last_from_an_earlier_chain() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe_with("main", &two_messages()).await;
+    let start = idle_after_request_with(&mut r, &fresh_chain()).await;
+    tick_to(&mut r, start, 12).await;
+    // `BODY`'s one message is the first of `two_messages`, so its one boundary is the older of that request's two.
+    r.observe("main").await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        ([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10])
+    );
+}
+
 #[tokio::test]
 async fn a_main_class_request_that_continues_the_prefix_counts_as_a_return() {
     let mut r = rig(RigSpec::default()).await;
