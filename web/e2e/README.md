@@ -20,7 +20,7 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row in every state, each badge and the "+N more" badge
 the pool card's strip badge on the row's one top edge, in the content box and clear of the tiles, with the story's
-nineteen items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in the
+twenty items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in the
 router pass), the list the "+N more" badge opens (every item, one badge per row inside the box, 8 px under the badge and
 8 px inside the window, the unpriced model's info badge against the first warning badge in height, left edge and type,
 its ink on its fill contrasting less than the warning badge's and at 4.5 to 1 or more, read here since the line folds
@@ -270,7 +270,7 @@ log and Analytics the width of the row's slots and gaps at rest under the view's
 and Requests the bar's scroll width at most its client width with the count inside the window, the trailing slots
 wrapped, and at 400 by 800 on every view with a bar, at rest, the bar and the row no wider than their boxes with the
 count where the view draws one and the Refresh button inside the window), the Kinds list through Add filter on the
-routing log (Select all, the eight presets and the 44 kinds, its popover 8 px inside the window at 1280 by 800), the
+routing log (Select all, the eight presets and the 45 kinds, its popover 8 px inside the window at 1280 by 800), the
 split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it
 never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request landing
 below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a top row's
@@ -461,7 +461,8 @@ admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afterno
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
 Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the open cost reference's
 three tabs as `<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
-the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`, and the written
+the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`, the Quota view's reset
+dialog on its two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`, and the written
 session's open row on the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as
 `<theme>/sessions-phone.png`. Its views include the Analytics page's Cache warming tab as
 `<theme>/analytics-cache-warming.png` and the Quota page's Quota windows section as `<theme>/quota-windows.png`. The

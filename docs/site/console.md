@@ -336,6 +336,12 @@ share left after as an estimate from the upstream's own figures. Where the windo
 reset has nothing to clear yet. While the claim is on its way the button reads "Using…" and the dialog cannot be
 closed.
 
+![The reset dialog's first page: the account's resets](assets/quota-reset-pick-light.png#only-light)
+![The reset dialog's first page: the account's resets](assets/quota-reset-pick-dark.png#only-dark)
+
+![The reset dialog's confirmation](assets/quota-reset-confirm-light.png#only-light)
+![The reset dialog's confirmation](assets/quota-reset-confirm-dark.png#only-dark)
+
 After a use the dialog closes under the toast "Reset used", and the card reads the cleared windows. Any other answer
 keeps the dialog open under one of two classes. "Refused" means the reset was not used, and the sentence says why. "Not
 confirmed" means the router cannot tell: the upstream's answer leaves the use open, no usable answer came, or the router

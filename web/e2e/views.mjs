@@ -5039,8 +5039,10 @@ async function quotaCardHeights(theme) {
  * with the focus on that row's button, since the page change unmounts the Back that held it. After the close through
  * Cancel the focus stands on the card's Use reset again, where a keyboard operator left off, not at the top of the
  * page. It stands there too after a second opening from a click that left the focus on the card, as a browser that
- * focuses no button on a click does, where the dialog hands the focus back to the card. The walk sends no claim and
- * ends at rest, so the view's shot draws the cards with no focus ring and no hover.
+ * focuses no button on a click does, where the dialog hands the focus back to the card. The first opening writes the
+ * dialog's own shots at rest, its first page as `<theme>/quota-reset-pick.png` and its confirmation, before Back, as
+ * `<theme>/quota-reset-confirm.png`. The walk sends no claim and ends at rest, so the view's shot draws the cards with
+ * no focus ring and no hover.
  */
 async function quotaResetDialog(theme) {
   const say = (what) => failures.push(`${theme} /quota reset dialog: ${what}`);
@@ -5051,10 +5053,14 @@ async function quotaResetDialog(theme) {
     // The mock answers the read before the dialog after 400 ms on the paused clock.
     await advance(600);
     await dialog.waitFor({ state: 'visible', timeout: 5_000 });
+    await atRest();
+    await dialog.screenshot({ path: join(shots, theme, 'quota-reset-pick.png') });
     const row = dialog.locator('.reset-dialog__row button[data-grant]').first();
     const grant = await row.getAttribute('data-grant');
     await row.click();
     await advance(CLOCK_STEP_MS);
+    await atRest();
+    await dialog.screenshot({ path: join(shots, theme, 'quota-reset-confirm.png') });
     await dialog.locator('.reset-dialog__back').click();
     await advance(CLOCK_STEP_MS);
     const focus = await page.evaluate(() => {
