@@ -2653,6 +2653,40 @@ mod service {
     }
 
     #[tokio::test]
+    async fn a_repeats_reset_with_no_count_takes_one_off_once() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        // The read between the two attempts stores one reset left of three, the grant still usable.
+        let one_left = br#"{"cedar_ember":{"eligible":true,"grants":[{"id":"rg-a-1","label":"Launch reset","clears":["seven_day_overage_included"],"gives_back_weekly":true,"starts_at":"2026-01-01T00:00:00Z","ends_at":"2027-01-01T00:00:00Z","resets_left":1,"resets_total":3,"usable_now":true}]}}"#;
+        let up = FakeUpstream::start(vec![
+            limit_resets_rule(answering_with(200, one_left)),
+            claim_rule(Respond::CloseAfterRequest),
+        ])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(3, 3));
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+        // One millisecond after the outcome, so the read follows the attempt and keeps the id for the usable grant.
+        now.store(1_000_001, Ordering::SeqCst);
+        service.limit_resets("a").await.unwrap();
+        answer_claims(&up, answering_with(200, br#"{"result":"reset"}"#));
+        service.claim_limit_reset(&row, "rg-a-1").await.unwrap();
+
+        let ids = request_ids(&up);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(
+            ids[0], ids[1],
+            "the second claim repeats the first one's id"
+        );
+        assert_eq!(
+            stored_block(&store).grants[0].resets_left,
+            1,
+            "the reset answers for the first attempt's use of three, and the read's count of one already holds it"
+        );
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn a_re_pair_drops_the_kept_request_id() {
         let now = Arc::new(AtomicI64::new(1_000_000));
         let up = FakeUpstream::start(vec![claim_rule(Respond::CloseAfterRequest)]).await;

@@ -939,13 +939,14 @@ fn new_request_id() -> String {
     )
 }
 
-/// One holder's kept request ids by grant id, each with the instant its unsettled outcome arrived.
-type KeptIds = HashMap<String, (String, i64)>;
+/// One holder's kept request ids by grant id, each with the instant its unsettled outcome arrived and the grant's
+/// count its attempt read.
+type KeptIds = HashMap<String, (String, i64, u32)>;
 
 #[derive(Default)]
 struct ClaimMemory {
-    /// The kept request ids by account id and grant id, with the holder they were kept under and the instant
-    /// the unsettled outcome arrived.
+    /// The kept request ids by account id and grant id, with the holder they were kept under, the instant the
+    /// unsettled outcome arrived and the grant's count the first attempt read.
     kept: HolderMap<KeptIds>,
     /// The accounts with a claim on its way, each with whether an `invalidate` crossed it: a claim crossed before its
     /// token is acquired sends nothing, and one crossed after that keeps no id.
@@ -1349,7 +1350,7 @@ impl UsageService {
         // Checked under the reservation, so a second click finds the count the first one's fold left, and matched
         // whole against the stored block, so an id that reaches the upstream is one the upstream sent. The epoch
         // comes from the same read: a pairing that lands before the answer moves it, and the fold writes nothing.
-        let (label, epoch) = inner
+        let (label, epoch, read_left) = inner
             .usable_grant(account_id, grant_id)
             .ok_or(ClaimRefusal::NotUsable)?;
         let token = inner
@@ -1367,7 +1368,10 @@ impl UsageService {
         {
             return Err(ClaimRefusal::AccountChanged);
         }
-        let (request_id, repeated) = inner.request_id_for(account_id, holder, grant_id);
+        let (request_id, kept_left) = inner.request_id_for(account_id, holder, grant_id);
+        let repeated = kept_left.is_some();
+        // A repeat's answer is for the first attempt's use, so the fold counts from what that attempt read.
+        let counted = kept_left.unwrap_or(read_left);
         let request = claim_request(
             inner.profile,
             organization,
@@ -1412,9 +1416,9 @@ impl UsageService {
             reply,
             request_id,
         };
-        inner.settle_request_id(account_id, holder, grant_id, &claim, repeated);
+        inner.settle_request_id(account_id, holder, grant_id, &claim, repeated, counted);
         if let Some(answer) = claim.answer() {
-            inner.fold_claim(account_id, holder, epoch, grant_id, answer);
+            inner.fold_claim(account_id, holder, epoch, grant_id, counted, answer);
         }
         // An account deleted and created again while the request was out has another holder, whose memory the mark
         // would replace with an empty one.
@@ -1543,19 +1547,31 @@ impl Inner {
         })
     }
 
-    /// The grant's label and the stored block's epoch where the block reads the grant usable at the service's
-    /// clock, `None` for another state, for a grant the block does not list and for a row with no block.
-    fn usable_grant(&self, account_id: &str, grant_id: &str) -> Option<(String, u64)> {
+    /// The grant's label, the stored block's epoch and the grant's count where the block reads the grant usable at
+    /// the service's clock, `None` for another state, for a grant the block does not list and for a row with no block.
+    fn usable_grant(&self, account_id: &str, grant_id: &str) -> Option<(String, u64, u32)> {
         let extras = self.store.account_extras_of(account_id).ok().flatten()?;
         let block = LimitResets::stored(&extras)?;
         let at = block.grants.iter().position(|grant| grant.id == grant_id)?;
         let usable = grant_states(&block, (self.clock)())[at].state == GrantStatus::Usable;
-        usable.then(|| (block.grants[at].label.clone(), extras.limit_resets_epoch))
+        usable.then(|| {
+            let grant = &block.grants[at];
+            (
+                grant.label.clone(),
+                extras.limit_resets_epoch,
+                grant.resets_left,
+            )
+        })
     }
 
-    /// The holder's kept request id for the grant and `true` while it is younger than `REQUEST_ID_REUSE`, else a new
-    /// id and `false`.
-    fn request_id_for(&self, account_id: &str, holder: Identity, grant_id: &str) -> (String, bool) {
+    /// The holder's kept request id for the grant with the count its first attempt read while the id is younger than
+    /// `REQUEST_ID_REUSE`, else a new id and `None`.
+    fn request_id_for(
+        &self,
+        account_id: &str,
+        holder: Identity,
+        grant_id: &str,
+    ) -> (String, Option<u32>) {
         let now = (self.clock)();
         let reuse = REQUEST_ID_REUSE.as_millis() as i64;
         let claims = self.claim_memory.lock().expect(LOCK_POISONED);
@@ -1563,15 +1579,15 @@ impl Inner {
             .kept
             .get(account_id, holder)
             .and_then(|ids| ids.get(grant_id))
-            .filter(|(_, kept_at)| now - kept_at < reuse);
+            .filter(|(_, kept_at, _)| now - kept_at < reuse);
         match kept {
-            Some((id, _)) => (id.clone(), true),
-            None => (new_request_id(), false),
+            Some((id, _, left)) => (id.clone(), Some(*left)),
+            None => (new_request_id(), None),
         }
     }
 
-    /// Keeps the id of an unsettled claim that sent a new one, leaves a kept id as it is after an unsettled repeat, and
-    /// drops it once the claim settles.
+    /// Keeps the id of an unsettled claim that sent a new one with the count `left` its attempt read, leaves a kept id
+    /// as it is after an unsettled repeat, and drops it once the claim settles.
     fn settle_request_id(
         &self,
         account_id: &str,
@@ -1579,6 +1595,7 @@ impl Inner {
         grant_id: &str,
         claim: &Claim,
         repeated: bool,
+        left: u32,
     ) {
         let mut claims = self.claim_memory.lock().expect(LOCK_POISONED);
         // An `invalidate` crossed the claim, so its id went out under the pairing before and is kept for no other.
@@ -1588,10 +1605,10 @@ impl Inner {
         match claim.outcome {
             ClaimOutcome::Unsettled if repeated => {}
             ClaimOutcome::Unsettled => {
-                claims
-                    .kept
-                    .slot(account_id, holder)
-                    .insert(grant_id.to_string(), (claim.request_id.clone(), claim.at));
+                claims.kept.slot(account_id, holder).insert(
+                    grant_id.to_string(),
+                    (claim.request_id.clone(), claim.at, left),
+                );
             }
             ClaimOutcome::Refused | ClaimOutcome::Used => {
                 if let Some(ids) = claims.kept.get_mut(account_id, holder) {
@@ -1621,7 +1638,7 @@ impl Inner {
         let states = block
             .map(|block| grant_states(block, sent_at))
             .unwrap_or_default();
-        ids.retain(|grant_id, (_, kept_at)| {
+        ids.retain(|grant_id, (_, kept_at, _)| {
             // A read sent at the instant the id was kept is not known to follow the attempt.
             if *kept_at >= sent_at {
                 return true;
@@ -1632,13 +1649,15 @@ impl Inner {
         });
     }
 
-    /// Folds a claim's answer into the stored block under the holder and the epoch the claim was checked on.
+    /// Folds a claim's answer into the stored block under the holder and the epoch the claim was checked on, counting
+    /// from `counted`, the grant's count the use the answer stands for was checked on.
     fn fold_claim(
         &self,
         account_id: &str,
         holder: Identity,
         epoch: u64,
         grant_id: &str,
+        counted: u32,
         answer: &ClaimAnswer,
     ) {
         let folded = self.store.fold_limit_resets(
@@ -1648,7 +1667,7 @@ impl Inner {
             epoch,
             |stored| {
                 let mut block: LimitResets = serde_json::from_str(stored).ok()?;
-                fold_claim_answer(&mut block, grant_id, answer);
+                fold_claim_answer(&mut block, grant_id, counted, answer);
                 Some(block.to_stored())
             },
         );

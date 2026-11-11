@@ -303,14 +303,22 @@ pub(crate) fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError>
     })
 }
 
-/// The block after a claim's answer for `grant_id`.
-pub(crate) fn fold_claim_answer(block: &mut LimitResets, grant_id: &str, answer: &ClaimAnswer) {
+/// The block after a claim's answer for `grant_id`, where `counted` is the grant's count the use the answer stands for
+/// was checked on.
+pub(crate) fn fold_claim_answer(
+    block: &mut LimitResets,
+    grant_id: &str,
+    counted: u32,
+    answer: &ClaimAnswer,
+) {
     if let Some(grant) = block.grants.iter_mut().find(|grant| grant.id == grant_id) {
         grant.resets_left = match (answer.result.as_str(), answer.resets_left) {
             // The word says this grant's reset is gone, whatever count the answer names.
             ("already_used", _) => 0,
             (_, Some(left)) => left,
-            ("reset", None) => grant.resets_left.saturating_sub(1),
+            // A block read that landed after the use already stores the count after it, so the use comes off the
+            // count it was checked on and a lower stored count stands.
+            ("reset", None) => grant.resets_left.min(counted.saturating_sub(1)),
             (_, None) => grant.resets_left,
         };
     }
