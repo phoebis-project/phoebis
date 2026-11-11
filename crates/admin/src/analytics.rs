@@ -17,7 +17,6 @@ use phoebis_ledger::{
 };
 use phoebis_routing::{
     account_window_id, term, BurnUnit, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
@@ -563,11 +562,10 @@ pub(crate) async fn placements(
     Json(Placements { from, to, rows }).into_response()
 }
 
-/// The three windows the router reads, each null until an hour's sample fills it, so the console reads the keys
+/// The router's own list of plan windows, each null until an hour's sample fills it, so the console reads the keys
 /// whatever the hour holds. Any other window id the samples carry joins the hours that hold one alone.
 fn base_windows() -> IndexMap<String, Option<WindowSample>> {
-    [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]
-        .into_iter()
+    phoebis_routing::all_plan_windows()
         .map(|w| (w.to_string(), None))
         .collect()
 }
