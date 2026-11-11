@@ -232,15 +232,15 @@ The Quota view covers the subscription accounts that are paired, not awaiting re
 ended, since an API-key account has no quota window, and with none of them to list its Accounts section reads "No
 accounts to list" with "The view lists a subscription account that is paired, not awaiting re-authentication and whose
 plan has not ended." Its bar offers the Sort control, which orders the Accounts section's cards, and "Refresh all",
-which reads the endpoint of each of those accounts and whose hover reads "reads the endpoint now unless the account is
-backing off, and records the reading as the scheduled poll does", and at the right edge the split Refresh button, whose
-body reads the account list again ("Reads the list again now"), and the count of those accounts, `{n} accounts`,
-followed in the critical ink by those needing attention, `, {n} need attention`. Auto reload starts at 5 s. A section
-bar shows one of two sections at a time: Accounts, where the view opens, and Quota windows, which a link or a reload
-with `#quota-windows` lands on. A card's reading is the router's reported sample where the router holds one for the
-window and the ledger's [quota sample](statistics.md#quota-samples) otherwise. The router answers no quota window for an
-account in the `disconnected` or `reauth_required` state or whose plan ended (its `plan_ended_at` set), whatever reading
-it held before, so no view draws one for it.
+which reads the endpoint and the limit resets of each of those accounts and whose hover reads "reads the endpoint now
+unless the account is backing off, and records the reading as the scheduled poll does", and at the right edge the split
+Refresh button, whose body reads the account list again ("Reads the list again now"), and the count of those accounts,
+`{n} accounts`, followed in the critical ink by those needing attention, `, {n} need attention`. Auto reload starts at 5
+s. A section bar shows one of two sections at a time: Accounts, where the view opens, and Quota windows, which a link or
+a reload with `#quota-windows` lands on. A card's reading is the router's reported sample where the router holds one for
+the window and the ledger's [quota sample](statistics.md#quota-samples) otherwise. The router answers no quota window
+for an account in the `disconnected` or `reauth_required` state or whose plan ended (its `plan_ended_at` set), whatever
+reading it held before, so no view draws one for it.
 
 Accounts draws a card per account. The Accounts section's cards sort by the bar's Sort control: Default order (the
 route's order, no direction), 5-hour pace, 7-day pace and 7-day Fable pace (each descending, an account without that
@@ -299,8 +299,22 @@ name the plan the router resolved from the organization type and the tier ("Plan
 or "Usage-based", the display name claude.ai sends where the account carries one, the tier on hover), when the plan of
 an account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The poll reading
 says when the poll last asked the endpoint and how it answered, with the whole message and the backoff on hover, and
-"Refresh" reads this account's endpoint now. A card that shows an error, whose last poll failed, or that is backing off
-counts as needing attention.
+"Refresh" reads this account's endpoint and its limit resets now. A card that shows an error, whose last poll failed, or
+that is backing off counts as needing attention.
+
+A card of an account that holds a one-time limit reset closes its chip row with a Resets chip. It reads the count of
+resets left and "available" while one can be used now, as in `Resets 2 available`. Where none can, the reason of the
+first reset left follows the count in the muted ink: "blocked by the 5-hour limit" (or the 7-day, the Opus, the Sonnet
+or another limit), "not usable now", "nothing it can clear now", "on a cooldown until 15:10", "paused", "usable once at
+a limit it clears" or "waits for the other reset". Inside the warning's days before the account's earliest reset ends,
+the chip takes the tone of a plan about to end and, where a reset can be used now, adds "ends in 4 days", or "first ends
+in 4 days" where the account holds several. The days are `usage.limit_reset_warning_days`
+([installation](installation.md#usage)), and 0 turns the tone off. On a narrow card the chip shortens to `Resets 1 ends
+in 4 days` or `cooldown until 15:10`. Its hover carries the whole words with the labels of the resets left and, inside
+the warning's days, the instant the earliest one ends. A narrow card that also draws the plan's end and the trial leaves
+the chip out. An account with no reset left draws no chip. A window that a reset usable now can clear carries a
+counter-clockwise arrow in its chip unless it reads 100% left or has no live reading, and the chip's hover adds ", a
+reset can clear it now".
 
 Quota windows lays the same windows across a calendar titled "Quota windows", with its span and length (`two weeks` in
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch

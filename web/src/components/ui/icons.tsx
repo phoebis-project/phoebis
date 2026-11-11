@@ -155,6 +155,13 @@ export const IconRefresh = (p: Props) => (
     <path d="M20 4v5h-5" />
   </svg>
 );
+/** The Refresh glyph mirrored: a counter-clockwise arrow, the mark of a window a reset can clear. */
+export const IconReset = (p: Props) => (
+  <svg {...base(p)}>
+    <path d="M4 12a8 8 0 1 0 2.3-5.7" />
+    <path d="M4 4v5h5" />
+  </svg>
+);
 export const IconPlus = (p: Props) => (
   <svg {...base(p)}>
     <path d="M12 5v14M5 12h14" />

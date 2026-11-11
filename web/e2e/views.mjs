@@ -225,6 +225,19 @@ async function atRest() {
 }
 
 /**
+ * `read`'s answer in a 375 by 800 phone window, after which the pass's 1280 by 800 is put back, each size settled
+ * before the next step, so the measures after it read the window they were written for.
+ */
+async function inPhoneWindow(read) {
+  await page.setViewportSize({ height: 800, width: 375 });
+  await settle();
+  const got = await read();
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  return got;
+}
+
+/**
  * The open dialog's frame and rail as the browser lays them out, run in the page, so the grouped-dialog fixture and the
  * Pools dialog read the rail alike. The headroom is the room the rail keeps below its last entry, which the next group
  * spends, and `firstBelow` is the first group past the rail's content bottom, null while every group fits.
@@ -4416,8 +4429,10 @@ let cardReadings = {};
  * longer reset cell may wrap but never runs past its column, and a live label with a projection breaks between its
  * reset and its projection where the column is too narrow for both, each part on one line inside the cell, as is the
  * speed chip that closes a slowed account's 5-hour cell, which the mock pass requires on the story's studio. Every live
- * window's meter carries its pace mark inside the meter's horizontal bounds and taller than the track. The router's
- * seed has no subscription account, so only the story's pass has chips to read.
+ * window's meter carries its pace mark inside the meter's horizontal bounds and taller than the track. In a 375 by 800
+ * window the story's secondary card, whose chip row holds the Plan chip, the plan's end, the trial and a Resets chip,
+ * draws every chip of that row inside the row's content box and its plan's end whole. The router's seed has no
+ * subscription account, so only the story's pass has chips to read.
  */
 async function quotaChips(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -4494,6 +4509,34 @@ async function quotaChips(theme) {
   const expired = read.resets.filter((r) => /^expired .+ ago$/.test(r.text));
   if (mock && expired.length === 0) measurements.push(`${theme} /quota chips: no listed card draws an expired window, so none is read`);
   for (const reset of expired.filter((r) => !r.title.startsWith('no reading since the reset, '))) say(`the expired cell ${JSON.stringify(reset.text)} does not read its reset on its title`);
+  // A 375 px card's row cannot hold all of secondary's chips, and the row's overflow cuts every chip but its last with
+  // no ellipsis, so a chip that ends past the row's content box is a cut one. A chip with no box is not read.
+  const row = await inPhoneWindow(() =>
+    page.evaluate(() => {
+      const card = [...document.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'secondary');
+      const chips = card?.querySelector('.qcard__chips');
+      if (!chips) return null;
+      const tenth = (v) => Math.round(v * 10) / 10;
+      return {
+        chips: [...chips.children]
+          .filter((el) => el.getClientRects().length > 0)
+          .map((el) => {
+            const box = el.getBoundingClientRect();
+            return { client: el.clientWidth, end: /^End(s in|ed) /.test(el.textContent?.trim() ?? ''), left: tenth(box.left), right: tenth(box.right), scroll: el.scrollWidth, text: el.innerText.trim() };
+          }),
+        edge: tenth(chips.getBoundingClientRect().right - parseFloat(getComputedStyle(chips).paddingRight)),
+        resets: chips.querySelector('.chip--resets') !== null,
+      };
+    }),
+  );
+  measurements.push(`${theme} /quota chip row at 375 ${JSON.stringify(row && { chips: row.chips.map((c) => [c.text, c.left, c.right]), edge: row.edge })}`);
+  if (mock && row === null) say("the story's secondary card draws no chip row at 375 px");
+  if (mock && row && !row.resets) say("secondary's chip row holds no Resets chip at 375 px, though the story gives it a reset");
+  if (mock && row && !row.chips.some((c) => c.end)) say("secondary's chip row draws no plan's end chip at 375 px, though the story cancels its plan");
+  for (const chip of row?.chips ?? []) {
+    if (chip.right > row.edge + 0.5) say(`secondary's chip ${JSON.stringify(chip.text)} ends ${Math.round((chip.right - row.edge) * 10) / 10}px past its row's content box at 375 px`);
+    if (chip.end && chip.scroll > chip.client) say(`secondary's plan end chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px at 375 px`);
+  }
 }
 
 /**
@@ -4949,23 +4992,28 @@ async function timelinePhone(theme) {
  * Every Quota card against the others, in either theme: one height, and the head's bottom rule and the foot's top rule
  * each at one offset from the card's top, whatever the card holds. Sub-pixel layout noise is not a difference, so the
  * values compare within half a pixel. The router's seed has no subscription account, so only the story's pass has
- * cards to compare.
+ * cards to compare. A second read in a 375 by 800 window records the same figures there and compares nothing: the grid
+ * gives every row one height, so no comparison inside one pass tells a card that grew, and a change of the card holds
+ * both lines of its head against the lines of its base.
  */
 async function quotaCardHeights(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
-  const cards = await page.evaluate(() =>
-    [...document.querySelectorAll('.qcard')].map((card) => {
-      const box = card.getBoundingClientRect();
-      const at = (el, edge) => (el ? Math.round((el.getBoundingClientRect()[edge] - box.top) * 10) / 10 : null);
-      return { foot: at(card.querySelector('.qcard__foot'), 'top'), head: at(card.querySelector('.qcard__head'), 'bottom'), height: Math.round(box.height * 10) / 10, name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '' };
-    }),
-  );
+  const read = () =>
+    page.evaluate(() =>
+      [...document.querySelectorAll('.qcard')].map((card) => {
+        const box = card.getBoundingClientRect();
+        const at = (el, edge) => (el ? Math.round((el.getBoundingClientRect()[edge] - box.top) * 10) / 10 : null);
+        return { foot: at(card.querySelector('.qcard__foot'), 'top'), head: at(card.querySelector('.qcard__head'), 'bottom'), height: Math.round(box.height * 10) / 10, name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '' };
+      }),
+    );
+  const cards = await read();
   measurements.push(`${theme} /quota card heights ${JSON.stringify(cards)}`);
   if (mock && cards.length < 2) say('the story has several subscription accounts, yet fewer than two cards are drawn');
   for (const key of ['foot', 'head', 'height']) {
     const values = cards.map((c) => c[key]);
     if (values.some((v) => v === null) || Math.max(...values) - Math.min(...values) > 0.5) say(`the cards' ${key} differs: ${cards.map((c) => `${c.name} ${c[key]}`).join(', ')}`);
   }
+  measurements.push(`${theme} /quota card heights at 375 ${JSON.stringify(await inPhoneWindow(read))}`);
 }
 
 /** The card grid's floor (`.quota-grid`), the measured figure its comment carries. */

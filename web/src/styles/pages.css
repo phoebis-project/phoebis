@@ -278,13 +278,15 @@
   gap: 12px;
 }
 
-/* A card always holds a 120 px meter beside the widest chip and reset label the console draws: 2 px of border and
-   28 px of body padding, the chip "Fable 100% left" (121 px in DejaVu Sans, against the story's 112 px), two 6 px
-   gaps, the 120 px meter and the reset column's 150 px bound (--qwin-reset on .qcard__windows), so the grid reflows
-   before a meter shrinks under 120 px. Two cards and the 14 px gap take 880 px, so two sit in a row once the content
-   area reaches that: the window less the 232 px sidebar (--sidebar-w) and the content's 28 px of padding each side.
-   Every row takes the tallest card's height, so a card that holds more than the rest (an expired window's wrapped
-   reset, a longer error) moves no delimiter against its neighbors in any row. */
+/* A card always holds a 120 px meter beside the widest chip and reset part the console draws: 2 px of border and
+   28 px of body padding, the chip "Fable 99% left" with its reset mark (127 px in DejaVu Sans, past the 121 px of an
+   unmarked "Fable 100% left", since a full window carries no mark), two 6 px gaps, the 120 px meter and the widest
+   single part of a reset label, "100% left in 4 h 59 min" (140.7 px, inside the reset column's 150 px bound,
+   --qwin-reset on .qcard__windows), 429.7 px in all, so the grid reflows before a meter shrinks under 120 px. Two
+   cards and the 14 px gap take 880 px, so two sit in a row once the content area reaches that: the window less the
+   232 px sidebar (--sidebar-w) and the content's 28 px of padding each side. Every row takes the tallest card's
+   height, so a card that holds more than the rest (an expired window's wrapped reset, a longer error) moves no
+   delimiter against its neighbors in any row. */
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(433px, 1fr));
@@ -412,6 +414,44 @@
   visibility: hidden;
 }
 
+/* The row is the container the Resets chip's forms answer to. */
+.qcard__chips {
+  container: qcard-chips / inline-size;
+}
+
+.chip--resets .chip__short {
+  display: none;
+}
+
+@container qcard-chips (max-width: 400px) {
+  /* Under a narrow row the chip keeps its count and its nearest fact, and its hover carries the whole words. */
+  .chip--resets .chip__long {
+    display: none;
+  }
+
+  .chip--resets .chip__short {
+    display: inline;
+  }
+
+  /* A narrow row that draws the plan's end and the trial has no room for a fourth chip, so the Resets chip leaves it
+     and the trial gives way as the row's last chip does. */
+  .qcard__chips .chip--resets:nth-child(4) {
+    display: none;
+  }
+
+  .qcard__chips .chip:has(+ .chip--resets:nth-child(4)) {
+    display: inline-block;
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .qcard__chips .chip:has(+ .chip--resets:nth-child(4)) .chip__label {
+    margin-right: 6px;
+  }
+}
+
 .qcard__skel {
   display: flex;
   flex-direction: column;
@@ -521,6 +561,11 @@
 .qchip__pct {
   font-size: 12.5px;
   font-weight: 600;
+}
+
+/* The reset mark follows the figure inside the share, so the two stay together at the chip's right edge. */
+.qchip__pct .qchip__reset {
+  margin-left: 4px;
 }
 
 .qchip--good {

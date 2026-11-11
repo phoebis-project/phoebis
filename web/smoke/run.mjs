@@ -1885,6 +1885,23 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   });
 }
 {
+  // The Resets chip's long form, which the run draws beside the short one since it loads no style sheet. The seeds'
+  // blocks (`RESET_BLOCKS` in `web/src/mock/resets.ts`): primary holds two resets, the first usable and the second
+  // waiting, workshop one under the block's cooldown, which ends 40 minutes after the mock's clock and so reads 15:10 in
+  // the run's UTC zone, and studio one it used, with none left.
+  const resetsOf = (label) => {
+    const card = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+    const chip = card?.querySelector('.qcard__chips .chip--resets') ?? null;
+    return card === undefined ? 'no card' : chip && [chip.querySelector('.chip__label')?.textContent?.trim() ?? '', chip.querySelector('.chip__long')?.textContent?.trim() ?? ''];
+  };
+  const drawn = { primary: resetsOf('primary'), studio: resetsOf('studio'), workshop: resetsOf('workshop') };
+  results.push({
+    name: "/quota a card's Resets chip counts the resets left with the first one's reason where none is usable, and a card with none left draws none (seeds primary, workshop and studio)",
+    ok: JSON.stringify(drawn) === JSON.stringify({ primary: ['Resets', '2 available'], studio: null, workshop: ['Resets', '1 on a cooldown until 15:10'] }),
+    missing: [JSON.stringify(drawn)],
+  });
+}
+{
   // A pill passes `active` only as a toggle, and every pill the view draws is a one-shot action, so none reads as
   // pressed or not. No view draws a toggle pill, so the toggle pair and an action pill beside it are mounted here.
   const pills = [...m.container.querySelectorAll('button.pill')];

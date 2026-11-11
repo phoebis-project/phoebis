@@ -7,13 +7,14 @@ import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
-import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconRefresh, IconReset, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { readsFull, resetChip, resetMarks } from '@/lib/resets';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
 import { DAY, HOUR } from '@/lib/time';
@@ -28,6 +29,10 @@ export function QuotaPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
   const { cause: pauseCause, host } = useHoldHost();
   const accounts = useAsync(() => api.listAccounts(), [], { paused: pauseCause !== null, refreshMs: intervalMs });
+  // The warning's days come with the settings and not with the list, so the page reads them once, and until they land,
+  // or where the read fails, the Resets chip draws in the plain tone.
+  const settings = useAsync(() => api.getSettings(), []);
+  const warningDays = settings.data?.usage.limitResetWarningDays ?? null;
   const now = useNow();
   const { address, filters, update } = useQueryFilters(QUOTA_CODEC);
   const dir = sortDirOf(QUOTA_SORT_KEYS, filters);
@@ -105,7 +110,7 @@ export function QuotaPage() {
               <div className="quota-grid">
                 {!accounts.data
                   ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-                  : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
+                  : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} warningDays={warningDays} />)}
               </div>
             )}
           </section>
@@ -167,7 +172,7 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
   );
 }
 
-function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
+function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed, warningDays }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot; warningDays: number | null }) {
   const soonest = soonestResetAt(account, now);
   const [localRefreshing, setLocalRefreshing] = useState(false);
   const busy = refreshing || localRefreshing;
@@ -186,6 +191,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const endsAt = canceledEndOf(account);
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
+  const chip = resetChip(account.limitResets, now, warningDays);
+  const marks = resetMarks(account.limitResets);
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
   // spend reading with neither amounts nor a share counts as none.
   const failed = Boolean(snapshot?.error) && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
@@ -226,9 +233,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
-            <QuotaWindow name={windowTag('5h')} absent={`no ${windowWord('5h')} window`} window={w5} end={end} now={now} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
-            <QuotaWindow name={windowTag('7d')} absent={`no ${windowWord('7d')} window`} window={w7} end={end} now={now} soon={soonest.includes('7d')} />
-            <QuotaWindow name={windowTag('7d_fable')} absent={`no ${windowWord('7d_fable')} window`} window={account.fableWindow} end={end} now={now} soon={soonest.includes('7d_fable')} />
+            <QuotaWindow name={windowTag('5h')} absent={`no ${windowWord('5h')} window`} window={w5} end={end} now={now} resettable={marks.includes('5h')} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
+            <QuotaWindow name={windowTag('7d')} absent={`no ${windowWord('7d')} window`} window={w7} end={end} now={now} resettable={marks.includes('7d')} soon={soonest.includes('7d')} />
+            <QuotaWindow name={windowTag('7d_fable')} absent={`no ${windowWord('7d_fable')} window`} window={account.fableWindow} end={end} now={now} resettable={marks.includes('7d_fable')} soon={soonest.includes('7d_fable')} />
           </div>
         )}
       </div>
@@ -257,6 +264,19 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             {fmtEndsIn(trialEndsAt, now)}
           </span>
         )}
+        {/* Last, so the row gives up this chip's room before the plan's end. */}
+        {chip && (
+          <span className={`chip chip--resets ${chip.tone === 'warning' ? 'chip--serious' : ''}`} title={chip.title}>
+            <span className="chip__label">Resets</span>
+            <span className="chip__long">
+              {chip.count} <span className={chip.usable ? undefined : 'muted'}>{chip.state}</span>
+              {chip.ends && ` ${chip.ends}`}
+            </span>
+            <span className="chip__short">
+              {chip.count} {chip.short}
+            </span>
+          </span>
+        )}
       </div>
 
       <footer className="qcard__foot">
@@ -277,8 +297,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
 }
 
 /** The short name and the remaining share, in the meter's own color. An expired window has no share to give, and a
- *  window the account does not carry names itself in the reset's cell, `absent` the chip's title. */
-function WindowChip({ absent, name, window: w, className, now }: { absent: string; className: string; name: string; now: number; window: RateLimitWindow | null }) {
+ *  window the account does not carry names itself in the reset's cell, `absent` the chip's title. A `resettable` live
+ *  window closes its share with the reset mark. */
+function WindowChip({ absent, name, window: w, className, now, resettable }: { absent: string; className: string; name: string; now: number; resettable: boolean; window: RateLimitWindow | null }) {
   if (!w || isExpired(w, now)) {
     return (
       <span className={`${className} qchip qchip--absent`} title={w ? `${w.label}: expired, no reading since the reset` : absent}>
@@ -287,10 +308,15 @@ function WindowChip({ absent, name, window: w, className, now }: { absent: strin
     );
   }
   const remaining = remainingOf(w);
+  // A window that prints as full has nothing a reset gives back, so it carries no mark.
+  const marked = resettable && !readsFull(w, now);
   return (
-    <span className={`${className} qchip qchip--${meterTone(remaining)}`} title={`${w.label}: ${fmtPct(remaining)} left`}>
+    <span className={`${className} qchip qchip--${meterTone(remaining)}`} title={`${w.label}: ${fmtPct(remaining)} left${marked ? ', a reset can clear it now' : ''}`}>
       <span className="qchip__name">{name}</span>
-      <span className="qchip__pct num">{fmtPct(remaining)} left</span>
+      <span className="qchip__pct num">
+        {fmtPct(remaining)} left
+        {marked && <IconReset size={11} className="qchip__reset" />}
+      </span>
     </span>
   );
 }
@@ -302,9 +328,10 @@ function WindowChip({ absent, name, window: w, className, now }: { absent: strin
  * `qwin__chip` names the chip's cell for the checks that read a row by its cells. Under 900 px the reset label takes a
  * row of its own under the meter. A slowed account's 5-hour window, passed its `slowDown`, closes its reset label with
  * the speed chip. A window the account's poll does not carry keeps its row, so the cards align, with `absent`'s words
- * ("no 5-hour window") muted in the reset label's place.
+ * ("no 5-hour window") muted in the reset label's place. A window a reset usable now clears, passed `resettable`,
+ * carries the reset mark in its chip.
  */
-function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon }: { absent: string; end: number | null; name: string; now: number; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
+function QuotaWindow({ absent, end, name, window: w, now, resettable, slowDown = null, soon }: { absent: string; end: number | null; name: string; now: number; resettable: boolean; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
@@ -313,7 +340,7 @@ function QuotaWindow({ absent, end, name, window: w, now, slowDown = null, soon 
   const burn = live ? burnWords(live) : null;
   return (
     <>
-      <WindowChip absent={absent} name={name} window={w} now={now} className="qwin__chip" />
+      <WindowChip absent={absent} name={name} window={w} now={now} resettable={resettable} className="qwin__chip" />
       {live ? (
         <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live) ?? undefined} />
       ) : (
