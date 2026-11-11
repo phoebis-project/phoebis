@@ -763,20 +763,21 @@ and a failover's move adds its `cause`: for a cooldown its `scope` (`account`, `
 its `reason` (the cooldown row's own word, such as `rate_limit`) and its `window`, and for a mark the account's `state`
 and the state's `cause`. A failover with neither, a 401 whose refresh failed with a transient error the request could
 not wait out, carries none. A mark that clears records `mark_cleared` with the reason `healed` (the account's projection
-on the marked window read under its line again, or its stretch under the threshold for a mark the stretch made), `moved`
-or `released`. A reservation that leaves without the usage that would have replaced it records `reservation_expired`,
-with the relay's word for a request that ended without usage (`canceled`, `exhausted`, `refused` or `transport_error`)
-or `timeout` for a booking an hour old. A pin released without a move records `pin_expired` with `reasons`, every fact
-the selection found against the account: `attempted`, `budget` (the pinned member has reached one of its spend budgets),
-`budget_unknown` (the ledger is degraded and the pinned member carries a budget), `cooldown`, `deleted`, `expired`,
-`fast_credits` (a fast request's pinned account whose `fast_credits` row stands or whose usage credits the poll reads as
-unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`,
-`spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`
-until its retry is admitted, `reauth_required`, `unpaired`), or `released` when the selection found nothing else against
-the account, as with a move whose destination emptied. A pin whose creating request was answered 400, 403 or 404, or was
-bound to its account and ended at an authentication failure that marked nothing, with no cooldown or mark on the account
-and no other turn of the session renewing it meanwhile, records the single reason `client_error`: it never served, so
-the session's next request is placed afresh rather than moved.
+on the marked window read under its line again, the wall at the window's reset or the account's end and the ceiling at
+the five-hour bound, which the event names as `limit`, or its stretch under the threshold for a mark the stretch made),
+`moved` or `released`. A reservation that leaves without the usage that would have replaced it records
+`reservation_expired`, with the relay's word for a request that ended without usage (`canceled`, `exhausted`, `refused`
+or `transport_error`) or `timeout` for a booking an hour old. A pin released without a move records `pin_expired` with
+`reasons`, every fact the selection found against the account: `attempted`, `budget` (the pinned member has reached one
+of its spend budgets), `budget_unknown` (the ledger is degraded and the pinned member carries a budget), `cooldown`,
+`deleted`, `expired`, `fast_credits` (a fast request's pinned account whose `fast_credits` row stands or whose usage
+credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast` row is the blocking row that stands
+latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the account's state when it cannot serve
+(`disconnected`, `funding_required` until its retry is admitted, `reauth_required`, `unpaired`), or `released` when the
+selection found nothing else against the account, as with a move whose destination emptied. A pin whose creating request
+was answered 400, 403 or 404, or was bound to its account and ended at an authentication failure that marked nothing,
+with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records the single
+reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
 
 A placement that replaces a live pin and lands on another account is a move as well, recorded as `pin_migrated` with the
 reason the pin left its account for (`paused`, `disconnected`, `funding_required`, `reauth_required`, `unpaired`,

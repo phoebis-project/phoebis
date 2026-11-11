@@ -577,6 +577,10 @@ pub struct MarkClearedFacts {
     /// The stretch and the pool's threshold the heal read, on a `healed` mark the stretch made. None otherwise.
     pub stretch_ms: Option<i64>,
     pub threshold_ms: Option<i64>,
+    /// The line the healing projection read under, on a mark the projection healed: 1.0 where the heal's horizon
+    /// was bound to the wall, the window's ceiling where it was bound to the span. `None` on a heal by the stretch,
+    /// which reads `stretch_ms` and `threshold_ms`, and under `moved` and `released`.
+    pub limit: Option<f64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]

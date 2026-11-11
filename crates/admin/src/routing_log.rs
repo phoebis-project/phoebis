@@ -436,8 +436,10 @@ pub(crate) struct DecisionRecord {
     /// (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`, `reset`, `slow_down` or
     /// `rewrite`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`, `marked_on`,
     /// `marked_window`, `projection`, `stretch_ms` and `threshold_ms` (the stretch and the threshold the heal read
-    /// where the stretch made the mark)), `reservation` (`account_id`, `rewrite` and `burn` by plan window, the burn
-    /// per hour, `expires_at`, null for a decision that booked nothing), `cause` (why the failover this decision lands
+    /// where the stretch made the mark), and `limit` (the line the healing projection read under: 1.0 at the wall, the
+    /// pool's ceiling at the five-hour bound, null on a heal by the stretch and under `moved` and `released`, absent on
+    /// a row of an earlier build)), `reservation` (`account_id`, `rewrite` and `burn` by plan window, the burn per
+    /// hour, `expires_at`, null for a decision that booked nothing), `cause` (why the failover this decision lands
     /// moved the session: a cooldown's `scope`, `reason` and `window`, or a mark's `state` and `cause`, null for every
     /// other decision), `completion`.
     ///

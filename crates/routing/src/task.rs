@@ -132,10 +132,10 @@ pub enum RouterEvent {
         at: i64,
     },
     /// A shedding mark left a pin: the heal check found the window back under its test at the pin's request (`healed`,
-    /// with the healing projection, and with the stretch and the threshold where the stretch healed a 5-hour mark), the
-    /// pin moved off the account the mark was made on (`moved`), or the pin was released, expired or lost a rekey's
-    /// merge without a move, or asked while its pool's load shedding was off (`released`). `account_id` is the account
-    /// the pin sat on when the mark cleared.
+    /// with the healing projection, and with the stretch and the threshold where the stretch healed a 5-hour mark, else
+    /// the `limit` the projection read under), the pin moved off the account the mark was made on (`moved`), or the pin
+    /// was released, expired or lost a rekey's merge without a move, or asked while its pool's load shedding was off
+    /// (`released`). `account_id` is the account the pin sat on when the mark cleared.
     MarkCleared {
         account_id: String,
         pin: PinKey,
@@ -146,6 +146,10 @@ pub enum RouterEvent {
         projection: Option<f64>,
         stretch_ms: Option<i64>,
         threshold_ms: Option<i64>,
+        /// The line the healing projection read under, on a mark the projection healed: 1.0 where the heal's horizon
+        /// was bound to the wall, the window's ceiling where it was bound to the span. `None` on a heal by the
+        /// stretch, which reads `stretch_ms` and `threshold_ms`, and under `moved` and `released`.
+        limit: Option<f64>,
         at: i64,
     },
     OverageEnded {
@@ -2611,6 +2615,7 @@ fn cleared_mark(row: &PinRow, reason: &'static str, at: i64) -> Option<RouterEve
         projection: None,
         stretch_ms: None,
         threshold_ms: None,
+        limit: None,
         at,
     })
 }
@@ -3294,6 +3299,7 @@ impl Task {
                             projection: facts.projection,
                             stretch_ms: facts.stretch_ms,
                             threshold_ms: facts.threshold_ms,
+                            limit: facts.limit,
                             at: request.now,
                         }),
                         None => left.and_then(|reason| {

@@ -391,6 +391,13 @@ pub(crate) struct Event {
     /// - `fast_credits_changed`: a credits reading changed whether fast mode can draw on the account's extra
     ///   usage, or why it cannot.
     /// - `ledger_gap`: a request whose record never reached the ledger, with the reason.
+    /// - `mark_cleared`: a shedding mark left a pin, with the pin's `agent_id`, the `reason` (`healed` where the heal
+    ///   check found the window back under its test at the pin's request, `moved` where the pin left the account the
+    ///   mark was made on, or `released` where it left without a move or asked while its pool's load shedding was off),
+    ///   the mark's `marked_at`, `marked_on` and `marked_window`, the healing `projection` on `healed`, `stretch_ms`
+    ///   and `threshold_ms` where the stretch healed the mark, and `limit`, the line the healing projection read under:
+    ///   1.0 at the wall, the pool's ceiling at the five-hour bound, null on a heal by the stretch and under `moved`
+    ///   and `released`, absent on a row of an earlier build.
     /// - `model_permitted`: the account that served a model another account had rejected for the same request.
     /// - `model_rejected`: an account refused the model the request named.
     /// - `overage_ended`: the account left overage, with `since`, when it entered.

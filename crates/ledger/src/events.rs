@@ -167,6 +167,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             projection,
             stretch_ms,
             threshold_ms,
+            limit,
             at,
         } => EventRecord {
             at: *at,
@@ -182,6 +183,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "projection": projection,
                     "stretch_ms": stretch_ms,
                     "threshold_ms": threshold_ms,
+                    "limit": limit,
                 })
                 .to_string(),
             ),
@@ -1605,6 +1607,7 @@ mod tests {
             projection: Some(0.91),
             stretch_ms: Some(1_440_000),
             threshold_ms: Some(1_800_000),
+            limit: None,
             at: 6_000,
         })
         .expect("a mark row");
@@ -1629,7 +1632,7 @@ mod tests {
             json!({
                 "agent_id": "sub-1", "reason": "healed", "marked_at": 1_000, "marked_on": "a",
                 "marked_window": "five_hour", "projection": 0.91, "stretch_ms": 1_440_000,
-                "threshold_ms": 1_800_000
+                "threshold_ms": 1_800_000, "limit": null
             })
         );
 

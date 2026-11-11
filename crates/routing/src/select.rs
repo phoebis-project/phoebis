@@ -4954,11 +4954,15 @@ fn trigger_of(
 }
 
 /// What the heal check read when it cleared a mark: the healing projection, with the stretch and the threshold where
-/// the stretch healed it.
+/// the stretch healed it, else the line the projection read under.
 struct Healed {
     projection: f64,
     stretch_ms: Option<i64>,
     threshold_ms: Option<i64>,
+    /// The line the healing projection read under, on a mark the projection healed: 1.0 where the heal's horizon
+    /// was bound to the wall, the window's ceiling where it was bound to the span. `None` on a heal by the stretch,
+    /// which reads `stretch_ms` and `threshold_ms`.
+    limit: Option<f64>,
 }
 
 /// Whether a marked pin's window reads back under the round's test at `now`, the test the window fires on. A 5-hour
@@ -4988,6 +4992,7 @@ fn healed(
                 + read.banded.increase_until(read.horizon - read.threshold_ms),
             stretch_ms: Some(read.stretch_ms),
             threshold_ms: Some(read.threshold_ms),
+            limit: None,
         });
     }
     let projection = projection_of(
@@ -5004,6 +5009,7 @@ fn healed(
         projection: projection.at_horizon,
         stretch_ms: None,
         threshold_ms: None,
+        limit: Some(projection.limit),
     })
 }
 
@@ -5021,6 +5027,7 @@ fn mark_cleared_of(
         projection: heal.map(|heal| heal.projection),
         stretch_ms: heal.and_then(|heal| heal.stretch_ms),
         threshold_ms: heal.and_then(|heal| heal.threshold_ms),
+        limit: heal.and_then(|heal| heal.limit),
     }
 }
 

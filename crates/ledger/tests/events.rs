@@ -2139,6 +2139,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             projection: None,
             stretch_ms: None,
             threshold_ms: None,
+            limit: None,
             at: 1,
         },
         RouterEvent::OverageEnded {

@@ -1522,7 +1522,8 @@ chip per pin, its session and its reason, `off window` for a pin whose model doe
 window, and `sliver` for a pin the round left warm under its Mark share), Planned destinations, Outcome (`marked 2`,
 `nothing to mark: no runway`, `nothing to mark: sliver`, or, for a round that walked no pin, the word of the pin it left
 out, such as `nothing to mark: off window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads
-the pin, Reason (`healed: the 5h projection read 91% under the ceiling`,
+the pin, Reason (`healed: the 5h projection read 91% under the wall` where the heal's horizon was the window's reset or
+the account's end and `under the ceiling` at the five-hour bound,
 `healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made, `moved` or `released`), Marked
 (when, on which account) and Standing for, and a reservation expired panel reads Request, Attempt, Cause, Reserved
 (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down started
@@ -1541,7 +1542,7 @@ panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the 
 | cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
 | fast credits changed | An account's usage credits for fast mode became available or unavailable. |
 | ledger gap | The ledger could not record a request whole, and the reason names what it is missing. |
-| mark cleared | A shedding mark left a pin: it moved, was released, or its account's window read under the ceiling again, or its stretch under the threshold. |
+| mark cleared | A shedding mark left a pin: it moved, was released, or its account's window read under its line again, the wall or the ceiling, or its stretch under the threshold. |
 | model permitted | An account served a model another account had rejected. |
 | model rejected | An account answered 404 for a model, which cools that model on the account. |
 | overage ended | An account left overage at its 7-day reset. |

@@ -9989,6 +9989,89 @@ async fn a_marked_pin_moved_off_its_cooled_account_inside_a_decision_clears_its_
 }
 
 #[tokio::test]
+async fn a_heals_event_names_the_wall_at_the_windows_reset_and_the_pools_ceiling_at_the_five_hour_bound(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = shedding_store(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.window_ceiling = 0.8;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    for pin in [
+        marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000),
+        PinRow {
+            mark: Some(PinMark {
+                at: AT - 60_000,
+                on: "a".into(),
+                window: SEVEN_DAY.into(),
+            }),
+            ..stored_pin(&store, "s2", "a", 2, 0.0)
+        },
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // The 5-hour reading names its reset an hour out, so its horizon is the reset and its line the wall, which 0.9
+    // reads under while over the ceiling. The week names none, so its horizon is the five-hour bound and its line the
+    // ceiling, which 0.5 reads under. Nothing burns, so each projection is its reading.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.9, Some(AT + HOUR)).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.5,
+                    reset: None,
+                    observed_at: AT,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    for session in ["s1", "s2"] {
+        handle
+            .select(quota_turn(&handle, Some(session), AT))
+            .await
+            .unwrap();
+    }
+    let cleared: Vec<_> = drained(&mut events)
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            RouterEvent::MarkCleared {
+                pin,
+                reason,
+                marked_window,
+                limit,
+                ..
+            } => Some((pin.session_id, reason, marked_window, limit)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        cleared,
+        [
+            (
+                "s1".to_string(),
+                "healed",
+                "five_hour".to_string(),
+                Some(1.0)
+            ),
+            (
+                "s2".to_string(),
+                "healed",
+                "seven_day".to_string(),
+                Some(0.8)
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn a_cooldown_report_naming_a_marked_pin_clears_its_mark_as_released() {
     use phoebis_routing::RouterEvent;
     let store = shedding_store(&["a", "b"]);

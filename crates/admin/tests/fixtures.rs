@@ -3007,7 +3007,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
 
     // The kinds no report or route of this harness writes, each as its writer builds it: the harness's router prices
     // no burn, so it marks no pin, books no reservation and slows no account, and the round, its mark leaving with the
-    // pin's move, a booking its request ended without usage and a slow-down's span are seeded here.
+    // pin's move, another pin's mark healed, a booking its request ended without usage and a slow-down's span are
+    // seeded here.
     let at = |minute: i64| hour_ago + minute * 60_000;
     let routed = [
         RouterEvent::SheddingRound {
@@ -3075,7 +3076,22 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             projection: None,
             stretch_ms: None,
             threshold_ms: None,
+            limit: None,
             at: at(7),
+        },
+        // A projection over the ceiling still heals under the wall, the line of a horizon at the window's reset.
+        RouterEvent::MarkCleared {
+            account_id: "business".into(),
+            pin: PinKey::new("desktop", "s2", "main", "claude-sonnet-5"),
+            reason: "healed",
+            marked_at: at(10),
+            marked_on: "business".into(),
+            marked_window: "five_hour".into(),
+            projection: Some(0.97),
+            stretch_ms: None,
+            threshold_ms: None,
+            limit: Some(1.0),
+            at: at(24),
         },
         RouterEvent::ReservationExpired {
             account_id: "business".into(),
