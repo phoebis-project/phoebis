@@ -209,11 +209,12 @@ force from it, `models`. An `effective` is a date in `YYYY-MM-DD` form, in force
 instant in UTC written `YYYY-MM-DDTHH:MM:SSZ`, in force from that second, and two entries on one instant are refused,
 whichever form each wrote. An entry is in force to the next entry's instant, and an instant before the first entry reads
 the first. A request is priced at the entry in force when it arrived, so all its attempts price under one entry. An
-entry added late re-prices the ledger's rows from its instant on at their next read. An entry that takes effect after
-the one in force is held: every read takes it from its instant on, and the burn rates the router builds at start for
-the shedding round take it at the first start after that instant. A correction of a figure the file had wrong edits
-every entry that carries the row and adds no entry, since the correction says what was always true, while a provider's
-price change, a new model or a moved threshold adds one.
+hourly sum is priced whole by the entry in force at the end of its hour, so the hour an entry starts in prices at that
+entry. An entry added late re-prices the ledger's rows from its instant on at their next read. An entry that takes
+effect after the one in force is held: every read takes it from its instant on, and the burn rates the router builds at
+start for the shedding round take it at the first start after that instant. A correction of a figure the file had wrong
+edits every entry that carries the row and adds no entry, since the correction says what was always true, while a
+provider's price change, a new model or a moved threshold adds one.
 
 The twelve rows of the shipped revision in force, in USD per million tokens, in the file's order (the fast cells of
 Fable 5.2 and the three Opus models are twice each figure):

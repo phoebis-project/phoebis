@@ -8439,6 +8439,115 @@ fn a_members_spend_across_a_revision_inside_its_period_prices_each_span_at_its_o
     );
 }
 
+/// A price list whose second entry takes effect at 18:30 UTC on 2026-01-15, inside an hour, and adds Opus 5.5 at $10
+/// per million input tokens.
+const AN_ENTRY_INSIDE_AN_HOUR: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-sonnet-5-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}
+  - effective: 2026-01-15T18:30:00Z
+    models:
+      claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+      claude-sonnet-5-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}
+";
+
+/// A million Opus 5.5 input tokens on the API-key member `a` of pool `p` at 17:45 and at 18:45 UTC on 2026-01-15, so
+/// one row lands in the hour before the entry's and one in the hour the entry starts in, folded on
+/// `AN_ENTRY_INSIDE_AN_HOUR`, which it answers.
+fn plant_around_an_entry_inside_an_hour(db: &LedgerDb) -> PriceRevisions {
+    let prices = PriceRevisions::from_yaml(AN_ENTRY_INSIDE_AN_HOUR, "test").unwrap();
+    for (id, hour) in [("before", 17), ("inside", 18)] {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: ms(2026, 1, 15, hour, 45),
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            canonical_model: "claude-opus-5-5".into(),
+            model: "claude-opus-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::ApiKey,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000_000),
+            ..Default::default()
+        };
+        db.insert_request_at(&request, &[attempt], None, &prices)
+            .unwrap();
+    }
+    prices
+}
+
+/// The dollars of the hour starting at `hour`:00 UTC on 2026-01-15, every row of it as one group.
+async fn dollars_of_hour(
+    db: &std::sync::Arc<LedgerDb>,
+    prices: &PriceRevisions,
+    hour: i8,
+) -> Vec<f64> {
+    let from = ms(2026, 1, 15, hour, 0);
+    breakdown_paged(
+        db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        from,
+        from + 3_600_000,
+        GroupBy::All,
+        prices,
+        &phoebis_ledger::test_tables::subscription_costs(),
+        NOW,
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|group| group.cost_usd)
+    .collect()
+}
+
+/// A row holds its whole hour and is priced by the entry in force at the hour's end: the row of 18:00 reads the entry
+/// of 18:30 that adds Opus 5.5, a million input tokens at $10, while the row of 17:00 ends before the entry and reads
+/// no dollars on a model the entry before it lacks.
+#[tokio::test]
+async fn the_breakdown_prices_the_hour_an_entry_starts_in_at_that_entry() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = plant_around_an_entry_inside_an_hour(&db);
+    assert_eq!(
+        (
+            dollars_of_hour(&db, &prices, 17).await,
+            dollars_of_hour(&db, &prices, 18).await
+        ),
+        (vec![0.0], vec![10.0])
+    );
+}
+
+/// A member's spend splits its period at the start of the hour an entry takes effect in, so the row of 18:00 prices at
+/// the entry of 18:30 that adds Opus 5.5 and the row of 17:00 at the entry before it: the day counts the $10 of the
+/// 18:45 request alone.
+#[test]
+fn a_members_spend_prices_the_hour_an_entry_starts_in_at_that_entry() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_around_an_entry_inside_an_hour(&db);
+    let spent = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[budgeted("p", "a", BudgetPeriod::Day)],
+                ms(2026, 1, 15, 23, 0),
+                &prices,
+            )
+        })
+        .unwrap()[0]
+        .spent_usd;
+    assert_eq!(spent, 10.0);
+}
+
 #[test]
 fn the_reconciliations_read_answers_the_named_accounts_newest_first_inside_the_trailing_thirty_days(
 ) {

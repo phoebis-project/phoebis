@@ -75,8 +75,9 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 /// The generation is the presenting key's own `created_at`, so an id an earlier key used answers only what
 /// this key spent, whole hours included: nothing is left out and each window starts where its name says.
 ///
-/// Each row's dollars price from its counts at the revision in force at its hour, once for both windows, a client
-/// classifier call the plan paid adding zero, and probe rows are left out as the key list's totals leave them out.
+/// Each row's dollars price from its counts at the revision in force at the end of its hour, once for both windows, a
+/// client classifier call the plan paid adding zero, and probe rows are left out as the key list's totals leave them
+/// out.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,

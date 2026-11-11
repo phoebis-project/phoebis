@@ -3374,23 +3374,26 @@ pub fn latest_extra_usage_share(
     latest_extra_usage_of(conn, LATEST_EXTRA_USAGE_SHARE_SQL, now)
 }
 
-/// One span of hours over which both lists' revisions are constant: the SQL bounds (seconds, half-open) and the
-/// instant the span prices at in milliseconds.
+/// One span of hours over which both lists' revisions are constant for the hourly rows: the SQL bounds (seconds,
+/// half-open) and the instant the span prices at in milliseconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
     pub from_hour: i64,
     pub to_hour: i64,
-    /// The span's start, raised to the earliest instant of either list when the start lies below it (a lifetime
-    /// read passes `i64::MIN` as `from_hour`), so the sentinel is not multiplied and `in_force(at)` is the
-    /// revision every hour of the span reads.
+    /// The last millisecond of the span's first hour, an instant at which `in_force` answers the revision every hour
+    /// of the span reads at its end, since a row cannot hold a boundary inside its hour. Raised to the earliest
+    /// instant of either list when it lies below it, and a lifetime read's `i64::MIN` as `from_hour` reads that
+    /// earliest instant, so the sentinel is not multiplied.
     pub at: i64,
 }
 
-/// The spans between `from_hour` and `to_hour` split at every revision boundary of `prices` and, when given, of
-/// `costs`, so a SQL sum runs once per span and is priced at that span's revisions, and one span when no revision
-/// starts inside the range. `costs` is `None` for a dollar sum. The first span's `from_hour` is the caller's (so the
-/// rows before the first revision's instant, which `in_force` reads at the first entry, stay in the sum) and its `at`
-/// is clamped as `Span` says.
+/// The spans between `from_hour` and `to_hour` split at the start of the hour each revision of `prices` and, when
+/// given, of `costs` takes effect in, so a SQL sum runs once per span and is priced at that span's revisions, and one
+/// span when no revision starts inside the range. A row cannot hold a boundary inside its hour, so it is priced whole
+/// by the revisions in force at the end of its hour, and the hour a revision starts in falls in that revision's span.
+/// `costs` is `None` for a dollar sum. The first span's `from_hour` is the caller's (so the rows before the first
+/// revision's instant, which `in_force` reads at the first entry, stay in the sum) and its `at` is clamped as `Span`
+/// says.
 pub fn revision_spans(
     prices: &PriceRevisions,
     costs: Option<&CostRevisions>,
@@ -3403,7 +3406,7 @@ pub fn revision_spans(
     let mut edges: Vec<i64> = [price_instants, cost_instants]
         .into_iter()
         .flat_map(|instants| instants.iter().skip(1))
-        .map(|ms| ms.div_euclid(1_000))
+        .map(|ms| hour_of(*ms))
         .filter(|hour| *hour > from_hour && *hour < to_hour)
         .collect();
     edges.sort_unstable();
@@ -3421,9 +3424,9 @@ pub fn revision_spans(
         .map(|(from, to)| Span {
             from_hour: from,
             to_hour: to,
-            at: from
+            at: hour_end(from)
                 .checked_mul(1_000)
-                .map_or(earliest, |ms| ms.max(earliest)),
+                .map_or(earliest, |ms| (ms - 1).max(earliest)),
         })
         .collect()
 }
@@ -4589,7 +4592,7 @@ fn price_burn_row(
     let Some(point) = bucket_slot(points, first, bucket_seconds, row.hour) else {
         return;
     };
-    // The rollup keeps no completion, so the key's `band_at` is `None` and the band reads at the row's hour.
+    // The rollup keeps no completion, so the key reads the band at the row's hour.
     price_usage(
         point,
         prices,
@@ -5869,7 +5872,8 @@ mod tests {
 
     /// The price fixture's two entries take effect on 2026-01-01 and 2026-02-01, so a range across February splits
     /// there and nowhere else: before the first entry `in_force` already reads the first, so its date is no edge. A
-    /// span that starts before the earliest entry prices at that entry's instant.
+    /// span prices at the last millisecond of its first hour, and one that starts before the earliest entry at that
+    /// entry's instant.
     #[test]
     fn revision_spans_split_a_range_where_the_price_revision_in_force_changes() {
         let prices = crate::test_tables::api_prices();
@@ -5890,7 +5894,7 @@ mod tests {
                 Span {
                     from_hour: february,
                     to_hour: to,
-                    at: february * 1_000
+                    at: february * 1_000 + 3_599_999
                 },
             ],
             "two spans meeting at the second entry's hour"
@@ -5901,7 +5905,7 @@ mod tests {
             [Span {
                 from_hour: inside_from,
                 to_hour: inside_to,
-                at: inside_from * 1_000
+                at: inside_from * 1_000 + 3_599_999
             }],
             "one span when no revision starts inside the range"
         );

@@ -392,8 +392,11 @@ impl RollupRow {
         }
     }
 
-    /// The price key of the row: its own model, speed, band and funding, its tier (`None` under `UNATTRIBUTED`), the
-    /// entrypoint its `client` names, and its hour as the instant, with no completion, read at `now`.
+    /// The price key of the row: its own model, speed, band and funding, its tier (`None` under `UNATTRIBUTED`) and the
+    /// entrypoint its `client` names, read at `now`. Its instant is the last millisecond of its hour, so the entries in
+    /// force at the end of the hour price it whole: a row cannot hold a boundary inside its hour, and this way the hour
+    /// an entry starts in prices at that entry, so a model the entry adds reads its dollars from its first request on.
+    /// The rollup keeps no completion, so the peak band reads at the hour's start.
     pub(crate) fn price_key(&self, now: i64) -> RowKey<'_> {
         RowKey {
             model: &self.canonical_model,
@@ -403,8 +406,8 @@ impl RollupRow {
             tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
             entrypoint: entrypoint_of_client(&self.client),
             classifier: is_free_classifier(Some(self.classifier.as_str())),
-            at: self.hour * 1_000,
-            band_at: None,
+            at: hour_end(self.hour) * 1_000 - 1,
+            band_at: Some(self.hour * 1_000),
             now,
         }
     }

@@ -1161,9 +1161,9 @@ impl PlanTables {
     }
 
     /// The Pro share of `window`: `usage`'s units at the revision in force at `at` with the band read at `band_at`
-    /// (a completion where the reader has one, else `at`), over the anchor tier's capacity on the window in the
-    /// revision in force at `now`, the read's instant, so every figure a page sums divides by one whole whatever
-    /// revision priced its tokens. `None` where either side prices nothing.
+    /// (a completion where the reader has one, a rollup row's hour start, else `at`), over the anchor tier's capacity on
+    /// the window in the revision in force at `now`, the read's instant, so every figure a page sums divides by one
+    /// whole whatever revision priced its tokens. `None` where either side prices nothing.
     #[allow(clippy::too_many_arguments)]
     pub fn equivalent_at(
         &self,
@@ -1361,8 +1361,9 @@ pub type WindowShares = IndexMap<&'static str, Option<f64>>;
 
 /// `share_at` under the account tier and the regime `entrypoint` names on each window `plan_windows(canonical_model)`
 /// walks, `None` inside the map on a window the model has no weight for. `at` selects the cost revision (the request's
-/// receipt, what the dollars and the rollup select on) and `band_at` the peak band inside that revision (the completion
-/// where a reader has one, else `at`). The revision never reads `band_at`.
+/// receipt, or a rollup row's last millisecond, as the dollars select theirs) and `band_at` the peak band inside that
+/// revision (the completion where a reader has one, else the rollup row's hour start). The revision never reads
+/// `band_at`.
 pub fn price_shares(
     tables: &PlanTables,
     entrypoint: Option<&str>,
