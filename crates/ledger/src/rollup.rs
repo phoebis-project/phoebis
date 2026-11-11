@@ -147,7 +147,7 @@ pub fn hour_end(hour: i64) -> i64 {
 }
 
 /// The hours `[from, to)` of the day up to the current hour, one span so the keepalive overview and the attention
-/// item's expired count sum the same rows.
+/// item's expired count read the same hours, the item counting some of their rows.
 pub fn trailing_day_hours(now: i64) -> (i64, i64) {
     let hour = hour_of(now);
     (hour - 24 * 3_600, hour_end(hour))
@@ -2300,20 +2300,41 @@ pub fn read_overview_rollups(
     Ok((expired, kept))
 }
 
-/// The count `read_overview_rollups` answers beside its rows, for a poll that wants the count alone and so decodes
-/// one column of each row.
+/// One pool and key's count of `read_expired_between_turns`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExpiredBetweenTurns {
+    pub pool_id: String,
+    pub key_id: String,
+    pub expired: u64,
+}
+
+/// The expiries between turns of `[from_hour, to_hour)` by the pool and the key their requests ran under, for a
+/// reader that counts some pools and keys alone.
 pub fn read_expired_between_turns(
     conn: &Connection,
     from_hour: i64,
     to_hour: i64,
-) -> Result<u64, LedgerError> {
+) -> Result<Vec<ExpiredBetweenTurns>, LedgerError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT cache_miss_reasons_json FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2",
+        "SELECT pool_id, key_id, cache_miss_reasons_json FROM rollups_hourly \
+         WHERE hour >= ?1 AND hour < ?2",
     )?;
-    let expired = stmt
-        .query_map(params![from_hour, to_hour], |r| expired_at(r, 0))?
-        .sum::<rusqlite::Result<u64>>()?;
-    Ok(expired)
+    let mut rows = stmt.query(params![from_hour, to_hour])?;
+    let mut by_pair: BTreeMap<(String, String), u64> = BTreeMap::new();
+    while let Some(r) = rows.next()? {
+        let expired = expired_at(r, 2)?;
+        if expired > 0 {
+            *by_pair.entry((r.get(0)?, r.get(1)?)).or_default() += expired;
+        }
+    }
+    Ok(by_pair
+        .into_iter()
+        .map(|((pool_id, key_id), expired)| ExpiredBetweenTurns {
+            pool_id,
+            key_id,
+            expired,
+        })
+        .collect())
 }
 
 /// The rows of `[from_hour, to_hour)` under `select`, one `PAGE_HOURS` page per `read`, handed to `visit` in the

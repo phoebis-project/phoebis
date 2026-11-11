@@ -3,14 +3,15 @@
 
 mod reader;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
 use phoebis_ledger::{
     parked_summary, read_expired_between_turns, routing_conditions, trailing_day_hours,
-    AttentionGaugeSource, AttentionGauges, Connection, Ledger, LedgerError, ParkedSummary,
-    RoutingCondition,
+    AttentionGaugeSource, AttentionGauges, Connection, ExpiredBetweenTurns, Ledger, LedgerError,
+    ParkedSummary, RoutingCondition,
 };
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
@@ -49,7 +50,7 @@ pub trait TlsPairs: Send + Sync {
 }
 
 /// What the keepalive engine stands at when a read runs: the gap counter and the last gap's instant, the three caps
-/// and whether a pool's policy warms caches. Behind a trait, so this crate names no keepalive type, as `TlsPairs`
+/// and the pools whose policy warms caches. Behind a trait, so this crate names no keepalive type, as `TlsPairs`
 /// keeps the listeners out of it.
 #[derive(Debug)]
 pub struct KeepaliveStanding {
@@ -57,8 +58,8 @@ pub struct KeepaliveStanding {
     pub last_bus_gap_at: Option<i64>,
     /// `sessions`, `agents`, `retained`, in that order, each its count against its max.
     pub caps: Vec<KeepaliveCap>,
-    /// A pool whose keepalive policy is on exists.
-    pub warming: bool,
+    /// The ids of the pools whose keepalive policy is on.
+    pub warming: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -219,11 +220,12 @@ impl Attention {
 struct LedgerFacts {
     parked: Vec<ParkedSummary>,
     routing: Vec<RoutingCondition>,
-    expired: u64,
+    expired: Vec<ExpiredBetweenTurns>,
 }
 
 /// The ledger's part of a read, on one connection. The expiries span `trailing_day_hours`, the hours the keepalive
-/// overview sums, so the item and the overview count the same rows.
+/// overview sums, so the item reads the overview's hours and counts the rows of a warming pool under a key with the
+/// `keepalive` permission among them.
 fn ledger_facts(c: &Connection, now: i64) -> Result<LedgerFacts, LedgerError> {
     let (from, to) = trailing_day_hours(now);
     Ok(LedgerFacts {

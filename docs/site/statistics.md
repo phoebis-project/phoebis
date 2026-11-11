@@ -674,7 +674,7 @@ holds again at the first read.
 | `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
 | `slowed_long` | warning | the account | the slow-down's held time of the last 24 hours comes to at most twice the pool's `slow_down_stretch_seconds`, at least an hour |
 | `keepalive_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
-| `expired_between_turns` | warning | the keepalive engine | no expiry between turns stands in the last 24 hours, or no pool warms caches |
+| `expired_between_turns` | warning | the keepalive engine | no expiry between turns on a warming pool under a key with the `keepalive` permission stands in the last 24 hours |
 
 Of the tones, critical, serious, warning and info, `info` is the mildest, a condition that holds while nothing is
 broken: the dashboard's line draws such an item in the place the route ranks it, and no pool card draws it, since a
@@ -848,12 +848,15 @@ its count, its max and the share, which the dashboard's line reads as `Keepalive
 tone, and the item opens the [Sessions](console.md#sessions) view.
 
 **`expired_between_turns`** holds while a request of the last 24 hours missed the cache because its entry expired
-between two turns, the miss probing exists to prevent, and a pool's keepalive policy is on. Without a pool that warms
-caches such an expiry is the expected course, so the condition clears once no pool warms caches. The count is the
-ledger's, from its hourly rollups, the figure `GET /admin/keepalive/overview` answers as `expired_between_turns_24h`.
-The subject is the engine, `keepalive`, and the item dates from the first read of this process that saw it. The detail
-gives the count, which the dashboard's line reads as `Expired between turns: {n} in 24h` in the warning tone, and the
-item opens the [Sessions](console.md#sessions) view.
+between two turns, the miss probing exists to prevent, and the request ran on a pool whose keepalive policy is on, under
+a key that holds the `keepalive` permission. On any other pool or key such an expiry is the expected course, since the
+keepalive probes nothing there. The reader takes the policy and the permission as they stand at each read, so an expiry
+stops counting at the next read once its pool's policy is switched off or its key's permission withdrawn, and an expiry
+from before a policy was switched on counts for up to a day. The count is the ledger's, from its hourly rollups, over
+those requests alone, while `GET /admin/keepalive/overview` answers every pool's count as `expired_between_turns_24h`,
+so the two figures can differ. The subject is the engine, `keepalive`, and the item dates from the first read of this
+process that saw it. The detail gives the count, which the dashboard's line reads as `Expired between turns: {n} in 24h`
+in the warning tone, and the item opens the [Sessions](console.md#sessions) view.
 
 A threshold is a Prometheus rule over the gauge:
 

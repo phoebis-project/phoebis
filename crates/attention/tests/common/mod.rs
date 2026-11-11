@@ -2,6 +2,7 @@
 //! them, a ledger over an in-memory file and the ledger's test cost model, and a clock the test moves. The reader
 //! spawns on the rig's bus.
 #![allow(dead_code)]
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -131,7 +132,7 @@ impl Standing {
             bus_gaps: 0,
             last_bus_gap_at: None,
             caps: Vec::new(),
-            warming: false,
+            warming: BTreeSet::new(),
         }))
     }
 }
@@ -152,7 +153,7 @@ impl KeepaliveFacts for Standing {
                     max: cap.max,
                 })
                 .collect(),
-            warming: set.warming,
+            warming: set.warming.clone(),
         }
     }
 }

@@ -1541,14 +1541,16 @@ impl Engine {
         &self.parts.limits
     }
 
-    /// Whether a pool's policy warms caches, read off the router's snapshot as the scheduler reads a pool's policy
+    /// The pools whose policy warms caches, read off the router's snapshot as the scheduler reads a pool's policy
     /// (`KeepalivePolicy::from_json`).
-    pub fn warming(&self) -> bool {
+    pub fn warming(&self) -> BTreeSet<String> {
         self.parts
             .router
             .snapshot()
             .pools()
-            .any(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled)
+            .filter(|pool| KeepalivePolicy::from_json(&pool.keepalive_json).enabled)
+            .map(|pool| pool.id.clone())
+            .collect()
     }
 
     pub fn stats(&self) -> EngineStats {

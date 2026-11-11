@@ -4,6 +4,7 @@
 //! ledger's landing saw, the keepalive engine's standing, and the gauge the metrics listener scrapes from the same
 //! read.
 mod common;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -2651,28 +2652,42 @@ fn expired_turn(id: &str) -> Record {
     }
 }
 
-#[tokio::test]
-async fn expiries_between_turns_hold_their_item_only_while_a_pool_warms_caches() {
-    let rig = rig().await;
-    let standing = Arc::new(Standing::idle());
-    standing.0.lock().unwrap().warming = true;
-    let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
+/// The read's expiry item as `(holds, detail)`.
+fn expiry_item(attention: &Attention) -> (bool, serde_json::Value) {
+    let conditions = read(attention, NOW);
+    let item = find(&conditions, Kind::ExpiredBetweenTurns, "keepalive").unwrap();
+    (item.holds, item.detail.clone())
+}
+
+/// Records `expired_turn("r1")` and waits until the item holds, so a clear read after it is taken with the expiry
+/// landed.
+async fn expiry_landed(rig: &Rig, attention: &Attention) -> serde_json::Value {
     rig.ledger.record_request(expired_turn("r1")).await;
     // The rollup lands after the call returns, so the read waits for the item rather than for the call.
-    let warm = fake_upstream::wait_for(Duration::from_secs(5), || {
-        let conditions = read(&attention, NOW);
-        find(&conditions, Kind::ExpiredBetweenTurns, "keepalive")
-            .is_some_and(|c| c.holds)
-            .then_some(conditions)
+    fake_upstream::wait_for(Duration::from_secs(5), || {
+        let (holds, detail) = expiry_item(attention);
+        holds.then_some(detail)
     })
-    .await;
+    .await
+}
+
+#[tokio::test]
+async fn expiries_between_turns_hold_their_item_only_while_their_pool_warms_caches() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::idle());
+    standing.0.lock().unwrap().warming = BTreeSet::from(["main".to_string()]);
+    let (attention, _arm) = rig.attention_with_keepalive(standing.clone());
     assert_eq!(
-        find(&warm, Kind::ExpiredBetweenTurns, "keepalive")
-            .unwrap()
-            .detail,
+        expiry_landed(&rig, &attention).await,
         json!({ "expired": 1 })
     );
-    standing.0.lock().unwrap().warming = false;
+    standing.0.lock().unwrap().warming = BTreeSet::from(["other".to_string()]);
+    assert_eq!(
+        expiry_item(&attention),
+        (false, json!({ "expired": 0 })),
+        "an expiry on a pool whose policy is off counts nothing while another pool warms caches"
+    );
+    standing.0.lock().unwrap().warming = BTreeSet::new();
     assert!(
         !find(
             &read(&attention, NOW),
@@ -2682,5 +2697,29 @@ async fn expiries_between_turns_hold_their_item_only_while_a_pool_warms_caches()
         .unwrap()
         .holds,
         "with no pool warming caches the same expiry raises nothing"
+    );
+}
+
+#[tokio::test]
+async fn expiries_between_turns_hold_their_item_only_under_a_key_with_the_keepalive_permission() {
+    let rig = rig().await;
+    let standing = Arc::new(Standing::idle());
+    standing.0.lock().unwrap().warming = BTreeSet::from(["main".to_string()]);
+    let (attention, _arm) = rig.attention_with_keepalive(standing);
+    assert_eq!(
+        expiry_landed(&rig, &attention).await,
+        json!({ "expired": 1 }),
+        "the seed's key holds the permission, so its expiry raises the item"
+    );
+    let mut key = rig.store.api_key("desktop").unwrap().unwrap();
+    key.companion_permissions.keepalive = false;
+    rig.store
+        .update_api_key_with_guardrails(&key, key.updated_at, None, "test")
+        .unwrap();
+    rig.router.reload().await.unwrap();
+    assert_eq!(
+        expiry_item(&attention),
+        (false, json!({ "expired": 0 })),
+        "an expiry under a key the keepalive may not probe for counts nothing on a warming pool"
     );
 }

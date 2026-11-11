@@ -1,7 +1,7 @@
 //! What the engine retains from the bus, and what it refuses: the registration rule, the owner header, the
 //! pool and key gates, the account kinds, and the storage bounds; the Go admission cases.
 mod common;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use common::*;
@@ -184,6 +184,32 @@ async fn a_request_on_a_keepalive_off_pool_keeps_no_body_at_its_arrival_while_on
         (r.engine.stats().retained_bytes > 0, r.status("main").reason),
         (true, Reason::AwaitingSelection),
         "the arrival on the probing pool kept its body for the selection"
+    );
+}
+
+/// The attention reader counts an expiry between turns on the pools this set names alone.
+#[tokio::test]
+async fn the_warming_pools_are_the_pools_whose_policy_is_on() {
+    let r = rig(RigSpec::default()).await;
+    r.h.store
+        .insert_pool_with_members(
+            &phoebis_store::PoolRow {
+                keepalive_json: serde_json::to_string(&KeepalivePolicy {
+                    enabled: false,
+                    ..RigSpec::default().policy
+                })
+                .unwrap(),
+                ..phoebis_store::PoolRow::new("other")
+            },
+            None,
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    assert_eq!(
+        r.engine.warming(),
+        BTreeSet::from(["main".to_string()]),
+        "the rig's pool warms caches and the pool beside it with its policy off does not"
     );
 }
 

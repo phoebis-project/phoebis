@@ -86,7 +86,7 @@ pub(crate) struct IdleReturn {
     pub to_seconds: Option<u64>,
 }
 
-/// The engine as the attention reader sees it: the counters and the caps the overview answers, and whether a pool's
+/// The engine as the attention reader sees it: the counters and the caps the overview answers, and the pools whose
 /// policy warms caches.
 pub struct EngineFacts {
     pub engine: Arc<Engine>,

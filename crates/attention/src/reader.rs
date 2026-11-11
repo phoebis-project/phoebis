@@ -67,8 +67,8 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// every kind that does, worst first among themselves: an account that reached its wall, a move whose destination was
 /// spent within the hour, a pool whose rounds found no destination with runway, and an account whose requests waited
 /// past twice its pool's stretch threshold in the day, a slow-down that worked for long. The keepalive engine's two
-/// warnings rank last: a cap filled to 90 percent or more, then cache entries that expired between turns while a pool
-/// warms caches.
+/// warnings rank last: a cap filled to 90 percent or more, then cache entries that expired between turns on a pool
+/// that warms caches, under a key the keepalive may probe for.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
@@ -520,8 +520,8 @@ pub(crate) fn refresh_ends(
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
 /// `refresh_runs` and `refresh_ends`, and the parked rows, before it takes the reader's state, and a read that fails
 /// fails the whole answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the
-/// parked rows, the fold's routing conditions and the count of expiries between turns over the last 24 hours. It is
-/// `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions
+/// parked rows, the fold's routing conditions and the expiries between turns of the last 24 hours by pool and key. It
+/// is `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions
 /// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and `expired_between_turns` then has a
 /// series. Where one is built, `destination_spent` stops holding once a `window_cleared` followed its spent window.
 /// `pairs` is `None` where no listener is built, and neither certificate kind then has a series. `pairing_expiring` has
@@ -817,9 +817,21 @@ pub(crate) fn conditions(
             json!({ "cap": cap.name, "count": cap.count, "max": cap.max, "pct": pct }),
         ));
     }
-    if let Some(expired) = ledger.map(|l| l.expired) {
-        // Without a pool that warms caches, an entry expiring between turns is the expected course.
-        let holds = expired > 0 && keepalive.warming;
+    if let Some(expired) = ledger.map(|l| l.expired.as_slice()) {
+        // An expiry counts where probing could have prevented it: on a pool that warms caches, under a key the
+        // keepalive may probe for. The policy and the permission are read now, so an expiry from before a switch
+        // counts for up to a day.
+        let expired: u64 = expired
+            .iter()
+            .filter(|row| keepalive.warming.contains(&row.pool_id))
+            .filter(|row| {
+                snapshot
+                    .key(&row.key_id)
+                    .is_some_and(|key| key.companion_permissions.keepalive)
+            })
+            .map(|row| row.expired)
+            .sum();
+        let holds = expired > 0;
         out.push(dated_condition(
             state,
             &mut seen,

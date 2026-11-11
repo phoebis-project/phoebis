@@ -72,7 +72,7 @@ pub(crate) struct AttentionItem {
     /// `gaps` (the engine's gaps since the start) and `last_at` (the last gap's instant), `keepalive_cap` carries `cap`
     /// (`sessions`, `agents` or `retained`), `count`, `max` and `pct` (`count` over `max` as a fraction, 0 where `max`
     /// is 0), and `expired_between_turns` carries `expired` (the cache entries that expired between turns in the
-    /// trailing 24 hours).
+    /// trailing 24 hours on a pool whose keepalive policy is on, under a key that holds the `keepalive` permission).
     #[schema(value_type = Object)]
     pub detail: Value,
 }
