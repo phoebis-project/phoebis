@@ -1009,8 +1009,9 @@ pub(crate) fn insert_request_in(
 
 /// Request rows one slice of the backfill writes at most, the newest first, so the most recent history reads complete
 /// soonest. One slice read chunk by chunk through `requests_serving_pending` beside ten filled slices holds the write
-/// lock for about 95 ms on a desktop host. A start writes one slice and a pass of the purge task the rest, slice after
-/// slice, each going on where the last one stopped.
+/// lock for about 33 ms in a release build on a 32-core server host, and for about 92 ms in an unoptimized build. A
+/// start writes one slice and a pass of the purge task the rest, slice after slice, each going on where the last one
+/// stopped.
 pub const BACKFILL_SLICE: usize = 10_000;
 
 /// Pending rows one read of a slice takes, so a landing batch that begins during a slice waits for one chunk's read and

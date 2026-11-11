@@ -1063,7 +1063,7 @@ mod tests {
             (Scope::Account, 1_700_003_600_000 + MARGIN_MS),
             "a rejected shared window cools the account until its reset, whatever the set holds"
         );
-        // The finding's head with a 5-hour status that is neither an allowance nor a rejection: a status the head names
+        // The same head with a 5-hour status that is neither an allowance nor a rejection: a status the head names
         // decides on a window the set lacks too.
         let mut throttled = wall.to_vec();
         throttled.push(("anthropic-ratelimit-unified-5h-status", "throttled"));
