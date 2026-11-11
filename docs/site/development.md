@@ -89,8 +89,8 @@ pools, keys, guardrails, requests, analytics, the analytics cache warming tab, s
 two of them in the mock pass alone), waits for one element per view, asserts the document title, records every console
 error and page error, writes a full-page screenshot to `$PHOEBIS_SCREENSHOT_DIR/<theme>/<view>.png`, and runs the layout
 assertions its README lists, one function each, exiting non-zero with the list of failures. The README beside the
-script, [web/e2e/README.md](https://github.com/daystrom-labs/phoebis/blob/main/web/e2e/README.md), lists every assertion
-and names the Playwright image for a host without Chromium.
+script, [web/e2e/README.md](https://github.com/phoebis-project/phoebis/blob/main/web/e2e/README.md), lists every
+assertion and names the Playwright image for a host without Chromium.
 
 The screenshot directory must lie outside the repository and outside every checkout `git worktree list` reports: the
 script resolves the directory's symlinks, reads the checkouts from `git worktree list --porcelain` (or takes the tree
@@ -424,7 +424,7 @@ variable `DOCS_PAGES` is `1`, so a push to `main` stays green until Pages is ena
 To publish: in the repository's Pages settings, set the source to GitHub Actions. A private repository needs a GitHub
 plan that offers Pages there. Otherwise the repository has to be made public first. Under Settings, Secrets and
 variables, Actions, Variables, add `DOCS_PAGES` with the value `1`. The next push to `main` deploys the site to
-`https://daystrom-labs.github.io/phoebis/`.
+`https://phoebis-project.github.io/phoebis/`.
 
 To pause deployments, delete the `DOCS_PAGES` variable. The build job keeps running on every push, the deploy job
 stops, and GitHub Pages keeps serving the last deployment at the same URL.
@@ -459,7 +459,7 @@ on a published release, on a manual dispatch, and on a pull request that touches
    static link check, an embedded bundle, `init --non-interactive` and `check-config` in a temporary directory) and
    packs it with the license as `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and
    libclang without tzdata's time zone prompt, so the build runs through rather than waiting for an answer. Once every
-   smoke passes it publishes one manifest list at `ghcr.io/daystrom-labs/phoebis` under `X.Y.Z`, `X.Y` and `X` (from
+   smoke passes it publishes one manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y` and `X` (from
    major 1, never for a prerelease), `latest` (never for a prerelease), and `sha-<short sha>`, checks that the list
    holds amd64 and arm64, and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the
    image's node stage to `node:26.11.1-trixie-slim` by digest, resolved 2026-10-22, as it pins the runtime base.

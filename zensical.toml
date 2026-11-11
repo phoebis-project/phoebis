@@ -1,9 +1,9 @@
 [project]
 site_name = "Phoebis Router"
-site_url = "https://daystrom-labs.github.io/phoebis/"
+site_url = "https://phoebis-project.github.io/phoebis/"
 site_description = "A router for Claude Code. Every request lands on the right account."
-repo_url = "https://github.com/daystrom-labs/phoebis"
-repo_name = "daystrom-labs/phoebis"
+repo_url = "https://github.com/phoebis-project/phoebis"
+repo_name = "phoebis-project/phoebis"
 # No edit_uri: the repository is private, so an edit link would land a reader on a login page.
 docs_dir = "docs/site"
 site_dir = "site"

@@ -14,13 +14,13 @@ back to, the start check, the tool, what the mod reports, where it runs and how 
 Inside Claude Code:
 
 ```text
-/plugin marketplace add daystrom-labs/phoebis-marketplace
+/plugin marketplace add phoebis-project/phoebis-marketplace
 /plugin install phoebis-companion@phoebis
 ```
 
 The install line resolves once the marketplace is added. From a shell, `claude plugin marketplace add` and
 `claude plugin install` take the same arguments. For development, `claude --plugin-dir <checkout>` loads a checkout of
-[the companion repository](https://github.com/daystrom-labs/phoebis-companion) for one session.
+[the companion repository](https://github.com/phoebis-project/phoebis-companion) for one session.
 
 The mod needs Claude Code 2.1.287 or later. On an older client it writes one transcript line, `phoebis-companion: Claude
 Code <version> is older than 2.1.287, so the mod does nothing`, raises a toast with the same text when Start check

@@ -9,7 +9,7 @@ secrets:
 services:
   phoebis:
     env_file: phoebis.env
-    image: ghcr.io/daystrom-labs/phoebis:0.1.0
+    image: ghcr.io/phoebis-project/phoebis:0.1.0
     ports:
       - "8317:8317"
       - "127.0.0.1:8081:8081"

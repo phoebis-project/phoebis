@@ -1,6 +1,6 @@
 [Unit]
 Description=Phoebis Router
-Documentation=https://daystrom-labs.github.io/phoebis/operations/
+Documentation=https://phoebis-project.github.io/phoebis/operations/
 After=network-online.target
 Wants=network-online.target
 

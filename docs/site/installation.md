@@ -11,7 +11,7 @@ Every release carries a static binary for `x86_64` and `aarch64` Linux, which ru
 with no shared library, glibc version or distribution in the way:
 
 ```sh
-release=https://github.com/daystrom-labs/phoebis/releases/download/<version>
+release=https://github.com/phoebis-project/phoebis/releases/download/<version>
 curl -LO "$release/phoebis-<version>-x86_64-unknown-linux-musl.tar.gz"
 curl -LO "$release/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
@@ -26,7 +26,7 @@ checksum file and lists both archives, so `--ignore-missing` checks the one you 
 While the repository is private, downloading a release asset needs a token with `repo` scope, as
 [Releasing](development.md#releasing) says of `read:packages` for the image. GitHub answers the `curl -LO` lines above
 with `404` while the repository is private, token or not, so fetch the archive and `SHA256SUMS` in their place with the
-GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo daystrom-labs/phoebis --pattern
+GitHub CLI: `GH_TOKEN=<token> gh release download <version> --repo phoebis-project/phoebis --pattern
 'phoebis-<version>-x86_64-unknown-linux-musl.tar.gz' --pattern SHA256SUMS`. An operator who builds from source follows
 [Build](#build) instead.
 
@@ -121,7 +121,7 @@ The block below is the shipped `deploy/phoebis.service`, quoted whole:
 ```ini title="deploy/phoebis.service"
 [Unit]
 Description=Phoebis Router
-Documentation=https://daystrom-labs.github.io/phoebis/operations/
+Documentation=https://phoebis-project.github.io/phoebis/operations/
 After=network-online.target
 Wants=network-online.target
 
@@ -151,7 +151,7 @@ WantedBy=multi-user.target
 
 ## Run the container
 
-Every release publishes `ghcr.io/daystrom-labs/phoebis:<version>` for `linux/amd64` and `linux/arm64`. The image holds
+Every release publishes `ghcr.io/phoebis-project/phoebis:<version>` for `linux/amd64` and `linux/arm64`. The image holds
 the binary alone: no shell, no configuration, no key, and no price table (the shipped one is compiled in). It runs as
 uid 65532, reads `/etc/phoebis/config.yaml` (`PHOEBIS_CONFIG` is set in the image, so `phoebis` needs no flag), keeps
 both databases under `/var/lib/phoebis`, and probes its own proxy listener with `phoebis health` every 30 seconds,
@@ -173,7 +173,7 @@ on every interface over plain HTTP (no `tls` key), `storage.key`, and `phoebis.e
 runs the same command against the directory:
 
 ```sh title="Write the compose directory's files from the image"
-docker run --rm -it -u "$(id -u)" -v "$PWD:/work" ghcr.io/daystrom-labs/phoebis:<version> \
+docker run --rm -it -u "$(id -u)" -v "$PWD:/work" ghcr.io/phoebis-project/phoebis:<version> \
   init --container --config /work/config.yaml
 ```
 

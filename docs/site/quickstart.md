@@ -27,7 +27,7 @@ Download the release archive for your architecture, check it and put the binary 
 ([Download a release](installation.md#download-a-release)):
 
 ```sh
-release=https://github.com/daystrom-labs/phoebis/releases/download/<version>
+release=https://github.com/phoebis-project/phoebis/releases/download/<version>
 curl -LO "$release/phoebis-<version>-x86_64-unknown-linux-musl.tar.gz"
 curl -LO "$release/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
