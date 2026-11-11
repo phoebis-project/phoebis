@@ -2574,7 +2574,8 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
 /// The order that picks the one word a replaced pin's move carries out of what stood against its account: what the
 /// account is first, then what its pool and its limits say, so a deleted account's pin, whose list also holds
 /// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, as
-/// `pin_expired` with `deleted`, and the word stands here so the order covers every word `release_reasons` answers.
+/// `pin_expired` with `deleted`, and the word stands here so the order covers every word `release_reasons` answers but
+/// `expired`, which the arm never reads as a move.
 const MOVE_CAUSE_ORDER: [&str; 17] = [
     "deleted",
     "paused",
@@ -2615,7 +2616,8 @@ fn cleared_mark(row: &PinRow, reason: &'static str, at: i64) -> Option<RouterEve
 }
 
 /// The fit of a move's destination as the decision's candidate table holds it: what the move's gate read there, or
-/// the fresh placement's fit for a fail-over's landing. `None` throughout for a member the table does not list.
+/// the fresh placement's fit for a fail-over's landing and for a replaced live pin's move. `None` throughout for a
+/// member the table does not list.
 fn destination_fit(
     record: &DecisionRecord,
     account_id: &str,

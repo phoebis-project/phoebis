@@ -783,8 +783,8 @@ reason the pin left its account for (`paused`, `disconnected`, `funding_required
 `subscription_ended`, `unserved`, `cooldown`, `fast_rate_limit`, `fast_credits`, `budget_unknown`, `budget`, `overage`,
 `attempted`, `spent` or `released`, the first of that order the selection found) and with `reasons`, every fact it
 found. The request's `moved` and the decision's rule carry the same word, and the decision names the account the session
-left (`from_account_id`). A session idle past its pin's TTL stays an expiry beside any other reason, and so does a pin
-replaced on its own account: each records `pin_expired` with `reasons` and `pin_created`, and its placement names no
+left (`from_account_id`). The pin of a session idle past its TTL stays an expiry beside any other reason, and so does a
+pin replaced on its own account: each records `pin_expired` with `reasons` and `pin_created`, and its placement names no
 source. A deleted account's pins leave when the router reloads, as `pin_expired` with `deleted`, so a session that sat
 on one is placed afresh and its placement names no source.
 

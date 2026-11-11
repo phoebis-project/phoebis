@@ -1181,19 +1181,19 @@ fn unready(state: &RoutingState, account: &AccountRow, now: i64) -> Option<&'sta
     (account.state != AccountState::Ready && !retry_admitted).then(|| account.state.as_str())
 }
 
-/// The facts a selection finds against a pinned account, in the order it evaluates them, for the event that
-/// says why a pin was released without a migration: `expired` (idle past the pool's affinity TTL), `unserved`
-/// (the account no longer serves the model for this key: it left the pool, the model was deselected, or the
-/// key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is off), the
-/// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
-/// `subscription_ended` (canceled and past its saved end), `cooldown` (a live row blocks the model on the
-/// account), `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the
-/// poll's credits state, blocks it), `budget_unknown` (the member carries a budget while the ledger is degraded) or
-/// else `budget` (the member's spend is at or above its configured budget), `overage` (in overage under a policy
-/// other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the request's
-/// window); a fast request draws no plan window, so neither `overage` nor `spent` stands against it. Never empty: a
-/// pin released by a move whose destination then answered nothing carries `released`, the one fact the list above
-/// does not evaluate.
+/// The facts a selection finds against a pinned account, in the order it evaluates them, for two events: the
+/// `pin_expired` of a pin released without a migration, and the `pin_migrated` of a live pin a placement replaced on
+/// another account, which carries them whole and takes its word from them. They are `expired` (idle past the pool's
+/// affinity TTL), `unserved` (the account no longer serves the model for this key: it left the pool, the model was
+/// deselected, or the key or the pool is gone), `deleted` (the account left the registry), `paused` (`enabled` is
+/// off), the account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
+/// `subscription_ended` (canceled and past its saved end), `cooldown` (a live row blocks the model on the account),
+/// `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the poll's credits
+/// state, blocks it), `budget_unknown` (the member carries a budget while the ledger is degraded) or else `budget` (the
+/// member's spend is at or above its configured budget), `overage` (in overage under a policy other than `allow`),
+/// `attempted` (this request already tried it), and `spent` (no allowance left in the request's window). A fast request
+/// draws no plan window, so neither `overage` nor `spent` stands against it. Never empty: a pin released by a move
+/// whose destination then answered nothing carries `released`, the one fact the list above does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,

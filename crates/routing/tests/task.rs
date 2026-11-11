@@ -3995,11 +3995,16 @@ async fn a_pin_on_a_paused_account_moves_to_the_sibling_under_paused_and_a_repla
 }
 
 #[tokio::test]
-async fn a_pin_on_a_paused_account_idle_past_its_ttl_stays_an_expiry_and_its_placement_names_no_source(
+async fn a_marked_pin_on_a_paused_account_idle_past_its_ttl_stays_an_expiry_names_no_source_and_clears_its_mark_as_released(
 ) {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);
-    let now = Arc::new(AtomicI64::new(1_000));
+    let (from, to) = ("a", "b");
+    store
+        .upsert_pin(&marked(stored_pin(&store, "s1", from, 1, 0.0), AT - 60_000))
+        .unwrap();
+    store.set_enabled(from, false, "test").unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
     // No purge tick runs, so the row past its TTL below stays for the selection to replace.
     let handle = spawn(
         store.clone(),
@@ -4010,21 +4015,10 @@ async fn a_pin_on_a_paused_account_idle_past_its_ttl_stays_an_expiry_and_its_pla
         },
     )
     .unwrap();
-    let first = handle
-        .select(request(&handle, Some("s1"), 1_000))
-        .await
-        .unwrap();
-    let from = match &first.result {
-        SelectResult::Selected(s) => s.account.id.clone(),
-        other => panic!("{other:?}"),
-    };
-    let to = if from == "a" { "b" } else { "a" };
-    store.set_enabled(&from, false, "test").unwrap();
-    handle.reload().await.unwrap();
     let mut events = handle.subscribe_events();
-    // One millisecond past the pool's hour-long affinity TTL.
+    // One millisecond past the pool's hour-long affinity TTL from the pin's last use.
     let answer = handle
-        .select(request(&handle, Some("s1"), 1_000 + HOUR + 1))
+        .select(request(&handle, Some("s1"), AT - 1_000 + HOUR + 1))
         .await
         .unwrap();
     let moved = match &answer.result {
@@ -4054,6 +4048,25 @@ async fn a_pin_on_a_paused_account_idle_past_its_ttl_stays_an_expiry_and_its_pla
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == from && reasons == vec!["expired", "paused"]),
         "the expiry keeps both facts"
+    );
+    assert!(matches!(
+        next_event(&mut events).await,
+        RouterEvent::PinCreated { account_id, .. } if account_id == to
+    ));
+    // The expired pin left for the sibling, so a mark reason read off the two accounts would say `moved`.
+    assert!(
+        matches!(
+            next_event(&mut events).await,
+            RouterEvent::MarkCleared {
+                account_id,
+                pin: PinKey { session_id, .. },
+                reason: "released",
+                marked_at,
+                marked_on,
+                ..
+            } if account_id == from && session_id == "s1" && marked_at == AT - 60_000 && marked_on == from
+        ),
+        "the expired pin's mark leaves with it as released"
     );
 }
 
