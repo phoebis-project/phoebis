@@ -195,7 +195,8 @@ the rate-limit windows, never this number. The shipped price table (`crates/ledg
 binary. `stats.api_prices_path` replaces its whole list with a file of the operator's own, Settings names each table's
 path and date on its About card, and the cost reference dialog the Sessions view opens draws the table ([The cost
 reference](console.md#the-cost-reference)). A request with usage on a model the entry in force does not price reads no
-cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
+cost estimate and is counted in `phoebis_pricing_unknown_model_total`, while a client classifier call the plan paid
+reads zero on any model.
 
 The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` date in `YYYY-MM-DD`
 form and the whole table of that date, `models`. An entry is in force from 00:00 UTC of its date to the next entry's,
@@ -269,9 +270,9 @@ Plan per hour and its dollars in `usd`. A usage-based seat's answer counts its d
 burn route names its group's unit `usd`, as an API-key account's. A member's budget counts a fast answer at the fast
 cells, a subscription member's as an API-key member's.
 
-A client classifier call reads a zero share and a zero Pro-week figure on a subscription account, with the reason
-`client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat. A call
-recorded `client_off`, charged off its judged turn's account, prices at its model's weight as any call does
+A client classifier call reads a zero share, a zero Pro-week figure and zero dollars on a subscription account, with the
+reason `client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat. A
+call recorded `client_off`, charged off its judged turn's account, prices at its model's weight as any call does
 ([Clients](routing.md#clients)).
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:

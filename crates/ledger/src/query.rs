@@ -4412,7 +4412,7 @@ pub(crate) fn price_usage(
 #[derive(Debug)]
 pub struct RequestPrice {
     pub funding: Funding,
-    /// The serving attempt's list dollars through `price_usd`.
+    /// The serving attempt's list dollars through `price_usd`, zero for a client classifier call the plan paid.
     pub usd: f64,
     /// A plan row's Pro-week figure, `None` where the cost model prices nothing for it, and `Some(0.0)` on a billed
     /// row.

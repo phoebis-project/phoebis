@@ -1458,7 +1458,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.00355,
+        "cost_usd": 0.0,
         "cost_shares": {
           "five_hour": 0.0,
           "seven_day": 0.0
@@ -1501,7 +1501,7 @@
             ],
             "overage_in_use": null,
             "usage_based": false,
-            "estimated_usd": 0.00355,
+            "estimated_usd": 0.0,
             "selection": null,
             "response": {
               "cleared_input_tokens": null,

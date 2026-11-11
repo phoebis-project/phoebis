@@ -128,12 +128,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0007000000000000001,
-              "cache_write": 0.006,
-              "input": 0.024,
-              "output": 0.012
+              "cache_read": 0.0006500000000000001,
+              "cache_write": 0.0055,
+              "input": 0.022,
+              "output": 0.011
             },
-            "cost_usd": 0.0427,
+            "cost_usd": 0.039150000000000004,
             "errors": {
               "stream_incomplete": 1
             },

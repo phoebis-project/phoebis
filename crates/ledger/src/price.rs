@@ -117,6 +117,7 @@ impl<'a> AttemptFacts<'a> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Priced {
     /// The price revision in force at `at` over the five counts at the selected cells, `None` for a model it lacks.
+    /// A client classifier call under the plan reads the zero split on any model.
     pub usd: Option<CostSplit>,
     /// The shares of the account tier's windows for `Funding::Plan` with an account tier the cost revision sizes,
     /// else `None`.
@@ -166,7 +167,7 @@ pub fn price_row(
     let in_force = costs.revisions.in_force(key.at);
     let sized = key.tier.filter(|tier| in_force.sizes(key.entrypoint, tier));
     if key.classifier {
-        // A free call spends no window, so the Pro-week figure is zero too, and the dollars stay for the cost views.
+        // A free call spends no window and costs no dollars, so every figure reads zero.
         let shares = sized.map(|tier| free_shares(costs, key.entrypoint, tier, key.model, key.at));
         return Priced {
             usd,
@@ -229,12 +230,16 @@ pub(crate) fn price_equivalent_at(
 }
 
 /// `price_row`'s dollars alone: the counts at the price revision in force at the row's instant, `None` for a
-/// model that revision lacks. The `/v1/usage` sums read these and no other figure.
+/// model that revision lacks, and a zero split for a client classifier call the plan paid, which is free on its
+/// account in every unit whatever the revision lists. The `/v1/usage` sums read these and no other figure.
 pub(crate) fn price_usd(
     prices: &PriceRevisions,
     key: &RowKey<'_>,
     counts: PinUsage,
 ) -> Option<CostSplit> {
+    if key.classifier && key.funding == Funding::Plan {
+        return Some(CostSplit::default());
+    }
     prices
         .in_force(key.at)
         .estimate_banded(key.model, key.speed, key.band, counts)
@@ -363,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_row_of_a_classifier_call_answers_zero_on_every_window_with_the_reason_and_its_dollars(
+    fn a_plan_row_of_a_classifier_call_answers_zero_dollars_and_zero_on_every_window_with_the_reason(
     ) {
         let plain = price(&plan_row(), input(1_000));
         let free = price(
@@ -373,8 +378,15 @@ mod tests {
             },
             input(1_000),
         );
-        assert!(free.usd.is_some(), "Opus 5.5 is listed");
-        assert_eq!(free.usd, plain.usd, "the dollars stay for the cost views");
+        assert!(
+            plain.usd.as_ref().is_some_and(|usd| usd.total() > 0.0),
+            "Opus 5.5 is listed: {plain:?}"
+        );
+        assert_eq!(
+            free.usd,
+            Some(CostSplit::default()),
+            "a free call costs no dollars: {free:?}"
+        );
         let plain_windows = windows(&plain.shares);
         assert!(!plain_windows.is_empty(), "{plain:?}");
         assert_eq!(
@@ -413,7 +425,8 @@ mod tests {
     }
 
     // Mystery 2 sits on a model tier with no weighted model, so a priced row reads both windows unpriced, while the
-    // marker's zero maps come from Ultra's capacity alone.
+    // marker's zero maps come from Ultra's capacity alone. The price list lacks it too, so its zero dollars come from
+    // the free rule ahead of the list's lookup.
     #[test]
     fn a_classifier_call_on_a_model_the_weight_table_lacks_answers_the_full_zero_maps() {
         let row = RowKey {
@@ -427,6 +440,7 @@ mod tests {
             },
             input(1_000),
         );
+        assert_eq!(free.usd, Some(CostSplit::default()), "{free:?}");
         assert_eq!(
             (windows(&free.shares), free.equivalent),
             (

@@ -794,12 +794,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.0010500000000000002,
-            "cache_write": 0.008500000000000004,
-            "input": 0.034000000000000016,
-            "output": 0.017000000000000008
+            "cache_read": 0.0010000000000000002,
+            "cache_write": 0.008000000000000002,
+            "input": 0.03200000000000001,
+            "output": 0.016000000000000004
           },
-          "cost_usd": 0.06055000000000003,
+          "cost_usd": 0.05700000000000001,
           "errors": {
             "stream_incomplete": 1,
             "upstream_error": 1
@@ -1563,12 +1563,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.0009000000000000002,
-            "cache_write": 0.007500000000000001,
-            "input": 0.030000000000000002,
-            "output": 0.015000000000000001
+            "cache_read": 0.0008500000000000002,
+            "cache_write": 0.007,
+            "input": 0.028,
+            "output": 0.014
           },
-          "cost_usd": 0.0534,
+          "cost_usd": 0.04985,
           "errors": {
             "stream_incomplete": 1,
             "upstream_error": 1
@@ -3465,12 +3465,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost": {
-            "cache_read": 0.0010500000000000002,
-            "cache_write": 0.008500000000000004,
-            "input": 0.034000000000000016,
-            "output": 0.017000000000000008
+            "cache_read": 0.0010000000000000002,
+            "cache_write": 0.008000000000000002,
+            "input": 0.03200000000000001,
+            "output": 0.016000000000000004
           },
-          "cost_usd": 0.06055000000000003,
+          "cost_usd": 0.05700000000000001,
           "errors": {
             "stream_incomplete": 1,
             "upstream_error": 1
@@ -5716,12 +5716,12 @@ export const FIXTURES: Record<string, Fixture> = {
                 "web_search": 0
               },
               "cost": {
-                "cache_read": 0.0007500000000000001,
-                "cache_write": 0.006500000000000002,
-                "input": 0.02600000000000001,
-                "output": 0.013000000000000005
+                "cache_read": 0.0007000000000000001,
+                "cache_write": 0.006000000000000002,
+                "input": 0.024000000000000007,
+                "output": 0.012000000000000004
               },
-              "cost_usd": 0.04625000000000002,
+              "cost_usd": 0.042700000000000016,
               "errors": {
                 "stream_incomplete": 1
               },
@@ -6969,12 +6969,12 @@ export const FIXTURES: Record<string, Fixture> = {
                 "web_search": 0
               },
               "cost": {
-                "cache_read": 0.0007000000000000001,
-                "cache_write": 0.006,
-                "input": 0.024,
-                "output": 0.012
+                "cache_read": 0.0006500000000000001,
+                "cache_write": 0.0055,
+                "input": 0.022,
+                "output": 0.011
               },
-              "cost_usd": 0.0427,
+              "cost_usd": 0.039150000000000004,
               "errors": {
                 "stream_incomplete": 1
               },
@@ -9865,7 +9865,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "requests_24h": 18,
       "tokens_24h": 34200,
       "tokens_cached_24h": 9500,
-      "cost_24h": 0.06409999999999999,
+      "cost_24h": 0.06055,
       "billed_24h": 0.0178,
       "equivalent_24h": null,
       "error_rate_24h": 0.1111111111111111,
@@ -10096,7 +10096,7 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "at": 1791716400000,
           "billed": 0.0142,
-          "cost": 0.0498,
+          "cost": 0.04625,
           "equivalent": 0.0002115,
           "errors": 1,
           "refused": 2,
@@ -11184,14 +11184,14 @@ export const FIXTURES: Record<string, Fixture> = {
           ],
           "usage_7d": {
             "billed_usd": 0.0178,
-            "cost_usd": 0.06055,
+            "cost_usd": 0.057,
             "equivalent": null,
             "requests": 17,
             "tokens": 32400
           },
           "lifetime": {
             "billed_usd": 0.0178,
-            "cost_usd": 0.06055,
+            "cost_usd": 0.057,
             "equivalent": null,
             "requests": 17
           }
@@ -11437,7 +11437,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "requests": 13,
           "failed": 1,
           "tokens": 25200,
-          "cost_usd": 0.04979999999999999,
+          "cost_usd": 0.04624999999999999,
           "billed_usd": 0.0142,
           "equivalent": 0.00021150000000000002
         },
@@ -11611,7 +11611,7 @@ export const FIXTURES: Record<string, Fixture> = {
           ],
           "status": "active",
           "requests_24h": 18,
-          "cost_24h": 0.06409999999999999,
+          "cost_24h": 0.06054999999999999,
           "billed_24h": 0.0178,
           "equivalent_24h": null,
           "active_pins": 6,
@@ -11828,7 +11828,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 13,
               "failed": 1,
               "tokens": 25200,
-              "cost_usd": 0.04979999999999999,
+              "cost_usd": 0.04624999999999999,
               "billed_usd": 0.0142,
               "equivalent": 0.00021150000000000002
             },
@@ -14724,7 +14724,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_fetch": 0,
             "web_search": 0
           },
-          "cost_usd": 0.00355,
+          "cost_usd": 0,
           "cost_shares": {
             "five_hour": 0,
             "seven_day": 0
@@ -14767,7 +14767,7 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "overage_in_use": null,
               "usage_based": false,
-              "estimated_usd": 0.00355,
+              "estimated_usd": 0,
               "selection": null,
               "response": {
                 "cleared_input_tokens": null,
@@ -22251,7 +22251,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "user_agent": "claude-cli/2.1.310 (external, cli)",
           "spend": {
             "requests": 2,
-            "usd": 0.0071,
+            "usd": 0.00355,
             "billed_usd": {},
             "equivalent": 0.0000235,
             "shares": {
@@ -22273,7 +22273,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "auxiliary": 1,
               "other": 1
             },
-            "usd": 0.0071,
+            "usd": 0.00355,
             "billed_usd": {},
             "equivalent": 0.0000235
           },
@@ -22310,7 +22310,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "last_request_at": 1791720880000,
               "spend": {
                 "requests": 2,
-                "usd": 0.0071,
+                "usd": 0.00355,
                 "billed_usd": {},
                 "equivalent": 0.0000235,
                 "shares": {

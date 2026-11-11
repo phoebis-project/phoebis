@@ -4,7 +4,7 @@
     "requests_24h": 18,
     "tokens_24h": 34200,
     "tokens_cached_24h": 9500,
-    "cost_24h": 0.06409999999999999,
+    "cost_24h": 0.06055,
     "billed_24h": 0.0178,
     "equivalent_24h": null,
     "error_rate_24h": 0.1111111111111111,
@@ -235,7 +235,7 @@
       {
         "at": 1791716400000,
         "billed": 0.0142,
-        "cost": 0.0498,
+        "cost": 0.04625,
         "equivalent": 0.0002115,
         "errors": 1,
         "refused": 2,

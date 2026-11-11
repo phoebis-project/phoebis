@@ -1204,9 +1204,10 @@ async fn the_analytics_group_on_the_classifier_dimension() {
     keys.sort_unstable();
     assert_eq!(keys, ["-", "client"], "{breakdown}");
     let (marked, plain) = (group(&breakdown, "client"), group(&breakdown, "-"));
-    assert!(
-        marked["cost_usd"].as_f64().is_some_and(|usd| usd > 0.0),
-        "the marked group keeps its dollar estimate: {marked}"
+    assert_eq!(
+        marked["cost_usd"].as_f64(),
+        Some(0.0),
+        "the marked group reads zero dollars: {marked}"
     );
     assert_eq!(marked["cost_equivalent"].as_f64(), Some(0.0), "{marked}");
     assert!(

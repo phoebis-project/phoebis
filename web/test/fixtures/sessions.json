@@ -535,7 +535,7 @@
         "user_agent": "claude-cli/2.1.310 (external, cli)",
         "spend": {
           "requests": 2,
-          "usd": 0.0071,
+          "usd": 0.00355,
           "billed_usd": {},
           "equivalent": 0.0000235,
           "shares": {
@@ -557,7 +557,7 @@
             "auxiliary": 1,
             "other": 1
           },
-          "usd": 0.0071,
+          "usd": 0.00355,
           "billed_usd": {},
           "equivalent": 0.0000235
         },
@@ -594,7 +594,7 @@
             "last_request_at": 1791720880000,
             "spend": {
               "requests": 2,
-              "usd": 0.0071,
+              "usd": 0.00355,
               "billed_usd": {},
               "equivalent": 0.0000235,
               "shares": {

@@ -19,7 +19,8 @@ use utoipa::ToSchema;
 pub(crate) struct SessionSpend {
     /// The client requests priced, probes and refused requests out.
     pub requests: u64,
-    /// Their dollars at the list price, the sum of what the request log shows as `cost_usd`.
+    /// Their dollars at the list price, the sum of what the request log shows as `cost_usd`, where a client
+    /// classifier call the plan paid adds zero.
     pub usd: f64,
     /// The dollars billed by funding, `api_key`, `fast`, `overage` or `usage_based`, a zero entry left out.
     pub billed_usd: BTreeMap<String, f64>,

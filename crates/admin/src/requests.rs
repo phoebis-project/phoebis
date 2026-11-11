@@ -167,9 +167,9 @@ pub(crate) struct RequestSummary {
     /// price, a model without a weight. Else the serving attempt's usage as the share of the Pro 7-day window, the
     /// cost model's units over the Pro capacity under the request's regime, whatever account tier served it.
     pub cost_equivalent: Option<f64>,
-    /// `client_classifier` where `cost_shares` and `cost_equivalent` read zero by rule, for a request whose
-    /// `classifier` reads `client` under a subscription window. Null for a figure priced from the request's counts, a
-    /// `client_off` call's among them.
+    /// `client_classifier` where `cost_shares` and `cost_equivalent` read zero by rule and the attempts the plan paid
+    /// add zero dollars to `cost_usd`, for a request whose `classifier` reads `client` under a subscription window.
+    /// Null for a figure priced from the request's counts, a `client_off` call's among them.
     pub share_reason: Option<String>,
     /// The serving attempt's account tier the router priced by when the request landed, null as on the attempt.
     pub tier: Option<String>,
@@ -284,8 +284,9 @@ pub(crate) struct Attempt {
     /// The serving account's class at the attempt, false on a row from before the router recorded it.
     pub usage_based: bool,
     /// The attempt's dollars at the cells its own prompt selects on the API price revision in force at its request's
-    /// receipt, priced when it is read. Null for an attempt without usage and for an attempt on a model the revision
-    /// lacks, a probe's among them.
+    /// receipt, priced when it is read. Null for an attempt without usage. An attempt of a client classifier call the
+    /// plan paid reads zero whatever the revision lists, and another attempt on a model the revision lacks reads null,
+    /// a probe's among them.
     pub estimated_usd: Option<f64>,
     /// Null, or the trace behind the attempt's placement: `strategy`, `tier` (the three-element array `[group,
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a

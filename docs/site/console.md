@@ -194,12 +194,13 @@ usage, the cooldown line, and "API key" for an API-key account. "Recent requests
 badge reading `×{n}` for a request of several attempts. Time is the column that gives way: the time reads whole, and
 the request id under it is cut by the room past its first twelve characters, whole on hover, while Key and the other
 columns read whole. Cost reads as the Requests view's column does: under All in dollars and Dollar equivalent a
-subscription request's dollar equivalent over `equivalent`, under Billed dollars a dash, and a billed request's dollars
-under each of the three but Dollar equivalent, where it reads a dash. Under Native a subscription request reads its
-figure in the chosen week alone, with the hint the Requests view's column describes, the dollar equivalent and the price
-list and cost model in force on hover, a client classifier call's hover leading with "Free on the plan: a client
-classifier call takes no window share", and a billed request its dollars. The column header's hover names what each kind
-of request reads under the position. Where the table runs wider than its card it scrolls inside it.
+subscription request's dollar equivalent over `equivalent`, `$0.00` for a client classifier call, under Billed dollars a
+dash, and a billed request's dollars under each of the three but Dollar equivalent, where it reads a dash. Under Native
+a subscription request reads its figure in the chosen week alone, with the hint the Requests view's column describes,
+the dollar equivalent and the price list and cost model in force on hover, a client classifier call its zero figure with
+"Free on the plan: a client classifier call takes no window share" leading its hover, and a billed request its dollars.
+The column header's hover names what each kind of request reads under the position. Where the table runs wider than its
+card it scrolls inside it.
 
 "Sessions" ("Sessions, their agents and the engine that keeps their caches warm", with "Open") reads the active pins as
 `active pins across {n} accounts`. Its grid counts the live sessions as the [Sessions](#sessions) view's summary line
@@ -852,12 +853,12 @@ under Billed dollars a dash with the hover "Nothing billed: a subscription reque
 usage-based request reads dollars under every position but Dollar equivalent, where it reads a dash with the hover
 "Billed in dollars, no subscription equivalent". A client classifier call on a subscription account reads `0%` in the
 chosen week under Native, with the hover "Free on the plan: a client classifier call takes no window share" ahead of the
-hint, its dollar equivalent over `equivalent` under All in dollars and Dollar equivalent with the same hover ahead of
-its zero figure, and a dash under Billed dollars, while on an overage or API-key account it reads its dollars as any
-billed request does. The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds
-the requests up to the moment you opened it so paging does not shift, and the split Refresh button's body brings it up
-to now. An empty table reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which
-clears the filters, the search and the range. What each figure means is on [Statistics](statistics.md).
+hint, `$0.00` over `equivalent` under All in dollars and Dollar equivalent with the same hover ahead of its zero figure,
+and a dash under Billed dollars, while on an overage or API-key account it reads its dollars as any billed request does.
+The table pages by "Rows" (10, 25, 50 or 100, 25 by default) with First, Previous and Next, holds the requests up to the
+moment you opened it so paging does not shift, and the split Refresh button's body brings it up to now. An empty table
+reads "No requests match" with "Widen the range or clear a filter." and "Reset filters", which clears the filters, the
+search and the range. What each figure means is on [Statistics](statistics.md).
 
 Auto reload is off when the view opens. The split Refresh button's dropdown sets it to Off, 5 s, 10 s, 30 s or 1 min,
 and the choice stays with the open page, out of its address. At each interval it reads the list again, a preset's range
@@ -899,8 +900,9 @@ the same on the open row closes it. The drawer holds the request's id and time, 
   dollars, and a billed request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a
   dash stands, as the Cost cell's hover does, then the hint, the serving account's tier (`Account tier {tier}`) and the
   price list and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of
-  {date}`). A client classifier call's row reads its zero figure under Native and its dollar equivalent under All in
-  dollars and Dollar equivalent, with the hover "Free on the plan: a client classifier call takes no window share".
+  {date}`). A client classifier call's row reads its zero figure under Native, `$0.00` with `equivalent` under All in
+  dollars and Dollar equivalent and a dash under Billed dollars, with the hover "Free on the plan: a client classifier
+  call takes no window share".
 - Request: Session, Agent, Client with the request class badge and the fork line where the session branched from another
   conversation, User agent (such as `claude-cli/2.1.310 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row
   per attempt with the upstream's request id and, on the answer that served, its message id.
