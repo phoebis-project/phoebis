@@ -342,14 +342,14 @@ compaction, or settles as wasted.
 
 `partial_cache_coverage` names a probe that did not leave the whole prefix in the cache. The measure is the count of the
 agent's last request, the tokens it read and wrote. A probe on the recipe's own account covers by reading that many
-tokens back. One that read part of the prefix, or whose read and write stay under the count, pauses the recipe, and one
-that read nothing and rewrote the prefix counts as a cold probe. A probe the failover served on another account moves
-the agent there and covers where its read and write reach the count, or where it read or wrote some of it and left at
-most 64 tokens of its prompt uncached, the tokens a body carries after its last cache marker. An upstream can count a
-cold write lower than the warm read of the same prompt, and a probe that left so little uncached read or wrote the rest
-whatever the count says. A body that carries more than that after its last marker is judged on the count alone. A
-covering probe on another account arms the schedule at the expiry of the entry it wrote, and the next probe has to read
-back what it counted.
+tokens back. One that read part of the prefix, or that read or wrote some of it and stayed under the count, pauses the
+recipe, and one that read nothing and rewrote the prefix counts as a cold probe. A probe the failover served on another
+account moves the agent there and covers where its read and write reach the count, or where it read or wrote some of it
+and left at most 64 tokens of its prompt uncached, the tokens a body carries after its last cache marker. An upstream
+can count a cold write lower than the warm read of the same prompt, and a probe that left so little uncached read or
+wrote the rest whatever the count says. A body that carries more than that after its last marker is judged on the count
+alone. A covering probe on another account arms the schedule at the expiry of the entry it wrote, and the next probe has
+to read back what it counted.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance and the session's own expiry each discard every recipe of the session at once, and the deletion of the key that

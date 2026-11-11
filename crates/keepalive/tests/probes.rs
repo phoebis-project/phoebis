@@ -1239,6 +1239,44 @@ async fn a_migrated_probe_under_the_count_that_left_a_long_tail_uncached_pauses_
     );
 }
 
+/// A probe on its own account that reads the whole prefix and writes beside it covers, and the next probe is held to
+/// the same count: only a migrated probe hands the next one what it counted.
+#[tokio::test]
+async fn a_probe_on_its_own_account_that_also_writes_leaves_the_next_probe_the_same_count() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    // The recipe counts the standing answer's 2,000-token read. The probe reads all of it and writes 500 beside it.
+    r.observe("main").await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(2_000, 500));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.migrations,
+            status.probes,
+            status.cold,
+            status.paused,
+            status.reason
+        ),
+        (0, 1, 0, false, Reason::Scheduled),
+        "{status:?}"
+    );
+    // The next probe reads the 2,000 tokens back and writes nothing.
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(2_000, 0));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.cold, status.paused, status.reason),
+        (2, 0, false, Reason::Scheduled),
+        "the count stays the last request's 2,000 tokens: {status:?}"
+    );
+}
+
 /// The series of one family in a scrape of the rig's metrics, in the order the scrape renders them.
 fn series(r: &Rig, family: &str) -> Vec<String> {
     r.metrics

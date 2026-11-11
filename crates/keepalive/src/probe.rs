@@ -125,12 +125,13 @@ pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'
 const MIGRATED_UNCACHED_MAX: u64 = 64;
 
 /// The coverage judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's.
-/// A probe on its own account covers by reading back what the agent's last request read and wrote. A migrated probe
-/// wrote the prefix on its new account, and it covers where its read and write reach that count or where it read or
-/// wrote some of it and left at most `MIGRATED_UNCACHED_MAX` tokens uncached. An upstream can count a cold write below
-/// the warm read of the same prompt, and every token of a prompt is read, written or uncached, so a probe that left
-/// that little uncached read or wrote the rest whatever the count says. A probe that reports no cache read and no
-/// cache write covers nothing, whatever it left uncached, and the probe counter keeps `cold` for it.
+/// A probe on its own account covers by reading back the count `expected` holds, the last request's read and write or,
+/// after a migrated probe that covered, what that probe counted. A migrated probe wrote the prefix on its new account,
+/// and it covers where its read and write reach that count or where it read or wrote some of it and left at most
+/// `MIGRATED_UNCACHED_MAX` tokens uncached. An upstream can count a cold write below the warm read of the same prompt,
+/// and every token of a prompt is read, written or uncached, so a probe that left that little uncached read or wrote
+/// the rest whatever the count says. A probe that reports no cache read and no cache write covers nothing, whatever it
+/// left uncached, and the probe counter keeps `cold` for it.
 pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool {
     if migrated {
         usage.evidence() >= expected
