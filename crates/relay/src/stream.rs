@@ -190,9 +190,6 @@ pub(crate) struct Renewal {
     pub cache_ttl_ms: i64,
     /// Whether this request created the pin rather than renewing one that already served.
     pub fresh: bool,
-    /// The request is the client's own classifier call on the account its judged turn ended on, so the renewal enters
-    /// the unmetered copy. False for a classifier call the router answered off, which renews as a standard answer.
-    pub classifier: bool,
     /// The request's class is a turn's, `main` or `subagent`, so its stream's end is the turn's end the router notes.
     pub turn: bool,
     /// The request's class is `subagent`, so an answer that stops with `end_turn` ends the agent.
@@ -258,7 +255,6 @@ impl Renewal {
                 keepalive: self.keepalive,
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast: response.speed.as_deref() == Some("fast"),
-                classifier: self.classifier,
                 turn_end,
             },
         );
@@ -284,6 +280,9 @@ pub(crate) struct AffinityFacts {
     /// The request is the client's own classifier call on the account its judged turn ended on, so its usage report
     /// charges no plan window. False for a classifier call the router answered off, which charges as any call.
     pub classifier: bool,
+    /// The pin the client's classifier call judged (`Selection::judged_pin`), whose classifier copy the usage report
+    /// folds into where the call ran on that pin's account. `None` for every other request.
+    pub judged_pin: Option<PinRef>,
     pub lane: String,
     /// The identity's session id, which the contract guarantees.
     pub root: String,
@@ -339,6 +338,7 @@ impl AffinityFacts {
                     request_id: self.request_id.clone(),
                     attempt: self.attempt,
                     entrypoint: self.entrypoint.clone(),
+                    judged_pin: self.judged_pin.clone(),
                 },
             );
             usage_sent = true;

@@ -26,8 +26,8 @@ use crate::record::{
 };
 use crate::select::{
     budget_facts, burn_unit, decide, obstacle, pace_of, passes_reset, projection_of,
-    projections_of, release_reasons, routed_agent, slow_down_ramp, BurnRead, Decided, FailedOver,
-    Obstacle, Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    projections_of, release_reasons, slow_down_ramp, BurnRead, Decided, FailedOver, Obstacle,
+    Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, burn_folded, ceiling, default_burn_average_ms,
@@ -512,13 +512,14 @@ impl BurnRates {
     /// with the fast usage read from the row's own `burn_fast` and the usage of the client's own classifier calls from
     /// the row's own `burn_unmetered`. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus
     /// the fast usage through the fast table plus the unmetered usage through the dollar table at the set the last
-    /// prompt selects. On a row with fast cells the fast table carries them whatever the prompt, so a prompt that
-    /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
-    /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare` the
-    /// copy `BurnUnit::read` takes on `window` alone, the banded one on `five_hour`, through the table of the window it
-    /// prices on under the pin's regime: fast usage draws usage credits and a classifier call takes no share of a plan
-    /// window, so neither reaches the plan's figure, while an account in overage or on an API key pays the dollars of
-    /// both. `None` where a type the pin burns has no rate.
+    /// prompt selects, at the model the copy names (`burn_unmetered_model`), the pin's own for a copy that names none.
+    /// On a row with fast cells the fast table carries them whatever the prompt, so a prompt that crosses the threshold
+    /// reprices the ordinary usage alone, and on a row without them it carries the row's own sets, so the fast usage
+    /// reprices with the row, as the ledger prices a fast answer there. Under `WindowShare` the copy `BurnUnit::read`
+    /// takes on `window` alone, the banded one on `five_hour`, through the table of the window it prices on under the
+    /// pin's regime: fast usage draws usage credits and a classifier call takes no share of a plan window, so neither
+    /// reaches the plan's figure, while an account in overage or on an API key pays the dollars of both. `None` where a
+    /// type the pin burns has no rate.
     pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, window: &str) -> Option<f64> {
         let own = unit
             .table(self, pin.entrypoint.as_deref(), window)
@@ -529,7 +530,7 @@ impl BurnRates {
                     .fast
                     .price_burn(&pin.model, &pin.burn_fast, pin.last_input_tokens)?
                     + self.dollars.price_burn(
-                        &pin.model,
+                        pin.burn_unmetered_model.as_deref().unwrap_or(&pin.model),
                         &pin.burn_unmetered,
                         pin.last_input_tokens,
                     )?,
@@ -585,7 +586,7 @@ pub struct SelectAnswer {
 /// What a renewal's stream end ended, which `Report::PinRenewed` carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenewalEnd {
-    /// No turn: a compaction, an auxiliary call (the classifier's among them) or a keepalive probe.
+    /// No turn: a compaction, an auxiliary call or a keepalive probe.
     NoTurn,
     /// A `main` or `subagent` turn, whose stream's end is the end of the agent's turn that `latest_turn_pin` answers.
     Turn,
@@ -693,11 +694,6 @@ pub enum Report {
         cache_ttl_ms: i64,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
-        /// The request is the client's own classifier call on the account and incarnation its judged turn ended on
-        /// (`Selection::judged` reads `On`), which charges no plan window and enters the pin's unmetered copy alone.
-        /// False for a classifier call the router answered off, which folds as a standard answer and leaves its body
-        /// as the pin's last prompt, the rewrite the pin's next move prices.
-        classifier: bool,
         /// What the stream's end ended, as the relay read it from the request's class, the answer's stop reason and
         /// whether a keepalive probe sent the request.
         turn_end: RenewalEnd,
@@ -740,6 +736,10 @@ pub enum Report {
         /// The request's entrypoint as the identity read it, what the charge prices under: `None` for a client that
         /// is not Claude Code, which prices at the base regime.
         entrypoint: Option<String>,
+        /// The pin the client's classifier call judged (`Selection::judged_pin`), `None` for every other request. The
+        /// call's tokens fold into that pin's classifier copy where the pin still stands under its epoch on the account
+        /// and incarnation the call ran on.
+        judged_pin: Option<PinRef>,
     },
 }
 
@@ -3061,11 +3061,6 @@ impl Task {
                         }
                     }
                 }
-                // The client's classifier call is routed as the agent of the turn it judges (`routed_agent`), so the
-                // pin the facts and the events below read is that agent's.
-                if let Some(agent_id) = routed_agent(&self.state, &request) {
-                    request.agent_id = agent_id;
-                }
                 let pin_key = request.pin_key();
                 // The agent's own request is its return, cleared ahead of the round it may run so that round walks the
                 // pin. A probe replays a request and a classifier call judges a turn, the ended one among them, so
@@ -3074,12 +3069,14 @@ impl Task {
                     !(request.probe || request.classifier) && self.state.clear_ended(&pin_key);
                 let before = self.state.pin(&pin_key).cloned();
                 // A failover inside the window lands on the row its source lost: the selection prices the session's
-                // own burn and names the cause on the record. A key that holds a pin again is no landing, and the
-                // entry stays until a selection lands the session, so a held one leaves it for the next.
+                // own burn and names the cause on the record. A key that holds a pin again is no landing, and neither
+                // is the client's classifier call, which holds no pin and lands no session though its key can be the
+                // conversation's. The entry stays until a selection lands the session, so a held one leaves it for
+                // the next.
                 request.failed_over = self
                     .invalidated
                     .get(&pin_key)
-                    .filter(|_| before.is_none())
+                    .filter(|_| before.is_none() && !request.classifier)
                     .filter(|entry| entry.within(request.now))
                     .map(|entry| FailedOver {
                         from_account_id: entry.account_id.clone(),
@@ -4038,7 +4035,6 @@ impl Task {
                 keepalive,
                 cache_ttl_ms,
                 fast,
-                classifier,
                 turn_end,
             } => {
                 let key = self.canonical_pin(&mut pin);
@@ -4132,27 +4128,17 @@ impl Task {
                                     }
                                 };
                                 // A fast answer is usage credits: its tokens land in the row's fast copy, priced
-                                // later through the fast table (`BurnRates::fast`). The client's classifier call on
-                                // its judged turn's account takes no share of a plan window, so its tokens land in
-                                // the unmetered copy alone, priced in dollars and never under the window share. A
-                                // standard answer folds into the plain and banded copies, the banded one weighed by
-                                // the band, and so does a classifier call the router answered off, which the relay
-                                // reports unmarked: its body then stands as the pin's last prompt, which the pin's
-                                // next move prices as its rewrite. Every copy an answer does not land in only decays.
-                                let (plain, fast_weight, unmetered_weight) =
-                                    match (classifier, fast) {
-                                        (true, _) => (0.0, 0.0, 1.0),
-                                        (false, true) => (0.0, 1.0, 0.0),
-                                        (false, false) => (1.0, 0.0, 0.0),
-                                    };
+                                // later through the fast table (`BurnRates::fast`). A standard answer folds into the
+                                // plain and banded copies, the banded one weighed by the band. Every copy an answer
+                                // does not land in only decays, the classifier copy among them.
+                                let (plain, fast_weight) =
+                                    if fast { (0.0, 1.0) } else { (1.0, 0.0) };
                                 renewed.burn = folded(renewed.burn, plain);
                                 renewed.burn_banded = folded(renewed.burn_banded, plain * band);
                                 renewed.burn_fast = folded(renewed.burn_fast, fast_weight);
-                                renewed.burn_unmetered =
-                                    folded(renewed.burn_unmetered, unmetered_weight);
+                                renewed.burn_unmetered = folded(renewed.burn_unmetered, 0.0);
                                 renewed.burn_at = Some(now);
                                 renewed.last_input_tokens = prompt;
-                                renewed.last_classifier = classifier;
                             }
                         }
                         let row = renewed.clone();
@@ -4332,6 +4318,7 @@ impl Task {
                 request_id,
                 attempt: _,
                 entrypoint,
+                judged_pin,
             } => {
                 // The usage replaces the booking, on every path below: a request that holds none (a renewal, a
                 // request from before a restart, one whose booking the purge expired) still charges its account.
@@ -4340,6 +4327,23 @@ impl Task {
                 let Some(account) = holder(&snapshot, &account_id, incarnation) else {
                     return;
                 };
+                // The one write a classifier call makes to a pin: its tokens enter the classifier copy of the pin its
+                // selection judged, where that pin still stands on the account the call ran on. The pin is the
+                // selection's, since another agent's turn can end while the call is upstream. A call that ran
+                // elsewhere folds nothing, and the ledger holds its dollars.
+                if let Some(judged) = &judged_pin {
+                    let window_ms = burn_window_ms(&snapshot, &judged.key_id);
+                    if let Some(row) = self.state.fold_classifier_copy(
+                        judged,
+                        (&account_id, incarnation),
+                        &canonical_model,
+                        &usage,
+                        at,
+                        window_ms,
+                    ) {
+                        self.write(vec![StateWrite::UpsertPin(row)]);
+                    }
+                }
                 // A fast completion draws usage credits, and the client's classifier call on its judged turn's
                 // account takes no share of a plan window, so neither charges one.
                 if fast || classifier {
@@ -5680,8 +5684,8 @@ mod tests {
             burn_banded: input(16.0),
             burn_fast: input(6.0),
             burn_unmetered: PinBurn::default(),
+            burn_unmetered_model: None,
             last_input_tokens: 0,
-            last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
             shed: None,
@@ -5698,6 +5702,60 @@ mod tests {
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
             Some(4.0 * 0.25 + 6.0 * 0.5),
             "the row's plain copy at the dollar rate plus its fast usage at the fast rate"
+        );
+    }
+
+    #[test]
+    fn a_pins_classifier_copy_prices_at_the_model_it_names_under_usd() {
+        // The pin's model costs five times the copy's.
+        let mut dollars = RateTable::unit();
+        dollars
+            .rows
+            .insert("pinned".into(), crate::state::Rates::flat(1.25));
+        dollars
+            .rows
+            .insert("classifier".into(), crate::state::Rates::flat(0.25));
+        let rates = BurnRates {
+            dollars,
+            ..BurnRates::default()
+        };
+        let pin = PinRow {
+            key_id: "k".into(),
+            session_id: "s".into(),
+            agent_id: "main".into(),
+            model: "pinned".into(),
+            account_id: "a".into(),
+            epoch: 1,
+            created_at: 0,
+            last_used_at: 0,
+            key_generation: 0,
+            incarnation: 1,
+            burn: PinBurn::default(),
+            burn_at: None,
+            burn_banded: PinBurn::default(),
+            burn_fast: PinBurn::default(),
+            burn_unmetered: PinBurn {
+                input: 2.0,
+                ..PinBurn::default()
+            },
+            burn_unmetered_model: Some("classifier".into()),
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: crate::lane_key("pinned", "standard", "none", "-"),
+            entrypoint: None,
+            mark: None,
+            auxiliary_only: false,
+            effort: None,
+            ended: false,
+        };
+        assert_eq!(
+            rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
+            Some(2.0 * 0.25),
+            "the copy's tokens at the classifier's model's dollar rate, not the pin's"
         );
     }
 
@@ -6043,8 +6101,8 @@ mod tests {
                 burn_banded: PinBurn::default(),
                 burn_fast: PinBurn::default(),
                 burn_unmetered: PinBurn::default(),
+                burn_unmetered_model: None,
                 last_input_tokens: 0,
-                last_classifier: false,
                 last_refresh_at: T,
                 cache_ttl_ms: 300_000,
                 shed: None,

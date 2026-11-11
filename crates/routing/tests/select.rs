@@ -1,7 +1,7 @@
 use phoebis_routing::{
     burn_average_ms, cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve,
-    routed_agent, select, shed_dwell_ms, warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket,
-    AffinityChain, AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
+    select, shed_dwell_ms, warm, warmth_of, windows::MODEL_WINDOWS, AccountTicket, AffinityChain,
+    AffinityMap, AffinityRow, BandSegment, Banded, BudgetFacts, BurnRates, BurnUnit,
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
     HoldFacts, HoldOutcome, HoldReason, HoldWait, LaneFacts, LongContextRates, MemberSpend,
@@ -8270,8 +8270,8 @@ fn an_overage_whose_named_reset_has_passed_no_longer_counts_for_the_release_reas
         burn_banded: PinBurn::default(),
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
         last_input_tokens: 0,
-        last_classifier: false,
         last_refresh_at: 0,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -11493,8 +11493,8 @@ fn seeded_pin(session: &str, account: &str, now: i64) -> PinRow {
         burn_banded: PinBurn::default(),
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
         last_input_tokens: 1_000,
-        last_classifier: false,
         last_refresh_at: now - 1_000,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -18034,10 +18034,12 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
         },
         ..Pool::default()
     });
+    // The classifier copy names a model other than the pin's own, which a row that dropped it would price the copy at.
     let old = PinRow {
         last_input_tokens: 813_365,
         burn_fast: input_rate(5.0),
         burn_unmetered: input_rate(3.0),
+        burn_unmetered_model: Some("claude-haiku-5-5".into()),
         ..burning("s1", "a", 40_000.0, true, T)
     };
     let mut st = loaded(vec![old.clone()]);
@@ -18057,6 +18059,7 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
             moved.burn_banded,
             moved.burn_fast,
             moved.burn_unmetered,
+            moved.burn_unmetered_model.as_deref(),
             moved.last_input_tokens,
         ),
         (
@@ -18065,9 +18068,10 @@ fn a_moving_pin_keeps_its_burn_and_its_last_prompt_on_the_new_row() {
             old.burn_banded,
             old.burn_fast,
             old.burn_unmetered,
+            Some("claude-haiku-5-5"),
             old.last_input_tokens,
         ),
-        "the new row carries the averages and the last prompt over"
+        "the new row carries the averages, the classifier copy's model and the last prompt over"
     );
     let fresh = request(&s, Some("s2"), "claude-sonnet-5", true, &[], T + 1_000);
     select(&mut st, &s, &fresh, &mut rng());
@@ -18349,75 +18353,6 @@ fn a_classifier_request_with_a_nonzero_body_lands_on_the_account_its_body_would_
     }
 }
 
-/// A cold pin of `session` on `a` whose last prompt of a million tokens rewrites a tenth of the 5-hour window on
-/// `TIER`, written by a classifier call when `classifier` is set.
-fn classified_pin(session: &str, classifier: bool) -> PinRow {
-    PinRow {
-        created_at: T - MINUTE,
-        last_input_tokens: 1_000_000,
-        last_classifier: classifier,
-        ..burning(session, "a", 0.0, false, T)
-    }
-}
-
-#[test]
-fn a_classifier_call_on_a_pin_a_classifier_call_renewed_last_prices_no_rewrite_for_its_move() {
-    let s = snapshot_with_terms(
-        b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),
-        tier_terms(&["b", "c"]),
-    );
-    let req = SelectRequest {
-        classifier: true,
-        ..auxiliary(&s, "cold", T)
-    };
-    // A pin only auxiliary calls use, as a classifier call's own pin is: it names no turn, so the call is directed to
-    // no judged account and its move rules run. Such a pin reads its warmth off its last use, ten minutes ago here,
-    // past its cache's TTL, so it stays cold.
-    let classifiers_own = |classifier: bool| PinRow {
-        auxiliary_only: true,
-        created_at: T - 10 * MINUTE,
-        last_used_at: T - 10 * MINUTE,
-        ..classified_pin("cold", classifier)
-    };
-    // The stored prompt is a classifier body, which the plan windows never see, and the call's own body prices
-    // nothing, so b at 0.9 fits the move and outranks c.
-    let mut st = priced(vec![classifiers_own(true)]);
-    b_filled_c_free(&mut st, T - 500);
-    let d = decide(&mut st, &s, &req, &mut rng());
-    assert_eq!(
-        landed(d.result.clone()),
-        ("b".into(), Some(MigrateReason::ReturnToPlan)),
-        "a classifier body stored on the pin is no rewrite, so the move lands on the sibling that outranks"
-    );
-    assert_eq!(
-        fact_of(line(&d.record, "fit"), "verdict", "b"),
-        &FactValue::Text("fits".into())
-    );
-    let moved = pinned(&st, "cold");
-    assert_eq!(
-        (
-            moved.account_id.as_str(),
-            moved.last_input_tokens,
-            moved.last_classifier
-        ),
-        ("b", 1_000_000, true),
-        "the moved row carries the classifier body with its flag, so its next move prices it as nothing too"
-    );
-    // A pin whose last prompt is the session's own keeps it as the move's rewrite, whatever the request: b has no
-    // room for a tenth of the window and c takes the move.
-    let mut st = priced(vec![classifiers_own(false)]);
-    b_filled_c_free(&mut st, T - 500);
-    let d = decide(&mut st, &s, &req, &mut rng());
-    assert_eq!(
-        landed(d.result.clone()),
-        ("c".into(), Some(MigrateReason::ReturnToPlan))
-    );
-    assert_eq!(
-        fact_of(line(&d.record, "fit"), "verdict", "b"),
-        &FactValue::Text("least_bad".into())
-    );
-}
-
 use phoebis_routing::JudgedCharge;
 
 /// The account a selection landed on and its answer on the classifier call's charge.
@@ -18440,7 +18375,7 @@ fn a_classifier_call_answers_on_where_it_runs_on_its_judged_turns_account_and_of
     // s1's turn runs on b, past the strategy's pick, and its classifier call follows it there.
     let turn = opus_turn(&s, "s1", "main", "main", &["a"], 1_000);
     assert_eq!(picked(&select(&mut st, &s, &turn, &mut r).0), "b");
-    let call = routed(&st, classifier_call(&s, "s1", 1_100));
+    let call = classifier_call(&s, "s1", 1_100);
     assert_eq!(
         judged_on(&select(&mut st, &s, &call, &mut r).0),
         ("b", Some(JudgedCharge::On))
@@ -18523,199 +18458,31 @@ fn a_classifier_call_whose_judged_pin_names_an_earlier_incarnation_of_the_accoun
         ("b", Some(JudgedCharge::Off)),
         "the call lands by the strategy on another holder of the id, off the one the turn ran on"
     );
-    assert!(
-        line(&d.record, "pin")
-            .facts
-            .iter()
-            .all(|f| f.key != "judged"),
-        "the call follows no holder but the one the turn ran on: {:?}",
-        line(&d.record, "pin").facts
-    );
-}
-
-#[test]
-fn a_plain_request_on_a_pin_a_classifier_call_renewed_last_prices_its_own_body_for_its_move() {
-    let s = snapshot_with_terms(
-        b_outranks_c_pool(vec![("a", AccountKind::ApiKey)]),
-        tier_terms(&["b", "c"]),
-    );
-    // The stored prompt is a classifier body, so the move of a request that is no classifier call prices the
-    // request's own body: a thousand tokens fit b at 0.9, while a million rewrite a tenth of the 5-hour window, which c
-    // alone has room for.
-    for (body, destination, b_verdict) in [(1_000, "b", "fits"), (1_000_000, "c", "least_bad")] {
-        let mut st = priced(vec![classified_pin("cold", true)]);
-        b_filled_c_free(&mut st, T - 500);
-        let req = SelectRequest {
-            body_tokens: body,
-            ..auxiliary(&s, "cold", T)
-        };
-        let d = decide(&mut st, &s, &req, &mut rng());
-        assert_eq!(
-            landed(d.result.clone()),
-            (destination.into(), Some(MigrateReason::ReturnToPlan)),
-            "a body of {body} tokens is the move's rewrite"
-        );
-        assert_eq!(
-            fact_of(line(&d.record, "fit"), "verdict", "b"),
-            &FactValue::Text(b_verdict.into()),
-            "a body of {body} tokens on b"
-        );
-    }
-}
-
-#[test]
-fn a_shed_round_reads_no_rewrite_for_a_pin_a_classifier_call_renewed_last() {
-    let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    // `heavy_light_small`'s round with heavy's last prompt a classifier body: heavy and light each cover the target,
-    // and heavy's move rewrites nothing the plan windows see, so its move costs nothing and the pick takes it over
-    // light, whose rewrite stands.
-    let mut st = rounding(vec![
-        PinRow {
-            last_input_tokens: 60_000,
-            last_classifier: true,
-            ..burning("heavy", "a", 3.0, true, T)
-        },
-        PinRow {
-            last_input_tokens: 10_000,
-            ..burning("light", "a", 0.4, true, T)
-        },
-        PinRow {
-            last_input_tokens: 10_000,
-            ..burning("small", "a", 0.1, true, T)
-        },
-    ]);
-    st.record_sample("a", refreshing(0.967, T + HOUR, T + 72 * HOUR, T - 500), 0);
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
-    past_the_wait(&mut st, &s, "p", "a", T);
-    let d = decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng());
-    let round = d.shed_round.expect("the round ran").facts;
-    let read = |session: &str| {
-        round
-            .pins
-            .iter()
-            .find(|p| p.session_id == session)
-            .unwrap_or_else(|| panic!("the round read {session}: {round:?}"))
-    };
+    let pin = line(&d.record, "pin");
     assert_eq!(
-        read("heavy").rewrite,
-        None,
-        "the pick reads no rewrite for the pin a classifier call renewed last: {round:?}"
-    );
-    assert!(
-        read("light")
-            .rewrite
-            .is_some_and(|rewrite| close(rewrite, 10_000.0 / 60_000_000.0)),
-        "light's rewrite is its own last prompt's: {round:?}"
-    );
-    assert_eq!(
-        round
-            .pins
-            .iter()
-            .map(|p| (p.session_id.as_str(), p.marked, p.planned.as_deref()))
-            .collect::<Vec<_>>(),
-        [
-            ("heavy", true, Some("b")),
-            ("light", false, None),
-            ("small", false, None),
-        ],
-        "heavy's move costs nothing, so the pick plans it on b over light"
-    );
-    assert!(marked(&st, "heavy") && !marked(&st, "light") && !marked(&st, "small"));
-}
-
-/// Three warm pins on `a`, two of them last renewed by a classifier call with a prompt of 400 000 tokens: `current`,
-/// whose request the round runs on, burning twenty, `other` a tenth, and `plain`, whose last prompt of 10 000 tokens is
-/// the session's own, burning 0.4. Together they take `a`'s 5-hour projection at the reset over the wall. The two a
-/// classifier call renewed are pins only auxiliary calls use, as a classifier call's own pin is, so neither names a
-/// turn and a classifier request on `current` runs the move rules, the round among them.
-fn classifier_renewed_round() -> RoutingState {
-    let mut st = rounding(vec![
-        PinRow {
-            last_input_tokens: 400_000,
-            last_classifier: true,
-            auxiliary_only: true,
-            ..burning("current", "a", 20.0, true, T)
-        },
-        PinRow {
-            last_input_tokens: 400_000,
-            last_classifier: true,
-            auxiliary_only: true,
-            ..burning("other", "a", 0.1, true, T)
-        },
-        PinRow {
-            last_input_tokens: 10_000,
-            ..burning("plain", "a", 0.4, true, T)
-        },
-    ]);
-    st.record_sample("a", refreshing(0.797, T + HOUR, T + 72 * HOUR, T - 500), 0);
-    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
-    st
-}
-
-/// The round `current`'s request of a 2 000 token body runs, a classifier call when `classifier` is set.
-fn classifier_renewed_round_on(classifier: bool) -> phoebis_routing::ShedRoundFacts {
-    let s = projection_pool(vec![("a", 0), ("b", 1)]);
-    let mut st = classifier_renewed_round();
-    past_the_wait(&mut st, &s, "p", "a", T);
-    let req = SelectRequest {
-        body_tokens: 2_000,
-        classifier,
-        ..auxiliary(&s, "current", T)
-    };
-    decide(&mut st, &s, &req, &mut rng())
-        .shed_round
-        .expect("the round ran")
-        .facts
-}
-
-#[test]
-fn a_shed_rounds_order_ranks_a_pin_a_classifier_call_renewed_last_by_its_own_requests_body() {
-    // The order divides each warm pin's burn by the prompt a move would rewrite: the request's own body of 2 000
-    // tokens for `current`, nothing for `other`, which ranks as the cheapest, and `plain`'s own 10 000 tokens. Divided
-    // by the classifier prompt, `current` would lead and `other` trail.
-    let order = |round: &phoebis_routing::ShedRoundFacts| {
-        round
-            .pins
-            .iter()
-            .map(|p| p.session_id.clone())
-            .collect::<Vec<_>>()
-    };
-    let round = classifier_renewed_round_on(false);
-    assert_eq!(
-        order(&round),
-        ["other", "current", "plain"],
-        "ranked by the prompt each move rewrites: {round:?}"
-    );
-    // A classifier request rewrites nothing on its own pin either, so `current` divides its burn by nothing too.
-    let round = classifier_renewed_round_on(true);
-    assert_eq!(
-        order(&round),
-        ["current", "other", "plain"],
-        "a classifier request's own pin ranks by its burn alone: {round:?}"
-    );
-}
-
-#[test]
-fn a_shed_rounds_per_rewrite_figure_divides_a_pin_a_classifier_call_renewed_last_by_its_own_requests_body(
-) {
-    for (classifier, current) in [(false, 2_000.0), (true, 1.0)] {
-        let round = classifier_renewed_round_on(classifier);
-        let divisor = |session: &str| {
-            let p = round
-                .pins
+        (
+            pin.verdict,
+            pin.facts
                 .iter()
-                .find(|p| p.session_id == session)
-                .unwrap_or_else(|| panic!("the round read {session}: {round:?}"));
-            p.burn.unwrap() / p.per_rewrite.unwrap()
-        };
-        for (session, expected) in [("current", current), ("other", 1.0), ("plain", 10_000.0)] {
-            assert!(
-                close(divisor(session), expected),
-                "{session}'s burn per rewrite divides by {expected} on a request with classifier {classifier}: \
-                 {round:?}"
-            );
-        }
-    }
+                .map(|f| (f.key, f.value.clone(), f.account_id.as_deref()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            "none",
+            vec![
+                ("reason", FactValue::Text("classifier".into()), None),
+                ("judged_agent", FactValue::Text("main".into()), None),
+                (
+                    "judged_model",
+                    FactValue::Text("claude-opus-5-5".into()),
+                    None
+                ),
+                ("judged", FactValue::Text("b".into()), Some("b")),
+                ("direction", FactValue::Text("strategy".into()), None),
+            ]
+        ),
+        "the call names the turn it judges on b's earlier holder, and follows no holder but that one"
+    );
 }
 
 #[test]
@@ -26461,18 +26228,17 @@ fn a_pin_with_no_burn_on_the_fired_window_leaves_the_walk_and_a_pin_with_almost_
             .map(|p| (p.session_id.clone(), p.marked, p.skip, p.burn.is_some()))
             .collect::<Vec<_>>()
     };
-    // A classifier pin: its calls folded into the unmetered copy alone, so it burns no share of the window.
+    // A pin whose only burn is its classifier copy, which no plan window prices, burns no share of the window.
     let judge = PinRow {
         burn_unmetered: input_rate(5.0),
         auxiliary_only: true,
-        last_classifier: true,
         ..burning("judge", "a", 0.0, false, T)
     };
     let (landed_on, round) = round_beside(judge);
     assert_eq!(
         landed_on,
         ("a".into(), None),
-        "with the classifier pin out of the walk, hot's mark would leave no burn unmarked"
+        "with the burnless pin out of the walk, hot's mark would leave no burn unmarked"
     );
     assert_eq!(
         rows(&round),
@@ -29806,15 +29572,6 @@ fn opus_turn(
     }
 }
 
-/// `req` under the agent the routing task routes it as before its selection (`routed_agent`): the judged turn's agent
-/// for a classifier call, its own for every other request.
-fn routed(st: &RoutingState, req: SelectRequest) -> SelectRequest {
-    match routed_agent(st, &req) {
-        Some(agent_id) => SelectRequest { agent_id, ..req },
-        None => req,
-    }
-}
-
 /// The client's marked classifier call of `session`, as the client sends it: an auxiliary call on Sonnet 5 under
 /// `main`, whatever agent's turn it judges.
 fn classifier_call(s: &RegistrySnapshot, session: &str, now: i64) -> SelectRequest {
@@ -29828,6 +29585,20 @@ fn classifier_call(s: &RegistrySnapshot, session: &str, now: i64) -> SelectReque
             &[],
         )
     }
+}
+
+/// The `direction` fact of the decision's `pin` step, where the client's classifier call went.
+fn direction(record: &DecisionRecord) -> &FactValue {
+    fact(line(record, "pin"), "direction")
+}
+
+/// The pins `session` holds, by agent, model and account, in the state's key order.
+fn session_pins(st: &RoutingState, session: &str) -> Vec<(String, String, String)> {
+    st.pins()
+        .into_iter()
+        .filter(|p| p.session_id == session)
+        .map(|p| (p.agent_id, p.model, p.account_id))
+        .collect()
 }
 
 #[test]
@@ -29848,16 +29619,22 @@ fn a_classifier_call_follows_the_sessions_turn_that_ended_last_onto_its_account(
         ..classifier_call(&s, "s1", 2_500)
     };
     assert_eq!(picked(&select(&mut st, &s, &plain, &mut r).0), "a");
-    // The classifier call follows the subagent's turn, under the subagent's own pin on the classifier's model.
-    let call = routed(&st, classifier_call(&s, "s1", 2_600));
-    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "b");
-    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "b");
-    // The main agent's next turn ends last, so the next call follows it onto the main's own Sonnet 5 pin.
+    // The classifier call follows the subagent's turn onto the account its pin stands on.
+    let call = decide(&mut st, &s, &classifier_call(&s, "s1", 2_600), &mut r);
+    assert_eq!(picked(&call.result), "b");
+    assert_eq!(
+        direction(&call.record),
+        &FactValue::Text("pin_account".into())
+    );
+    // The main agent's next turn ends last, so the next call follows it onto the main's account.
     let main_turn = opus_turn(&s, "s1", "main", "main", &[], 3_000);
     select(&mut st, &s, &main_turn, &mut r);
-    let call = routed(&st, classifier_call(&s, "s1", 3_100));
-    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
-    assert_eq!(pinned(&st, "s1").account_id, "a");
+    let call = decide(&mut st, &s, &classifier_call(&s, "s1", 3_100), &mut r);
+    assert_eq!(picked(&call.result), "a");
+    assert_eq!(
+        direction(&call.record),
+        &FactValue::Text("pin_account".into())
+    );
 }
 
 #[test]
@@ -29875,13 +29652,24 @@ fn a_classifier_call_whose_judged_account_cannot_serve_it_lands_like_any_request
     assert_eq!(picked(&select(&mut st, &s, &sub_turn, &mut r).0), "b");
     // b cools after the subagent's turn: the call cannot follow it and lands by the strategy.
     st.record_cooldown(cooled("b", "account", 5_000, "five_hour", "rate_limit"));
-    let call = routed(&st, classifier_call(&s, "s1", 2_600));
-    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
-    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "a");
-    // Once b serves again, the next call follows the judged turn and its pin goes there.
-    let call = routed(&st, classifier_call(&s, "s1", 6_000));
-    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "b");
-    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "b");
+    let call = decide(&mut st, &s, &classifier_call(&s, "s1", 2_600), &mut r);
+    assert_eq!(picked(&call.result), "a");
+    assert_eq!(direction(&call.record), &FactValue::Text("strategy".into()));
+    // Once b serves again, the next call follows the judged turn onto the account its pin stands on.
+    let call = decide(&mut st, &s, &classifier_call(&s, "s1", 6_000), &mut r);
+    assert_eq!(picked(&call.result), "b");
+    assert_eq!(
+        direction(&call.record),
+        &FactValue::Text("pin_account".into())
+    );
+    assert_eq!(
+        session_pins(&st, "s1"),
+        [
+            ("main".into(), "claude-opus-5-5".into(), "a".into()),
+            ("x".into(), "claude-opus-5-5".into(), "b".into()),
+        ],
+        "neither call holds a pin, so the session holds the conversation's pins alone"
+    );
 }
 
 #[test]
@@ -29898,7 +29686,15 @@ fn a_classifier_call_whose_judged_account_is_spent_lands_like_any_request() {
     assert_eq!(picked(&select(&mut st, &s, &sub_turn, &mut r).0), "b");
     // b's 5-hour window reads spent after the subagent's turn: b stays eligible but holds no allowance.
     st.record_sample("b", refreshing(1.0, HOUR, 2 * HOUR, 2_000), 1);
-    let call = routed(&st, classifier_call(&s, "s1", 2_600));
-    assert_eq!(picked(&select(&mut st, &s, &call, &mut r).0), "a");
-    assert_eq!(pinned_agent(&st, "s1", "x").account_id, "a");
+    let call = decide(&mut st, &s, &classifier_call(&s, "s1", 2_600), &mut r);
+    assert_eq!(picked(&call.result), "a");
+    assert_eq!(direction(&call.record), &FactValue::Text("strategy".into()));
+    assert_eq!(
+        session_pins(&st, "s1"),
+        [
+            ("main".into(), "claude-opus-5-5".into(), "a".into()),
+            ("x".into(), "claude-opus-5-5".into(), "b".into()),
+        ],
+        "the call holds no pin, so the session holds the conversation's pins alone"
+    );
 }

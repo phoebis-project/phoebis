@@ -3149,6 +3149,7 @@ fn a_million_input_served(account: &str, at: i64, fast: bool) -> Report {
         request_id: "r-1".into(),
         attempt: 1,
         entrypoint: None,
+        judged_pin: None,
     }
 }
 
@@ -3309,6 +3310,7 @@ async fn a_classifier_completion_charges_no_window_and_releases_its_booking() {
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     let reading = read(&handle, "a", FIVE_HOUR).await;
@@ -3378,6 +3380,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
         request_id: "r-1".into(),
         attempt: 1,
         entrypoint: None,
+        judged_pin: None,
     };
     let windows = || async {
         let mut read_all = Vec::new();
@@ -3500,6 +3503,7 @@ async fn a_usage_report_charges_no_five_hour_share_on_an_account_whose_set_lacks
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     // Read before the next poll is reported, since a pending poll drains ahead of a control fact queued before it.
@@ -6901,7 +6905,6 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             keepalive: true,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::NoTurn,
         })
         .await;
@@ -6942,7 +6945,6 @@ fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms
         keepalive,
         cache_ttl_ms,
         fast: false,
-        classifier: false,
         turn_end: if keepalive {
             RenewalEnd::NoTurn
         } else {
@@ -7097,7 +7099,6 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             keepalive: false,
             cache_ttl_ms: 3_600_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::Turn,
         })
         .await;
@@ -7203,7 +7204,6 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: true,
-            classifier: false,
             turn_end: RenewalEnd::Turn,
         })
         .await;
@@ -7296,9 +7296,56 @@ async fn a_fast_renewal_is_written_with_the_pin_and_a_restart_reads_its_fast_usa
     );
 }
 
+/// Session "s1"'s classifier call at `now`, as the client sends it: an auxiliary call on Sonnet 5 under `main`.
+fn classifier_call(handle: &RouterHandle, now: i64) -> SelectRequest {
+    SelectRequest {
+        classifier: true,
+        request_class: Some("auxiliary".into()),
+        ..request(handle, Some("s1"), now)
+    }
+}
+
+/// The pin the classifier call's selection judged.
+fn judged_pin(answer: phoebis_routing::SelectAnswer) -> PinRef {
+    match answer.result {
+        SelectResult::Selected(s) => s
+            .judged_pin
+            .expect("a classifier call in a session with a turn judges its pin"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A Sonnet 5 classifier call's usage on `account_id` at `at`, `input` uncached tokens as its whole prompt, free of a
+/// plan window where `free` is set, with the pin its selection judged.
+fn classifier_usage(
+    account_id: &str,
+    at: i64,
+    input: u64,
+    free: bool,
+    judged_pin: Option<PinRef>,
+) -> Report {
+    Report::Usage {
+        account_id: account_id.into(),
+        at,
+        canonical_model: "claude-sonnet-5".into(),
+        incarnation: 1,
+        usage: PinUsage {
+            input,
+            ..PinUsage::default()
+        },
+        fast: false,
+        classifier: free,
+        request_id: "r-classifier".into(),
+        attempt: 1,
+        entrypoint: None,
+        judged_pin,
+    }
+}
+
 #[tokio::test]
-async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars_alone() {
-    let store = averaged(seeded(&["a"]));
+async fn a_classifier_call_on_its_judged_pins_account_folds_into_the_pins_classifier_copy_and_one_elsewhere_folds_nothing(
+) {
+    let store = averaged(seeded(&["a", "b"]));
     let now = Arc::new(AtomicI64::new(1_000));
     let rates = quarter_dollar_rates();
     let config = RouterConfig {
@@ -7306,36 +7353,41 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
         ..RouterConfig::default()
     };
     let handle = spawn(store, clock(&now), config).unwrap();
-    let classified = selected_pin(
+    let pin = selected_pin(
         handle
-            .select(request(&handle, Some("s1"), 1_000))
+            .select(SelectRequest {
+                attempted: vec!["b".into()],
+                ..turn(&handle, false, 1_000)
+            })
             .await
             .unwrap(),
     );
-    let standard = selected_pin(
+    handle
+        .report(speed_renewal(pin.clone(), 2_000, false, 600))
+        .await;
+    let judged = judged_pin(
         handle
-            .select(request(&handle, Some("s2"), 1_000))
+            .select(classifier_call(&handle, 61_000))
             .await
             .unwrap(),
     );
     handle
-        .report(speed_renewal(classified.clone(), 2_000, false, 600))
+        .report(classifier_usage(
+            "a",
+            62_000,
+            1_000,
+            true,
+            Some(judged.clone()),
+        ))
         .await;
-    handle
-        .report(classifier_renewal(classified.clone(), 62_000, 1_000))
-        .await;
-    handle
-        .report(speed_renewal(standard, 62_000, false, 1_000))
-        .await;
-    let pins = handle.pins().await.unwrap();
+    let (s1, _) = pin_and_fast_usage(&handle).await;
     // The pool's burn average is 600 s, and the classifier's fold lands 60 s after the standard one, so the row's 600
     // tokens over 600 s keep e^-0.1 of their rate of 1.
     let window = 600.0_f64;
     let decayed = 0.904_837_418_036;
-    let s1 = pins.iter().find(|p| p.session_id == "s1").unwrap();
     assert!(
         (s1.burn.input - decayed).abs() < 1e-9 && (s1.burn_banded.input - decayed).abs() < 1e-9,
-        "the row's plain and banded copies only decay at a classifier renewal: {:?} and {:?}",
+        "the row's plain and banded copies only decay at a classifier call's fold: {:?} and {:?}",
         s1.burn,
         s1.burn_banded
     );
@@ -7346,55 +7398,169 @@ async fn a_classifier_renewal_lands_in_the_pins_unmetered_copy_priced_in_dollars
     );
     assert!(
         (s1.burn_unmetered.input - 1_000.0 / window).abs() < 1e-9,
-        "the thousand classifier tokens land in the pin's unmetered copy, unweighed: {:?}",
+        "the thousand classifier tokens land in the pin's classifier copy, unweighed: {:?}",
         s1.burn_unmetered
     );
+    assert_eq!(
+        (s1.burn_at, s1.burn_unmetered_model.as_deref()),
+        (Some(62_000), Some("claude-sonnet-5")),
+        "the copy names the call's model"
+    );
     let share = rates
-        .price_pin(BurnUnit::WindowShare, s1, FIVE_HOUR)
+        .price_pin(BurnUnit::WindowShare, &s1, FIVE_HOUR)
         .unwrap();
     assert!(
         (share - decayed).abs() < 1e-9,
-        "under the window share the row's banded copy alone, so the renewal adds nothing to the plan's figure: {share}"
+        "under the window share the row's banded copy alone, so the call adds nothing to the plan's figure: {share}"
     );
-    let dollars = rates.price_pin(BurnUnit::Usd, s1, FIVE_HOUR).unwrap();
+    let dollars = rates.price_pin(BurnUnit::Usd, &s1, FIVE_HOUR).unwrap();
     // (0.904 837 418 036 + 1 000 / 600) x 0.25.
     assert!(
         (dollars - 0.642_876_021_176).abs() < 1e-9,
         "in dollars the classifier tokens price at the standard quarter beside the row's: {dollars}"
     );
-    let s2 = pins.iter().find(|p| p.session_id == "s2").unwrap();
-    assert_eq!(
-        (s2.burn.input, s2.burn_unmetered),
-        (1_000.0 / window, PinBurn::default()),
-        "a standard renewal folds into the row and leaves no unmetered usage behind"
-    );
+    // The same judged pin's call ran on b, off the pin's account: the copy stays as the call on a left it.
     handle
-        .report(speed_renewal(classified, 122_000, false, 600))
+        .report(classifier_usage("b", 62_000, 1_000, false, Some(judged)))
         .await;
+    let (held, _) = pin_and_fast_usage(&handle).await;
+    assert_eq!(
+        (held.burn_unmetered, held.burn_at),
+        (s1.burn_unmetered, s1.burn_at),
+        "a call that ran on another account folds nothing into the judged pin"
+    );
+    handle.report(speed_renewal(pin, 122_000, false, 600)).await;
     let (s1, _) = pin_and_fast_usage(&handle).await;
     // The thousand classifier tokens over 600 s, 60 s later at e^-0.1 of that rate.
     assert!(
         (s1.burn_unmetered.input - 1.508_062_363_393).abs() < 1e-9,
-        "a standard renewal folds nothing into the unmetered copy, which decays with the row: {:?}",
+        "a standard renewal folds nothing into the classifier copy, which decays with the row: {:?}",
         s1.burn_unmetered
     );
 }
 
 #[tokio::test]
-async fn a_classifier_renewal_is_written_with_the_pin_and_a_restart_reads_its_unmetered_usage_as_saved(
+async fn a_classifier_calls_usage_folds_into_the_pin_its_selection_judged_though_another_turn_ended_since(
+) {
+    let store = averaged(seeded(&["a", "b"]));
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let opus = "claude-opus-5-5";
+    handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "main",
+            "main",
+            opus,
+            &["b"],
+            1_000,
+        ))
+        .await
+        .unwrap();
+    let x = selected_pin(
+        handle
+            .select(agent_turn(
+                &handle,
+                "s1",
+                "x",
+                "subagent",
+                opus,
+                &["a"],
+                2_000,
+            ))
+            .await
+            .unwrap(),
+    );
+    let y = selected_pin(
+        handle
+            .select(agent_turn(
+                &handle,
+                "s1",
+                "y",
+                "subagent",
+                opus,
+                &["a"],
+                2_500,
+            ))
+            .await
+            .unwrap(),
+    );
+    let usage = PinUsage {
+        input: 10,
+        output: 5,
+        ..PinUsage::default()
+    };
+    // x's turn ends on b, and the classifier call that judges it is selected there.
+    handle
+        .report(renewal(x, 3_000, usage, false, 300_000))
+        .await;
+    let answer = handle
+        .select(classifier_call(&handle, 3_100))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = answer.result else {
+        panic!("{:?}", answer.result);
+    };
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.judged_pin.as_ref().map(|p| p.agent_id.as_str())
+        ),
+        ("b", Some("x"))
+    );
+    // y's turn ends on b too while the call is upstream, then the call's usage arrives on b.
+    handle
+        .report(renewal(y, 3_200, usage, false, 300_000))
+        .await;
+    handle
+        .report(classifier_usage("b", 3_300, 600, true, sel.judged_pin))
+        .await;
+    let pins = handle.pins().await.unwrap();
+    let copy = |agent: &str| {
+        pins.iter()
+            .find(|p| p.agent_id == agent)
+            .map(|p| (p.burn_unmetered, p.burn_unmetered_model.clone()))
+            .unwrap_or_else(|| panic!("{agent}'s pin stands: {pins:?}"))
+    };
+    // The 600 classifier tokens over the pool's 600 s burn average, onto an empty copy.
+    assert_eq!(
+        copy("x"),
+        (
+            PinBurn {
+                input: 1.0,
+                ..PinBurn::default()
+            },
+            Some("claude-sonnet-5".into())
+        ),
+        "the call's tokens fold into x's pin, the one its selection judged"
+    );
+    assert_eq!(
+        copy("y"),
+        (PinBurn::default(), None),
+        "y's turn ended after the call was selected, so its pin takes nothing"
+    );
+}
+
+#[tokio::test]
+async fn a_classifier_calls_fold_is_written_with_the_pin_and_a_restart_reads_its_copy_and_model_as_saved(
 ) {
     let store = averaged(seeded(&["a"]));
     let now = Arc::new(AtomicI64::new(1_000));
     let (key, saved) = {
         let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-        let pin = selected_pin(
+        selected_pin(handle.select(turn(&handle, false, 1_000)).await.unwrap());
+        let judged = judged_pin(
             handle
-                .select(request(&handle, Some("s1"), 1_000))
+                .select(classifier_call(&handle, 1_500))
                 .await
                 .unwrap(),
         );
-        handle.report(classifier_renewal(pin, 2_000, 600)).await;
-        // The renewal's `burn_at` reaches the store in the same row as its unmetered copy, so the wait keys on it.
+        handle
+            .report(classifier_usage("a", 2_000, 600, true, Some(judged)))
+            .await;
+        // The fold's `burn_at` reaches the store in the same row as its copy and the copy's model, so the wait keys
+        // on it.
         wait_for(WRITTEN, || {
             store
                 .load_routing()
@@ -7410,7 +7576,11 @@ async fn a_classifier_renewal_is_written_with_the_pin_and_a_restart_reads_its_un
             "the 600 classifier tokens over the pool's 600 s burn average: {:?}",
             held.burn_unmetered
         );
-        (held.key(), held.burn_unmetered)
+        assert_eq!(
+            held.burn_unmetered_model.as_deref(),
+            Some("claude-sonnet-5")
+        );
+        (held.key(), (held.burn_unmetered, held.burn_unmetered_model))
     };
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     assert_eq!(
@@ -7420,9 +7590,9 @@ async fn a_classifier_renewal_is_written_with_the_pin_and_a_restart_reads_its_un
             .unwrap()
             .into_iter()
             .find(|p| p.key() == key)
-            .map(|p| p.burn_unmetered),
-        Some(saved),
-        "a restart reads the pin's unmetered usage as saved"
+            .map(|p| (p.burn_unmetered, p.burn_unmetered_model)),
+        Some(saved.clone()),
+        "a restart reads the pin's classifier copy and its model as saved"
     );
     assert_eq!(
         store
@@ -7430,79 +7600,11 @@ async fn a_classifier_renewal_is_written_with_the_pin_and_a_restart_reads_its_un
             .unwrap()
             .pins
             .into_iter()
-            .map(|p| p.burn_unmetered)
+            .map(|p| (p.burn_unmetered, p.burn_unmetered_model))
             .collect::<Vec<_>>(),
         vec![saved],
-        "the stored row carries the unmetered usage the state held, never a fold behind it"
+        "the stored row carries the copy and the model the state held, never a fold behind it"
     );
-}
-
-#[tokio::test]
-async fn a_classifier_renewal_sets_the_pins_last_classifier_flag_with_its_prompt_and_a_standard_renewal_clears_it(
-) {
-    let store = averaged(seeded(&["a"]));
-    let now = Arc::new(AtomicI64::new(1_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let pin = selected_pin(
-        handle
-            .select(request(&handle, Some("s1"), 1_000))
-            .await
-            .unwrap(),
-    );
-    let (placed, _) = pin_and_fast_usage(&handle).await;
-    assert!(
-        !placed.last_classifier,
-        "a placement holds no classifier body as its context"
-    );
-    handle
-        .report(classifier_renewal(pin.clone(), 2_000, 600))
-        .await;
-    let (held, _) = pin_and_fast_usage(&handle).await;
-    assert_eq!(
-        (held.last_input_tokens, held.last_classifier),
-        (600, true),
-        "the classifier call's prompt is the pin's last context, flagged as a classifier body"
-    );
-    let stored = wait_for(WRITTEN, || {
-        store
-            .load_routing()
-            .unwrap()
-            .pins
-            .into_iter()
-            .find(|p| p.burn_at == Some(2_000))
-    })
-    .await;
-    assert!(
-        stored.last_classifier,
-        "the flag reaches the store in the renewal's row"
-    );
-    handle
-        .report(speed_renewal(pin, 62_000, false, 1_000))
-        .await;
-    let (held, _) = pin_and_fast_usage(&handle).await;
-    assert_eq!(
-        (held.last_input_tokens, held.last_classifier),
-        (1_000, false),
-        "a standard renewal's prompt replaces the classifier body and clears the flag"
-    );
-}
-
-/// A client renewal of `pin` at `now` by the client's own classifier call, with `input` uncached tokens as its whole
-/// prompt.
-fn classifier_renewal(pin: PinRef, now: i64, input: u64) -> Report {
-    Report::PinRenewed {
-        pin,
-        now,
-        usage: Some(PinUsage {
-            input,
-            ..PinUsage::default()
-        }),
-        keepalive: false,
-        cache_ttl_ms: 300_000,
-        fast: false,
-        classifier: true,
-        turn_end: RenewalEnd::NoTurn,
-    }
 }
 
 /// Every token of every model at `rate`, with Sonnet 5's own row at `rate` and its long-context rates at `long`
@@ -7611,7 +7713,6 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         keepalive: false,
         cache_ttl_ms: 300_000,
         fast,
-        classifier: false,
         turn_end: RenewalEnd::Turn,
     }
 }
@@ -8724,7 +8825,6 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::AgentEnded,
         })
         .await;
@@ -8895,7 +8995,6 @@ async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_a
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::AgentEnded,
         })
         .await;
@@ -9079,8 +9178,8 @@ fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64
         burn_banded: rates,
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
         last_input_tokens: 1_000,
-        last_classifier: false,
         last_refresh_at: AT - HOUR / 2,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -9417,7 +9516,6 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::AgentEnded,
         })
         .await;
@@ -9449,7 +9547,6 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::AgentEnded,
         })
         .await;
@@ -11192,6 +11289,7 @@ async fn a_head_whose_percent_holds_the_predicted_wall_clears_neither_the_wall_n
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -11265,6 +11363,7 @@ async fn a_head_the_hold_raises_keeps_the_walls_figure_over_the_charges_since() 
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     now.store(3_000, Ordering::SeqCst);
@@ -11847,6 +11946,7 @@ fn usage_of(request_id: &str, attempt: u32, at: i64) -> Report {
         request_id: request_id.into(),
         attempt,
         entrypoint: None,
+        judged_pin: None,
     }
 }
 
@@ -11867,6 +11967,7 @@ fn usage_under(request_id: &str, at: i64, entrypoint: Option<&str>) -> Report {
         request_id: request_id.into(),
         attempt: 1,
         entrypoint: entrypoint.map(String::from),
+        judged_pin: None,
     }
 }
 
@@ -12346,6 +12447,7 @@ async fn a_charge_or_a_reservation_that_predicts_a_spent_window_emits_window_spe
             request_id: "r-3".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     match next_spent(&mut events).await {
@@ -12562,6 +12664,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_wi
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -12635,6 +12738,7 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -13539,6 +13643,7 @@ async fn a_predicted_wall_is_not_announced_again_by_a_head_that_names_no_reset_b
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -13963,6 +14068,7 @@ async fn a_poll_at_the_next_cycles_wall_past_a_predicted_walls_reset_announces_t
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
+            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -15987,7 +16093,6 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         keepalive,
         cache_ttl_ms: 300_000,
         fast: false,
-        classifier: false,
         turn_end: if keepalive {
             RenewalEnd::NoTurn
         } else {
@@ -16418,17 +16523,120 @@ async fn a_classifier_call_follows_the_turn_that_ended_last_rather_than_the_requ
         "the call follows x's turn, whose stream ended last, not y's arrival: {:?}",
         answer.result
     );
-    let pins = handle.pins().await.unwrap();
-    assert!(
-        pins.iter()
-            .any(|p| p.agent_id == "x" && p.model == "claude-sonnet-5" && p.account_id == "b"),
-        "the call is held under x's own Sonnet 5 pin on b: {pins:?}"
-    );
 }
 
 #[tokio::test]
-async fn a_classifier_call_renewing_a_pin_a_shed_moved_after_its_turn_ended_answers_off() {
-    use phoebis_routing::{JudgedCharge, MigrateReason};
+async fn a_classifier_call_holds_no_pin_and_its_completion_leaves_the_judged_pins_prompt_last_use_and_epoch(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // s1's conversation runs on Opus, so no pin of it stands under the call's own key on Sonnet 5.
+    let turn = handle
+        .select(agent_turn(
+            &handle,
+            "s1",
+            "main",
+            "main",
+            "claude-opus-5-5",
+            &["b"],
+            1_000,
+        ))
+        .await
+        .unwrap();
+    let usage = PinUsage {
+        input: 10,
+        output: 5,
+        ..PinUsage::default()
+    };
+    handle
+        .report(renewal(selected_pin(turn), 2_000, usage, false, 300_000))
+        .await;
+    let rows = |pins: Vec<PinRow>| {
+        pins.into_iter()
+            .map(|p| {
+                (
+                    p.agent_id,
+                    p.model,
+                    p.account_id,
+                    p.epoch,
+                    p.last_input_tokens,
+                    p.last_used_at,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = rows(handle.pins().await.unwrap());
+    assert_eq!(
+        before
+            .iter()
+            .map(|(_, model, account, _, prompt, used)| (
+                model.as_str(),
+                account.as_str(),
+                *prompt,
+                *used
+            ))
+            .collect::<Vec<_>>(),
+        [("claude-opus-5-5", "a", 10, 2_000)]
+    );
+    let mut events = handle.subscribe_events();
+    let answer = handle
+        .select(classifier_call(&handle, 3_000))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = answer.result else {
+        panic!("{:?}", answer.result);
+    };
+    assert_eq!(sel.pin, None);
+    handle
+        .report(classifier_usage(
+            &sel.account.id,
+            3_500,
+            600,
+            true,
+            sel.judged_pin.clone(),
+        ))
+        .await;
+    assert_eq!(
+        rows(handle.pins().await.unwrap()),
+        before,
+        "the session holds the conversation's pin alone, its prompt, last use and epoch as its turn left them"
+    );
+    let seen = drained(&mut events).await;
+    assert!(
+        !seen
+            .iter()
+            .any(|event| matches!(event, RouterEvent::PinCreated { .. })),
+        "the call creates no pin: {seen:?}"
+    );
+}
+
+/// The decision of the next selection among `events`, whatever the reports before it emitted.
+async fn next_record(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> DecisionRecord {
+    loop {
+        if let phoebis_routing::RouterEvent::Decision { record, .. } = next_event(events).await {
+            return Arc::unwrap_or_clone(record);
+        }
+    }
+}
+
+/// The value of `key` on the decision's `pin` step, `None` where the step carries no such fact.
+fn pin_step_fact(record: &DecisionRecord, key: &str) -> Option<phoebis_routing::FactValue> {
+    record
+        .walk
+        .iter()
+        .find(|step| step.step == "pin")
+        .and_then(|step| step.facts.iter().find(|fact| fact.key == key))
+        .map(|fact| fact.value.clone())
+}
+
+#[tokio::test]
+async fn a_classifier_call_goes_to_the_account_its_judged_turn_ended_on_past_a_moved_pin_and_else_to_the_pins_account(
+) {
+    use phoebis_routing::{FactValue, JudgedCharge, MigrateReason};
     let store = shedding_store(&["a", "b"]);
     with_tier(&store, "a");
     with_tier(&store, "b");
@@ -16473,19 +16681,136 @@ async fn a_classifier_call_renewing_a_pin_a_shed_moved_after_its_turn_ended_answ
         ("b".into(), Some(MigrateReason::Shed)),
         "the conversation's next turn moves the pin on its mark, its stream still running"
     );
-    let call = SelectRequest {
-        classifier: true,
-        request_class: Some("auxiliary".into()),
-        ..request(&handle, Some("s1"), AT + 2_000)
+    let pins = |rows: Vec<PinRow>| {
+        rows.into_iter()
+            .map(|p| (p.agent_id, p.model, p.account_id, p.epoch))
+            .collect::<Vec<_>>()
     };
-    let answer = handle.select(call).await.unwrap();
+    let moved = pins(handle.pins().await.unwrap());
+    assert_eq!(moved.len(), 1, "{moved:?}");
+    assert_eq!(moved[0].2, "b");
+    let mut events = handle.subscribe_events();
+    let answer = handle
+        .select(classifier_call(&handle, AT + 2_000))
+        .await
+        .unwrap();
     let SelectResult::Selected(sel) = answer.result else {
         panic!("{:?}", answer.result);
     };
     assert_eq!(
         (sel.account.id.as_str(), sel.judged),
-        ("b", Some(JudgedCharge::Off)),
-        "the call renews the moved pin on b, off the account the judged turn ended on"
+        ("a", Some(JudgedCharge::On)),
+        "the call goes to a, where the judged turn's stream ended, past the pin's move to b"
+    );
+    assert_eq!(
+        pin_step_fact(&next_record(&mut events).await, "direction"),
+        Some(FactValue::Text("turn_account".into()))
+    );
+    assert_eq!(
+        pins(handle.pins().await.unwrap()),
+        moved,
+        "the call takes no pin along: the conversation's pin stays on b under its epoch"
+    );
+    // a's 5-hour window reads spent: the account the turn ended on holds no allowance, so the call goes to the
+    // account the turn's pin stands on now, where the upstream charges it.
+    handle.report(windows("a", 1.0, 0.3, AT + 2_500)).await;
+    handle.samples().await.unwrap();
+    let answer = handle
+        .select(classifier_call(&handle, AT + 3_000))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = answer.result else {
+        panic!("{:?}", answer.result);
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.judged),
+        ("b", Some(JudgedCharge::Off))
+    );
+    assert_eq!(
+        pin_step_fact(&next_record(&mut events).await, "direction"),
+        Some(FactValue::Text("pin_account".into()))
+    );
+}
+
+#[tokio::test]
+async fn a_classifier_call_inside_a_failover_window_reads_no_failover_and_leaves_the_landing_to_the_conversation(
+) {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    // main's conversation runs on the classifier's model on a, and a cooldown on a fails its pin over.
+    let pin = selected_pin(
+        handle
+            .select(SelectRequest {
+                attempted: vec!["b".into()],
+                ..turn(&handle, false, 1_000)
+            })
+            .await
+            .unwrap(),
+    );
+    let mut events = handle.subscribe_events();
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: CooldownScope::Account,
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin),
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    let answer = handle
+        .select(classifier_call(&handle, 1_100))
+        .await
+        .unwrap();
+    let SelectResult::Selected(sel) = answer.result else {
+        panic!("{:?}", answer.result);
+    };
+    let record = next_record(&mut events).await;
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.left.as_deref(),
+            record.outcome.from_account_id.as_deref(),
+            record.outcome.cause.as_ref(),
+        ),
+        ("b", None, None, None),
+        "the call lands no session, so it names no failover's source"
+    );
+    let landing = handle.select(turn(&handle, false, 1_200)).await.unwrap();
+    let SelectResult::Selected(sel) = landing.result else {
+        panic!("{:?}", landing.result);
+    };
+    let record = next_record(&mut events).await;
+    assert_eq!(
+        (
+            sel.account.id.as_str(),
+            sel.trace.moved,
+            sel.left.as_deref(),
+            record.outcome.from_account_id.as_deref(),
+            record.outcome.cause,
+        ),
+        (
+            "b",
+            Some("cooldown"),
+            Some("a"),
+            Some("a"),
+            Some(MoveCause::Cooldown {
+                scope: "account".into(),
+                reason: "rate_limit".into(),
+                window: Some("five_hour".into()),
+            }),
+        ),
+        "the conversation's next request lands as the failover's landing, with its cause"
     );
 }
 
@@ -16552,7 +16877,6 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: RenewalEnd::NoTurn,
         })
         .await;

@@ -1451,8 +1451,8 @@ holds `realized`, in the order the engine applies them. Its Round group reads, b
 wall (`wall 5h`, `wall 7d`, `wall Fable`), the instant the burn the projection carries reaches the window's whole share,
 absent while the window burns nothing. A pin step's `credit issuer` chip names the account that issued the fallback
 credit token the body carries, on which the request is placed ahead of the pin's renewal and the moves, under the credit
-rule of [Routing](routing.md#selection). A `judged turn` chip on the same step names the account of the turn a
-classifier call judges, on which the call is placed the same way, under the classifier rule there.
+rule of [Routing](routing.md#selection). A classifier call's pin step draws no pin and names the turn the call judges,
+that turn's account and where the call went, under the classifier rule there.
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
 (the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a
@@ -1479,7 +1479,7 @@ waits for (`its 5h window spent until 15:42`, `at its spend cap until 00:00`), a
 the gate read that did not fit, `rewrite only` or `least bad` in the warning tone and `ending` neutral. A cooldown chip
 names the scope its words leave out after the reset, the model a cooldown holds, and the walk's exhausted line reads a
 spent member's chip as its row does. Three folds, "Request facts", "Pin and warmth" (a record that pins nothing reads
-why: not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
+why: classifier, not looked up or pinning off, and a pin that carries them reads Cycle and Slowed until) and
 `Settings in force since {time}` (which a guardrail's attach to or detach from the pool moves too, since the fence
 re-reads the pool's settings), stay closed until opened. In Pin and warmth, a stamped pin's Shed mark names the account
 it left, `shed from` after a shedding round and `failed over from` after a failover's landing, with the instant. The

@@ -32,25 +32,23 @@ refused for its shape as `400` `body_shape` on a request whose line the relay re
 A body carrying a fallback credit token from a refusal is placed on the account that issued it, the relay keeping the
 issuer under the token's digest in memory for an hour ([Admission](relay.md#admission)).
 The router requires the session header, the class header, the attribution line, `metadata.user_id` and the agent and
-compaction headers of a Claude Code request and refuses the rest `403` `client_contract`
-([The required set](client.md#the-required-set)), restores `cc_prompt_id` from the client's prompt-id header and
-`cc_prev_req` by class, blanks the account uuid on an API-key leg, prices the client's auto-mode classifier calls
-that carry the classifier marker at no share of a plan window, and routes each of them, best effort, as a call of the
-agent whose turn ended last in the session, onto that turn's account where it can, because the upstream charges a
-classifier call that lands on another account than the turn it judges
-([Auto mode behind the router](relay.md#auto-mode-behind-the-router)). Every caller-credential refusal
-(`auth_ambiguous`, `auth_malformed`, `auth_missing` and `auth_unknown`, the registry's key refusal among them) carries
-`x-should-retry: false` on every route that answers it, so the client does not resend it
-([Refusal codes](client.md#refusal-codes)). The router is measured against Claude Code 2.1.310 on Linux x64, the build
-the profile and the fixtures come from ([The pinned client build](development.md#the-pinned-client-build)). A version
-suffix refusal names the anchors the router tried and the marks a subagent's request carries, and says that a re-pin
-does not help where the session's main turns pass ([Client drift](relay.md#client-drift)). A request refused for an
-account's malformed stored uuid files as rejected, and every answer of the side routes carries
-`Cache-Control: no-store`, a refusal of a malformed path among them ([When nothing can
-serve](routing.md#when-nothing-can-serve), [What the proxy accepts](client.md#what-the-proxy-accepts)). A body holding
-more than 1,000,000 elements is refused `400` `body_shape` before it is parsed, so a body of many tiny elements cannot
-build a parsed tree past about 346 MiB, what nested single-entry objects (the dearest shape measured) build at the bound
-([Admission](relay.md#admission)).
+compaction headers of a Claude Code request and refuses the rest `403` `client_contract` ([The required
+set](client.md#the-required-set)), restores `cc_prompt_id` from the client's prompt-id header and `cc_prev_req` by
+class, blanks the account uuid on an API-key leg, prices the client's auto-mode classifier calls that carry the
+classifier marker at no share of a plan window, and sends each of them, best effort and without a pin, to the account
+its judged turn ended on where it can, because the upstream charges a classifier call that lands on another account than
+the turn it judges ([Auto mode behind the router](relay.md#auto-mode-behind-the-router)). Every caller-credential
+refusal (`auth_ambiguous`, `auth_malformed`, `auth_missing` and `auth_unknown`, the registry's key refusal among them)
+carries `x-should-retry: false` on every route that answers it, so the client does not resend it ([Refusal
+codes](client.md#refusal-codes)). The router is measured against Claude Code 2.1.310 on Linux x64, the build the profile
+and the fixtures come from ([The pinned client build](development.md#the-pinned-client-build)). A version suffix refusal
+names the anchors the router tried and the marks a subagent's request carries, and says that a re-pin does not help
+where the session's main turns pass ([Client drift](relay.md#client-drift)). A request refused for an account's
+malformed stored uuid files as rejected, and every answer of the side routes carries `Cache-Control: no-store`, a
+refusal of a malformed path among them ([When nothing can serve](routing.md#when-nothing-can-serve), [What the proxy
+accepts](client.md#what-the-proxy-accepts)). A body holding more than 1,000,000 elements is refused `400` `body_shape`
+before it is parsed, so a body of many tiny elements cannot build a parsed tree past about 346 MiB, what nested
+single-entry objects (the dearest shape measured) build at the bound ([Admission](relay.md#admission)).
 
 A key routes into one pool ([Pools, keys and routing](routing.md)), and every request it presents is placed on one
 account by the session's pin, the pool's strategy and each account's quota. A live pin moves only by one of five rules,

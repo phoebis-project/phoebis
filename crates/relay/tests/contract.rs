@@ -248,19 +248,18 @@ async fn a_classifier_call_off_its_judged_turns_account_is_reported_as_any_call_
         (None, Some(Classifier::ClientOff)),
         "the call off the judged turn completes with the second word, the one on it with the observation's"
     );
-    let mut renewed: Vec<(String, bool)> = h
+    let pinned: Vec<String> = h
         .router
         .pins()
         .await
         .unwrap()
         .into_iter()
-        .map(|p| (p.session_id, p.last_classifier))
+        .map(|p| p.session_id)
         .collect();
-    renewed.sort();
     assert_eq!(
-        renewed,
-        [("s-1".to_string(), true), ("s-2".to_string(), false)],
-        "the call off the judged turn renews its pin as a standard answer"
+        pinned,
+        ["s-1"],
+        "neither call holds a pin, so the conversation's turn holds the one pin"
     );
     up.shutdown().await;
 

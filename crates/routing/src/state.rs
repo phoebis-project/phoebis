@@ -3854,9 +3854,9 @@ impl RoutingState {
     /// The session's pin whose turn ended last under one key, any agent and model: the pin the last client stream's
     /// end renewed (`latest_turn_end`), else the pin with the greatest `last_used_at` among the session's pins that
     /// are not `auxiliary_only`, a stamp a stream's end moves too, so a restart or a session whose first turn has not
-    /// ended still reads a turn. A pin only auxiliary calls use is left out, so a classifier pin never names itself.
-    /// Rows stamped at one instant answer the later placement, then the greater agent and model ids, so the answer
-    /// never rests on the map's order.
+    /// ended still reads a turn. A pin only auxiliary calls use is left out, since no turn ran on it. Rows stamped at
+    /// one instant answer the later placement, then the greater agent and model ids, so the answer never rests on the
+    /// map's order.
     pub(crate) fn latest_turn_pin(&self, key_id: &str, session_id: &str) -> Option<&PinRow> {
         self.latest_turn_end(key_id, session_id)
             .and_then(|end| self.pins.get(&end.key))
@@ -3875,6 +3875,45 @@ impl RoutingState {
                         )
                     })
             })
+    }
+
+    /// Folds a classifier call's usage into the classifier copy of `judged`, the pin the call's selection named, where
+    /// that pin still stands under its epoch on `ran_on`, the account and incarnation the call ran on, and answers the
+    /// row to write. A pin replaced since, one that moved and a call that ran elsewhere fold nothing.
+    pub(crate) fn fold_classifier_copy(
+        &mut self,
+        judged: &PinRef,
+        ran_on: (&str, u64),
+        model: &str,
+        usage: &PinUsage,
+        at: i64,
+        window_ms: i64,
+    ) -> Option<PinRow> {
+        let pin = self.pin_mut(&judged.key()).filter(|pin| {
+            pin.epoch == judged.epoch && (pin.account_id.as_str(), pin.incarnation) == ran_on
+        })?;
+        // Every copy decays from the shared `burn_at`, so the copies the call adds nothing to fold at weight 0 and keep
+        // step with the classifier copy.
+        let since = pin.burn_at;
+        let folded = |copy: PinBurn, weight: f64| {
+            let fold = |rate: f64, tokens: u64| {
+                burn_folded(rate, since, at, window_ms, tokens as f64 * weight)
+            };
+            PinBurn {
+                cache_read: fold(copy.cache_read, usage.cache_read),
+                input: fold(copy.input, usage.input),
+                output: fold(copy.output, usage.output),
+                write_1h: fold(copy.write_1h, usage.write_1h),
+                write_5m: fold(copy.write_5m, usage.write_5m),
+            }
+        };
+        pin.burn = folded(pin.burn, 0.0);
+        pin.burn_banded = folded(pin.burn_banded, 0.0);
+        pin.burn_fast = folded(pin.burn_fast, 0.0);
+        pin.burn_unmetered = folded(pin.burn_unmetered, 1.0);
+        pin.burn_at = Some(at);
+        pin.burn_unmetered_model = Some(model.to_string());
+        Some(pin.clone())
     }
 
     /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, bucket windows read
@@ -4222,8 +4261,8 @@ mod tests {
             },
             burn_fast: PinBurn::default(),
             burn_unmetered: PinBurn::default(),
+            burn_unmetered_model: None,
             last_input_tokens: 0,
-            last_classifier: false,
             last_refresh_at: 0,
             cache_ttl_ms: 300_000,
             shed: None,

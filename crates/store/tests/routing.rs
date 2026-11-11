@@ -28,8 +28,8 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         burn_banded: PinBurn::default(),
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
         last_input_tokens: 0,
-        last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -1003,6 +1003,8 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     conn.execute_batch(
         "ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;
          ALTER TABLE pins DROP COLUMN ended;
+         ALTER TABLE pins ADD COLUMN last_classifier INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE pins DROP COLUMN burn_unmetered_model;
          DROP TABLE usage_window_sets;
          ALTER TABLE refresh_attempts DROP COLUMN cause;
          ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;

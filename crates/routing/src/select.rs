@@ -585,6 +585,10 @@ pub struct Selection {
     /// `Some` for the client's classifier call alone: `On` where the selected account and incarnation are the ones
     /// the judged turn's stream ended on, `Off` elsewhere and in a session with no turn to judge.
     pub judged: Option<JudgedCharge>,
+    /// The pin of the turn the client's classifier call judges, as `decide` read it ahead of the run, `None` for every
+    /// other request and in a session with no turn to judge. The relay hands it back on the call's usage report, so the
+    /// call's tokens fold into the pin it judged and never into the pin of a turn that ended while it was upstream.
+    pub judged_pin: Option<PinRef>,
 }
 
 /// A classifier call's standing against the turn it judges: the upstream keeps the call free on the account and
@@ -861,23 +865,19 @@ fn budget_unknown(
     state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
-/// The prompt size a pin's burn is divided by and its move rewrites: the pin's own prompt where a conversation call
-/// renewed it last, the request's own body where a classifier call did or no call has renewed it with usage, zero for
-/// a classifier request.
+/// The prompt size a pin's burn is divided by and its move rewrites: the pin's own prompt, else the request's own body
+/// where no call has renewed it with usage.
 fn prompt_size(pin: &PinRow, request: &SelectRequest) -> u64 {
-    if pin.last_input_tokens > 0 && !pin.last_classifier {
+    if pin.last_input_tokens > 0 {
         pin.last_input_tokens
-    } else if request.classifier {
-        0
     } else {
         request.body_tokens
     }
 }
 
 /// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
-/// session, a pin never renewed with usage or a pin a classifier call renewed last, as one cache write at the lane's
-/// TTL (five minutes until a pin reports one). The gate's booking and the pick's figure price the same tokens through
-/// it.
+/// session or a pin never renewed with usage, as one cache write at the lane's TTL (five minutes until a pin reports
+/// one). The gate's booking and the pick's figure price the same tokens through it.
 pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> PinUsage {
     // The plan windows see nothing of the client's classifier call, so its body is no rewrite to fit or to book. A
     // renewed pin's own context stays the session's, since a move still rewrites it.
@@ -887,9 +887,7 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
         request.body_tokens
     };
     // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
-    // session's TTL is unknown before a pin exists, so its write prices at five minutes. A pin a classifier call
-    // renewed last holds a classifier body as its context, which the plan windows never see either, so a move or a
-    // round prices the request's own body there, zero for a classifier request.
+    // session's TTL is unknown before a pin exists, so its write prices at five minutes.
     let (tokens, ttl_ms) = match pin {
         Some(pin) => (prompt_size(pin, request), pin.cache_ttl_ms),
         None => (body, FIVE_MINUTES_MS),
@@ -1320,13 +1318,22 @@ pub fn decide(
     let key = snapshot.key(&request.key_id);
     let pool = key.and_then(|k| snapshot.pool(&k.pool_id));
     // Read ahead of the run, whose writes stamp and move the session's pins: the call judges the turn that stood when
-    // it arrived, the one `judged_candidate` directs it by.
-    let judged_turn = request.classifier.then(|| judged_turn(state, request));
+    // it arrived, the one `judged_candidate` directs it by, and its usage folds into that turn's pin whatever turn ends
+    // while it is upstream.
+    let judged = request.classifier.then(|| {
+        (
+            judged_turn(state, request),
+            state
+                .latest_turn_pin(&request.key_id, &request.session_id)
+                .map(pin_ref),
+        )
+    });
     let (mut result, writes) = run(state, snapshot, pool, request, rng, &mut rec);
-    if let Some(turn) = judged_turn {
-        if turn.is_none() {
-            rec.judged_absent();
-        }
+    if let Some((turn, judged_pin)) = judged {
+        rec.judged_pin_step(
+            turn.as_ref().map(|(account_id, _)| account_id.as_str()),
+            judged_pin.as_ref(),
+        );
         if let SelectResult::Selected(selection) = &mut result {
             let on = turn.is_some_and(|(account_id, incarnation)| {
                 account_id == selection.account.id && incarnation == selection.account.incarnation
@@ -1336,6 +1343,7 @@ pub fn decide(
             } else {
                 JudgedCharge::Off
             });
+            selection.judged_pin = judged_pin;
         }
     }
     // The reserve station draws on every walk. A placement and a move record it where they book, and an answer that
@@ -1392,22 +1400,6 @@ fn round_write(
     writes
 }
 
-/// The agent a request is routed as where it differs from the one it names: the client's own classifier call carries
-/// `main` and no agent header whatever turn it judges, so it is routed as the agent of the session's turn that ended
-/// last (`RoutingState::latest_turn_pin`), on whose account the upstream keeps the call free. `None` for every other
-/// request, and for a classifier call with no turn pin to follow. The routing task writes the answer into the request
-/// ahead of its pin lookup, so every read of the selection runs under the routed agent. A call still under another
-/// agent is directed nowhere (`judged_candidate`).
-pub fn routed_agent(state: &RoutingState, request: &SelectRequest) -> Option<String> {
-    if !request.classifier {
-        return None;
-    }
-    state
-        .latest_turn_pin(&request.key_id, &request.session_id)
-        .filter(|judged| judged.agent_id != request.agent_id)
-        .map(|judged| judged.agent_id.clone())
-}
-
 /// `decide` without its record: the tests' entry and nothing else's.
 pub fn select(
     state: &mut RoutingState,
@@ -1448,6 +1440,8 @@ struct Recorder {
     slow_down: Option<SlowDownRead>,
     /// The slow-down hold step 5 answered, for its outcome's cycle.
     hold_plan: Option<HoldPlan>,
+    /// Where the client's classifier call went (`judged_candidate`'s word, else `PLACED_DIRECTION`), for its Pin step.
+    direction: Option<&'static str>,
 }
 
 /// The pin a renewal kept, as the summary's renewal fact reads it: whether it was cold on this request, the cause
@@ -1489,9 +1483,9 @@ impl Recorder {
             .find(|c| c.account_id == account_id)
     }
 
-    /// A directed placement, the credit issuer's or the judged turn's for a classifier call, shows under the `pin`
-    /// step, which step 1 has already pushed: its verdict reads `match` and it gains the fact `key` naming the
-    /// account, so the record keeps its stations and its verdict words.
+    /// The fallback credit's directed placement shows under the `pin` step, which step 1 has already pushed: its
+    /// verdict reads `match` and it gains the fact `key` naming the account, so the record keeps its stations and its
+    /// verdict words.
     fn directed_placed(&mut self, key: &'static str, account_id: &str) {
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
             pin.verdict = "match";
@@ -1500,11 +1494,22 @@ impl Recorder {
         }
     }
 
-    /// A classifier call in a session with no turn to judge carries the judged turn's fact under the `pin` step all
-    /// the same, reading `none`, so the record names what the call's charge lacked.
-    fn judged_absent(&mut self) {
+    /// The `pin` step of the client's classifier call, which pins nothing and keeps the verdict `none` beside its
+    /// reason: the turn it judges by that turn's pin's agent and model, the account `judged_turn` answers, the one the
+    /// charge reads, or `none` in a session with no turn to judge, then where the call went.
+    fn judged_pin_step(&mut self, account_id: Option<&str>, turn: Option<&PinRef>) {
+        let direction = self.direction;
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
-            pin.facts.push(Fact::text(JUDGED_WORDS.fact, "none"));
+            if let Some(turn) = turn {
+                pin.facts.push(Fact::text("judged_agent", &turn.agent_id));
+                pin.facts.push(Fact::text("judged_model", &turn.model));
+            }
+            pin.facts.push(match account_id {
+                Some(account_id) => Fact::text(JUDGED_WORDS.fact, account_id).about(account_id),
+                None => Fact::text(JUDGED_WORDS.fact, "none"),
+            });
+            pin.facts
+                .extend(direction.map(|word| Fact::text("direction", word)));
         }
     }
 }
@@ -1527,10 +1532,14 @@ fn run(
     // A marker-less request writes no cache, so under `when_cached` it has no pin to keep and spreads by the
     // strategy instead of pinning; `always`, a marked request, or a non-portable one still pins.
     let session = Some(request.session_id.as_str()).filter(|_| {
-        ttl_ms > 0
+        !request.classifier
+            && ttl_ms > 0
             && (pool.affinity.mode == AffinityMode::Always || request.marker || !request.portable)
     });
-    if session.is_none() {
+    if request.classifier {
+        // The client's classifier call follows its session's judged turn and holds no pin of its own.
+        rec.pin_reason = Some("classifier");
+    } else if session.is_none() {
         rec.pin_reason = Some("pinning_off");
     }
 
@@ -1757,8 +1766,8 @@ fn run(
     );
     // A fallback credit token is good on the organization that issued it alone, so the body carrying one goes to that
     // account ahead of the moves and the strategy, which would place it where the upstream refuses the token. The
-    // client's classifier call goes to the account of the turn it judges the same way, since the upstream charges it
-    // on any other account.
+    // client's classifier call goes ahead of the strategy the same way, to the account its judged turn ended on, where
+    // the upstream keeps it free, else to the account that turn's pin stands on now.
     let credit = credit_candidate(
         request,
         &eligible,
@@ -1769,9 +1778,15 @@ fn run(
     let judged = judged_candidate(state, snapshot, request, &eligible, window);
     let directed = credit
         .map(|c| (c, CREDIT_WORDS))
-        .or(judged.map(|c| (c, JUDGED_WORDS)));
-    if let Some((candidate, words)) = directed {
-        rec.directed_placed(words.fact, &candidate.account_id);
+        .or(judged.map(|(c, _)| (c, JUDGED_WORDS)));
+    if let Some(c) = credit {
+        rec.directed_placed(CREDIT_WORDS.fact, &c.account_id);
+    }
+    if request.classifier {
+        rec.direction = Some(match (credit, judged) {
+            (None, Some((_, direction))) => direction,
+            _ => PLACED_DIRECTION,
+        });
     }
 
     // A probe warms the pin it was sent for. With that member at its spend budget, disabled by the operator, past
@@ -1910,7 +1925,7 @@ fn run(
                     slow_down_read(state, snapshot, pool, &current.account_id, request.now);
             } else {
                 // Handed to the placement as a fired move hands its source, so the new row carries its burn and its
-                // last prompt. No move reason names a credit or a judged turn, so the write reads `created`.
+                // last prompt. No move reason names a credit, so the write reads `created`.
                 state.remove_pin(&current_key);
                 writes.push(StateWrite::DeletePin(current_key.clone()));
                 if let Some(mark) = standing_mark(&current) {
@@ -2540,6 +2555,7 @@ fn run(
             pool_id: pool.id.clone(),
             left,
             judged: None,
+            judged_pin: None,
         }),
         writes,
     )
@@ -2564,9 +2580,9 @@ fn replace_expired(
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
 /// and the word a shed move or a failover's landing stamps. `moving` is the row a move takes off its source or a
-/// failover took off its account, whose burn averages and last prompt, with whether a classifier call wrote it, the
-/// new row carries, so the destination's projection counts the pin from the moment it lands and a later move prices
-/// its rewrite from a figure.
+/// failover took off its account, whose burn averages, the classifier copy's model and the last prompt the new row
+/// carries, so the destination's projection counts the pin from the moment it lands, the copy keeps its price and a
+/// later move prices its rewrite from a figure.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
@@ -2576,27 +2592,34 @@ fn fresh_pin(
     moving: Option<&PinRow>,
 ) -> PinRow {
     // The rates are typed tokens per second and carry no unit, so the copy needs no re-pricing.
-    let (burn, burn_at, burn_banded, burn_fast, burn_unmetered, last_input_tokens, last_classifier) =
-        match moving {
-            Some(moving) => (
-                moving.burn,
-                moving.burn_at,
-                moving.burn_banded,
-                moving.burn_fast,
-                moving.burn_unmetered,
-                moving.last_input_tokens,
-                moving.last_classifier,
-            ),
-            None => (
-                PinBurn::default(),
-                None,
-                PinBurn::default(),
-                PinBurn::default(),
-                PinBurn::default(),
-                0,
-                false,
-            ),
-        };
+    let (
+        burn,
+        burn_at,
+        burn_banded,
+        burn_fast,
+        burn_unmetered,
+        burn_unmetered_model,
+        last_input_tokens,
+    ) = match moving {
+        Some(moving) => (
+            moving.burn,
+            moving.burn_at,
+            moving.burn_banded,
+            moving.burn_fast,
+            moving.burn_unmetered,
+            moving.burn_unmetered_model.clone(),
+            moving.last_input_tokens,
+        ),
+        None => (
+            PinBurn::default(),
+            None,
+            PinBurn::default(),
+            PinBurn::default(),
+            PinBurn::default(),
+            None,
+            0,
+        ),
+    };
     let mut row = PinRow {
         key_id: request.key_id.clone(),
         session_id: session.to_string(),
@@ -2616,8 +2639,8 @@ fn fresh_pin(
         burn_banded,
         burn_fast,
         burn_unmetered,
+        burn_unmetered_model,
         last_input_tokens,
-        last_classifier,
         // A fresh pin has no cache to be cold about, and its TTL is the default until the first report.
         last_refresh_at: request.now,
         cache_ttl_ms: FIVE_MINUTES_MS,
@@ -5224,9 +5247,8 @@ fn shed_round(
                         .increase()
                         / seconds(horizon - now)
                 });
-            // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it, so a pin a
-            // classifier call renewed last never ranks by a classifier body. A pin with no prompt size reported yet
-            // ranks as the cheapest rewrite.
+            // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it. A pin with no
+            // prompt size reported yet ranks as the cheapest rewrite.
             let prompt = prompt_size(&p, &pin_request(request, &p, is_current(&p))).max(1) as f64;
             // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the
             // record lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at
@@ -5244,9 +5266,8 @@ fn shed_round(
             }
         })
         .collect();
-    // A pin with no priced burn on the window (a classifier pin, whose calls fold into the unmetered copy alone) has
-    // nothing to shed, so it leaves before the order and the burn guard as an off-window pin does. An unpriced pin
-    // stays walked, since its burn is unknown rather than none.
+    // A pin with no priced burn on the window has nothing to shed, so it leaves before the order and the burn guard as
+    // an off-window pin does. An unpriced pin stays walked, since its burn is unknown rather than none.
     let (burnless, pins): (Vec<_>, Vec<_>) = pins
         .into_iter()
         .partition(|p| p.share.is_some_and(|share| share == 0.0));
@@ -5787,6 +5808,7 @@ fn renew(
             .filter(|account| *account != current.account_id)
             .map(String::from),
         judged: None,
+        judged_pin: None,
     }
 }
 
@@ -5980,8 +6002,9 @@ fn credit_candidate<'a>(
     (renews || under_cap(state, pool, &candidate.account_id)).then_some(candidate)
 }
 
-/// The words a placement directed ahead of the moves and the strategy writes: `reason` on the move rules, the rungs
-/// and the pick, `fact` as the key of the pin step's fact naming the account.
+/// The words a placement directed ahead of the moves and the strategy writes: `reason` on the rungs, the pick and,
+/// where a live pin stands, the move rules, `fact` as the key of the pin step's fact naming an account, the credit's
+/// issuer or the judged turn's.
 #[derive(Clone, Copy)]
 struct DirectedWords {
     reason: &'static str,
@@ -5994,38 +6017,49 @@ const CREDIT_WORDS: DirectedWords = DirectedWords {
     fact: "credit",
 };
 
-/// The classifier call's placement, on the account of the turn it judges.
+/// The classifier call's placement on the account its judged turn ended on or the one that turn's pin stands on.
 const JUDGED_WORDS: DirectedWords = DirectedWords {
     reason: "classifier",
     fact: "judged",
 };
 
-/// The candidate the client's classifier call follows: the account of the session's turn that ended last, under the
-/// incarnation its pin names, among the eligible set and holding allowance, as the `with_main` rung admits a parent's
-/// account. The cap does not bound it, as it bounds no renewal: the call belongs to a session already on that
-/// account. `None` for every other request, for a non-portable call, and for a judged account that cannot serve the
-/// call, which is then placed and moved like any request. The call goes to the judged account ahead of the moves
-/// whether or not it shares the judged pin, as it does where the session's turn runs on the classifier's model, so a
-/// call directed here never moves a pin: the conversation's next turn makes the move.
+/// The `direction` of a classifier call neither of `judged_candidate`'s accounts took, placed by the rungs and the
+/// strategy as a request without a pin is.
+const PLACED_DIRECTION: &str = "strategy";
+
+/// The candidate the client's classifier call goes to, with the direction word that names it: the account and
+/// incarnation the session's judged turn's stream ended on (`turn_account`), where the upstream keeps the call free,
+/// else the account and incarnation that turn's pin stands on now (`pin_account`), each among the eligible set and
+/// holding allowance, as the `with_main` rung admits a parent's account. In a session with no recorded turn end, as
+/// after a restart, the pin's account stands in for the first. The cap does not bound it, as it bounds no renewal:
+/// the call belongs to a session already on that account. `None` for every other request, for a count, a probe and a
+/// non-portable call, and where neither account can serve the call, which is then placed by the rungs and the
+/// strategy. The call holds no pin, so a call directed here moves none: the conversation's next turn makes the move.
 fn judged_candidate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     request: &SelectRequest,
     eligible: &[&'a Candidate],
     window: &str,
-) -> Option<&'a Candidate> {
+) -> Option<(&'a Candidate, &'static str)> {
     if !request.classifier || request.count || request.probe || !request.portable {
         return None;
     }
-    let judged = state.latest_turn_pin(&request.key_id, &request.session_id)?;
-    // The task routed the request as the judged agent ahead of this read (`routed_agent`), so the pin the call is held
-    // under and the account it is directed to never disagree. A request still under another agent follows no one.
-    if judged.agent_id != request.agent_id {
-        return None;
-    }
-    candidate_in(eligible, &judged.account_id)
-        .filter(|c| c.incarnation == judged.incarnation)
-        .filter(|c| holds_allowance(state, snapshot, &c.account_id, window, request.now))
+    let serves = |account_id: &str, incarnation: u64| {
+        candidate_in(eligible, account_id)
+            .filter(|c| c.incarnation == incarnation)
+            .filter(|c| holds_allowance(state, snapshot, &c.account_id, window, request.now))
+    };
+    state
+        .latest_turn_end(&request.key_id, &request.session_id)
+        .and_then(|end| serves(&end.account_id, end.incarnation))
+        .map(|c| (c, "turn_account"))
+        .or_else(|| {
+            state
+                .latest_turn_pin(&request.key_id, &request.session_id)
+                .and_then(|pin| serves(&pin.account_id, pin.incarnation))
+                .map(|c| (c, "pin_account"))
+        })
 }
 
 /// The account and incarnation the classifier call's judged turn ran on: the recorded stream end's, which a move of
@@ -7306,6 +7340,7 @@ fn finish(
         reservation,
         slow_down,
         hold_plan,
+        direction: _,
     } = rec;
     let settings = pool.map(settings_of);
     let mut outcome = Outcome {
@@ -7721,17 +7756,20 @@ impl Readings<'_> {
     fn pick_fact(&self) -> Vec<SummaryFact> {
         let text =
             |key: &'static str, value: String| summary_fact(key, FactValue::Text(value), "text");
-        // The credit or the judged turn placed the request ahead of the strategy, which ranked no candidate.
-        let pin_facts = || {
-            self.walk
-                .iter()
-                .filter(|w| w.step == "pin")
-                .flat_map(|w| &w.facts)
-        };
-        for words in [CREDIT_WORDS, JUDGED_WORDS] {
-            if pin_facts().any(|f| f.key == words.fact) {
-                return vec![text("pick", words.reason.into())];
-            }
+        // The credit or the judged turn placed the request ahead of the strategy, which ranked no candidate. A
+        // classifier call's pin step names its judged account wherever it went, so its direction says which.
+        let mut pin_facts = self
+            .walk
+            .iter()
+            .filter(|w| w.step == "pin")
+            .flat_map(|w| &w.facts);
+        let directed = pin_facts.find_map(|f| match (f.key, &f.value) {
+            (key, _) if key == CREDIT_WORDS.fact => Some(CREDIT_WORDS),
+            ("direction", FactValue::Text(word)) if word != PLACED_DIRECTION => Some(JUDGED_WORDS),
+            _ => None,
+        });
+        if let Some(words) = directed {
+            return vec![text("pick", words.reason.into())];
         }
         // Read off the accounts tried rather than the wire attempt: a retry in place advances the attempt on one
         // account, and a credential failure moves on to the next without advancing it.

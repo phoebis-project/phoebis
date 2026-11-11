@@ -90,7 +90,9 @@ fn rename(
 fn sixth_step_taken_back(conn: &rusqlite::Connection) {
     conn.execute_batch(
         "ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;
-         ALTER TABLE pins DROP COLUMN ended;",
+         ALTER TABLE pins DROP COLUMN ended;
+         ALTER TABLE pins ADD COLUMN last_classifier INTEGER NOT NULL DEFAULT 0;
+         ALTER TABLE pins DROP COLUMN burn_unmetered_model;",
     )
     .unwrap();
 }
@@ -134,8 +136,8 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
                 burn_banded: PinBurn::default(),
                 burn_fast: PinBurn::default(),
                 burn_unmetered: PinBurn::default(),
+                burn_unmetered_model: None,
                 last_input_tokens: 0,
-                last_classifier: false,
                 last_refresh_at: 1,
                 cache_ttl_ms: 300_000,
                 shed: None,
@@ -278,8 +280,8 @@ fn a_pin_saved_before_the_sixth_step_reads_back_as_saved_and_not_ended() {
         burn_banded: PinBurn::default(),
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
         last_input_tokens: 0,
-        last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -395,8 +397,8 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         },
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
+        burn_unmetered_model: None,
         last_input_tokens: 1_000,
-        last_classifier: false,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -441,72 +443,6 @@ fn every_burn_copy_of_a_pin_and_the_columns_after_them_read_back_as_written() {
         store.load_routing().unwrap().pins,
         vec![pin],
         "every copy and every column after them reads back as written"
-    );
-}
-
-#[test]
-fn a_pins_last_classifier_flag_reads_back_as_written_and_a_standard_renewal_clears_it() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store
-        .insert_account(&account("a", AccountKind::Oauth))
-        .unwrap();
-    let before = PinRow {
-        key_id: "k".into(),
-        session_id: "s".into(),
-        agent_id: "main".into(),
-        model: "claude-sonnet-5".into(),
-        account_id: "a".into(),
-        epoch: 1,
-        created_at: 1,
-        last_used_at: 1,
-        key_generation: 1,
-        incarnation: 1,
-        burn: PinBurn::default(),
-        burn_at: Some(5),
-        burn_banded: PinBurn::default(),
-        burn_fast: PinBurn::default(),
-        burn_unmetered: PinBurn::default(),
-        last_input_tokens: 1_000,
-        last_classifier: false,
-        last_refresh_at: 1,
-        cache_ttl_ms: 300_000,
-        shed: None,
-        static_hash: None,
-        tail_hash: None,
-        lane: String::new(),
-        entrypoint: None,
-        mark: None,
-        auxiliary_only: false,
-        effort: None,
-        ended: false,
-    };
-    store.upsert_pin(&before).unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins,
-        vec![before.clone()],
-        "a pin a standard request renewed reads the flag unset"
-    );
-    let classified = PinRow {
-        last_input_tokens: 600,
-        last_classifier: true,
-        ..before
-    };
-    store.upsert_pin(&classified).unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins,
-        vec![classified.clone()],
-        "a pin a classifier call renewed last reads back with the flag set"
-    );
-    let renewed = PinRow {
-        last_input_tokens: 2_000,
-        last_classifier: false,
-        ..classified
-    };
-    store.upsert_pin(&renewed).unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().pins,
-        vec![renewed],
-        "an upsert over the row clears the flag a standard renewal clears"
     );
 }
 

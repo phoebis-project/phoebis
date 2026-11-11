@@ -56,7 +56,8 @@ pub struct DecisionRecord {
     /// `None` for a request that pins nothing, with `pin_reason` beside it.
     pub pin: Option<PinFacts>,
     /// `not_looked_up` (made before the pin lookup whatever session the request named: a refusal's, or the engine's
-    /// when the snapshot holds no pool for the request's key) or `pinning_off`, and `None` beside a pin block.
+    /// when the snapshot holds no pool for the request's key), `pinning_off`, or `classifier` for the client's
+    /// classifier call, which runs without a pin, and `None` beside a pin block.
     pub pin_reason: Option<&'static str>,
     /// `None` for a refusal whose key or pool the snapshot no longer holds (a revoked key's), written as `null`.
     pub settings: Option<Settings>,

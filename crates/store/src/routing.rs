@@ -92,9 +92,10 @@ pub struct PinRow {
     /// The usage of the client's own classifier calls, typed tokens per second over the same window, decayed from
     /// `burn_at` as `burn` is. Priced in dollars alone, so a plan account's projection never reads it.
     pub burn_unmetered: PinBurn,
+    /// The canonical model of the classifier call that folded into `burn_unmetered` last, which prices the copy.
+    /// `None` on a row no classifier call folded into, whose copy prices at the pin's model.
+    pub burn_unmetered_model: Option<String>,
     pub last_input_tokens: u64,
-    /// A classifier call renewed the pin last, so its stored context is a classifier body and prices no rewrite.
-    pub last_classifier: bool,
     /// The last main, subagent or compaction turn, or a keepalive probe's renewal. `last_used_at` moves on every
     /// request, while this does not.
     pub last_refresh_at: i64,
@@ -441,13 +442,14 @@ impl Store {
                     key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
                     epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
                     key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64,
-                    burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64, last_classifier: r.get(43)?,
+                    burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
                     last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
                     shed: shed_from(r, 14, 15, 44)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
                     lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
                     burn_fast: burn_from(r, 29)?, burn_unmetered: burn_from(r, 34)?,
-                    mark: mark_from(r, 39)?,
-                    entrypoint: none_if_empty(r.get(42)?),
+                    burn_unmetered_model: r.get(39)?,
+                    mark: mark_from(r, 40)?,
+                    entrypoint: none_if_empty(r.get(43)?),
                     auxiliary_only: r.get(45)?, effort: none_if_empty(r.get(46)?), ended: r.get(47)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
@@ -822,8 +824,8 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_banded_cache_read, burn_banded_input, burn_banded_output, burn_banded_write_1h, burn_banded_write_5m, \
      burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
-     burn_unmetered_write_5m, \
-     marked_at, marked_on, marked_window, entrypoint, last_classifier, shed_reason, auxiliary_only, effort, ended";
+     burn_unmetered_write_5m, burn_unmetered_model, \
+     marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended";
 
 fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     Ok(PinBurn {
@@ -931,11 +933,11 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         pin.burn_unmetered.output,
         pin.burn_unmetered.write_1h,
         pin.burn_unmetered.write_5m,
+        pin.burn_unmetered_model,
         pin.mark.as_ref().map(|mark| mark.at),
         pin.mark.as_ref().map(|mark| &mark.on),
         pin.mark.as_ref().map(|mark| &mark.window),
         pin.entrypoint.as_deref().unwrap_or_default(),
-        pin.last_classifier,
         pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
         pin.auxiliary_only,
         pin.effort.as_deref().unwrap_or_default(),

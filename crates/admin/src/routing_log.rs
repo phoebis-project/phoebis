@@ -376,7 +376,11 @@ pub(crate) struct DecisionRecord {
     /// standing on the pin, null with none). Null for a request that pins nothing, with `pin_reason` beside it.
     #[schema(value_type = Option<Object>)]
     pub pin: Option<Value>,
-    /// `not_looked_up` for a refusal, which precedes the pin lookup, or `pinning_off`.
+    /// `not_looked_up` for a refusal, which precedes the pin lookup, `pinning_off`, or `classifier` for the client's
+    /// classifier call, which runs without a pin. Such a call's `pin` walk step reads `none` with the facts `reason`
+    /// (`classifier`), `judged_agent` and `judged_model` (the turn the call judges, absent with no turn), `judged` (the
+    /// account that turn's stream ended on, or the one its pin stands on where no end is recorded, `none` with no turn
+    /// to judge) and `direction` (`turn_account`, `pin_account` or `strategy`, where the call went).
     #[schema(example = "pinning_off")]
     pub pin_reason: Option<String>,
     /// The values that entered the decision, each named by the `PoolRow` field it is read from: `strategy`,

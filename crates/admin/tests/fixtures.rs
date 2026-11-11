@@ -1672,7 +1672,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 keepalive: false,
                 cache_ttl_ms: 300_000,
                 fast: false,
-                classifier: false,
                 turn_end: phoebis_routing::RenewalEnd::Turn,
             })
             .await;
@@ -1760,7 +1759,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
             keepalive: false,
             cache_ttl_ms: 300_000,
             fast: false,
-            classifier: false,
             turn_end: phoebis_routing::RenewalEnd::Turn,
         })
         .await;

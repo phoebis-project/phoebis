@@ -2769,6 +2769,7 @@ impl Relay {
                 head: &mut leg_head,
                 injected: &injected,
                 judged: selection.judged,
+                judged_pin: selection.judged_pin.as_ref(),
                 key_permit: &mut *key_permit,
                 // A probe's answer is never remembered: the id it was given belongs to the turn it replayed,
                 // and recording it would make the next real turn name a probe.
@@ -3597,7 +3598,6 @@ impl Relay {
                 .or(ctx.admitted.markers_ttl_ms)
                 .unwrap_or(DEFAULT_CACHE_TTL_MS),
             fresh: ctx.fresh_pin,
-            classifier: ctx.free_of_plan(),
             turn: ctx.admitted.turn,
             subagent: ctx.admitted.subagent,
             renews: ctx.admitted.trace.kind != Kind::CountTokens,
@@ -3634,6 +3634,7 @@ impl Relay {
             canonical_model: ctx.admitted.identity.canonical_model.clone(),
             entrypoint: ctx.admitted.identity.entrypoint.clone(),
             classifier: ctx.free_of_plan(),
+            judged_pin: ctx.judged_pin.cloned(),
             lane: ctx.admitted.lane.clone(),
             root,
             static_boundaries: ctx
@@ -4589,6 +4590,9 @@ struct Responding<'a> {
     /// The router's answer on a classifier call's charge for this leg's account (`Selection::judged`): the call is
     /// free of a plan window only where it reads `On`.
     judged: Option<JudgedCharge>,
+    /// The pin the classifier call's selection judged (`Selection::judged_pin`), which the usage report carries back
+    /// so the call's tokens fold into that pin's classifier copy.
+    judged_pin: Option<&'a PinRef>,
     /// The request's permit, which a committed stream takes into its body.
     key_permit: &'a mut Option<KeyPermit>,
     memory_key: Option<&'a MemoryKey>,
@@ -4605,7 +4609,7 @@ struct Responding<'a> {
 impl Responding<'_> {
     /// Whether the request is the client's classifier call on the account and incarnation its judged turn ended on,
     /// the one call the upstream keeps free of a plan window. A call the router answered off reports as any call, so
-    /// its usage charges the window and its renewal folds as a standard answer.
+    /// its usage charges the window.
     fn free_of_plan(&self) -> bool {
         self.judged == Some(JudgedCharge::On)
     }

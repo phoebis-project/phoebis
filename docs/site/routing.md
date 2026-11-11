@@ -258,21 +258,22 @@ set](client.md#the-required-set)).
 With the pool's `auto_mode_server` on, or a key's override on, the upstream reviews a Claude Code session's tool uses on
 the model's own turn. Off, the client reviews them with classifier requests of its own, which the router routes as
 requests of the session: they carry its id, on the client's Sonnet default. A request that carries the classifier marker
-([Auto mode behind the router](relay.md#auto-mode-behind-the-router)) is routed as a call of the agent whose turn ended
-last in the session, the main agent's or a subagent's, under that agent's own pin on the Sonnet default, and lands on
-that turn's account ahead of the moves and the strategy while the account is eligible and holds allowance, because the
-upstream charges a classifier call that lands on another account than the turn it judges. A turn here is a stream of
-the class `main` or `subagent`: the end of an auxiliary call, the subagent summary fork among them, names no turn. The
-read is best effort: the call names no agent, so the router infers the judged turn from the order of the session's
-stream ends. Two turns that end within the gap before a call, a selection repeated by a failover or a hold, and the
-calls after a restart before the session's next turn ends can follow the other turn, and such a call is charged by the
-upstream while the router's meter reads it free. Where that account cannot serve the call, the call is placed and moved
-like any request. Otherwise it goes to that turn's account whether or not it shares the turn's pin, as it does where the
-session's turn runs on the Sonnet default itself, and never moves the pin: the conversation's next turn makes the move.
+([Auto mode behind the router](relay.md#auto-mode-behind-the-router)) runs without a pin: the router looks up, creates,
+renews and moves no pin for it and writes nothing to a conversation's pin. It judges the session's turn that ended last,
+the main agent's or a subagent's, and goes to the account that turn's stream ended on, where that account is eligible
+under the same incarnation and holds allowance, since the call is free there. Else it goes to the account the judged
+turn's pin stands on now, under the same conditions. Else it is placed as a request without a pin is, by the rungs and
+the strategy, and the upstream charges it. A turn here is a stream of the class `main` or `subagent`: the end of an
+auxiliary call, the subagent summary fork among them, names no turn. The read is best effort: the call names no agent,
+so the router infers the judged turn from the order of the session's stream ends. Two turns that end within the gap
+before a call, a selection repeated by a failover or a hold, and the calls after a restart before the session's next
+turn ends can follow the other turn, and such a call is charged by the upstream while the router's meter reads it free.
 A marked call whose committed attempt runs on the account and incarnation the judged turn's stream ended on takes no
 share of a plan window on a subscription account and the normal price of its model in the account's overage and on an
 API-key account ([Plan meter](statistics.md#plan-meter)). A call whose committed attempt runs off that account and
-incarnation, or in a session with no turn to judge, is charged as any call and recorded `client_off`.
+incarnation, or in a session with no turn to judge, is charged as any call and recorded `client_off`. A charged call
+counts toward no pin, and the calls' usage folds into the classifier copy of the judged turn's pin where a call ran on
+that pin's account, priced in dollars at the call's model.
 A body whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice)
 is refused `400` with the error code `body_shape` before anything reaches the upstream. The mechanism is on [Auto mode
 behind the router](relay.md#auto-mode-behind-the-router).
@@ -328,10 +329,12 @@ One read comes ahead of a live pin's renewal, the moves and the strategy: a body
 relay remembers is placed on the account that issued it, where that account is eligible and under its cap, or already
 holds the session's live pin, and the record's `pin` step reads `match` with the fact `credit` naming it ([The
 relay](relay.md#admission)). A Claude Code client's marked classifier call is the second such read: it goes to the
-account of the session's turn that ended last where that account is eligible and holds allowance, the cap not read since
-the call belongs to a session already there, and the `pin` step reads `match` with the fact `judged` naming it, the move
-rules, the rungs and the pick naming the reason `classifier`. On a classifier call with no turn to judge the fact reads
-`none` ([Clients](#clients)).
+account its judged turn's stream ended on, else to the account that turn's pin stands on now, where that account is
+eligible and holds allowance, the cap not read since the call belongs to a session already there, and the rungs and
+the pick name the reason `classifier` ([Clients](#clients)). The call holds no pin, so its `pin` step reads `none` with
+the reason `classifier` and the facts `judged_agent` and `judged_model` (the turn it judges), `judged` (the account that
+turn's stream ended on, or the one its pin stands on where no end is recorded, `none` with no turn to judge) and
+`direction` (`turn_account`, `pin_account` or `strategy`, where the call went).
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane
@@ -647,30 +650,29 @@ next request, which renews the pin in place. The destination gate, the reservati
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
 The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens, or for a pin a classifier call renewed last or no call has renewed with usage yet, the
-prompt its move would rewrite: the body of the request the round runs on for that request's own pin and nothing for any
-other pin or a classifier request), a pin whose burn the cost model cannot price after every priced pin of its group,
-each burn read from the pin's average decayed with `burn_average_seconds`, and as its demand under a round the stretch
-fired, so the round's pins add up to its excess. `warm_sessions` bounds the order: `never` stops after the cold pins,
-`when_needed` (the default) goes on to the warm ones, and `always` orders every pin by burn over rewrite cost, cold or
-warm. A pin a former pool left on the account is outside the round until it ends. While the account runs on its plan, a
-pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
-window, so the pin has no share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A
-session that returns to standard requests brings its pin back with the plan burn it still carries. A pin whose model
-does not draw the window that fired is out of the round too (`off_window`), so a 7-day Fable round walks the account's
-Fable sessions alone and an Opus session on the account is neither counted nor moved by it. A pin whose agent ended, a
-subagent whose last answer stopped with `end_turn` or an agent the companion mod released, is out of the round as well
-and out of every figure the router reads an account's pins for (the burn, a fresh session's prior, the model weeks a
-round tests, a move's fit, the projection and the slow-down's shares), and the round's record keeps its row under
-`ended`. Its pin, its account and its cache stay, since the main session can respawn the agent with its whole context,
-and the agent's next request brings the pin back into the walk and into every figure, the projection that fires a round
-among them (see **The projection**, above). The mark is stored with the pin, so a restart keeps such a pin out of every
-figure until the agent's next request. A pin with no priced burn on the fired window, such as a classifier pin whose
-calls took no share of a plan window, is out of the round too (`no_burn`), since it has nothing to shed. The round then
-walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A pin
-with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round never
-marks a pin whose mark would leave the account's other unmarked priced pins with less than a tenth of the round's burn
-sum on the window (`last_pin`), so a pool with one session burning there sheds nothing, no round takes all of an
+pin's last prompt size in tokens, or for a pin no call has renewed with usage yet, the prompt its move would rewrite:
+the body of the request the round runs on for that request's own pin and nothing for any other pin), a pin whose burn
+the cost model cannot price after every priced pin of its group, each burn read from the pin's average decayed with
+`burn_average_seconds`, and as its demand under a round the stretch fired, so the round's pins add up to its excess.
+`warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
+ones, and `always` orders every pin by burn over rewrite cost, cold or warm. A pin a former pool left on the account is
+outside the round until it ends. While the account runs on its plan, a pin whose last refreshing request was sent in
+fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to shed. In
+dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard requests
+brings its pin back with the plan burn it still carries. A pin whose model does not draw the window that fired is out of
+the round too (`off_window`), so a 7-day Fable round walks the account's Fable sessions alone and an Opus session on the
+account is neither counted nor moved by it. A pin whose agent ended, a subagent whose last answer stopped with
+`end_turn` or an agent the companion mod released, is out of the round as well and out of every figure the router reads
+an account's pins for (the burn, a fresh session's prior, the model weeks a round tests, a move's fit, the projection
+and the slow-down's shares), and the round's record keeps its row under `ended`. Its pin, its account and its cache
+stay, since the main session can respawn the agent with its whole context, and the agent's next request brings the pin
+back into the walk and into every figure, the projection that fires a round among them (see **The projection**, above).
+The mark is stored with the pin, so a restart keeps such a pin out of every figure until the agent's next request. A pin
+with no priced burn on the fired window is out of the round too (`no_burn`), since it has nothing to shed. The round
+then walks the pins in that order while the burn it removed, each pin's burn on the fired window, is under the target. A
+pin with a standing mark counts its burn as removed and is skipped as `standing`, since its move is pending. The round
+never marks a pin whose mark would leave the account's other unmarked priced pins with less than a tenth of the round's
+burn sum on the window (`last_pin`), so a pool with one session burning there sheds nothing, no round takes all of an
 account's burn, and a pin with almost no burn does not make its heavy neighbor markable. A pin whose burn the cost model
 cannot price counts nothing and is never marked (`unpriced`), so a session is never shed on a guess, and while such a
 pin stands unmarked it is the pin that stays, so the round refuses no mark as `last_pin`. A pin the shed rule's gate
