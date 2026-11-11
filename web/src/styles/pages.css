@@ -507,14 +507,24 @@
   color: var(--serious-ink);
 }
 
-/* A poll line: a failed poll's reason gives way to the line's width, so the line never wraps and never reaches the
-   Refresh pill. The gap stands in for the space the flex row drops after "failed:". */
+/* A poll line: a failed poll's reason gives way to the line's width first and the line's words next, so the line
+   stays on one line and ends before the control beside it. A lone reading beside Use reset on a narrow card breaks
+   into a second line instead (below). The gap stands in for the space the flex row drops after "failed:". */
 .qcard__poll {
   display: flex;
   gap: 0.25em;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
+}
+
+/* The line's words keep their width while a reason beside them gives way, and end in an ellipsis where they alone run
+   past the line, which a phone shows no hover to complete. */
+.qcard__words {
+  flex-shrink: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .qcard__reason,

@@ -348,9 +348,10 @@ export function extraUsageState(extra: ExtraUsage | null): ExtraUsageState {
   return extra.inUse ? 'in_use' : 'enabled';
 }
 
-/** The footer's essential reading: one or two lines that never wrap, each in the muted or the serious tone, a
- *  failed poll's reason cut inside its line, and a title carrying every fact the lines leave (the attempt's
- *  instant, when the snapshot was read, since when the account backs off, the run, the next attempt). */
+/** The footer's essential reading: one or two lines, each in the muted or the serious tone and drawn on one line
+ *  unless it stands alone beside Use reset on a narrow card, a failed poll's reason cut inside its line and the
+ *  line's words ending in an ellipsis where they do not fit, and a title carrying every fact the lines leave (the
+ *  attempt's instant, when the snapshot was read, since when the account backs off, the run, the next attempt). */
 export interface PollReading {
   lines: { reason?: string; text: string; tone: 'muted' | 'serious' }[];
   title: string;

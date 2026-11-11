@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
 import { accountColor, accountSlots } from '@/components/charts/theme';
@@ -196,13 +196,32 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const marks = resetMarks(account.limitResets);
   const [opening, setOpening] = useState<LimitResetsRead | null>(null);
   const [readingResets, setReadingResets] = useState(false);
+  const resetButton = useRef<HTMLButtonElement>(null);
+  // Use reset is disabled while its read runs, so the browser drops its focus and the dialog records no opener to hand
+  // it back to. The card hands it back itself once the read ended with no dialog or the dialog closed.
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (opening !== null || readingResets || !refocus.current) return;
+    refocus.current = false;
+    // The dialog's own close ran in a child's effect before this one, so its restore cannot undo this focus, and a
+    // control the operator moved to meanwhile keeps it.
+    const active = document.activeElement;
+    const unmoved = active === null || active === document.body || active.closest('dialog:not([open])') !== null;
+    if (unmoved && resetButton.current !== null && !resetButton.current.disabled) resetButton.current.focus();
+  }, [opening, readingResets]);
   const openResets = async () => {
     setReadingResets(true);
     // The stored block stands in where the fresh read fails, so the click always gets an answer.
     const read = await api.readLimitResets(account.id).catch((e: unknown): LimitResetsRead => ({ error: messageOf(e), limitResets: account.limitResets }));
     setReadingResets(false);
-    if ((read.limitResets?.grants.length ?? 0) === 0) onRefreshed();
-    else setOpening(read);
+    if ((read.limitResets?.grants.length ?? 0) === 0) {
+      refocus.current = true;
+      onRefreshed();
+    } else setOpening(read);
+  };
+  const closeResets = () => {
+    refocus.current = true;
+    setOpening(null);
   };
   const resetWindow = (id: WindowId) => <WindowChip absent={`no ${windowWord(id)} window`} className="reset-dialog__chip" name={windowTag(id)} now={now} resettable={marks.includes(id)} window={windowOf(account, id)} />;
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
@@ -295,13 +314,14 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         <div className="qcard__status">
           {reading.lines.map((line, i) => (
             <span key={i} className={`qcard__poll ${line.tone === 'serious' ? 'qcard__backoff' : 'muted'}`} title={i === 0 && reading.title ? reading.title : undefined}>
-              {line.text}
+              <span className="qcard__words">{line.text}</span>
               {line.reason !== undefined && <span className="qcard__reason ellipsis">{line.reason}</span>}
             </span>
           ))}
         </div>
         {chip && (
           <Button
+            ref={resetButton}
             size="sm"
             className="qcard__use"
             disabled={chip.usable === null || readingResets}
@@ -311,7 +331,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             {readingResets ? 'Reading…' : 'Use reset'}
           </Button>
         )}
-        {(chip || opening) && <ResetDialog account={account} chip={resetWindow} now={now} onAnswered={onRefreshed} onClose={() => setOpening(null)} opening={opening} />}
+        {(chip || opening) && <ResetDialog account={account} chip={resetWindow} now={now} onAnswered={onRefreshed} onClose={closeResets} opening={opening} />}
         <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
           Refresh
         </Pill>
