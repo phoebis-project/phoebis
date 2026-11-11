@@ -465,6 +465,25 @@ mod tests {
     }
 
     #[test]
+    fn a_grant_at_its_end_counts_no_reset() {
+        // 86_400_000 is 1970-01-02T00:00:00Z, the grant's end.
+        let block = parsed(
+            r#"{"cedar_ember":{"eligible":true,"grants":[
+                {"id":"rg-a-1","label":"Launch reset","clears":["five_hour"],"resets_left":1,"resets_total":1,
+                 "usable_now":true,"starts_at":"1970-01-01T00:00:00Z","ends_at":"1970-01-02T00:00:00Z"}
+            ]}}"#,
+        );
+        assert_eq!(
+            (
+                resets_left(&block, 86_399_999),
+                resets_left(&block, 86_400_000)
+            ),
+            (1, 0),
+            "the grant's reset counts up to its end and not at it"
+        );
+    }
+
+    #[test]
     fn a_body_without_the_block_is_no_block_without_a_grant() {
         assert!(
             parse_limit_resets(br#"{"cedar_ember":null}"#)
