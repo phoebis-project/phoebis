@@ -169,11 +169,15 @@ struct NewestRequest {
 }
 
 impl NewestRequest {
-    /// Whether the request received at `at` under `id` replaces `newest`.
-    fn replaces(newest: Option<&NewestRequest>, at: i64, id: &str) -> bool {
+    /// Puts `candidate` in `slot` where the slot holds no request or an older one.
+    fn keep_newest(slot: &mut Option<NewestRequest>, candidate: NewestRequest) {
         // Two requests of one instant resolve by their ids, so the pick is the same whichever order a read visits
         // them: the first fill and the incremental read order the rows apart.
-        newest.is_none_or(|newest| (at, id) > (newest.at, newest.id.as_str()))
+        if slot.as_ref().is_none_or(|newest| {
+            (candidate.at, candidate.id.as_str()) > (newest.at, newest.id.as_str())
+        }) {
+            *slot = Some(candidate);
+        }
     }
 }
 
@@ -323,9 +327,7 @@ impl Accumulator {
             // stay the client's.
             if let Some(agent) = agent {
                 agent.probes.add(served);
-                if NewestRequest::replaces(agent.newest_probe.as_ref(), newest.at, &newest.id) {
-                    agent.newest_probe = Some(newest);
-                }
+                NewestRequest::keep_newest(&mut agent.newest_probe, newest);
             }
             return;
         }
@@ -339,9 +341,7 @@ impl Accumulator {
         }
         if let Some(agent) = agent {
             agent.spend.add(served);
-            if NewestRequest::replaces(agent.newest.as_ref(), newest.at, &newest.id) {
-                agent.newest = Some(newest);
-            }
+            NewestRequest::keep_newest(&mut agent.newest, newest);
         }
         let hour = hour_of(row.received_at);
         if hour >= kept_from(now) {
@@ -368,7 +368,7 @@ impl Accumulator {
             money.merge(&hour.money);
         }
         SessionFigures {
-            user_agent: self.user_agent.as_ref().and_then(|(_, ua)| ua.clone()),
+            user_agent: self.user_agent.as_ref().map(|(_, ua)| ua.clone()),
             spend: (self.spend.requests > 0 || self.probes.requests > 0)
                 .then(|| spend_of(&self.spend, &self.probes)),
             day: money.day(classes),
@@ -417,7 +417,9 @@ pub(crate) struct PollRows {
 
 /// The row's four members, as the fold answers them for one session.
 pub(crate) struct SessionFigures {
-    pub user_agent: Option<String>,
+    /// The newest client request's user agent, null included, `None` where the fold holds no client request, so the
+    /// route keeps the activity's agent there.
+    pub user_agent: Option<Option<String>>,
     pub spend: Option<SessionSpend>,
     pub day: SessionDay,
     pub agent_requests: Vec<AgentRequests>,

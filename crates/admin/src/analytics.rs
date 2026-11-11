@@ -16,7 +16,8 @@ use phoebis_ledger::{
     LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, TermEnd, TermPair,
 };
 use phoebis_routing::{
-    account_window_id, term, BurnUnit, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
+    account_window_id, is_weekly_window, term, BurnUnit, UtilizationSample, WindowReading,
+    FIVE_HOUR, SEVEN_DAY,
 };
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
@@ -1299,19 +1300,29 @@ pub(crate) async fn unused_allowance(
     // ended no plan, so a passed trial end ends a week only through a plan-ended flag that followed it, at the flag's
     // instant. An end still ahead of `now` ends no week yet, and a custom range may reach a day past it. An end before
     // `from` is listed too, since the week it cut short can reset inside the range, and the read drops that reset.
-    let reported = reported_samples(&state).await;
-    let term_ends: BTreeMap<String, TermEnd> = oauth
+    let ended: Vec<_> = oauth
         .iter()
         .filter_map(|id| {
             let held = snapshot.term(id)?;
             let end = term::end_of(held, to.min(now))?;
-            (end <= to.min(now)).then(|| {
-                let pairs = reported
-                    .get(id)
-                    .map(|sample| weekly_pairs_before(sample, held.plan_ended_at))
-                    .unwrap_or_default();
-                (id.clone(), TermEnd { end_at: end, pairs })
-            })
+            (end <= to.min(now)).then_some((id, held, end))
+        })
+        .collect();
+    // The ask clones every account's sample on the routing task's command channel, and only an ended term's pairs
+    // read it.
+    let reported = if ended.is_empty() {
+        BTreeMap::new()
+    } else {
+        reported_samples(&state).await
+    };
+    let term_ends: BTreeMap<String, TermEnd> = ended
+        .into_iter()
+        .map(|(id, held, end)| {
+            let pairs = reported
+                .get(id)
+                .map(|sample| weekly_pairs_before(sample, held.plan_ended_at))
+                .unwrap_or_default();
+            (id.clone(), TermEnd { end_at: end, pairs })
         })
         .collect();
     let rows = match state
@@ -1371,9 +1382,7 @@ fn weekly_pairs_before(
 ) -> BTreeMap<String, TermPair> {
     let mut kept: BTreeMap<String, &WindowReading> = BTreeMap::new();
     for (window, reading) in &sample.windows {
-        if !(window == SEVEN_DAY || window.starts_with("seven_day_"))
-            || flagged.is_some_and(|at| reading.observed_at >= at)
-        {
+        if !is_weekly_window(window) || flagged.is_some_and(|at| reading.observed_at >= at) {
             continue;
         }
         let key = account_window_id(window).to_string();

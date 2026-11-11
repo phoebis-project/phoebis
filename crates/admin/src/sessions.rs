@@ -6,6 +6,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use phoebis_ledger::SessionSpendKey;
 use phoebis_routing::{BurnRates, BurnUnit, PinStanding, FIVE_HOUR, MAIN_AGENT, SEVEN_DAY};
 use utoipa::ToSchema;
 
@@ -300,19 +301,18 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .non_companion_idle
             .min(state.session_expiry)
             .as_millis() as i64;
-    let engine: std::collections::BTreeMap<(String, i64, String), phoebis_keepalive::SessionView> =
-        state
-            .keepalive
-            .sessions()
-            .into_iter()
-            .map(|s| {
-                (
-                    (s.key_id.clone(), s.key_generation, s.session_id.clone()),
-                    s,
-                )
-            })
-            .collect();
-    let mut candidates: std::collections::BTreeSet<(String, i64, String)> = pins
+    let engine: std::collections::BTreeMap<SessionSpendKey, phoebis_keepalive::SessionView> = state
+        .keepalive
+        .sessions()
+        .into_iter()
+        .map(|s| {
+            (
+                (s.key_id.clone(), s.key_generation, s.session_id.clone()),
+                s,
+            )
+        })
+        .collect();
+    let mut candidates: std::collections::BTreeSet<SessionSpendKey> = pins
         .iter()
         .filter(|standing| standing.pin.last_used_at >= idle_bound)
         .filter_map(|standing| pin_key(&standing.pin))
@@ -337,7 +337,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .filter(|a| a.last_request_at >= idle_bound)
                 .map(activity_key),
         );
-        let keys: Vec<(String, i64, String)> = candidates.into_iter().collect();
+        let keys: Vec<SessionSpendKey> = candidates.into_iter().collect();
         // The fold's reads ride in this snapshot: the start watermark where the fold starts, the whole history of
         // each candidate the fold does not hold yet, and the rows landed since the watermark, so one reader hold
         // serves the poll.
@@ -354,16 +354,24 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
-    let mut rows: std::collections::BTreeMap<(String, i64, String), Session> =
+    // The lacked windows depend on the account alone, so they are collected once for every share map of the answer.
+    let lacked: Vec<(&str, Vec<&'static str>)> = reported
+        .keys()
+        .filter_map(|account| {
+            let windows = crate::routes::windows_lacked(&reported, account);
+            (!windows.is_empty()).then_some((account.as_str(), windows))
+        })
+        .collect();
+    let mut rows: std::collections::BTreeMap<SessionSpendKey, Session> =
         std::collections::BTreeMap::new();
     // The keepalive's own agent count answers `agents` when a session has an engine view, so every agent a pin names
     // is counted here as the fallback where it does not.
     let mut agents_by_session: std::collections::BTreeMap<
-        (String, i64, String),
+        SessionSpendKey,
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
     // Every conversation pin of each session, main's among them, which the lines pass reads after the historical one.
-    let mut agent_pins: std::collections::BTreeMap<(String, i64, String), Vec<PinStanding>> =
+    let mut agent_pins: std::collections::BTreeMap<SessionSpendKey, Vec<PinStanding>> =
         std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
     // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it and its
@@ -391,7 +399,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     };
     // Every standing carries its session's creation time, an auxiliary-only one and one past the expiry among them,
     // so a row reads it whichever pin, if any, the row shows.
-    let created: std::collections::BTreeMap<(String, i64, String), i64> = pins
+    let created: std::collections::BTreeMap<SessionSpendKey, i64> = pins
         .iter()
         .filter_map(|standing| Some((pin_key(&standing.pin)?, standing.session_first_seen_at?)))
         .collect();
@@ -407,7 +415,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .insert(standing.pin.agent_id.clone());
         // A pin only auxiliary requests have used holds no conversation: it neither stands for the row nor draws a
         // line, though its agent counts among the session's.
-        if standing.auxiliary_only {
+        if standing.pin.auxiliary_only {
             continue;
         }
         agent_pins.entry(key).or_default().push(standing);
@@ -444,7 +452,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 speed: standing.slow_down.map(|s| s.speed),
                 cycle_ms: standing.cycle_ms,
                 cache_ttl_ms: Some(p.cache_ttl_ms),
-                warm: Some(phoebis_routing::warm(p, p.auxiliary_only, now)),
+                warm: Some(phoebis_routing::pin_warm(p, now)),
                 last_input_tokens: Some(p.last_input_tokens),
                 effort: p.effort.clone(),
                 last_refresh_at: Some(p.last_refresh_at),
@@ -588,8 +596,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     last_input_tokens: pin.last_input_tokens,
                     cache_ttl_ms: pin.cache_ttl_ms,
                     last_used_at: pin.last_used_at,
-                    warm: phoebis_routing::warm(pin, pin.auxiliary_only, now),
-                    warm_until: phoebis_routing::warm_until(pin, pin.auxiliary_only),
+                    warm: phoebis_routing::pin_warm(pin, now),
+                    warm_until: phoebis_routing::pin_warm_until(pin),
                     burn: priced.burn,
                     burn_unit: Some(standing.burn_unit),
                     burn_window: priced.window.map(String::from),
@@ -610,7 +618,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
     // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.
     let mut recipe_by_session: std::collections::BTreeMap<
-        (String, i64, String),
+        SessionSpendKey,
         phoebis_keepalive::RecipeView,
     > = std::collections::BTreeMap::new();
     for recipe in recipes {
@@ -633,7 +641,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         }
     }
     let identity_by_key: std::collections::BTreeMap<
-        (String, i64, String),
+        SessionSpendKey,
         phoebis_ledger::SessionIdentity,
     > = identities
         .into_iter()
@@ -657,8 +665,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         let Some(figures) = fold.answer(key, now) else {
             continue;
         };
-        if figures.spend.as_ref().is_some_and(|s| s.requests > 0) {
-            entry.user_agent = figures.user_agent;
+        if let Some(user_agent) = figures.user_agent {
+            entry.user_agent = user_agent;
         }
         entry.spend = figures.spend;
         entry.day = figures.day;
@@ -666,10 +674,10 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         // The fold prices by the tier a row recorded, so a share of a window the account's set lacks today is dropped
         // at the answer, as the request list drops it. The account's key stays, since it marks that a plan paid.
         if let Some(spend) = entry.spend.as_mut() {
-            strip_lacked(spend, &reported);
+            strip_lacked(spend, &lacked);
         }
         for agent in &mut entry.agent_requests {
-            strip_lacked(&mut agent.spend, &reported);
+            strip_lacked(&mut agent.spend, &lacked);
         }
     }
     fold.retain(|key| rows.contains_key(key), now, state.session_expiry);
@@ -713,11 +721,12 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
         tables,
         now,
     } = *pricing;
-    let (burn, window, equivalent) = match unit {
+    let (burn, window, equivalent, usd) = match unit {
         BurnUnit::Usd => (
             rates
                 .price_pin(BurnUnit::Usd, p, FIVE_HOUR)
                 .map(|b| b * 3_600.0),
+            None,
             None,
             None,
         ),
@@ -745,15 +754,13 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
             let equivalent = rates
                 .price_pin(BurnUnit::WindowShare, p, SEVEN_DAY)
                 .map(|b| b * 3_600.0);
-            (burn, Some(window), equivalent)
+            // The plan copy at the list price, and no other copy: fast usage draws usage credits and a classifier
+            // call takes no share of a plan window, so neither is plan traffic. A model the price list lacks answers
+            // no figure.
+            let usd = rates.price_plan_usd(p).map(|b| b * 3_600.0);
+            (burn, Some(window), equivalent, usd)
         }
     };
-    // The plan copy at the list price, and no other copy: fast usage draws usage credits and a classifier call takes no
-    // share of a plan window, so neither is plan traffic. A model the price list lacks answers no figure.
-    let usd = (unit == BurnUnit::WindowShare)
-        .then(|| rates.price_plan_usd(p))
-        .flatten()
-        .map(|b| b * 3_600.0);
     PricedBurn {
         burn,
         window,
@@ -763,16 +770,15 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
     }
 }
 
-/// Takes out of `spend`'s shares and its probes' the shared windows each account's set lacks, as `windows_lacked` names
-/// them, and leaves every account's key in place.
-fn strip_lacked(
-    spend: &mut SessionSpend,
-    reported: &std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
-) {
+/// Takes out of `spend`'s shares and its probes' the shared windows `lacked` lists for each account whose set lacks
+/// one, as `windows_lacked` names them, and leaves every account's key in place.
+fn strip_lacked(spend: &mut SessionSpend, lacked: &[(&str, Vec<&'static str>)]) {
     for shares in [&mut spend.shares, &mut spend.probes.shares] {
-        for (account_id, windows) in shares.iter_mut() {
-            for window in crate::routes::windows_lacked(reported, account_id) {
-                windows.remove(window);
+        for (account_id, windows) in lacked {
+            if let Some(account_shares) = shares.get_mut(*account_id) {
+                for window in windows {
+                    account_shares.remove(*window);
+                }
             }
         }
     }
@@ -780,7 +786,7 @@ fn strip_lacked(
 
 /// The row a session's ledger activity lands on, spelled once so the fork-facts read names the row the activity pass
 /// files it under.
-fn activity_key(a: &phoebis_ledger::SessionActivity) -> (String, i64, String) {
+fn activity_key(a: &phoebis_ledger::SessionActivity) -> SessionSpendKey {
     (a.key_id.clone(), a.key_generation, a.session_id.clone())
 }
 
