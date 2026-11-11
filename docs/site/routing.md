@@ -834,14 +834,14 @@ request of the same pin arriving before it and before the 5-hour window's reset 
 two requests of one pin wait to one instant and a hold that crossed the client's window costs one visible retry and no
 doubled wait. The first selection on the account after the reset, or the purge tick before it, drops the deadlines its
 pins stood in the old window, so a request after the reset waits no deadline set before it and is read afresh. Where a
-newer reading replaced that reset before any selection read it, the router no longer knows the reset passed, and such a
-deadline stands until it passes. A hold under a second is not served, a request is held for the slow-down once, and a
-slot or reset hold after it keeps its own bound of `retry_in_place_seconds`. A pin whose cycle is too long for the cap
-is held at the cap and runs faster than the factor, and the account's other pins share the remaining reduction at one
-speed. The cap stands against the client's first-byte window of 180 seconds plus 1 second per 32 KiB of body: the
-default leaves 60 seconds for the upstream's head and the pre-commit hold, and the pool's warning `hold_over_window`
-fires above 150 seconds. [When the client waits](client.md#when-the-client-waits) states the relation and the operator's
-choice.
+newer reading replaced that reset before any selection read it and before a purge tick saw it pass, the router no longer
+knows the reset passed, and such a deadline stands until it passes. A hold under a second is not served, a request is
+held for the slow-down once, and a slot or reset hold after it keeps its own bound of `retry_in_place_seconds`. A pin
+whose cycle is too long for the cap is held at the cap and runs faster than the factor, and the account's other pins
+share the remaining reduction at one speed. The cap stands against the client's first-byte window of 180 seconds plus 1
+second per 32 KiB of body: the default leaves 60 seconds for the upstream's head and the pre-commit hold, and the pool's
+warning `hold_over_window` fires above 150 seconds. [When the client waits](client.md#when-the-client-waits) states the
+relation and the operator's choice.
 
 Probes, token counts, compactions, auxiliary requests (any `x-claude-code-request-class` outside `compaction`, `main`
 and `subagent`), requests sent fast, requests on an API-key account and non-portable requests are never held for the
