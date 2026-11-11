@@ -217,8 +217,9 @@ export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[
 const withRevision = (body: Record<string, unknown>, revision?: number) =>
   revision === undefined ? body : { ...body, expected_revision: revision };
 
-// The writes of the pool, key and account dialogs, the pairing dialog's start and the account's two inline editors:
-// each shows a refusal in its own callout or footer, so the shell's toast would only repeat it.
+// The writes of the pool, key and account dialogs, the pairing dialog's start, the account's two inline editors and
+// the reset dialog's read and use: each shows a refusal in its own callout or footer, so the shell's toast would only
+// repeat it.
 const DIALOG_WRITE = { report: 'quiet' } as const;
 
 export class HttpApi implements Api {
@@ -301,7 +302,7 @@ export class HttpApi implements Api {
   };
   logout = () => call<void>('DELETE', '/admin/session');
   pauseAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/pause`);
-  readLimitResets = async (accountId: string) => d.decodeLimitResetsRead(await call('POST', `/admin/accounts/${enc(accountId)}/limit-resets/read`, undefined, { report: 'quiet' }));
+  readLimitResets = async (accountId: string) => d.decodeLimitResetsRead(await call('POST', `/admin/accounts/${enc(accountId)}/limit-resets/read`, undefined, DIALOG_WRITE));
   refreshUsage = async (accountId: string) => {
     await call('POST', `/admin/accounts/${enc(accountId)}/usage/refresh`);
   };
@@ -326,7 +327,7 @@ export class HttpApi implements Api {
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.
   updatePool = async (id: string, input: PoolInput, revision?: number) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, withRevision(d.encodePool(input), revision), DIALOG_WRITE));
-  useLimitReset = async (accountId: string, grantId: string) => d.decodeResetUse(await call('POST', `/admin/accounts/${enc(accountId)}/limit-resets/${enc(grantId)}/use`, undefined, { report: 'quiet' }));
+  useLimitReset = async (accountId: string, grantId: string) => d.decodeResetUse(await call('POST', `/admin/accounts/${enc(accountId)}/limit-resets/${enc(grantId)}/use`, undefined, DIALOG_WRITE));
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }
 

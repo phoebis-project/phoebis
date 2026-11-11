@@ -229,7 +229,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
     refocus.current = true;
     setOpening(null);
   };
-  const resetWindow = (id: WindowId) => <WindowChip absent={`no ${windowWord(id)} window`} className="reset-dialog__chip" name={windowTag(id)} now={now} resettable={marks.includes(id)} window={windowOf(account, id)} />;
+  const resetWindow = (id: WindowId) => <WindowChip className="reset-dialog__chip" id={id} now={now} resettable={marks.includes(id)} window={windowOf(account, id)} />;
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
   // spend reading with neither amounts nor a share counts as none.
   const failed = Boolean(snapshot?.error) && !w5 && !w7 && !account.fableWindow && !hasSpendReading(account.spend);
@@ -270,9 +270,9 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
           <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
-            <QuotaWindow name={windowTag('5h')} absent={`no ${windowWord('5h')} window`} window={w5} end={end} now={now} resettable={marks.includes('5h')} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
-            <QuotaWindow name={windowTag('7d')} absent={`no ${windowWord('7d')} window`} window={w7} end={end} now={now} resettable={marks.includes('7d')} soon={soonest.includes('7d')} />
-            <QuotaWindow name={windowTag('7d_fable')} absent={`no ${windowWord('7d_fable')} window`} window={account.fableWindow} end={end} now={now} resettable={marks.includes('7d_fable')} soon={soonest.includes('7d_fable')} />
+            <QuotaWindow id="5h" window={w5} end={end} now={now} resettable={marks.includes('5h')} soon={soonest.includes('5h')} slowDown={slowedOf(account, now)} />
+            <QuotaWindow id="7d" window={w7} end={end} now={now} resettable={marks.includes('7d')} soon={soonest.includes('7d')} />
+            <QuotaWindow id="7d_fable" window={account.fableWindow} end={end} now={now} resettable={marks.includes('7d_fable')} soon={soonest.includes('7d_fable')} />
           </div>
         )}
       </div>
@@ -347,12 +347,13 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
 }
 
 /** The short name and the remaining share, in the meter's own color. An expired window has no share to give, and a
- *  window the account does not carry names itself in the reset's cell, `absent` the chip's title. A `resettable` live
- *  window closes its share with the reset mark. */
-function WindowChip({ absent, name, window: w, className, now, resettable }: { absent: string; className: string; name: string; now: number; resettable: boolean; window: RateLimitWindow | null }) {
+ *  window the account does not carry names itself in the reset's cell, "no 5-hour window" the chip's title. A
+ *  `resettable` live window closes its share with the reset mark. */
+function WindowChip({ id, window: w, className, now, resettable }: { className: string; id: WindowId; now: number; resettable: boolean; window: RateLimitWindow | null }) {
+  const name = windowTag(id);
   if (!w || isExpired(w, now)) {
     return (
-      <span className={`${className} qchip qchip--absent`} title={w ? `${w.label}: expired, no reading since the reset` : absent}>
+      <span className={`${className} qchip qchip--absent`} title={w ? `${w.label}: expired, no reading since the reset` : `no ${windowWord(id)} window`}>
         <span className="qchip__name">{name}</span>
       </span>
     );
@@ -377,11 +378,11 @@ function WindowChip({ absent, name, window: w, className, now, resettable }: { a
  * behind it on its hover. The grid sizes the chip and the reset to their content and hands the meter the rest, and
  * `qwin__chip` names the chip's cell for the checks that read a row by its cells. Under 900 px the reset label takes a
  * row of its own under the meter. A slowed account's 5-hour window, passed its `slowDown`, closes its reset label with
- * the speed chip. A window the account's poll does not carry keeps its row, so the cards align, with `absent`'s words
- * ("no 5-hour window") muted in the reset label's place. A window a reset usable now clears, passed `resettable`,
+ * the speed chip. A window the account's poll does not carry keeps its row, so the cards align, with the words
+ * "no 5-hour window" muted in the reset label's place. A window a reset usable now clears, passed `resettable`,
  * carries the reset mark in its chip.
  */
-function QuotaWindow({ absent, end, name, window: w, now, resettable, slowDown = null, soon }: { absent: string; end: number | null; name: string; now: number; resettable: boolean; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
+function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soon }: { end: number | null; id: WindowId; now: number; resettable: boolean; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
@@ -390,7 +391,7 @@ function QuotaWindow({ absent, end, name, window: w, now, resettable, slowDown =
   const burn = live ? burnWords(live) : null;
   return (
     <>
-      <WindowChip absent={absent} name={name} window={w} now={now} resettable={resettable} className="qwin__chip" />
+      <WindowChip id={id} window={w} now={now} resettable={resettable} className="qwin__chip" />
       {live ? (
         <Meter value={remainingOf(live)} tone={meterTone(remainingOf(live))} thin label={reading} title={reading} mark={remainingTimeShare(live) ?? undefined} />
       ) : (
@@ -418,7 +419,7 @@ function QuotaWindow({ absent, end, name, window: w, now, resettable, slowDown =
           expired {fmtRelative(w.resetsAt, now)}
         </span>
       ) : (
-        <span className="qwin__reset muted">{absent}</span>
+        <span className="qwin__reset muted">{`no ${windowWord(id)} window`}</span>
       )}
     </>
   );

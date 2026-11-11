@@ -16,7 +16,7 @@ import { earliest, leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
-import { RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
+import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
 import { TABLES } from './samples';
@@ -2566,14 +2566,14 @@ function claimRows(): EventSeed[] {
       accountId: 'studio',
       actor: 'admin',
       at: iso(studio.uses[used.id]),
-      detail: claimDetail(used, '8c1f5a3e-2d74-4b09-9e6a-5f3b7c0d1e82', 200, { cleared: ['seven_day_fable'], cooldown_until: null, outcome: 'used', reason: null, resets_left: 0, result: 'reset', weekly_resets_at: null }),
+      detail: claimDetail(used, '8c1f5a3e-2d74-4b09-9e6a-5f3b7c0d1e82', 200, FABLE_USE),
       kind: 'limit_reset_claimed',
     },
     {
       accountId: 'workshop',
       actor: 'admin',
       at: iso(NOW - 20 * MINUTE),
-      detail: claimDetail(cooled, '3a9e6d1c-7b52-4f80-a4c3-9d2e5b8f0c17', 200, { cleared: [], cooldown_until: cooldown, outcome: 'refused', reason: null, resets_left: null, result: 'cooldown', weekly_resets_at: null }),
+      detail: claimDetail(cooled, '3a9e6d1c-7b52-4f80-a4c3-9d2e5b8f0c17', 200, cooldownRefusal(cooldown)),
       kind: 'limit_reset_claimed',
     },
   ];

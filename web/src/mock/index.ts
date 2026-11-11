@@ -815,6 +815,10 @@ export class MockApi implements Api {
     return { ...a, pool: pool && member ? { poolId: pool.id, priority: member.priority } : null };
   }
 
+  private writeEvent(kind: string, accountId: string, actor: string | null, at: number, detail: Record<string, unknown>): void {
+    this.written.push({ type: 'event', accountId, actor, agentId: null, at: iso(at), detail, id: ROUTING_EVENTS.length + this.written.length + 1, keyId: null, kind, model: null, poolId: null, requestId: null, sessionId: null });
+  }
+
   analyticsBudgets() {
     // Read off the members as they stand, so a budget set on the Pools form shows here; one row per budgeted
     // period, and the route orders by pool, then account, then the day ahead of the month, which the stable sort
@@ -892,7 +896,7 @@ export class MockApi implements Api {
     if (held !== undefined && held.planEndedAt !== null) {
       this.putAccount({ ...held, planEndedAt: null });
       const detail = { organization_type: held.subscription?.organizationType ?? null, rate_limit_tier: held.subscription?.rateLimitTier ?? null, source: 'pairing', subscription_status: 'active' };
-      this.written.push({ type: 'event', accountId: held.id, actor: null, agentId: null, at: iso(mockClock.now()), detail, id: ROUTING_EVENTS.length + this.written.length + 1, keyId: null, kind: 'plan_restored', model: null, poolId: null, requestId: null, sessionId: null });
+      this.writeEvent('plan_restored', held.id, null, mockClock.now(), detail);
     }
     this.firstPolls.set(pairing.accountId, mockClock.now());
     return latency({ accountId: pairing.accountId, firstPollInFlight: true, status: 'confirmed' }, 250);
@@ -1655,7 +1659,7 @@ export class MockApi implements Api {
     // Every claim that left writes its row, one the upstream left unanswered included, as the router's task does.
     const sent = 'refusal' in entry ? { answer: null, status: entry.upstream } : { answer: entry.answer, status: 200 };
     const detail = claimDetail(block.grants[index], this.claimIds.uuid(), sent.status, sent.answer);
-    this.written.push({ type: 'event', accountId: a.id, actor: 'admin', agentId: null, at: iso(at), detail, id: ROUTING_EVENTS.length + this.written.length + 1, keyId: null, kind: 'limit_reset_claimed', model: null, poolId: null, requestId: null, sessionId: null });
+    this.writeEvent('limit_reset_claimed', a.id, 'admin', at, detail);
     if ('refusal' in entry) throw new ApiError(entry.refusal.status, entry.refusal.message, entry.refusal.code, path);
     this.resetBlocks = { ...this.resetBlocks, [accountId]: foldAnswer(block, grantId, entry.answer, at) };
     // Built after the fold, so the claimed grant reads its count and its use from this claim.

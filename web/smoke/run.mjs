@@ -1889,8 +1889,8 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 {
   // The Resets chip's long form, which the run draws beside the short one since it loads no style sheet. The seeds'
   // blocks (`RESET_BLOCKS` in `web/src/mock/resets.ts`): primary holds two resets, the first usable and the second
-  // waiting, workshop one under the block's cooldown, which ends 40 minutes after the mock's clock and so reads 15:10 in
-  // the run's UTC zone, and studio one it used, with none left.
+  // waiting, workshop one under the block's cooldown, which ends 40 minutes after the mock's clock and so reads 15:10
+  // in the run's UTC zone, and studio one it used, with none left.
   const resetsOf = (label) => {
     const card = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
     const chip = card?.querySelector('.qcard__chips .chip--resets') ?? null;
@@ -5983,10 +5983,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const aged = ([age, titled]) => age !== null && age === titled && /^(now|\d+[dhms]( \d+[hm])? ago)$/.test(age);
   const rowAges = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map(ageOf);
   // The story's items: jobs is exhausted and holds a parked record. all draws the laptop key's client drift, the
-  // Overflow workspace out of funding, nightly's reset that ends in four days, secondary's poll backoff, nightly's meter
-  // drift and the three routing conditions (the walls on nightly and secondary, nightly spent within the hour of a move,
-  // and all's round without a destination). work draws studio's wall after the round its stretch fired, in the wall's
-  // second wording, and studio slowed past twice the stretch, and the routing state writer belongs to no pool's card.
+  // Overflow workspace out of funding, nightly's reset that ends in four days, secondary's poll backoff, nightly's
+  // meter drift and the three routing conditions (the walls on nightly and secondary, nightly spent within the hour of
+  // a move, and all's round without a destination). work draws studio's wall after the round its stretch fired, in the
+  // wall's second wording, and studio slowed past twice the stretch, and the routing state writer belongs to no pool's
+  // card.
   const workDetail = [...(card('work')?.querySelectorAll('ul.attention .attention__detail') ?? [])].map((x) => x.textContent);
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
@@ -18088,8 +18089,8 @@ await forView('/routing-log', async () => {
     // as the request drawer prints the id.
     const MONO = { stream_interrupted: ['Code', 'Upstream request'] };
     // The row a kind's check reads where the newest row is not the one. A block that runs before this one can send uses
-    // on this run's one MockApi, so the newest claim can be another case's: the seeded refusal on workshop, an account no
-    // case sends a use for, stands for the kind.
+    // on this run's one MockApi, so the newest claim can be another case's: the seeded refusal on workshop, an account
+    // no case sends a use for, stands for the kind.
     const PICK = { limit_reset_claimed: (r) => r.accountId === 'workshop' };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {

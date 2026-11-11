@@ -295,7 +295,10 @@ export interface Api {
   /** `revision` is the one the row was read at. A save over a row that moved since answers 409 `stale_edit`. */
   updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool>;
-  /** `POST /admin/accounts/{id}/limit-resets/{grant}/use`, quiet too. A refusal is thrown as an `ApiError` with its code. */
+  /**
+   * `POST /admin/accounts/{id}/limit-resets/{grant}/use`, quiet too. A refusal is thrown as an `ApiError` with its
+   * code.
+   */
   useLimitReset(accountId: string, grantId: string): Promise<ResetUse>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

@@ -157,12 +157,16 @@ export function limitResetsWire(seed: string, blocks: Readonly<Record<string, Mo
 }
 
 /** A reset of a grant that clears the Fable week: none left of one, and the week cleared. */
-const FABLE_RESET: MockAnswer = { answer: { cleared: ['seven_day_fable'], cooldown_until: null, outcome: 'used', reason: null, resets_left: 0, result: 'reset', weekly_resets_at: null } };
+export const FABLE_USE: MockUse = { cleared: ['seven_day_fable'], cooldown_until: null, outcome: 'used', reason: null, resets_left: 0, result: 'reset', weekly_resets_at: null };
+const FABLE_RESET: MockAnswer = { answer: FABLE_USE };
+
+/** The answer to a claim the upstream refused with a cooldown that ends at `until`. */
+export const cooldownRefusal = (until: number | null): MockUse => ({ cleared: [], cooldown_until: until, outcome: 'refused', reason: null, resets_left: null, result: 'cooldown', weekly_resets_at: null });
 
 /** What a use of each grant answers: the route's 200 in its own names, or the refusal the call throws. */
 export const RESET_ANSWERS: Readonly<Record<string, MockAnswer>> = {
   // A cooldown on a first attempt is a refusal, whose instant the router folds into the block.
-  'rg-nightly-1': { answer: { cleared: [], cooldown_until: NOW + 25 * MINUTE, outcome: 'refused', reason: null, resets_left: null, result: 'cooldown', weekly_resets_at: null } },
+  'rg-nightly-1': { answer: cooldownRefusal(NOW + 25 * MINUTE) },
   'rg-primary-1': FABLE_RESET,
   'rg-primary-2': FABLE_RESET,
   // A status other than 401, 403 or 429 leaves the claim unsettled.
@@ -171,7 +175,9 @@ export const RESET_ANSWERS: Readonly<Record<string, MockAnswer>> = {
   'rg-workshop-1': FABLE_RESET,
 };
 
-/** The block a claim's answer leaves, folded as the router's store folds it, the use stamped at `at` where it was used. */
+/**
+ * The block a claim's answer leaves, folded as the router's store folds it, the use stamped at `at` where it was used.
+ */
 export function foldAnswer(block: MockBlock, grantId: string, answer: MockUse, at: number): MockBlock {
   const count = (g: MockGrant): number => answer.resets_left ?? (answer.result === 'reset' ? Math.max(0, g.resets_left - 1) : answer.result === 'already_used' ? 0 : g.resets_left);
   const used = answer.outcome === 'used';
@@ -187,8 +193,8 @@ export function foldAnswer(block: MockBlock, grantId: string, answer: MockUse, a
 }
 
 /**
- * The reset item of an account whose block holds an unused reset that ends within `days`, as the reader builds it: about
- * the grant that ends first, dated from its end less the days and never before its start. Null where none does.
+ * The reset item of an account whose block holds an unused reset that ends within `days`, as the reader builds it:
+ * about the grant that ends first, dated from its end less the days and never before its start. Null where none does.
  */
 export function resetEnding(account: string, block: MockBlock | undefined, now: number, days: number): Pick<AttentionItem, 'detail' | 'since'> | null {
   if (block === undefined) return null;

@@ -1215,11 +1215,7 @@ textarea.input {
 }
 
 .reset-dialog__rows {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: 10px;
 }
 
 /* One row per grant: its facts give way to its button, which keeps its width. */
@@ -1235,7 +1231,6 @@ textarea.input {
 }
 
 .reset-dialog__row + .reset-dialog__row {
-  margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--hairline);
 }

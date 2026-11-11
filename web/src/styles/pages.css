@@ -380,7 +380,7 @@
 }
 
 /* One line led by the Plan chip on every card, so the plan sits at one place and a chip past the width is cut rather
-   than wrapped. */
+   than wrapped. The row is the container the Resets chip's forms answer to. */
 .qcard__chips {
   display: flex;
   gap: 6px;
@@ -389,6 +389,7 @@
   padding: 0 14px 12px;
   overflow: hidden;
   white-space: nowrap;
+  container: qcard-chips / inline-size;
 }
 
 .qcard__chips .chip {
@@ -412,11 +413,6 @@
 /* A card whose account reports no plan keeps the Plan chip's place. */
 .qcard__chips .chip--empty {
   visibility: hidden;
-}
-
-/* The row is the container the Resets chip's forms answer to. */
-.qcard__chips {
-  container: qcard-chips / inline-size;
 }
 
 .chip--resets .chip__short {

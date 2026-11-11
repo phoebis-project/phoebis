@@ -2,6 +2,7 @@ import type { AttentionItem, Reconciliation, RoutingEvent } from '@/api/types';
 import { MIN_RISE, ratioOff } from '@/lib/analytics';
 import { lookup } from '@/lib/counts';
 import { tokensTotal, undatedModel } from '@/lib/format';
+import { readWindows } from '@/lib/quota';
 import { WINDOW_KEY, hoursOfKey, windowEntry } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
@@ -63,7 +64,7 @@ const sonnetUnpriced = unpriced('claude-sonnet-4-5');
 /** The windows an account's reading holds at their limit, in the router's names, as the wall's join reads the poll. */
 const atLimit = (accountId: string): string[] => {
   const a = accountById.get(accountId);
-  return [...(a?.windows ?? []), ...(a?.fableWindow ? [a.fableWindow] : [])].filter((w) => w.utilization >= 1).map((w) => windowEntry(WINDOW_KEY, w.id) ?? w.id);
+  return (a ? readWindows(a) : []).filter((w) => w.utilization >= 1).map((w) => windowEntry(WINDOW_KEY, w.id) ?? w.id);
 };
 
 /**
@@ -211,6 +212,8 @@ function drift(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
 
 const CONDITION_ORDER: AttentionItem['kind'][] = ['meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
 
+const byStart = (x: AttentionItem, y: AttentionItem): number => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id);
+
 /** The conditions the ledger folds per subscription account, each kind beside its fold. */
 const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<AttentionItem, 'detail' | 'since'> | null][] = [
   ['meter_drift', drift],
@@ -236,7 +239,7 @@ const CONDITIONS: AttentionItem[] = [
     const held = roundsWithoutRunway(p.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
   }),
-].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
+].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || byStart(x, y));
 
 /**
  * One item per account whose stored block holds an unused reset that ends within the settings' days, read from the
@@ -245,7 +248,7 @@ const CONDITIONS: AttentionItem[] = [
 const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
   const held = resetEnding(a.id, lookup(RESET_BLOCKS, a.id), NOW, SETTINGS_WIRE.usage.limit_reset_warning_days);
   return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'limit_reset_ending' as const }] : [];
-}).sort((x, y) => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
+}).sort(byStart);
 
 /**
  * One item per kind but a failed certificate reload, the expiries between turns, which the Dashboard reads as a figure,

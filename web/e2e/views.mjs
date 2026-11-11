@@ -5094,7 +5094,7 @@ async function quotaResetDialog(theme) {
     measurements.push(`${theme} /quota reset dialog focus after close from the card ${JSON.stringify(fromCard)}`);
     if (fromCard?.use !== true || fromCard.card !== 'primary') say(`the close after a click that left the focus on the card left it on ${JSON.stringify(fromCard)}, not on primary's Use reset`);
   } catch (e) {
-    say(`the walk from primary's Use reset through Back stopped: ${e.message.split('\n')[0]}`);
+    say(`the walk of primary's reset dialog stopped: ${e.message.split('\n')[0]}`);
   }
   await atRest();
 }

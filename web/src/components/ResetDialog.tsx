@@ -11,7 +11,9 @@ import { windowOf } from '@/lib/quota';
 import { resetAnswer, resetClearsNothing, resetEstimate, resetHolds, resetRowNote, resetRows, type ResetAnswer } from '@/lib/resets';
 import { periodHoursOf, windowTag } from '@/lib/windows';
 
-/** The first page, with the row Back returned from, or the confirmation of one grant, `direct` where it opened there. */
+/**
+ * The first page, with the row Back returned from, or the confirmation of one grant, `direct` where it opened there.
+ */
 type Page = { at: 'pick'; from: string | null } | { at: 'confirm'; direct: boolean; grant: string };
 
 /**
@@ -182,11 +184,10 @@ export function ResetDialog({
         <p className="secondary">A used reset cannot be returned.</p>
       </>
     );
-    const back = confirming.id;
     foot = (
       <>
         {!page.direct && (
-          <Button variant="ghost" className="reset-dialog__back" disabled={out} onClick={() => setPage({ at: 'pick', from: back })}>
+          <Button variant="ghost" className="reset-dialog__back" disabled={out} onClick={() => setPage({ at: 'pick', from: confirming.id })}>
             Back
           </Button>
         )}
@@ -199,7 +200,7 @@ export function ResetDialog({
   } else {
     title = `Resets on ${label}`;
     pages = block !== null && (
-      <ul className="reset-dialog__rows">
+      <ul className="plain-list reset-dialog__rows">
         {resetRows(block).map((g) => {
           const note = resetRowNote(g, block.cooldownUntil, now);
           return (

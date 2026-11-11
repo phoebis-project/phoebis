@@ -78,7 +78,7 @@ export function meterTone(remaining: number): MeterTone {
   return 'low';
 }
 
-const shareLeft = (utilization: number): number => Math.max(0, Math.min(1, 1 - utilization));
+export const shareLeft = (utilization: number): number => Math.max(0, Math.min(1, 1 - utilization));
 export const remainingOf = (w: RateLimitWindow) => shareLeft(w.utilization);
 /** A spend reading's share left, clamped as a window's is, and null without a share or under no limit. */
 export const spendLeftOf = (spend: Spend): number | null =>

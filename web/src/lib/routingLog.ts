@@ -1,6 +1,6 @@
-import { iso, list, numOrNull as num, strings, strOrNull as str } from '@/api/decode';
-import { FACT_UNIT_VALUES, PIN_RELEASE_REASON_VALUES } from '@/api/types';
-import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import { iso, list, numOrNull as num, oneOf, strings, strOrNull as str } from '@/api/decode';
+import { FACT_UNIT_VALUES, PIN_RELEASE_REASON_VALUES, RESET_OUTCOME_VALUES } from '@/api/types';
+import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, ResetOutcome, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { accountHref, type LogFilters, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { tierOrder } from './costs';
@@ -377,11 +377,11 @@ const CREDITS_WORD: Record<string, string> = { org_spend_cap_reached: 'spend cap
 const PERIOD_WORD: Record<string, string> = { day: 'daily budget', month: 'monthly budget' };
 const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
 /** The By chip's words for a claim's outcome, which the panel's Outcome pair repeats. */
-const RESET_OUTCOME_WORD: Record<string, string> = { refused: 'reset refused', unsettled: 'reset not confirmed', used: 'reset used' };
+const RESET_OUTCOME_WORD: Record<ResetOutcome, string> = { refused: 'reset refused', unsettled: 'reset not confirmed', used: 'reset used' };
 /** A class this console does not know is open, so it reads as not confirmed. A row with no outcome reads null. */
 const resetOutcome = (v: unknown): string | null => {
   const outcome = str(v);
-  return outcome === null ? null : (lookup(RESET_OUTCOME_WORD, outcome) ?? RESET_OUTCOME_WORD.unsettled);
+  return outcome === null ? null : RESET_OUTCOME_WORD[oneOf(RESET_OUTCOME_VALUES, outcome) ?? 'unsettled'];
 };
 /**
  * The pool fields a registry edit reads as a share rather than a bare number, a row written before the rename among
@@ -1859,6 +1859,10 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     const s = str(v);
     return s === null ? null : plain(wordOf(map, s));
   };
+  const asSent = (v: unknown) => {
+    const s = str(v);
+    return s === null ? null : plain(s);
+  };
   const key = row.keyId === null ? null : { entity: { id: row.keyId, kind: 'key' as const }, mono: true, value: row.keyId };
   const session = row.sessionId === null ? null : sessionChip(row.sessionId);
   const agent = row.agentId ?? str(d.agent_id);
@@ -1933,23 +1937,20 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     case 'limit_reset_claimed': {
       // The upstream's words keep their underscores, which `text` would read as spaces. The claim's request id names no
       // relayed request, so it draws unlinked.
-      const label = str(d.label);
       const grant = str(d.grant_id);
       const outcome = resetOutcome(d.outcome);
-      const result = str(d.result);
-      const reason = str(d.reason);
       const status = num(d.status);
       const error = str(d.error);
       const requestId = str(d.request_id);
-      add('Grant', label === null ? null : plain(label), grant === null ? null : { mono: true, value: grant });
+      add('Grant', asSent(d.label), grant === null ? null : { mono: true, value: grant });
       add('Outcome', outcome === null ? null : plain(outcome));
-      add('Result', result === null ? null : plain(result));
-      add('Reason', reason === null ? null : plain(reason));
+      add('Result', asSent(d.result));
+      add('Reason', asSent(d.reason));
       add('Cleared', ...strings(d.cleared).map((name) => plain(windowTag(name))));
       add('Resets left', count(d.resets_left));
       add('Cooldown until', time(d.cooldown_until));
       add('Status', status !== null ? plain(String(status)) : error === null ? null : plain('transport failure'));
-      add('Error', error === null ? null : plain(error));
+      add('Error', asSent(d.error));
       add('Request id', requestId === null ? null : { mono: true, value: requestId });
       add('Actor', plain(row.actor ?? 'admin'));
       break;
