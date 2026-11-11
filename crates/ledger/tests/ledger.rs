@@ -1691,7 +1691,7 @@ async fn the_purge_task_fills_the_rows_a_start_left_within_one_pass_and_says_onc
     let written = holding(&lines, "written=");
     assert_eq!(written.len(), 1, "one line names the rows filled");
     assert!(
-        written[0].contains("written=10001 "),
+        written[0].contains(&format!("written={} ", BACKFILL_SLICE + 1)),
         "the line counts both slices: {}",
         written[0]
     );

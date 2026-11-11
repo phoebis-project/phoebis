@@ -1868,7 +1868,7 @@ async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usi
                 if written > 0 {
                     tracing::info!(
                         written,
-                        "filled the serving attempt's facts on every request row written before the columns existed"
+                        "filled the serving attempt's facts on request rows written before the columns existed"
                     );
                 }
                 return None;
