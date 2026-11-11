@@ -23,4 +23,6 @@ The documentation lives under [`docs/site/`](docs/site/index.md), starting with 
 [Quick start](docs/site/quickstart.md), and is published at <https://daystrom-labs.github.io/phoebis/> once GitHub
 Pages is enabled for the repository.
 
+## License
+
 Released under the MIT license. See [`LICENSE`](LICENSE) for the full text.
