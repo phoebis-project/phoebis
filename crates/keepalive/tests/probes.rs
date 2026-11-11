@@ -1154,6 +1154,91 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
     );
 }
 
+/// A rig of two equal accounts whose armed recipe counts 2,000 tokens, stepped through one probe that the pinned
+/// account rejects and the sibling answers with `read`, `write` and `input`. Answers the rig and the sibling's secret.
+async fn migrated_probe(read: u64, write: u64, input: u64) -> (Rig, &'static str) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    let first = r.status("main").account_id.clone().unwrap();
+    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
+    r.up.push_credential_rule(
+        mine,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    let answer = format!(
+        r#"{{"id":"msg_p","type":"message","content":[],"usage":{{"input_tokens":{input},"cache_read_input_tokens":{read},"cache_creation_input_tokens":{write},"cache_creation":{{"ephemeral_5m_input_tokens":{write},"ephemeral_1h_input_tokens":0}},"output_tokens":0}}}}"#
+    );
+    r.up.push_credential_rule(other, "/v1/messages", json(200, &answer));
+    r.advance(270_000);
+    r.step().await;
+    (r, other)
+}
+
+/// A probe the relay serves on another account can count fewer tokens than the agent's last request did. What it left
+/// uncached then decides, and the next probe is held to what the migrated probe counted.
+#[tokio::test]
+async fn a_migrated_probe_under_the_count_covers_by_its_uncached_input_and_hands_the_next_probe_its_count(
+) {
+    // The sibling reads 100 tokens and writes 1,500, 400 under the count, and leaves 2 uncached.
+    let (mut r, other) = migrated_probe(100, 1_500, 2).await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.migrations,
+            status.paused,
+            status.reason,
+            status.next_probe_at
+        ),
+        (1, false, Reason::Scheduled, Some(r.now() + 270_000)),
+        "the five-minute entry the probe wrote ends 300 s on, and the rig's lead places the next probe 30 s ahead \
+         of it: {status:?}"
+    );
+    // The next probe reads back the 1,600 tokens the migrated probe counted.
+    r.up.push_credential_rule(other, "/v1/messages", probe_answer(1_600, 0));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.cold, status.paused, status.reason),
+        (2, 0, false, Reason::Scheduled),
+        "the entry on the new account holds what the migrated probe counted: {status:?}"
+    );
+    // One token under that count is a partial read of the entry.
+    r.up.push_credential_rule(other, "/v1/messages", probe_answer(1_599, 0));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.paused, status.reason),
+        (3, true, Reason::PartialCacheCoverage),
+        "{status:?}"
+    );
+}
+
+/// A body that leaves a long tail after its last cache marker reports that tail as uncached input on every probe, so
+/// its migrated probe is judged on the count alone.
+#[tokio::test]
+async fn a_migrated_probe_under_the_count_that_left_a_long_tail_uncached_pauses_the_recipe() {
+    // The sibling writes 1,500 tokens, 500 under the count, and leaves 1,000 uncached.
+    let (r, _) = migrated_probe(0, 1_500, 1_000).await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.migrations,
+            status.paused,
+            status.reason,
+            status.next_probe_at
+        ),
+        (1, true, Reason::PartialCacheCoverage, None),
+        "{status:?}"
+    );
+}
+
 /// The series of one family in a scrape of the rig's metrics, in the order the scrape renders them.
 fn series(r: &Rig, family: &str) -> Vec<String> {
     r.metrics

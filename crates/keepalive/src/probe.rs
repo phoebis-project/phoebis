@@ -118,10 +118,23 @@ pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'
     }
 }
 
-/// The cold judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's.
+/// The most uncached input a migrated probe may report and still cover, in tokens: what a body carries after its last
+/// cache marker, which the upstream neither reads nor writes. A measured probe on a main turn's body, whose last
+/// marker sits on its last block, carried 2. A body that leaves more than this after its last marker reports that
+/// tail on every probe, so its uncached input proves nothing and its count decides.
+const MIGRATED_UNCACHED_MAX: u64 = 64;
+
+/// The coverage judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's.
+/// A probe on its own account covers by reading back what the agent's last request read and wrote. A migrated probe
+/// wrote the prefix on its new account, and it covers where its read and write reach that count or where it read or
+/// wrote some of it and left at most `MIGRATED_UNCACHED_MAX` tokens uncached. An upstream can count a cold write below
+/// the warm read of the same prompt, and every token of a prompt is read, written or uncached, so a probe that left
+/// that little uncached read or wrote the rest whatever the count says. A probe that reports no cache read and no
+/// cache write covers nothing, whatever it left uncached, and the probe counter keeps `cold` for it.
 pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool {
     if migrated {
         usage.evidence() >= expected
+            || (usage.evidence() > 0 && usage.input <= MIGRATED_UNCACHED_MAX)
     } else {
         usage.read >= expected
     }
@@ -589,10 +602,10 @@ impl Inner {
             agent.migrations += 1;
             agent.cold = 0;
         }
-        // Full coverage is the whole prefix read back, which is what the next real request would read; a
-        // write beside it is the prefix rebuilt rather than kept. A migrated probe wrote the prefix on its
-        // new account instead, and that write is the coverage the next request reads there; it does not count
-        // toward the cold streak.
+        // Full coverage is the whole prefix read back, which is what the next real request would read. A write
+        // beside it is the prefix rebuilt, which the cold streak counts. A migrated probe wrote the prefix on its new
+        // account instead: it covers by its count or, with a read or a write, by what it left uncached, and it
+        // counts toward no cold streak.
         let covered = covers(migrated, &usage, job.expected);
         if !migrated {
             if covered {
@@ -616,9 +629,15 @@ impl Inner {
             );
             return;
         }
-        // A probe that read part of the prefix and rebuilt the rest never warmed the whole entry; one that
-        // read none of it rebuilt the entry, which the cold streak counts instead.
-        if usage.evidence() < job.expected || (usage.read > 0 && !covered) {
+        // A probe on its own account that read part of the prefix and rebuilt the rest never warmed the whole entry,
+        // and one that read none of it rebuilt the entry, which the cold streak counts instead. A migrated probe is
+        // partial where neither its count nor its uncached input covers.
+        let partial = if migrated {
+            !covered
+        } else {
+            usage.evidence() < job.expected || (usage.read > 0 && !covered)
+        };
+        if partial {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
             return;
         }
@@ -636,6 +655,14 @@ impl Inner {
         agent.cache_started = job.started;
         agent.expires = Some(job.started + ttl);
         agent.jitter_frac = rand::random::<f64>();
+        if migrated {
+            // The next probe runs on this account and reads the entry this one left, which holds what this probe
+            // counted. An upstream can count a cold write below the last request's warm read, so that request's count
+            // would read the next probe short.
+            if let Some(observation) = agent.current.as_mut() {
+                observation.expected = usage.evidence();
+            }
+        }
         // A full read and an accepted complete rewrite alike leave the whole prefix in an entry the next request
         // can read, so either covers from here.
         if let Some(probe) = agent.unanswered.last_mut() {
@@ -1501,21 +1528,26 @@ mod tests {
 
     #[test]
     fn a_probe_covers_its_prefix_by_reading_it_back_or_by_writing_it_after_a_migration() {
-        let usage = |read, write| ProbeUsage {
+        let usage = |read, write, input| ProbeUsage {
             read,
             write,
+            input,
             ..ProbeUsage::default()
         };
+        let over = MIGRATED_UNCACHED_MAX + 1;
         assert_eq!(
             [
-                covers(false, &usage(2_000, 0), 2_000),
-                covers(false, &usage(1_999, 1), 2_000),
-                covers(false, &usage(0, 2_000), 2_000),
-                covers(true, &usage(0, 2_000), 2_000),
-                covers(true, &usage(0, 1_999), 2_000),
+                covers(false, &usage(2_000, 0, 0), 2_000),
+                covers(false, &usage(1_999, 1, 0), 2_000),
+                covers(false, &usage(0, 2_000, 0), 2_000),
+                covers(true, &usage(0, 2_000, over), 2_000),
+                covers(true, &usage(0, 1_999, over), 2_000),
+                covers(true, &usage(0, 1_999, MIGRATED_UNCACHED_MAX), 2_000),
+                covers(true, &usage(0, 0, 0), 2_000),
             ],
-            [true, false, false, true, false],
-            "a whole read, a partial read, a rebuild, a migrated write, a migrated short write"
+            [true, false, false, true, false, true, false],
+            "a whole read, a partial read, a rebuild, a migrated write, a migrated short write one token over the \
+             bound, a migrated short write at the bound, a migrated probe with no cache evidence"
         );
     }
 }
