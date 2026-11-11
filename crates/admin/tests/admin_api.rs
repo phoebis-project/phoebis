@@ -1151,7 +1151,9 @@ async fn a_pairing_confirm_clears_the_plan_ended_flag_and_writes_plan_restored_f
         Some(&cookie),
     )
     .await;
-    assert_eq!(confirmed.status(), 200, "{}", json(confirmed).await);
+    let status = confirmed.status();
+    let confirmed = json(confirmed).await;
+    assert_eq!(status, 200, "{confirmed}");
     assert_eq!(
         h.store
             .subscription_term("business")
@@ -1160,6 +1162,11 @@ async fn a_pairing_confirm_clears_the_plan_ended_flag_and_writes_plan_restored_f
             .plan_ended_at,
         None,
         "the confirm's write clears the flag"
+    );
+    assert_eq!(
+        confirmed["first_poll_in_flight"],
+        serde_json::json!(true),
+        "the confirm that cleared the flag starts the first poll: {confirmed}"
     );
     let restored = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
         h.db.events(0, i64::MAX, 100)

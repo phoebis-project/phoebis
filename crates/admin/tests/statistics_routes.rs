@@ -2731,9 +2731,10 @@ async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_o
     );
 }
 
-/// Both accounts carry a saved end and a plan-ended flag a quarter hour after it, and the router holds a weekly reading
-/// of each taken while the plan stood: the first a millisecond before its flag, so after its saved end, the second at
-/// its flag.
+/// Every account carries a saved end, and the router holds a weekly reading of each taken while the plan stood. The
+/// first two carry a plan-ended flag a quarter hour after the end, the first's reading a millisecond before its flag,
+/// so after its saved end, the second's at its flag. The third carries no flag, and its reading is half an hour past
+/// its saved end.
 #[tokio::test]
 async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_plan_ended_flag() {
     use common::patch;
@@ -2744,14 +2745,13 @@ async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_
     const DAY: i64 = 24 * HOUR;
     let end = now - DAY;
     let flagged = end + 15 * 60_000;
-    let created = post(
-        &parts.app,
-        "/admin/accounts",
+    for body in [
         r#"{"id":"second","kind":"oauth","label":"Second"}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(created.status(), 201);
+        r#"{"id":"third","kind":"oauth","label":"Third"}"#,
+    ] {
+        let created = post(&parts.app, "/admin/accounts", body, Some(&cookie)).await;
+        assert_eq!(created.status(), 201);
+    }
     for (id, document, tier) in [
         (
             "business",
@@ -2762,6 +2762,11 @@ async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_
             "second",
             r#"{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}"#,
             "default_claude_ai",
+        ),
+        (
+            "third",
+            r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_5x"}}"#,
+            "default_claude_max_5x",
         ),
     ] {
         parts
@@ -2777,7 +2782,11 @@ async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_
             .unwrap();
     }
     parts.router.reload().await.unwrap();
-    for (id, observed_at) in [("business", flagged - 1), ("second", flagged)] {
+    for (id, observed_at, flag) in [
+        ("business", flagged - 1, Some(flagged)),
+        ("second", flagged, Some(flagged)),
+        ("third", end + 30 * 60_000, None),
+    ] {
         parts
             .router
             .report(Report::Sample {
@@ -2805,7 +2814,9 @@ async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_
         )
         .await;
         assert_eq!(saved.status(), 200);
-        assert!(parts.store.set_plan_ended(id, flagged).unwrap());
+        if let Some(at) = flag {
+            assert!(parts.store.set_plan_ended(id, at).unwrap());
+        }
         parts
             .db
             .insert_samples(
@@ -2861,8 +2872,15 @@ async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_
                 serde_json::Value::Null,
                 serde_json::Value::Null,
             ),
+            (
+                serde_json::json!("third"),
+                serde_json::json!("term_ended"),
+                serde_json::json!("max_5x"),
+                serde_json::json!("default_claude_max_5x"),
+            ),
         ],
-        "a reading from before the flag hands its pair to the row, and one at the flag hands none: {answer}"
+        "a reading from before the flag hands its pair to the row, one at the flag hands none, and an account with no \
+         flag hands its reading's pair whenever it was read: {answer}"
     );
 }
 

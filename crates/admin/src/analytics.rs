@@ -1255,13 +1255,13 @@ pub(crate) struct UnusedAllowanceReset {
     pub source: String,
     /// The resolved plan word the reading carried when the reset was observed: the event's for a `sample` or `clock`
     /// reset, null for a reset whose event carries none. A `term_ended` row answers the plan of the router's stored
-    /// reading of the week where it was taken before the account's plan-ended flag, null where the router holds no
-    /// such reading.
+    /// reading of the week, where it was taken before the account's plan-ended flag or the account carries no such
+    /// flag, null where the router holds no such reading.
     pub plan: Option<String>,
     /// The stored rate-limit tier the reading carried when the reset was observed: the event's for a `sample` or
     /// `clock` reset, null for a reset whose event carries none. A `term_ended` row answers the tier of the router's
-    /// stored reading of the week where it was taken before the account's plan-ended flag, null where the router holds
-    /// no such reading.
+    /// stored reading of the week, where it was taken before the account's plan-ended flag or the account carries no
+    /// such flag, null where the router holds no such reading.
     pub tier: Option<String>,
 }
 

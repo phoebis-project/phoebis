@@ -329,10 +329,10 @@ event, with the error code `account_canceled`, the probe outcome `canceled` and 
 ([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view orders its list through the
 filter bar's sort control, a key and a direction carried in the address, with Name ascending by default, one key per
 window's reset and Most used filing an account with no plan window last ([Accounts](console.md#accounts)). The Accounts
-view shows a paired account's first reading once the confirm's poll lands, a few seconds after the confirm, with "The
-first quota reading is in flight." in its Usage card until then and a read of the list every 2 s for up to 30 s while
-auto reload is off ([Accounts](console.md#accounts)). The allowance block and the Analytics card read each weekly reset
-in the chosen week and price it at the tier the account ran under at that reset ([Accounts](console.md#accounts),
+view shows a paired account's first reading once the poll a confirm started lands, a few seconds after the confirm, with
+"The first quota reading is in flight." in its Usage card until then and a read of the list every 2 s for up to 30 s
+while auto reload is off ([Accounts](console.md#accounts)). The allowance block and the Analytics card read each weekly
+reset in the chosen week and price it at the tier the account ran under at that reset ([Accounts](console.md#accounts),
 [Analytics](console.md#analytics)). A new pool's dialog starts with cache warming off ([Pools](console.md#pools)). A
 pool card's Active pins fact counts every pin under the pool's keys, as the Dashboard's Sessions card does, and reads
 how many sit on a former member under the figure ([Dashboard](console.md#dashboard), [Pools](console.md#pools)). The

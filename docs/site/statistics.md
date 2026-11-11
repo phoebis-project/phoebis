@@ -168,7 +168,9 @@ minutes after the startup step, on the account's phase, or when its hold ends af
 hour after, on every third poll. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the
 cadence, and hand the reading to the router and the ledger as a scheduled read does, under the same hold and coalescing,
 and the card draws the reading the refresh took the moment it answers, its time the reading's own instant, and the
-Accounts view shows the first reading once the poll lands, a few seconds after the confirm.
+Accounts view shows the first reading once the poll lands, a few seconds after the confirm. Neither sends a usage
+request while the account's plan-ended flag stands: a confirm whose profile still reports no plan keeps the flag and
+reads nothing more, and Refresh reads the profile first, then the usage only where that profile finds a plan.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -184,9 +186,9 @@ under. `GET /admin/analytics/unused_allowance` reads those events for the weekly
 week, as the share of the allowance each subscription account left unused at its resets in range (the default range 30
 days). Each reset answers the plan and the tier its event names, null where the event names none. An account's term end
 inside a week reads as a reset of that week from its last reading before the end, with the plan and the tier of the
-router's stored reading of the week where it was read before the account's plan-ended flag, and null where the router
-holds no such reading. The history reaches as far as the events the hourly purge still holds, which
-`stats.retention_days` bounds, so a longer retention shows more weeks.
+router's stored reading of the week, where it was read before the account's plan-ended flag or the account carries no
+such flag, and null where the router holds no such reading. The history reaches as far as the events the hourly purge
+still holds, which `stats.retention_days` bounds, so a longer retention shows more weeks.
 
 ## Pricing
 

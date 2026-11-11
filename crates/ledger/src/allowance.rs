@@ -27,7 +27,8 @@ pub struct AllowanceReset {
     pub source: String,
     /// The event's pair for a `sample` or `clock` reset, `None` where the event carries none. A `term_ended` row
     /// carries the pair `unused_allowance` is handed for its window, the router's stored reading of the week from
-    /// before the account's plan-ended flag, `None` where it is handed none.
+    /// before the account's plan-ended flag, or any stored reading where the account carries no such flag, `None`
+    /// where it is handed none.
     pub plan: Option<String>,
     pub tier: Option<String>,
 }
