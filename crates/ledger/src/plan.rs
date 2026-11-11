@@ -1,8 +1,8 @@
 //! The subscription cost model, shipped beside the price file and read like it: a list of revisions keyed by the date
-//! each takes effect. A token costs a model weight times a type multiplier in units on every window, a window holds a
-//! capacity in units per tier, the peak band is a capacity factor per window read at a request's completion, and a
-//! model week is sized against the 7-day window. A model without a weight, or of no model tier, prices nothing, and so
-//! does an account tier left out or set to `null`.
+//! or the UTC instant each takes effect. A token costs a model weight times a type multiplier in units on every
+//! window, a window holds a capacity in units per tier, the peak band is a capacity factor per window read at a
+//! request's completion, and a model week is sized against the 7-day window. A model without a weight, or of no model
+//! tier, prices nothing, and so does an account tier left out or set to `null`.
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -429,7 +429,7 @@ fn counts_of(usage: PinUsage) -> [f64; 5] {
 }
 
 impl SubscriptionCosts {
-    /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's date.
+    /// The entry with its peak zone resolved and its rules checked, a refusal prefixed by the entry's `effective`.
     fn resolved(mut self) -> Result<SubscriptionCosts, LedgerError> {
         self.peak
             .resolve()
@@ -1029,9 +1029,9 @@ impl std::ops::Deref for CostRevisions {
 }
 
 impl CostRevisions {
-    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants. Each revision takes
-    /// `unit`, the file's one unit, so the unit the envelope reports is the one every pricer reads its anchor off,
-    /// whoever builds the list.
+    /// Sorts, refuses an empty list, an `effective` in neither form and two entries on one instant, and computes the
+    /// instants. Each revision takes `unit`, the file's one unit, so the unit the envelope reports is the one every
+    /// pricer reads its anchor off, whoever builds the list.
     pub fn new(
         unit: Unit,
         revisions: Vec<SubscriptionCosts>,
@@ -1051,8 +1051,8 @@ impl CostRevisions {
 
     /// Refuses with `LedgerError::Plan` naming the key and the rule: the untyped pass's refusals (a parse error, a
     /// repeated key, a key that is not an untagged string), serde's (an unknown or a missing key), the unit's window,
-    /// then per entry under its date a zone the bundled database lacks and each value rule in the file's order, then
-    /// the list's.
+    /// then per entry under its `effective` a zone the bundled database lacks and each value rule in the file's order,
+    /// then the list's.
     pub fn from_yaml(text: &str) -> Result<CostRevisions, LedgerError> {
         // The typed maps read a key as its text and keep the last of two equal keys, so the untyped pass runs first
         // and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors keep

@@ -771,9 +771,9 @@ fn router_config(
     }
 }
 
-/// The start's `ledger opened` line. It names the date of the first entry dated after the one in force at the start,
-/// and no date when none is. The tables built at the start take that entry only at the next one, so an operator reads
-/// in the log what a restart changes.
+/// The start's `ledger opened` line. It names the `effective` of the first entry taking effect after the one in force
+/// at the start, as its file wrote it, and nothing when none is. The tables built at the start take that entry only at
+/// the next one, so an operator reads in the log what a restart changes.
 fn log_ledger_opened(
     ledger: &std::path::Path,
     revisions: &phoebis_ledger::PriceRevisions,
@@ -783,7 +783,7 @@ fn log_ledger_opened(
         ledger = %ledger.display(),
         pricing = %revisions.in_force(started).effective,
         pricing_revisions = revisions.len(),
-        // An `Option` records nothing at `None`, so the line names no next date while nothing is held.
+        // An `Option` records nothing at `None`, so the line names no next entry while nothing is held.
         pricing_next = revisions
             .pending(started)
             .map(|next| tracing::field::display(&next.effective)),

@@ -285,7 +285,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (
             &serde_json::json!({
                 "path": null, "source": "shipped", "effective": shipped.effective,
-                "revisions": revisions.len(), "next": "2026-11-09",
+                "revisions": revisions.len(), "next": "2026-11-09T18:30:00Z",
             }),
             &serde_json::json!({
                 "path": null, "source": "shipped", "effective": cost_model.effective,
@@ -293,7 +293,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             })
         ),
         "the harness configures neither path, so both tables are the shipped ones, and the clock sits before the \
-         price list's 2026-11-09 entry, its next one, and past every entry of the cost model: {system}"
+         price list's 2026-11-09T18:30:00Z entry, its next one, and past every entry of the cost model: {system}"
     );
     assert_eq!(
         (

@@ -73,7 +73,7 @@
         "source": "shipped",
         "effective": "2026-10-08",
         "revisions": 3,
-        "next": "2026-11-09"
+        "next": "2026-11-09T18:30:00Z"
       },
       "subscription_costs": {
         "path": null,

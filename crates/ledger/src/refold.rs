@@ -30,7 +30,7 @@ use crate::record::{AttemptRecord, RequestRecord};
 use crate::rollup::{deltas_of, fold_delta, read_rollup, unfold, RollupRow};
 use crate::LedgerError;
 
-/// The `meta` key holding the mark: `{"since": <ms>, "revisions": [{"effective": "<date>", "bands": {"<model>":
+/// The `meta` key holding the mark: `{"since": <ms>, "revisions": [{"effective": "<effective>", "bands": {"<model>":
 /// <over or null>}}]}`, `since` the instant the first mark was written (the first start after the migration) and the
 /// list every revision's thresholds as the last start loaded them. Requests received before `since` landed under the
 /// migration's `standard` and are never re-folded: nothing is backfilled.

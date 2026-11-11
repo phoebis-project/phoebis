@@ -900,9 +900,9 @@ the same on the open row closes it. The drawer holds the request's id and time, 
   dollars, and a billed request's dollars, or a dash under Dollar equivalent. Its hover names why a dollar figure or a
   dash stands, as the Cost cell's hover does, then the hint, the serving account's tier (`Account tier {tier}`) and the
   price list and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of
-  {date}`). A client classifier call's row reads its zero figure under Native, `$0.00` with `equivalent` under All in
-  dollars and Dollar equivalent and a dash under Billed dollars, with the hover "Free on the plan: a client classifier
-  call takes no window share".
+  {date}`, each date with its time where the entry carries one). A client classifier call's row reads its zero figure
+  under Native, `$0.00` with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed dollars,
+  with the hover "Free on the plan: a client classifier call takes no window share".
 - Request: Session, Agent, Client with the request class badge and the fork line where the session branched from another
   conversation, User agent (such as `claude-cli/2.1.310 (external, cli)`), Key, Pool, Kind, and one `Attempt {n}` row
   per attempt with the upstream's request id and, on the answer that served, its message id.
@@ -1287,12 +1287,13 @@ price, and as a share of a subscription window." on three tabs, Tiers and peak b
 Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool dialog's Write cost hint
 on API prices, and the subtitle of the Dashboard's 7-day ring and the notes of the Burn section's three plan cards on
 Tiers and peak band. It opens on the entries in force now. Its footer carries a "Revision" select over both files'
-revision dates, newest first, a date not yet in force marked `(next)`, and choosing a date redraws every tab at the
-entry each file had in force on that date, or at a file's first entry when the date comes before it. A single date
-across the two files shows no select. The footer names each table's entry as a chip, `API prices, effective {date},
-shipped` (or `file`) and `Subscription cost model, effective {date}, shipped` (or `file`), the hover naming the key and
-the path that set it or would replace it at the next start (`stats.api_prices_path`, `stats.subscription_costs_path`).
-The console has no import control: a table is replaced by a file at that path, read at the next start.
+revision dates, newest first, each with its time where the entry carries one, a date not yet in force marked `(next)`,
+and choosing a date redraws every tab at the entry each file had in force on that date, or at a file's first entry when
+the date comes before it. A single date across the two files shows no select. The footer names each table's entry as a
+chip, `API prices, effective {date}, shipped` (or `file`) and `Subscription cost model, effective {date}, shipped` (or
+`file`), each date with its time where the entry carries one, the hover naming the key and the path that set it or
+would replace it at the next start (`stats.api_prices_path`, `stats.subscription_costs_path`). The console has no
+import control: a table is replaced by a file at that path, read at the next start.
 
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-light.png#only-light)
 ![The cost reference dialog on Plan rates](assets/cost-reference-plan-rates-dark.png#only-dark)
@@ -1341,14 +1342,15 @@ chosen week and a billed request in dollars."), the five browser preferences the
 each row's control wraps under its label, the Unit row's position select, week select and legend button onto a second
 line. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path (each
 as the path or "not configured", then its table's entry in force, its revision count and the next date while one is
-pending, as `effective {date}, {n} revisions, next {date}`, the last reading `{problem}` in their place while the
-cost model reports a problem), Storage path, "Requests, samples and the routing log" and "Rollups" (each as
-`kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as `at most {n} hours`, the longest a pool
-or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long a session stays listed after its last
-activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod reports stays listed after its last use,
-which also bounds the lines its pins draw), and Admin secret as "configured" or "not configured", each path's, each
-retention line's and each session line's hover naming the bootstrap key that sets it, and closes on "The values the
-configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
+pending, as `effective {date}, {n} revisions, next {date}`, each date with its time where the entry carries one, the
+last reading `{problem}` in their place while the cost model reports a problem), Storage path, "Requests, samples and
+the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as
+`at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long
+a session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod
+reports stays listed after its last use, which also bounds the lines its pins draw), and Admin secret as "configured"
+or "not configured", each path's, each retention line's and each session line's hover naming the bootstrap key that
+sets it, and closes on "The values the configuration file sets are on the installation page, and
+`phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point

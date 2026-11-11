@@ -1658,12 +1658,13 @@ pub(crate) struct PricingSource {
     /// `shipped`, or `file` when that path was read.
     #[schema(example = "shipped")]
     pub source: String,
-    /// The date of the revision in force.
+    /// The `effective` of the revision in force as its file wrote it, a date `YYYY-MM-DD` or an instant
+    /// `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     /// How many revisions the file lists.
     pub revisions: usize,
-    /// The date of the first revision dated after the one in force, which takes effect at that date's midnight UTC,
-    /// null when none is.
+    /// The `effective` of the first revision that takes effect after the one in force, as its file wrote it, null
+    /// when none is.
     pub next: Option<String>,
 }
 

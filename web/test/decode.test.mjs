@@ -2657,7 +2657,7 @@ test('a pricing effective date that is not a date decodes as the string sent wit
   const listed = d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, revisions: [{ ...first, effective: 'v3', content: { ...first.content, effective: 'v3' } }, ...rest] } }).apiPrices.revisions;
   assert.deepEqual([listed[0].effective, listed[0].effectiveDate], ['v3', null], "a revision's free-text date is kept as sent");
   assert.equal(listed[0].models.length, Object.keys(first.content.models).length, 'its rows still decode');
-  assert.deepEqual(listed.slice(1).map((r) => r.effectiveDate), rest.map((r) => `${r.effective}T00:00:00.000Z`), 'the dated revisions parse');
+  assert.deepEqual(listed.slice(1).map((r) => r.effectiveDate), ['2026-10-08T00:00:00.000Z', '2026-11-09T18:30:00.000Z'], 'the dated revisions parse');
   assert.deepEqual(d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, revisions: 'none' } }).apiPrices.revisions, [], 'a list the answer garbles reads as none');
 });
 
@@ -2695,10 +2695,12 @@ test("a table's effective date reads as the calendar date the file names in ever
     assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
     assert.equal(d.effectiveLabel('2026-10-01T23:00'), 'Oct 01, 2026', "a date with a time reads in the browser's zone");
     assert.equal(d.effectiveLabel('v3'), 'v3');
-    // Each revision's date is its UTC midnight, so the label reads the calendar date the file names here too.
+    // A dated revision is its UTC midnight and one with a time its instant, so the label reads the calendar date the
+    // file names here too.
     const { apiPrices, subscriptionCosts } = d.decodeSettings(fixture('settings'));
     for (const r of [...apiPrices.revisions, ...subscriptionCosts.revisions]) {
-      assert.equal(r.effectiveDate, `${r.effective}T00:00:00.000Z`, `${r.effective} parses to its midnight`);
+      const instant = r.effective.length === 10 ? `${r.effective}T00:00:00.000Z` : `${r.effective.slice(0, 19)}.000Z`;
+      assert.equal(r.effectiveDate, instant, `${r.effective} parses to the instant it names`);
       assert.equal(d.effectiveLabel(r.effective), new Date(r.effectiveDate).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }), `${r.effective} reads its calendar date`);
     }
   } finally {

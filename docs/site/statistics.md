@@ -198,14 +198,16 @@ reference](console.md#the-cost-reference)). A request with usage on a model the 
 cost estimate and is counted in `phoebis_pricing_unknown_model_total`, while a client classifier call the plan paid
 reads zero on any model.
 
-The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` date in `YYYY-MM-DD`
-form and the whole table of that date, `models`. An entry is in force from 00:00 UTC of its date to the next entry's,
-and an instant before the first entry reads the first. A request is priced at the entry in force when it arrived, so all
-its attempts price under one entry. An entry added late re-prices the ledger's rows from its date on at their next read.
-An entry dated after the one in force is held: every read takes it from its date on, and the burn rates the router
-builds at start for the shedding round take it at the first start after that date. A correction of a figure the file had
-wrong edits every entry that carries the row and adds no entry, since the correction says what was always true, while a
-provider's price change, a new model or a moved threshold adds one.
+The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` and the whole table in
+force from it, `models`. An `effective` is a date in `YYYY-MM-DD` form, in force from 00:00 UTC of that day, or an
+instant in UTC written `YYYY-MM-DDTHH:MM:SSZ`, in force from that second, and two entries on one instant are refused,
+whichever form each wrote. An entry is in force to the next entry's instant, and an instant before the first entry reads
+the first. A request is priced at the entry in force when it arrived, so all its attempts price under one entry. An
+entry added late re-prices the ledger's rows from its instant on at their next read. An entry that takes effect after
+the one in force is held: every read takes it from its instant on, and the burn rates the router builds at start for
+the shedding round take it at the first start after that instant. A correction of a figure the file had wrong edits
+every entry that carries the row and adds no entry, since the correction says what was always true, while a provider's
+price change, a new model or a moved threshold adds one.
 
 The twelve rows of the shipped revision in force, in USD per million tokens, in the file's order (the fast cells of
 Fable 5.2 and the three Opus models are twice each figure):
@@ -246,11 +248,12 @@ answer's reported speed selects, and reads no dollars on a model the table does 
 do. On a model priced by prompt length, a probe prices at the set its own prompt selects.
 
 A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
-entry's date, the model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the
-threshold): a negative or `NaN` price would turn every estimate negative or `NaN`, which no budget trips on. A
+entry's `effective`, the model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over
+the threshold): a negative or `NaN` price would turn every estimate negative or `NaN`, which no budget trips on. A
 `long_context.over` that is not a whole number of tokens above zero is refused the same way, since a zero would price
-every prompt at the long-context cells. The list itself is refused when it is empty, when an entry's date is not in
-`YYYY-MM-DD` form, naming the entry's place in the list, and when two entries carry one date, naming the date
+every prompt at the long-context cells. The list itself is refused when it is empty, when an entry's `effective` is
+neither a date in `YYYY-MM-DD` form nor an instant in `YYYY-MM-DDTHH:MM:SSZ` form, naming the entry's place in the list
+and its text, and when two entries take effect at one instant, naming both entries' texts
 ([stats](installation.md#stats) gives each message).
 
 ## Plan meter
@@ -398,11 +401,13 @@ round on that window reads that tier's pins as unpriced, after every priced pin,
 analytics an account on a tier the file lacks reads tier unknown, while a window the file leaves `null` on a listed tier
 reads model unlisted. A dated model id reads the weight of its undated name.
 
-The file is a revision list in the price table's shape: `revisions`, each entry an `effective` date and the whole model
-of that date, in force from 00:00 UTC of its date to the next entry's, an instant before the first entry reading the
-first. The shipped file carries one entry, and `stats.subscription_costs_path` replaces the whole list. A weight that
-corrects an entry's figure edits that entry and each later one that carried the figure on, up to the first entry that
-names another, since it says what the weight was from that entry's date.
+The file is a revision list in the price table's shape: `revisions`, each entry an `effective` and the whole model in
+force from it to the next entry's, an instant before the first entry reading the first. An `effective` is a date in
+`YYYY-MM-DD` form, in force from 00:00 UTC of that day, or an instant in UTC written `YYYY-MM-DDTHH:MM:SSZ`, in force
+from that second, and two entries on one instant are refused, whichever form each wrote. The shipped file carries one
+entry, and `stats.subscription_costs_path` replaces the whole list. A weight that corrects an entry's figure edits that
+entry and each later one that carried the figure on, up to the first entry that names another, since it says what the
+weight was from that entry's instant on.
 
 Two members of each entry name the model tiers: `tier_order`, the tiers in display order (`fable`, `opus`, `sonnet` and
 `haiku` on the shipped file), and `model_tier`, each model's tier by undated id. The tiers order the cost reference's

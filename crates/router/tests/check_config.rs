@@ -474,10 +474,10 @@ fn a_cost_model_with_a_capacity_at_zero_fails_check_config_naming_the_key() {
     );
 }
 
-/// The cost model takes the price file's refusal of two entries on one date under its own prefix, naming the file
-/// and the date.
+/// The cost model takes the price file's refusal of two entries on one instant under its own prefix, naming the file
+/// and both entries' texts.
 #[test]
-fn a_cost_model_with_two_entries_dated_the_same_fails_check_config_naming_the_date() {
+fn a_cost_model_with_two_entries_on_one_instant_fails_check_config_naming_both_texts() {
     let dir = tempfile::tempdir().unwrap();
     let costs = dir.path().join("costs.yaml");
     let text = phoebis_ledger::test_tables::SUBSCRIPTION_COSTS
@@ -505,7 +505,9 @@ fn a_cost_model_with_two_entries_dated_the_same_fails_check_config_naming_the_da
         printed(&out)
     );
     assert!(
-        stderr.contains("plan table: revisions: two entries dated 2026-01-01"),
+        stderr.contains(
+            "plan table: revisions: two entries in force from the same instant, 2026-01-01 and 2026-01-01"
+        ),
         "{}",
         printed(&out)
     );

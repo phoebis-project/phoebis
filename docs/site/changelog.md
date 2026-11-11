@@ -638,15 +638,15 @@ the `enabled` pair, and a registry change names the account or the key it change
 account or the key lists it ([Routing log](console.md#routing-log)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
-the request arrived. The price table and the subscription cost model are revision lists keyed by effective date, the
-cost model's unit is the Pro 7-day window, of which one percent is 900,000 units, so every subscription figure is a
-Pro-week figure the console reads in the chosen week, the account's tier and the prompt-length band join the hourly
-rollups, a model the cost model does not weight prices nothing, its figure null, and raises an attention item, and the
-cost model names each model's tier ([statistics](statistics.md#pricing), [installation](installation.md#stats)). The
-shipped price table carries Claude Sonnet 4.6 and Claude Sonnet 4.5 and reads Claude Fable 5's cache read at $1 per
-million tokens in every revision ([statistics](statistics.md#pricing)). The subscription cost model weighs Claude Fable
-5, Opus 5, Opus 4.8 and Sonnet 4.6 as the plan meter measured them on 2026-10-29, the measurement confirming Sonnet 5's
-weight ([statistics](statistics.md#plan-meter)).
+the request arrived. The price table and the subscription cost model are revision lists keyed by the date or the UTC
+instant each revision takes effect, the cost model's unit is the Pro 7-day window, of which one percent is 900,000
+units, so every subscription figure is a Pro-week figure the console reads in the chosen week, the account's tier and
+the prompt-length band join the hourly rollups, a model the cost model does not weight prices nothing, its figure null,
+and raises an attention item, and the cost model names each model's tier ([statistics](statistics.md#pricing),
+[installation](installation.md#stats)). The shipped price table carries Claude Sonnet 4.6 and Claude Sonnet 4.5 and
+reads Claude Fable 5's cache read at $1 per million tokens in every revision ([statistics](statistics.md#pricing)). The
+subscription cost model weighs Claude Fable 5, Opus 5, Opus 4.8 and Sonnet 4.6 as the plan meter measured them on
+2026-10-29, the measurement confirming Sonnet 5's weight ([statistics](statistics.md#plan-meter)).
 
 The console prices every figure in the unit the shell's Unit switch names, one of four positions, Native, All in
 dollars, Billed dollars and Dollar equivalent, Native by default (a subscription request as a share of the chosen week,

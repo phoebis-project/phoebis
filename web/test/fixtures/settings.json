@@ -338,9 +338,9 @@
           }
         },
         {
-          "effective": "2026-11-09",
+          "effective": "2026-11-09T18:30:00Z",
           "content": {
-            "effective": "2026-11-09",
+            "effective": "2026-11-09T18:30:00Z",
             "models": {
               "claude-fable-5-2": {
                 "input": 8.0,

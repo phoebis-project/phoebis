@@ -43,12 +43,13 @@ pub struct Envelopes {
 }
 
 /// One table's envelope, its `content` the revision in force as loaded, key for key, and `revisions` every revision
-/// the file lists, ascending by date, each in the shape of `content`.
+/// the file lists, ascending by the instant each takes effect, each in the shape of `content`.
 // The sentences on `content` and `revisions` sit on the type, since utoipa renders a generic field as its argument's
 // schema and drops the field's own description.
 #[derive(serde::Serialize, ToSchema)]
 pub struct Envelope<T: ToSchema> {
-    /// The date of the revision in force.
+    /// The `effective` of the revision in force as its file wrote it, a date `YYYY-MM-DD` or an instant
+    /// `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     /// `shipped`, or `file` for the operator's file.
     #[schema(example = "shipped")]
@@ -57,12 +58,13 @@ pub struct Envelope<T: ToSchema> {
     pub revisions: Vec<Revision<T>>,
 }
 
-/// The subscription cost model's envelope: the date and source of the revision in force, the file's one `unit`,
+/// The subscription cost model's envelope: the `effective` and source of the revision in force, the file's one `unit`,
 /// `content` the revision in force as loaded, key for key, and `revisions` every revision the file lists, ascending by
-/// date, each in the shape of `content`. No revision's content carries the unit.
+/// the instant each takes effect, each in the shape of `content`. No revision's content carries the unit.
 #[derive(serde::Serialize, ToSchema)]
 pub struct SubscriptionCostsEnvelope {
-    /// The date of the revision in force.
+    /// The `effective` of the revision in force as its file wrote it, a date `YYYY-MM-DD` or an instant
+    /// `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     /// `shipped`, or `file` for the operator's file.
     #[schema(example = "shipped")]
@@ -73,9 +75,10 @@ pub struct SubscriptionCostsEnvelope {
     pub revisions: Vec<Revision<SubscriptionCostsContent>>,
 }
 
-/// One revision of a table: its date and its table, `content` in the envelope's shape.
+/// One revision of a table: its `effective` and its table, `content` in the envelope's shape.
 #[derive(serde::Serialize, ToSchema)]
 pub struct Revision<T: ToSchema> {
+    /// The revision's `effective` as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     pub content: T,
 }
@@ -83,6 +86,7 @@ pub struct Revision<T: ToSchema> {
 /// The price table's `effective` and `models`.
 #[derive(serde::Serialize, ToSchema)]
 pub struct PriceTableContent {
+    /// The revision's `effective` as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     /// Each model id to its `input`, `cache_write_5m`, `cache_write_1h`, `cache_read` and `output` cells, and
     /// `fast` and `long_context` where the model has them, in the file's order.

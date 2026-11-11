@@ -1,7 +1,8 @@
-# The API list prices in dollars per million tokens. Each entry holds the whole table of its date and is in force from
-# 00:00 UTC of that date to the next entry's date. A provider's price change, a new model or a moved threshold adds an
-# entry. A correction of a figure this file had wrong edits every entry that carries the model, since the correction
-# says what was always true.
+# The API list prices in dollars per million tokens. Each entry holds the whole table in force from its `effective` to
+# the next entry's: a date `YYYY-MM-DD` takes effect at 00:00 UTC of that day, and an instant in UTC written
+# `YYYY-MM-DDTHH:MM:SSZ` at that second. A provider's price change, a new model or a moved threshold adds an entry. A
+# correction of a figure this file had wrong edits every entry that carries the model, since the correction says what
+# was always true.
 revisions:
   - effective: 2026-10-01
     models:
@@ -70,7 +71,7 @@ revisions:
         output: 0.5
         long_context: {over: 100000, input: 0.5, cache_write_5m: 0.625, cache_write_1h: 1.0, cache_read: 0.05, output: 2.5}
       claude-haiku-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5}
-  - effective: 2026-11-09
+  - effective: 2026-11-09T18:30:00Z
     models:
       claude-fable-5-2:
         input: 8

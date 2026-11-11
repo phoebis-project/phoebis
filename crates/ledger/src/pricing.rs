@@ -1,9 +1,9 @@
-//! The API price file as a list of revisions keyed by the date each takes effect, and the list prices per million
-//! tokens of one revision, which price an attempt's stored counts whenever a reader asks for its dollars, at the
-//! revision in force when its request arrived. Every estimate is an estimate: tier and batch modifiers are not known
-//! here, and subscription quota is the rate-limit windows, never this number.
+//! The API price file as a list of revisions keyed by the date or the UTC instant each takes effect, and the list
+//! prices per million tokens of one revision, which price an attempt's stored counts whenever a reader asks for its
+//! dollars, at the revision in force when its request arrived. Every estimate is an estimate: tier and batch modifiers
+//! are not known here, and subscription quota is the rate-limit windows, never this number.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -99,7 +99,7 @@ pub struct LongContext {
     pub cells: ModelPrice,
 }
 
-/// One revision of the price file: the date it takes effect and the table of that date.
+/// One revision of the price file: the date or the UTC instant it takes effect, and the table in force from then.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PriceTable {
@@ -125,16 +125,17 @@ pub struct Revisions<T> {
 // `new` refuses an empty list, so a list never reads empty.
 #[allow(clippy::len_without_is_empty)]
 impl<T> Revisions<T> {
-    /// Sorts by each entry's `effective` date, refuses an empty list, a date not in `YYYY-MM-DD` form and two entries
-    /// dated the same through `refuse`, and computes the instants.
+    /// Sorts by the instant each entry's `effective` names, refuses through `refuse` an empty list, a text that is
+    /// neither a date in `YYYY-MM-DD` form nor an instant in `YYYY-MM-DDTHH:MM:SSZ` form, and two entries on one
+    /// instant, whichever form each wrote, and computes the instants.
     pub(crate) fn new(
         revisions: Vec<T>,
         effective: impl Fn(&T) -> &str,
         refuse: impl FnOnce(String) -> LedgerError,
     ) -> Result<Revisions<T>, LedgerError> {
-        let dates: Vec<&str> = revisions.iter().map(effective).collect();
-        let instants = sorted_instants(&dates).map_err(refuse)?;
-        // The dates carry the order, and the file's own is not refused.
+        let texts: Vec<&str> = revisions.iter().map(effective).collect();
+        let instants = sorted_instants(&texts).map_err(refuse)?;
+        // The instants carry the order, and the file's own is not refused.
         let mut pairs: Vec<(i64, T)> = instants.into_iter().zip(revisions).collect();
         pairs.sort_by_key(|(instant, _)| *instant);
         let (instants, revisions) = pairs.into_iter().unzip();
@@ -157,8 +158,8 @@ impl<T> Revisions<T> {
         &self.revisions[self.revisions.len() - 1]
     }
 
-    /// The first entry dated after `now_ms` that `in_force` does not answer, held until its instant: before the first
-    /// instant the first entry is in force, so the entry held then is the second.
+    /// The first entry taking effect after `now_ms` that `in_force` does not answer, held until its instant: before
+    /// the first instant the first entry is in force, so the entry held then is the second.
     pub fn pending(&self, now_ms: i64) -> Option<&T> {
         self.revisions.get(
             self.instants
@@ -199,7 +200,8 @@ impl std::ops::Deref for PriceRevisions {
 }
 
 impl PriceRevisions {
-    /// Sorts, refuses an empty list and two entries dated the same, and computes the instants.
+    /// Sorts, refuses an empty list, an `effective` in neither form and two entries on one instant, and computes the
+    /// instants.
     pub fn new(revisions: Vec<PriceTable>, source: &str) -> Result<PriceRevisions, LedgerError> {
         Ok(PriceRevisions {
             revisions: Revisions::new(revisions, |r| r.effective.as_str(), LedgerError::Yaml)?,
@@ -208,8 +210,8 @@ impl PriceRevisions {
     }
 
     /// Refuses a cell that is not a finite non-negative number, and a `long_context.over` that is zero, each under
-    /// the entry's date: a negative or `NaN` price makes every estimate negative or `NaN`, which a budget then never
-    /// trips on, and a zero threshold would price every prompt at the long-context cells.
+    /// the entry's `effective`: a negative or `NaN` price makes every estimate negative or `NaN`, which a budget then
+    /// never trips on, and a zero threshold would price every prompt at the long-context cells.
     pub fn from_yaml(text: &str, source: &str) -> Result<PriceRevisions, LedgerError> {
         // The typed map reads a key as its text and keeps the last of two equal keys, so the untyped pass runs
         // first and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors
@@ -231,39 +233,62 @@ impl PriceRevisions {
     }
 }
 
-/// 00:00:00 UTC of a `YYYY-MM-DD` date in Unix milliseconds, `None` for any other text (through jiff's civil date).
-pub fn effective_instant(date: &str) -> Option<i64> {
-    // The shape first, since jiff's parser also reads other forms of a date (a basic `YYYYMMDD`, a date-time) that
-    // the files never write.
-    let shaped = date.len() == 10
-        && date.bytes().enumerate().all(|(i, b)| match i {
-            4 | 7 => b == b'-',
-            _ => b.is_ascii_digit(),
-        });
-    if !shaped {
-        return None;
-    }
-    let day: jiff::civil::Date = date.parse().ok()?;
-    let midnight = day.to_zoned(jiff::tz::TimeZone::UTC).ok()?;
-    Some(midnight.timestamp().as_millisecond())
+// The two forms of an `effective`, byte for byte, a `9` standing for an ASCII digit.
+const DATE_SHAPE: &[u8] = b"9999-99-99";
+const INSTANT_SHAPE: &[u8] = b"9999-99-99T99:99:99Z";
+
+fn fits(text: &str, shape: &[u8]) -> bool {
+    text.len() == shape.len()
+        && text.bytes().zip(shape).all(|(b, &s)| {
+            if s == b'9' {
+                b.is_ascii_digit()
+            } else {
+                b == s
+            }
+        })
 }
 
-/// The instant of each entry's date, in the file's order: refuses an empty list, a date not in `YYYY-MM-DD` form and
-/// two entries dated the same, with the messages both revision files share.
-fn sorted_instants(dates: &[&str]) -> Result<Vec<i64>, String> {
-    if dates.is_empty() {
+/// The instant an entry's `effective` names, in Unix milliseconds: 00:00:00 UTC of a `YYYY-MM-DD` date, or the
+/// second of an instant in UTC written `YYYY-MM-DDTHH:MM:SSZ`. `None` for any other text, an offset, a fraction
+/// and a lowercase `t` or `z` among them.
+pub fn effective_instant(effective: &str) -> Option<i64> {
+    // The shape goes first, since jiff's parsers also read forms the files never write (a basic `YYYYMMDD`, an
+    // offset, a fraction, a lowercase `t` or `z`).
+    if fits(effective, DATE_SHAPE) {
+        let day: jiff::civil::Date = effective.parse().ok()?;
+        let midnight = day.to_zoned(jiff::tz::TimeZone::UTC).ok()?;
+        Some(midnight.timestamp().as_millisecond())
+    } else if fits(effective, INSTANT_SHAPE) {
+        let at: jiff::Timestamp = effective.parse().ok()?;
+        Some(at.as_millisecond())
+    } else {
+        None
+    }
+}
+
+/// The instant of each entry's `effective`, in the file's order: refuses an empty list, a text that is neither a date
+/// in `YYYY-MM-DD` form nor an instant in `YYYY-MM-DDTHH:MM:SSZ` form, and two entries on one instant, whichever
+/// form each wrote, with the messages both revision files share.
+fn sorted_instants(texts: &[&str]) -> Result<Vec<i64>, String> {
+    if texts.is_empty() {
         return Err("revisions: at least one entry".to_string());
     }
-    let mut seen = HashSet::new();
-    dates
+    // Keyed by instant with the entry's text, so a repeat names the earlier entry beside its own.
+    let mut seen: HashMap<i64, &str> = HashMap::new();
+    texts
         .iter()
         .enumerate()
-        .map(|(i, date)| {
-            let instant = effective_instant(date).ok_or_else(|| {
-                format!("revisions[{i}].effective: a date in YYYY-MM-DD form, not `{date}`")
+        .map(|(i, text)| {
+            let instant = effective_instant(text).ok_or_else(|| {
+                format!(
+                    "revisions[{i}].effective: a date in YYYY-MM-DD form or an instant in \
+                     YYYY-MM-DDTHH:MM:SSZ form, not `{text}`"
+                )
             })?;
-            if !seen.insert(instant) {
-                return Err(format!("revisions: two entries dated {date}"));
+            if let Some(first) = seen.insert(instant, text) {
+                return Err(format!(
+                    "revisions: two entries in force from the same instant, {first} and {text}"
+                ));
             }
             Ok(instant)
         })
@@ -732,30 +757,60 @@ mod tests {
         );
     }
 
-    /// Two tables in force from one instant leave no rule for which one prices it.
+    /// Two tables in force from one instant leave no rule for which one prices it, and an entry between the two does
+    /// not hide the repeat.
     #[test]
-    fn two_entries_dated_the_same_day_are_refused_naming_the_date() {
+    fn two_entries_on_one_instant_are_refused_naming_both_texts() {
         assert_eq!(
             refused(&dated(&["2026-10-04", "2026-01-01", "2026-10-04"])),
-            "pricing table: revisions: two entries dated 2026-10-04"
+            "pricing table: revisions: two entries in force from the same instant, 2026-10-04 and 2026-10-04"
         );
     }
 
-    /// jiff's parser reads other forms of a date too, so the shape is held to `YYYY-MM-DD` before the calendar.
+    /// A date reads 00:00 UTC of its day, so an instant at that second takes effect with it, whichever form each
+    /// entry wrote.
     #[test]
-    fn a_date_not_in_yyyy_mm_dd_form_is_refused_naming_its_index_and_its_text() {
-        for (date, written) in [
+    fn a_date_and_an_instant_at_its_midnight_are_refused_as_two_entries_on_one_instant() {
+        assert_eq!(
+            refused(&dated(&["2026-03-01", "2026-03-01T00:00:00Z"])),
+            "pricing table: revisions: two entries in force from the same instant, 2026-03-01 and 2026-03-01T00:00:00Z"
+        );
+    }
+
+    /// An instant takes effect at its second, so the hours of its day before it still price at the entry before.
+    #[test]
+    fn an_entry_written_as_an_instant_is_in_force_from_that_second() {
+        let revisions =
+            PriceRevisions::from_yaml(&dated(&["2026-02-01", "2026-03-01T18:30:00Z"]), "file")
+                .unwrap();
+        assert_eq!(
+            revisions.in_force(1_772_389_799_000).effective,
+            "2026-02-01"
+        );
+        assert_eq!(
+            revisions.in_force(1_772_389_800_000).effective,
+            "2026-03-01T18:30:00Z"
+        );
+    }
+
+    /// jiff's parsers read other forms of a date and an instant too, so the shape is held to the two forms before the
+    /// calendar.
+    #[test]
+    fn a_text_in_neither_form_is_refused_naming_its_index_and_its_text() {
+        for (text, written) in [
             ("20261004", "\"20261004\""),
             ("2026-1-4", "2026-1-4"),
             ("2026-10-04T00:00", "2026-10-04T00:00"),
+            ("2026-10-04t00:00:00z", "2026-10-04t00:00:00z"),
             ("October", "October"),
             ("2026-02-30", "2026-02-30"),
         ] {
-            assert_eq!(effective_instant(date), None, "{date}");
+            assert_eq!(effective_instant(text), None, "{text}");
             assert_eq!(
                 refused(&dated(&["2026-01-01", written])),
                 format!(
-                    "pricing table: revisions[1].effective: a date in YYYY-MM-DD form, not `{date}`"
+                    "pricing table: revisions[1].effective: a date in YYYY-MM-DD form or an instant in \
+                     YYYY-MM-DDTHH:MM:SSZ form, not `{text}`"
                 ),
             );
         }

@@ -12528,9 +12528,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           {
-            "effective": "2026-11-09",
+            "effective": "2026-11-09T18:30:00Z",
             "content": {
-              "effective": "2026-11-09",
+              "effective": "2026-11-09T18:30:00Z",
               "models": {
                 "claude-fable-5-2": {
                   "input": 8,
@@ -22940,9 +22940,9 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           },
           {
-            "effective": "2026-11-09",
+            "effective": "2026-11-09T18:30:00Z",
             "content": {
-              "effective": "2026-11-09",
+              "effective": "2026-11-09T18:30:00Z",
               "models": {
                 "claude-fable-5-2": {
                   "input": 8,
@@ -23393,7 +23393,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "source": "shipped",
           "effective": "2026-10-08",
           "revisions": 3,
-          "next": "2026-11-09"
+          "next": "2026-11-09T18:30:00Z"
         },
         "subscription_costs": {
           "path": null,

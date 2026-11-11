@@ -132,7 +132,10 @@ fn main() -> anyhow::Result<()> {
             // revision and nothing else says so.
             let shipped = phoebis_ledger::CostRevisions::shipped();
             let newest = &shipped.latest().effective;
-            let newer = if tables.source == "file" && *newest > tables.revisions.latest().effective
+            // The instants decide, since by text an instant at `00:00:00Z` reads newer than the date of its day, which
+            // names the same instant.
+            let newer = if tables.source == "file"
+                && shipped.instants().last() > tables.revisions.instants().last()
             {
                 format!(", the built-in model has a newer revision {newest}")
             } else {
@@ -450,8 +453,8 @@ fn print(text: &str) {
 }
 
 /// One table's `check-config` line: the file read, or the built-in list with the configured path it found nothing
-/// at, so an operator can tell a missing override from a misspelled one. `next` names the first entry dated after the
-/// one in force, `None` when none is, so the operator knows what a restart changes.
+/// at, so an operator can tell a missing override from a misspelled one. `next` names the first entry taking effect
+/// after the one in force, `None` when none is, so the operator knows what a restart changes.
 fn table_line(
     source: &str,
     revisions: usize,

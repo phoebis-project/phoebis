@@ -200,7 +200,8 @@ impl From<&phoebis_keepalive::KeepaliveSummary> for SessionKeepalive {
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionCosts {
-    /// The date of the price revision in force.
+    /// The `effective` of the price revision in force as its file wrote it, a date `YYYY-MM-DD` or an instant
+    /// `YYYY-MM-DDTHH:MM:SSZ`.
     pub effective: String,
     pub models: Vec<CostRow>,
 }

@@ -98,14 +98,15 @@ With both price files left uninstalled, `check-config` names the shipped revisio
 `account tiers` count names the tiers the base rows size, leaving out a tier only a regime sizes:
 
 ```text
-api prices: built in (3 revisions, in force 2026-11-09, 12 models), since /etc/phoebis/api_prices.yaml was not found
+api prices: built in (3 revisions, in force 2026-11-09T18:30:00Z, 12 models), since /etc/phoebis/api_prices.yaml was not found
 subscription costs: built in (1 revision, in force 2026-10-05, 11 weighted models, 3 account tiers, 1 regime: interactive), since /etc/phoebis/subscription_costs.yaml was not found
 ```
 
-While a file holds an entry dated after the one in force, its line adds `next {date}` after the date in force, the date
-of the first such entry. Every price read from that date on takes the entry, and the burn rates the router builds at
-start take it at the first start after the date. The start's `ledger opened` log line names the same for the price
-table: `pricing`, the date in force, `pricing_revisions`, the count, and `pricing_next`, the held date, recorded only
+While a file holds an entry that takes effect after the one in force, its line adds `next {date}` after the entry in
+force, the `effective` of the first such entry as its file wrote it. Every price read from the instant it takes effect
+on, 00:00 UTC of a date or the second of an instant, takes the entry, and the burn rates the router builds at start
+take it at the first start after that instant. The start's `ledger opened` log line names the same for the price
+table: `pricing`, the entry in force, `pricing_revisions`, the count, and `pricing_next`, the held entry, recorded only
 while an entry is held.
 
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints `warning: environment
@@ -245,12 +246,12 @@ against a production file while the router is up. It prints, in order:
 9. `api prices: {path} (file, {n} revisions, in force {date}, {n} models)` when `stats.api_prices_path` names a file
    that exists, `api prices: built in ({n} revisions, in force {date}, {n} models), since {path} was not found` when it
    names a file that is missing, or `api prices: built in ({n} revisions, in force {date}, {n} models)` when the key is
-   set to `null`, with `revision` for a list of one entry and `, next {date}` after the date in force while an entry is
-   held
+   set to `null`, with `revision` for a list of one entry and `, next {date}` after the entry in force while an entry
+   is held
 10. `subscription costs: {path} (file, {n} revisions, in force {date}, {n} weighted models, {n} account tiers, {n}
     regimes: {names})`, in the same three shapes, from `stats.subscription_costs_path`, where the regime clause reads
-    `, no regime` for a model without the map and `, 1 regime: {name}` for one, and a file whose newest entry is dated
-    before the built-in model's adds `, the built-in model has a newer revision {date}`
+    `, no regime` for a model without the map and `, 1 regime: {name}` for one, and a file whose newest entry takes
+    effect before the built-in model's newest adds `, the built-in model has a newer revision {date}`
 11. `retention {n days|forever}, rollups {n days|forever}`
 12. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
 13. the registry line, `registry at {config.storage.path} does not exist yet, and the first start creates it` when the
@@ -678,8 +679,8 @@ model:
 | Rule | File | Refused for |
 | --- | --- | --- |
 | `revisions: at least one entry` | both | an empty list |
-| ``revisions[{i}].effective: a date in YYYY-MM-DD form, not `{date}` `` | both | an entry's date in another form |
-| `revisions: two entries dated {date}` | both | two entries with one date |
+| ``revisions[{i}].effective: a date in YYYY-MM-DD form or an instant in YYYY-MM-DDTHH:MM:SSZ form, not `{text}` `` | both | an entry's `effective` in neither form |
+| `revisions: two entries in force from the same instant, {first} and {second}` | both | two entries on one instant, whichever form each wrote |
 | ``unknown field `{key}`, expected `revisions` at line {n} column {n}`` | both | a top-level key other than `revisions` |
 | `revision {date}: model {model}, cell {cell} must be a finite non-negative number` | price table | a cell of that entry that is negative, `NaN` or infinite |
 | `revision {date}: model {model}, cell long_context.over must be a whole number of tokens above zero` | price table | a threshold of that entry at zero |
