@@ -262,7 +262,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
 }
 
 #[test]
-fn a_registry_before_the_sixth_step_keeps_its_pin_unended_and_loses_the_agent_saved_under_the_released_cause(
+fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_calls_count_and_loses_the_agent_saved_under_the_released_cause(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
@@ -284,7 +284,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pin_unended_and_loses_the_agent_sa
         burn_fast: PinBurn::default(),
         burn_unmetered: PinBurn::default(),
         burn_unmetered_model: None,
-        last_input_tokens: 0,
+        last_input_tokens: 40_000,
         last_refresh_at: 1,
         cache_ttl_ms: 300_000,
         shed: None,
@@ -296,6 +296,13 @@ fn a_registry_before_the_sixth_step_keeps_its_pin_unended_and_loses_the_agent_sa
         auxiliary_only: false,
         effort: None,
         ended: false,
+    };
+    // A classifier call renewed this pin last under the fifth step, so its count is that call's prompt, which the
+    // seed below flags.
+    let judged = PinRow {
+        agent_id: "helper".into(),
+        last_input_tokens: 1_200,
+        ..saved.clone()
     };
     let agent = |agent_id: &str, payload: &str| KeepaliveAgentRow {
         key_id: "k".into(),
@@ -318,6 +325,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pin_unended_and_loses_the_agent_sa
             .insert_account(&account("a", AccountKind::Oauth))
             .unwrap();
         store.upsert_pin(&saved).unwrap();
+        store.upsert_pin(&judged).unwrap();
         // The worker's payload carries the word in its state and its wasted probe, as the companion's release
         // writes them, so a delete keyed on the word anywhere in the payload would take it as well.
         store
@@ -333,17 +341,26 @@ fn a_registry_before_the_sixth_step_keeps_its_pin_unended_and_loses_the_agent_sa
             })
             .unwrap();
     }
-    // No build writes the cause any more, so the seed writes it into main's payload as an older build saved it.
+    // No build writes the cause or the flag any more, so the seed writes the cause into main's payload and the flag
+    // onto the helper's pin as an older build saved them.
     at_version_five(
         &path,
         "UPDATE keepalive_agents SET payload = json_set(payload, '$.reason', 'released') \
-         WHERE agent_id = 'main';",
+         WHERE agent_id = 'main'; \
+         UPDATE pins SET last_classifier = 1 WHERE agent_id = 'helper';",
     );
     let store = Store::open(&path, &key).unwrap();
     assert_eq!(
         store.load_routing().unwrap().pins,
-        vec![saved],
-        "the step adds the mark at its default to the pin it finds"
+        vec![
+            PinRow {
+                last_input_tokens: 0,
+                ..judged
+            },
+            saved
+        ],
+        "the step adds the mark at its default to each pin it finds, keeps the count of the pin with the flag clear \
+         and zeroes the classifier call's count"
     );
     assert_eq!(
         store
