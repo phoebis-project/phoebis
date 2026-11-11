@@ -85,6 +85,13 @@ fn rename(
     })
 }
 
+/// The sixth step taken back on a file this build wrote, which every case that takes a file back past version 6
+/// runs before its own statements.
+fn sixth_step_taken_back(conn: &rusqlite::Connection) {
+    conn.execute_batch("ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;")
+        .unwrap();
+}
+
 #[test]
 fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_their_defaults_and_no_all_time_counters(
 ) {
@@ -144,6 +151,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
     // The file as a version-1 build left it: the steps' columns and tables taken back, the counters' table in the
     // baseline's shape with an all-time row, and the marker at 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    sixth_step_taken_back(&conn);
     conn.execute_batch(
         "ALTER TABLE pins DROP COLUMN auxiliary_only;
          ALTER TABLE pins DROP COLUMN effort;
@@ -210,6 +218,7 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
     // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column gone and
     // the marker at 4, as the file's other migration test takes a file back to version 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    sixth_step_taken_back(&conn);
     conn.execute_batch(
         "ALTER TABLE api_keys ADD COLUMN keepalive_opt_out INTEGER NOT NULL DEFAULT 0;
          UPDATE api_keys SET keepalive_opt_out = 1 WHERE id = 'quiet';
@@ -634,7 +643,6 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
         "a row never written answers every field None"
     );
     let row = SubscriptionRow {
-        plan: Some("max".into()),
         tier: Some("default_claude_max_5x".into()),
         since: Some(1_773_482_400_000),
         trial_ends_at: None,
@@ -674,7 +682,6 @@ fn the_canceled_flag_and_its_end_are_the_operators_alone_and_survive_a_profile_w
             "a",
             "{}",
             &SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some("default_claude_max_5x".into()),
                 since: Some(1_000),
                 trial_ends_at: None,
@@ -2621,7 +2628,6 @@ fn paired_row(id: &str, account_uuid: &str) -> AccountRow {
 fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_write() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     let subscription = SubscriptionRow {
-        plan: Some("max".into()),
         tier: Some("default_claude_max_5x".into()),
         since: Some(1_773_482_400_000),
         trial_ends_at: None,

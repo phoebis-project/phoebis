@@ -11351,7 +11351,6 @@ async fn a_member_entering_its_wind_down_before_its_trial_ends_names_the_trial_a
             "a",
             "{}",
             &SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some("default_claude_max_5x".into()),
                 since: Some(1),
                 trial_ends_at: Some(end),

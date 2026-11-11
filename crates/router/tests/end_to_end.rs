@@ -3087,7 +3087,6 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         "a",
         "{}",
         &phoebis_store::SubscriptionRow {
-            plan: None,
             tier: Some("default_claude_max_20x".into()),
             since: None,
             trial_ends_at: None,

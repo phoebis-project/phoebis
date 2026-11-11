@@ -2000,7 +2000,6 @@ fn store_max_20x(store: &Store, id: &str) {
             id,
             r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
             &SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some("default_claude_max_20x".into()),
                 ..SubscriptionRow::default()
             },

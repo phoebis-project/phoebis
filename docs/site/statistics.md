@@ -564,6 +564,8 @@ Each family means what its entry below says, the text a `# HELP` line would hold
 - `phoebis_attention` reads 1 while an attention condition holds on its subject and 0 once it clears
   ([Conditions and gauges](#conditions-and-gauges)).
 - `phoebis_bus_dropped_total` counts the events the in-process event bus dropped for a subscriber whose queue was full.
+  A subscriber that reads one kind of event counts that kind alone: the attention reader's series counts lost
+  completions.
 - `phoebis_bus_subscriber_panics_total` counts the panics that stopped a subscriber of the event bus.
 - `phoebis_keepalive_agents` reads the agents the keepalive engine retains, one series per state.
 - `phoebis_keepalive_probes_total` counts the keepalive engine's probes, by outcome and pool.

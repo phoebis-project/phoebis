@@ -4805,7 +4805,6 @@ fn set_tier(store: &Store, account: &str, tier: &str) {
             account,
             r#"{"account":{"uuid":"u","email":"a@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some(tier.into()),
                 since: Some(NOW),
                 trial_ends_at: None,

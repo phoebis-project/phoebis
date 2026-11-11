@@ -216,12 +216,11 @@ pub(crate) fn write_profile_in(
     at: i64,
 ) -> Result<usize, StoreError> {
     Ok(conn.execute(
-        "UPDATE accounts SET profile_json = ?2, subscription_plan = ?3, subscription_tier = ?4, \
-         subscription_since = ?5, trial_ends_at = ?6, updated_at = ?7 WHERE id = ?1",
+        "UPDATE accounts SET profile_json = ?2, subscription_tier = ?3, subscription_since = ?4, \
+         trial_ends_at = ?5, updated_at = ?6 WHERE id = ?1",
         params![
             id,
             json,
-            subscription.plan,
             subscription.tier,
             subscription.since,
             subscription.trial_ends_at,
@@ -668,8 +667,6 @@ fn term_of(
     })
 }
 
-// Beside the read that resolves the term's plan, since the rule reads that word: `SubscriptionRow.plan` holds the
-// document's own `max` or `pro` flag word and cannot tell a free, Team or usage-based organization apart.
 impl SubscriptionTerm {
     /// The stored tier where the resolved plan is one the cost table may price (`pro`, `max_5x`, `max_20x`, `max`,
     /// `team` or `enterprise`), the table's capacity rows judging the word, `None` for `free`, `usage_based` and an
@@ -695,7 +692,6 @@ pub struct AccountExtras {
 /// where the document lacks it. The dates are epoch milliseconds parsed from the RFC 3339 strings it sends.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SubscriptionRow {
-    pub plan: Option<String>,
     pub tier: Option<String>,
     pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,

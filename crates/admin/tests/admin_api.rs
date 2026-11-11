@@ -5151,7 +5151,6 @@ fn name_the_tier(store: &phoebis_store::Store, account: &str, tier: &str) {
             account,
             "{}",
             &phoebis_store::SubscriptionRow {
-                plan: None,
                 tier: Some(tier.into()),
                 since: None,
                 trial_ends_at: None,

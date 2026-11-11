@@ -182,7 +182,9 @@ impl fmt::Display for CooldownScope {
 
 impl FromSql for CooldownScope {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        CooldownScope::parse(value.as_str()?).ok_or(FromSqlError::InvalidType)
+        let word = value.as_str()?;
+        CooldownScope::parse(word)
+            .ok_or_else(|| FromSqlError::Other(format!("unknown word {word:?}").into()))
     }
 }
 

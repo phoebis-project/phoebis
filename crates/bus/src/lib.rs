@@ -4,6 +4,7 @@
 
 mod event;
 
+use std::cmp;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -56,7 +57,15 @@ struct Slot {
     name: &'static str,
     delivery: Delivery,
     events: mpsc::Sender<Event>,
+    /// `None` for a slot offered every event.
+    reads: Option<fn(&Event) -> bool>,
     stats: Arc<SubscriberStats>,
+}
+
+impl Slot {
+    fn reads(&self, event: &Event) -> bool {
+        self.reads.is_none_or(|reads| reads(event))
+    }
 }
 
 #[derive(Clone, Default)]
@@ -73,6 +82,26 @@ impl Bus {
     }
 
     pub fn subscribe(&self, name: &'static str, delivery: Delivery) -> Subscriber {
+        self.attach(name, delivery, None)
+    }
+
+    /// A slot offered the events `reads` answers true for and no other, so its queue and its drop count hold the kinds
+    /// its consumer reads.
+    pub fn subscribe_filtered(
+        &self,
+        name: &'static str,
+        delivery: Delivery,
+        reads: fn(&Event) -> bool,
+    ) -> Subscriber {
+        self.attach(name, delivery, Some(reads))
+    }
+
+    fn attach(
+        &self,
+        name: &'static str,
+        delivery: Delivery,
+        reads: Option<fn(&Event) -> bool>,
+    ) -> Subscriber {
         let (events_tx, events) = mpsc::channel(QUEUE_DEPTH);
         let stats = Arc::new(SubscriberStats::default());
         self.counters
@@ -83,6 +112,7 @@ impl Bus {
             name,
             delivery,
             events: events_tx,
+            reads,
             stats: stats.clone(),
         });
         Subscriber {
@@ -92,20 +122,23 @@ impl Bus {
         }
     }
 
-    /// Never waits: a clone for each live subscriber but the last, which takes the event itself, `try_send`, and a
-    /// drop counted where the queue is full.
+    /// Never waits: a clone for each live subscriber that reads the event but the last such, which takes the event
+    /// itself, `try_send`, and a drop counted where the queue is full. A slot that does not read the event is neither
+    /// offered it nor found closed by it.
     pub fn publish(&self, event: Event) {
         let mut slots = self.slots.lock().expect(LOCK_POISONED);
-        let mut left = slots.len();
+        let Some(last) = slots.iter().rposition(|slot| slot.reads(&event)) else {
+            return;
+        };
         let mut event = Some(event);
+        let mut at = 0;
         slots.retain(|slot| {
-            left -= 1;
-            let copy = if left == 0 {
-                event.take()
-            } else {
-                event.clone()
+            let copy = copy_for(slot, at, last, &mut event);
+            at += 1;
+            let Some(copy) = copy else {
+                return true;
             };
-            let open = offer(slot, copy.expect(EVENT_TAKEN));
+            let open = offer(slot, copy);
             if !open {
                 tracing::debug!(subscriber = slot.name, "a bus subscriber went away");
             }
@@ -124,19 +157,18 @@ impl Bus {
     pub async fn publish_fact(&self, event: Event) {
         // Cloned out of the lock, so no await holds it.
         let slots: Vec<Slot> = self.slots.lock().expect(LOCK_POISONED).clone();
-        let last = slots.len().saturating_sub(1);
+        let Some(last) = slots.iter().rposition(|slot| slot.reads(&event)) else {
+            return;
+        };
         let mut event = Some(event);
         let mut closed = Vec::new();
-        for (index, slot) in slots.into_iter().enumerate() {
-            let copy = if index == last {
-                event.take()
-            } else {
-                event.clone()
+        for (at, slot) in slots.iter().enumerate() {
+            let Some(copy) = copy_for(slot, at, last, &mut event) else {
+                continue;
             };
-            let copy = copy.expect(EVENT_TAKEN);
             let gone = match slot.delivery {
                 Delivery::Durable => slot.events.send(copy).await.is_err(),
-                Delivery::BestEffort => !offer(&slot, copy),
+                Delivery::BestEffort => !offer(slot, copy),
             };
             if gone {
                 closed.push(slot.name);
@@ -148,6 +180,20 @@ impl Bus {
                 .expect(LOCK_POISONED)
                 .retain(|slot| !closed.contains(&slot.name));
         }
+    }
+}
+
+/// The event as the slot at `at` receives it, where `last` is the last slot that reads it: a clone for an earlier
+/// reader, the event itself at `last`, nothing for a slot that skips it. The caller finds `last` before any copy is
+/// made, so the event moves into a reader and never into a slot that skips it while a later reader waits.
+fn copy_for(slot: &Slot, at: usize, last: usize, event: &mut Option<Event>) -> Option<Event> {
+    match at.cmp(&last) {
+        cmp::Ordering::Less => {
+            let held = event.as_ref().expect(EVENT_TAKEN);
+            slot.reads(held).then(|| held.clone())
+        }
+        cmp::Ordering::Equal => event.take(),
+        cmp::Ordering::Greater => None,
     }
 }
 
@@ -235,6 +281,107 @@ mod tests {
             body: Bytes::from_static(b"x"),
             phase: None,
         }
+    }
+
+    fn completed(id: &str) -> Event {
+        Event::RequestComplete(RequestComplete {
+            request_id: id.into(),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            origin: Origin::Client,
+            kind: Kind::Inference,
+            attempt: 1,
+            account_id: Some("a".into()),
+            outcome: Outcome::Succeeded,
+            status: 200,
+            usage: None,
+            response: ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: None,
+            client_drift: None,
+            client_contract: None,
+            client_version: None,
+            response_bytes: None,
+            response_chunks: None,
+            held: None,
+            diagnostics: None,
+            message_id: None,
+            skipped_events: 0,
+            interruption: None,
+            classifier: None,
+            finished_at: 2,
+        })
+    }
+
+    fn completions(event: &Event) -> bool {
+        matches!(event, Event::RequestComplete(_))
+    }
+
+    fn drained(subscriber: &mut Subscriber) -> Vec<String> {
+        std::iter::from_fn(|| subscriber.events.try_recv().ok())
+            .map(|event| event.request_id().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn each_slot_receives_what_it_reads_on_both_paths_with_filtered_slots_between_and_behind_unfiltered_ones(
+    ) {
+        let bus = Bus::new();
+        let mut slots = [
+            bus.subscribe("first", Delivery::Durable),
+            bus.subscribe_filtered("second", Delivery::Durable, completions),
+            bus.subscribe("third", Delivery::Durable),
+            bus.subscribe_filtered("fourth", Delivery::Durable, completions),
+        ];
+        bus.publish(observed("observed_publish"));
+        bus.publish_fact(observed("observed_fact")).await;
+        bus.publish(completed("complete_publish"));
+        bus.publish_fact(completed("complete_fact")).await;
+        assert_eq!(
+            slots.iter_mut().map(drained).collect::<Vec<_>>(),
+            [
+                vec![
+                    "observed_publish",
+                    "observed_fact",
+                    "complete_publish",
+                    "complete_fact"
+                ],
+                vec!["complete_publish", "complete_fact"],
+                vec![
+                    "observed_publish",
+                    "observed_fact",
+                    "complete_publish",
+                    "complete_fact"
+                ],
+                vec!["complete_publish", "complete_fact"],
+            ],
+            "an unfiltered slot takes every event and a slot filtered to completions takes those alone"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_completion_behind_more_chunks_than_the_queue_holds_reaches_a_slot_filtered_to_completions_with_no_drop(
+    ) {
+        let bus = Bus::new();
+        // Best-effort as the attention arm's slot, and nobody reads it while the chunks arrive.
+        let mut attention = bus.subscribe_filtered("attention", Delivery::BestEffort, completions);
+        for index in 0..=QUEUE_DEPTH as u32 {
+            bus.publish(Event::ResponseChunk(chunk("r1", index)));
+        }
+        bus.publish_fact(completed("r1")).await;
+        let first = attention
+            .events
+            .try_recv()
+            .expect("the slot holds an event");
+        assert_eq!(
+            (
+                attention.stats.dropped.load(Ordering::SeqCst),
+                matches!(first, Event::RequestComplete(_))
+            ),
+            (0, true),
+            "no chunk reached the slot, so none was dropped and the completion found room"
+        );
     }
 
     #[tokio::test]

@@ -508,7 +508,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "business",
         r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","has_extra_usage_enabled":true,"plan_display_name":"Ultra","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
         &SubscriptionRow {
-            plan: Some("max".into()),
             tier: Some("default_claude_max_20x".into()),
             since: Some(1_773_482_400_000),
             trial_ends_at: None,
@@ -552,7 +551,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "usage-seat",
         r#"{"account":{"uuid":"s","email":"seat@example.invalid","display_name":"Seat"},"organization":{"uuid":"e","name":"Enterprise Org","organization_type":"claude_enterprise","rate_limit_tier":"default_claude_zero","seat_tier":"enterprise_usage_based","has_extra_usage_enabled":true}}"#,
         &SubscriptionRow {
-            plan: None,
             tier: Some("default_claude_zero".into()),
             since: None,
             trial_ends_at: None,
@@ -595,7 +593,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "free-org",
         r#"{"account":{"uuid":"f","email":"free@example.invalid","display_name":"Free"},"organization":{"uuid":"g","name":"Free Org","organization_type":"claude_free","billing_type":"free","rate_limit_tier":"default_claude_ai","has_extra_usage_enabled":false}}"#,
         &SubscriptionRow {
-            plan: None,
             tier: Some("default_claude_ai".into()),
             since: None,
             trial_ends_at: None,

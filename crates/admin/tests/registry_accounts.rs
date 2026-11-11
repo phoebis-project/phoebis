@@ -1024,7 +1024,6 @@ async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
         "business",
         r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","has_extra_usage_enabled":true,"subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
         &SubscriptionRow {
-            plan: Some("max".into()),
             tier: Some("default_claude_max_5x".into()),
             since: Some(1_773_482_400_000),
             trial_ends_at: Some(1_790_899_200_000),
@@ -1544,7 +1543,6 @@ async fn a_canceled_account_stores_the_end_it_was_saved_with_and_answers_it_back
             "business",
             r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some("default_claude_max_5x".into()),
                 since: Some(1_000_000),
                 trial_ends_at: None,
@@ -2419,7 +2417,6 @@ async fn the_account_view_warns_on_a_tier_it_cannot_read_and_answers_as_if_no_su
             "business",
             r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz"}}"#,
             &phoebis_store::SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some("default_claude_max_5x".into()),
                 since: None,
                 trial_ends_at: None,

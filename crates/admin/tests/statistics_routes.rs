@@ -1650,7 +1650,6 @@ async fn set_max_20x(parts: &common::Full) {
             "business",
             r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
-                plan: Some("max".into()),
                 tier: Some("default_claude_max_20x".into()),
                 since: Some(1_000_000),
                 trial_ends_at: None,
