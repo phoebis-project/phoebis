@@ -1,18 +1,16 @@
 //! A row's counts priced in one call: the dollars at the price revision in force at the row's instant, the shares of
 //! the account tier's windows and the Pro-week figure at the cost revision in force then. One function answers
 //! every figure so the native rule (a plan row in the equivalent, a billed row in dollars) is written once by the
-//! caller and never recomputed from the account tier the registry holds now. The probe rows' fallback to the dearest
-//! listed cells sits inside it too: a probe that consumed quota must never read as free, and a reader filling the
-//! dollars in after the call would be the recomputation this function exists to prevent.
+//! caller and never recomputed from the account tier the registry holds now.
 
-use phoebis_bus::{Classifier, Kind};
+use phoebis_bus::Classifier;
 use phoebis_routing::{plan_windows, PinUsage, SEVEN_DAY};
 
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, price_equivalent, price_shares, Funding,
     PlanTables, WindowShares,
 };
-use crate::pricing::{split_of, Band, PriceRevisions, PriceTable, Speed};
+use crate::pricing::{Band, PriceRevisions, PriceTable, Speed};
 use crate::record::{AttemptRecord, RequestRecord};
 use crate::rollup::CostSplit;
 
@@ -26,19 +24,16 @@ pub(crate) fn is_free_classifier(classifier: Option<&str>) -> bool {
     classifier == Some(Classifier::Client.as_str())
 }
 
-/// What prices a row: its model, the cells its speed and band select, who paid, the rollup's `kind` word, the account
-/// tier the row carries (`None` for an api_key account, a profile not yet read, or the rollup's `-`), the entrypoint
-/// whose regime prices its shares and the instant that picks the revision and the threshold. `band_at` is the instant
-/// the peak band is read at where a reader has a completion (an attempt's), else `at` (a rollup row's hour).
+/// What prices a row: its model, the cells its speed and band select, who paid, the account tier the row carries
+/// (`None` for an api_key account, a profile not yet read, or the rollup's `-`), the entrypoint whose regime prices
+/// its shares and the instant that picks the revision and the threshold. `band_at` is the instant the peak band is
+/// read at where a reader has a completion (an attempt's), else `at` (a rollup row's hour).
 #[derive(Clone, Copy, Debug)]
 pub struct RowKey<'a> {
     pub model: &'a str,
     pub speed: Speed,
     pub band: Band,
     pub funding: Funding,
-    /// `probe` for a keepalive probe's row, `inference` otherwise: a probe row on a model the revision does not list
-    /// prices at the revision's `dearest_cells`, since a probe that consumed quota must never read as free.
-    pub kind: &'a str,
     pub tier: Option<&'a str>,
     /// The request's entrypoint from its `client` label, `None` the base regime.
     pub entrypoint: Option<&'a str>,
@@ -51,19 +46,18 @@ pub struct RowKey<'a> {
     pub now: i64,
 }
 
-impl RowKey<'_> {
+impl<'a> RowKey<'a> {
     /// The key one attempt of `request` prices under at `now`: the attempt's tier, funding, speed and band, the
-    /// request's `canonical_model`, kind, entrypoint and classifier word. `table` is the price revision in force at
+    /// request's `canonical_model`, entrypoint and classifier word. `table` is the price revision in force at
     /// `request.received_at`.
-    pub fn of_attempt<'a>(
+    pub fn of_attempt(
         request: &'a RequestRecord,
         attempt: &'a AttemptRecord,
         table: &PriceTable,
         now: i64,
-    ) -> RowKey<'a> {
+    ) -> Self {
         AttemptFacts {
             model: &request.canonical_model,
-            kind: &request.kind,
             client: request.client.as_deref(),
             classifier: request.classifier.as_deref(),
             received_at: request.received_at,
@@ -84,7 +78,6 @@ impl RowKey<'_> {
 /// priced attempt was read from, so both readers key an attempt by the one rule in `key`.
 pub(crate) struct AttemptFacts<'a> {
     pub model: &'a str,
-    pub kind: &'a str,
     /// The request's `client` label, `None` on a row from before the column.
     pub client: Option<&'a str>,
     pub classifier: Option<&'a str>,
@@ -109,7 +102,6 @@ impl<'a> AttemptFacts<'a> {
             speed: Speed::of(self.speed),
             band: table.band_of(self.model, self.usage.prompt_tokens()),
             funding: self.funding,
-            kind: self.kind,
             tier: self.tier,
             entrypoint: self.client.and_then(entrypoint_of_client),
             classifier: is_free_classifier(self.classifier),
@@ -124,8 +116,7 @@ impl<'a> AttemptFacts<'a> {
 /// written once by the caller and never recomputed from the account tier the registry holds now.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Priced {
-    /// The price revision in force at `at` over the five counts at the selected cells, `None` for a model it lacks,
-    /// except a probe row, which prices such a model at that revision's `dearest_cells`.
+    /// The price revision in force at `at` over the five counts at the selected cells, `None` for a model it lacks.
     pub usd: Option<CostSplit>,
     /// The shares of the account tier's windows for `Funding::Plan` with an account tier the cost revision sizes,
     /// else `None`.
@@ -158,7 +149,7 @@ impl Priced {
     }
 }
 
-/// Every figure for one row, the probe rows' dearest-cell fallback inside it.
+/// Every figure for one row.
 pub fn price_row(
     prices: &PriceRevisions,
     costs: &PlanTables,
@@ -237,19 +228,16 @@ pub(crate) fn price_equivalent_at(
     )
 }
 
-/// `price_row`'s dollars alone: the counts at the price revision in force at the row's instant, a probe row on a model
-/// that revision lacks at its dearest listed cells. The `/v1/usage` sums read these and no other figure.
+/// `price_row`'s dollars alone: the counts at the price revision in force at the row's instant, `None` for a
+/// model that revision lacks. The `/v1/usage` sums read these and no other figure.
 pub(crate) fn price_usd(
     prices: &PriceRevisions,
     key: &RowKey<'_>,
     counts: PinUsage,
 ) -> Option<CostSplit> {
-    let table = prices.in_force(key.at);
-    table
+    prices
+        .in_force(key.at)
         .estimate_banded(key.model, key.speed, key.band, counts)
-        .or_else(|| {
-            (key.kind == Kind::Probe.as_str()).then(|| split_of(counts, &table.dearest_cells()))
-        })
 }
 
 #[cfg(test)]
@@ -289,7 +277,6 @@ mod tests {
             speed: Speed::Standard,
             band: Band::Standard,
             funding: Funding::Plan,
-            kind: "inference",
             tier: Some(MAX_20X),
             entrypoint: None,
             classifier: false,
@@ -663,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells() {
+    fn a_row_on_a_model_the_revision_lacks_reads_no_dollars() {
         let counts = PinUsage {
             input: 1_000,
             cache_read: 2_000,
@@ -671,42 +658,16 @@ mod tests {
             write_1h: 400,
             output: 50,
         };
-        let probe = RowKey {
-            model: "claude-mystery-9",
-            kind: "probe",
-            ..plan_row()
-        };
-        // The test table's dearest standard cells are Opus 5.5's: 10 input, 1 cache read, 12.5 and 20 for the two
-        // writes and 50 output per million in January, each doubled in February.
-        for (at, [input_usd, cache_read_usd, cache_write_usd, output_usd]) in [
-            (JANUARY_2026, [0.01, 0.002, 0.01175, 0.0025]),
-            (FEBRUARY_2026, [0.02, 0.004, 0.0235, 0.005]),
-        ] {
-            let priced = price(&RowKey { at, ..probe }, counts);
-            let usd = priced
-                .usd
-                .as_ref()
-                .expect("a probe row prices at the fallback");
-            assert!(
-                close(Some(usd.input_usd), input_usd)
-                    && close(Some(usd.cache_read_usd), cache_read_usd)
-                    && close(Some(usd.cache_write_usd), cache_write_usd)
-                    && close(Some(usd.output_usd), output_usd),
-                "{at}: {usd:?}"
-            );
-            assert_eq!(
-                priced.equivalent, None,
-                "a model without a weight prices no Pro-week figure: {priced:?}"
-            );
-            let inference = price(
+        for at in [JANUARY_2026, FEBRUARY_2026] {
+            let priced = price(
                 &RowKey {
+                    model: "claude-mystery-9",
                     at,
-                    kind: "inference",
-                    ..probe
+                    ..plan_row()
                 },
                 counts,
             );
-            assert_eq!(inference.usd, None, "{at}");
+            assert_eq!(priced.usd, None, "{at}");
         }
     }
 

@@ -2382,11 +2382,10 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
 }
 
-/// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it:
-/// a probe row on a model the revision lacks takes its dearest-cell dollars inside `price_row`. Its reader,
-/// `shared_figures`, reads its `usd` and `equivalent` and not its `shares`, since the shares a route answers come from
-/// `ShareSums::add` where the read's groups each hold one account's rows. So the key carries no tier, as
-/// `price_group`'s does, and `price_row` prices no share window.
+/// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it.
+/// Its reader, `shared_figures`, reads its `usd` and `equivalent` and not its `shares`, since the shares a route
+/// answers come from `ShareSums::add` where the read's groups each hold one account's rows. So the key carries no
+/// tier, as `price_group`'s does, and `price_row` prices no share window.
 pub(crate) fn priced(
     row: &RollupRow,
     prices: &PriceRevisions,
@@ -4887,8 +4886,6 @@ pub(crate) struct PricedAttempt {
     account_kind: String,
     usage_based: bool,
     overage_in_use: Option<bool>,
-    /// `requests.kind`, so a probe's attempt prices as a probe row does.
-    kind: String,
     /// `attempts.tier`, the account tier the attempt recorded at its landing.
     tier: Option<String>,
     /// `requests.client`, `None` on a row from before the column existed.
@@ -4898,8 +4895,8 @@ pub(crate) struct PricedAttempt {
 }
 
 impl PricedAttempt {
-    // Offsets past `first` of the request columns `SessionSpendRow::read` takes as well, for a request no attempt
-    // joined, so both readers name one place.
+    // Offsets past `first` of the request columns `SessionSpendRow::read` takes, for a request no attempt joined, so
+    // both readers of `PRICED_ATTEMPT_COLUMNS` name one place.
     const MODEL: usize = 1;
     const RECEIVED_AT: usize = 7;
     const KIND: usize = 11;
@@ -4924,7 +4921,6 @@ impl PricedAttempt {
             speed: row.get(first + 8)?,
             account_kind: row.get(first + 9)?,
             overage_in_use: row.get(first + 10)?,
-            kind: row.get(first + Self::KIND)?,
             tier: row.get(first + 12)?,
             client: row.get(first + 13)?,
             classifier: row.get(first + 14)?,
@@ -4938,7 +4934,6 @@ impl PricedAttempt {
         let speed = self.speed.as_deref();
         let facts = AttemptFacts {
             model: &self.canonical_model,
-            kind: &self.kind,
             client: self.client.as_deref(),
             classifier: self.classifier.as_deref(),
             received_at: self.received_at,

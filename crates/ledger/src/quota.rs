@@ -12,8 +12,7 @@ use phoebis_oauth::{
 };
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
-    credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use tokio::task::JoinSet;
@@ -105,15 +104,7 @@ pub(crate) fn samples_from_unified(
 ) -> (Vec<QuotaSampleRecord>, Option<ExtraUsageSampleRecord>) {
     let bucket = bucket_of(observed_at);
     let mut quota = Vec::new();
-    // The head names its windows `5h`, `7d` and `7d_oi`, and the table spells them as a poll files them, so a head
-    // and a poll of one bucket write one row per window. The `7d_oi` week is the Fable week, as every other reader of
-    // the header takes it.
-    let windows = [
-        (FIVE_HOUR, &unified.five_hour),
-        (SEVEN_DAY, &unified.seven_day),
-        (SEVEN_DAY_FABLE, &unified.seven_day_oi),
-    ];
-    for (window, reading) in windows {
+    for (window, reading) in unified.windows() {
         if reading.utilization.is_some() || reading.reset.is_some() {
             quota.push(QuotaSampleRecord {
                 account_id: account_id.into(),

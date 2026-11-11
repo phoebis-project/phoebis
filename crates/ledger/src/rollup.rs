@@ -392,16 +392,14 @@ impl RollupRow {
         }
     }
 
-    /// The price key of the row: its own model, speed, band, funding and `kind`, its tier (`None` under
-    /// `UNATTRIBUTED`), the entrypoint its `client` names, and its hour as the instant, with no completion, read at
-    /// `now`.
+    /// The price key of the row: its own model, speed, band and funding, its tier (`None` under `UNATTRIBUTED`), the
+    /// entrypoint its `client` names, and its hour as the instant, with no completion, read at `now`.
     pub(crate) fn price_key(&self, now: i64) -> RowKey<'_> {
         RowKey {
             model: &self.canonical_model,
             speed: Speed::of(Some(self.speed.as_str())),
             band: Band::of_rollup(&self.band),
             funding: self.funding_kind(),
-            kind: self.kind.as_str(),
             tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
             entrypoint: entrypoint_of_client(&self.client),
             classifier: is_free_classifier(Some(self.classifier.as_str())),

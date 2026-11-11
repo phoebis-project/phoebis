@@ -158,6 +158,16 @@ impl UnifiedHeaders {
             || self.five_hour.utilization.is_some()
             || self.seven_day.utilization.is_some()
     }
+
+    /// The head's three windows under the ids a poll files them by. The head names them `5h`, `7d` and `7d_oi`,
+    /// and the `7d_oi` week is the Fable week, the one model week a head reports.
+    pub fn windows(&self) -> [(&'static str, &UnifiedWindow); 3] {
+        [
+            (FIVE_HOUR, &self.five_hour),
+            (SEVEN_DAY, &self.seven_day),
+            (SEVEN_DAY_FABLE, &self.seven_day_oi),
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -288,15 +298,10 @@ pub fn head_sample(
     match kind {
         AccountKind::Oauth => {
             if let Some(unified) = &reading.unified {
-                for (name, window) in [
-                    (FIVE_HOUR, &unified.five_hour),
-                    (SEVEN_DAY, &unified.seven_day),
-                    // The head carries the Fable week under the overage-included name, the one model week a
-                    // head reports here. Whether a second model week ever arrives by head is for the first live
-                    // run to read. Unlike the shared windows, it carries no status of its own to gate on, only
-                    // the utilization.
-                    (SEVEN_DAY_FABLE, &unified.seven_day_oi),
-                ] {
+                for (name, window) in unified.windows() {
+                    // Whether a second model week ever arrives by head is for the first live run to read. Unlike
+                    // the shared windows, the Fable week carries no status of its own to gate on, only the
+                    // utilization.
                     if let Some(utilization) = window.utilization {
                         sample.windows.insert(
                             name.to_string(),

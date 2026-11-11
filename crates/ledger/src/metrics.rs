@@ -356,17 +356,16 @@ impl Metrics {
                     }
                 }
                 Family::AccountRatelimitUtilization => {
-                    // An account added later under a deleted id has had no clean poll of its own, so the deleted
-                    // account's set must not bound its heads.
+                    // An account added later under a deleted id has had no clean poll and no reading of its own, so
+                    // the deleted account's set must not bound its heads and its last readings must not scrape
+                    // under it.
                     inner
                         .polled_windows
                         .retain(|account, _| gauges.live_accounts.contains(account));
+                    inner
+                        .utilization
+                        .retain(|(account, _), _| gauges.live_accounts.contains(account));
                     for ((account, window), value) in &inner.utilization {
-                        // A deleted account's last reading would otherwise scrape forever. The registry is
-                        // the list of accounts that exist.
-                        if !gauges.live_accounts.contains(account) {
-                            continue;
-                        }
                         let _ = writeln!(
                             out,
                             "{name}{{account=\"{}\",window=\"{}\"}} {}",

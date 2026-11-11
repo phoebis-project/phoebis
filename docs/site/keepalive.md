@@ -435,16 +435,15 @@ prices the saving from the two counts at read time, and the console reads it: th
 rate less the read it paid. The credit row is keyed under the client of the request it credits, so the saving prices
 under that client's regime as the request's own row does. It also files under the account tier of the request's own row,
 the one the router's snapshot holds when the credit is booked. A probe's cost is its own request row's counts priced
-when read, at the dearest listed cells for a model the price table does not know, and `probe_migrated` counts a probe
-that landed on a different account than the recipe's. `wasted_probes` counts the probes settled wasted by one of the
-reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted probes' five token counts sit on the
-hourly rollup beside their count, priced the same way. Each wasted probe files beside its own cost row, in the hour the
-relay received the probe and under the funding that row took (the kind of the account that served it, whether that
-account is a usage-based seat, the speed its answer reported and whether its answer reported overage in use), so the
-wasted part of the probes' figure, read in the chosen week, is the plan-funded probes' waste against their own cost.
-`probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a
-cooldown already held the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its
-ledger caught up and sent again, outside the failed probes since no account answered it.
+when read, and `probe_migrated` counts a probe that landed on a different account than the recipe's. `wasted_probes`
+counts the probes settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The
+wasted probes' five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe
+files beside its own cost row, in the hour the relay received the probe and under the funding that row took (the kind of
+the account that served it, whether that account is a usage-based seat, the speed its answer reported and whether its
+answer reported overage in use), so the wasted part of the probes' figure, read in the chosen week, is the plan-funded
+probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than
+sending, for example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
+`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
 `plan_ok`, `skipped`, where `plan_ok` counts the answered probes a subscription window paid for, inside `ok`), and per

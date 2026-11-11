@@ -241,9 +241,8 @@ both sets. The band an attempt's prompt selects is a dimension of the hourly rol
 each band at its own cells.
 
 A keepalive probe's own row is priced from the table in dollars, whatever the account's funding, at the cells the
-answer's reported speed selects. A probe on a model the table does not list prices at the dearest standard cell of each
-type the table carries, never at zero, in the request log as in the rollups, so a probe that consumed quota never reads
-as free. On a model priced by prompt length, a probe prices at the set its own prompt selects.
+answer's reported speed selects, and reads no dollars on a model the table does not list, as the model's other requests
+do. On a model priced by prompt length, a probe prices at the set its own prompt selects.
 
 A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
 entry's date, the model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the

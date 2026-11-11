@@ -284,8 +284,8 @@ pub(crate) struct Attempt {
     /// The serving account's class at the attempt, false on a row from before the router recorded it.
     pub usage_based: bool,
     /// The attempt's dollars at the cells its own prompt selects on the API price revision in force at its request's
-    /// receipt, priced when it is read. Null for an attempt without usage. A probe on a model the revision lacks
-    /// prices at the dearest listed standard cell of each type, and any other attempt on such a model reads null.
+    /// receipt, priced when it is read. Null for an attempt without usage and for an attempt on a model the revision
+    /// lacks, a probe's among them.
     pub estimated_usd: Option<f64>,
     /// Null, or the trace behind the attempt's placement: `strategy`, `tier` (the three-element array `[group,
     /// priority, overage_bit]` the choice was made in, null for a renewed pin), `renewed`, `moved` (the reason a

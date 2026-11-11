@@ -4045,7 +4045,6 @@ fn a_classifier_row_reads_zero_in_the_session_series_and_its_price_names_the_rea
             speed: Speed::of(Some(row.speed.as_str())),
             band: phoebis_ledger::Band::of_rollup(&row.band),
             funding: phoebis_ledger::Funding::of_rollup(&row.funding),
-            kind: &row.kind,
             tier: Some(&row.tier),
             entrypoint: phoebis_ledger::entrypoint_of_client(&row.client),
             classifier: row.classifier == "client",
@@ -7991,11 +7990,10 @@ fn a_session_of_refusals_alone_is_still_listed() {
     );
 }
 
-/// A probe on a model the revision does not list consumed quota all the same, so its row prices its counts and its
-/// wasted counts at the dearest listed cell of each type of the entry in force, while an inference row on the same
-/// model stays unpriced.
+/// A probe on a model the revision does not list reads no dollars for its counts or its wasted counts, as an inference
+/// row on the same model reads none.
 #[test]
-fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells() {
+fn a_probe_row_on_a_model_the_revision_lacks_reads_no_dollars() {
     let prices = phoebis_ledger::test_tables::api_prices();
     let hour = hour_of(phoebis_ledger::test_tables::JANUARY_2026);
     let row = |kind: &str| RollupRow {
@@ -8033,13 +8031,10 @@ fn a_probe_row_on_a_model_the_revision_lacks_prices_at_the_dearest_listed_cells(
         &COSTS,
         NOW,
     );
-    let cells = prices.in_force(hour * 1_000).dearest_cells();
-    let (input, output) = (cells.input / 1_000_000.0, cells.output / 1_000_000.0);
-    assert!(input > 0.0 && output > 0.0);
     let probe = groups.iter().find(|g| g.key == "probe").unwrap();
-    assert!(
-        (probe.probe_cost_usd - (1_000.0 * input + 100.0 * output)).abs() < 1e-12
-            && (probe.wasted_probe_usd - 500.0 * input).abs() < 1e-12,
+    assert_eq!(
+        (probe.probe_cost_usd, probe.wasted_probe_usd),
+        (0.0, 0.0),
         "{probe:?}"
     );
     let inference = groups.iter().find(|g| g.key == "inference").unwrap();

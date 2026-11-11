@@ -764,6 +764,51 @@ fn a_deleted_accounts_newest_clean_poll_bounds_no_head_of_a_later_account_under_
 }
 
 #[test]
+fn an_account_added_under_a_deleted_id_scrapes_none_of_the_deleted_accounts_readings() {
+    let sample = |account: &str, window: &str, utilization: f64| QuotaSampleRecord {
+        account_id: account.into(),
+        window: window.into(),
+        utilization: Some(utilization),
+        ..Default::default()
+    };
+    let metrics = Metrics::new();
+    metrics.observe_samples(
+        &[sample("a", "seven_day", 0.2), sample("b", "seven_day", 0.1)],
+        true,
+    );
+    metrics.render(
+        &RoutingGauges {
+            live_accounts: BTreeSet::from(["b".to_string()]),
+            ..RoutingGauges::default()
+        },
+        &[],
+        0,
+    );
+    metrics.observe_samples(
+        &[sample("a", "five_hour", 0.6), sample("b", "five_hour", 0.7)],
+        false,
+    );
+    let text = metrics.render(
+        &RoutingGauges {
+            live_accounts: BTreeSet::from(["a".to_string(), "b".to_string()]),
+            ..RoutingGauges::default()
+        },
+        &[],
+        0,
+    );
+    assert!(
+        !text.contains(r#"phoebis_account_ratelimit_utilization{account="a",window="seven_day"}"#),
+        "the deleted account's last 7-day reading scrapes under no account added later under its id: {text}"
+    );
+    assert!(
+        text.contains(
+            r#"phoebis_account_ratelimit_utilization{account="b",window="seven_day"} 0.1"#
+        ),
+        "a live account keeps its readings: {text}"
+    );
+}
+
+#[test]
 fn a_polls_samples_lacking_five_hour_remove_its_series_and_a_heads_remove_nothing() {
     let sample = |window: &str, utilization: f64| QuotaSampleRecord {
         account_id: "a".into(),

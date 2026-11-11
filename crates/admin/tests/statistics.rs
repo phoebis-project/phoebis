@@ -1127,8 +1127,7 @@ async fn the_request_log_answers_each_window_of_a_tier_the_cost_model_does_not_s
     );
 }
 
-/// The test's own price list, its dearest standard cells spread over its two rows: the input on Opus 5.5 at 10 and the
-/// output on Sonnet 5.5 at 50 per million.
+/// The test's own price list, whose two rows leave the probe's model unlisted.
 const PROBE_PRICES: &str = "\
 revisions:
   - effective: 2026-01-01
@@ -1137,11 +1136,9 @@ revisions:
       claude-sonnet-5-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 50}
 ";
 
-/// A keepalive probe on a model the price list lacks consumed quota all the same: 1,000 input tokens at 10 and 100
-/// output tokens at 50 per million read $0.015.
+/// A keepalive probe on a model the price list lacks reads no dollars, as the model's other requests do.
 #[tokio::test]
-async fn the_request_log_prices_a_probe_on_a_model_the_price_list_lacks_at_the_dearest_listed_cells(
-) {
+async fn the_request_log_reads_no_dollars_for_a_probe_on_a_model_the_price_list_lacks() {
     let parts = common::admin_parts_full_priced(
         phoebis_ledger::PriceRevisions::from_yaml(PROBE_PRICES, "test")
             .expect("the price list parses"),
@@ -1167,10 +1164,9 @@ async fn the_request_log_prices_a_probe_on_a_model_the_price_list_lacks_at_the_d
     let shown = json(get(&parts.app, "/admin/requests/r-probe", Some(&cookie)).await).await
         ["request"]
         .clone();
-    assert!(
-        shown["attempts"][0]["estimated_usd"]
-            .as_f64()
-            .is_some_and(|usd| (usd - 0.015).abs() < 1e-12),
+    assert_eq!(
+        shown["attempts"][0].get("estimated_usd"),
+        Some(&serde_json::Value::Null),
         "{shown}"
     );
 }

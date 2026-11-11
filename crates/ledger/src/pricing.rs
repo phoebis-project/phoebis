@@ -383,9 +383,8 @@ impl PriceTable {
         Some(split_of(counts, cells(row, speed, band)))
     }
 
-    /// The dearest listed standard cell of each type, per million tokens: the cells a probe row on a model the
-    /// revision does not list prices at, since a zero would read a probe that consumed quota as free, and through
-    /// `rate_table` the routing's fallback rates.
+    /// The dearest listed standard cell of each type, per million tokens: the fallback rates `rate_table` hands the
+    /// routing for a model the revision does not list.
     pub fn dearest_cells(&self) -> ModelPrice {
         let dearest = |of: fn(&ModelPrice) -> f64| {
             self.models
@@ -474,8 +473,7 @@ impl PriceTable {
     }
 }
 
-/// The four figures of five counts at the per-million cells `p`, the two writes summed. `estimate_banded` and the
-/// probe rows' fallback both split here, so a probe on a model the table lacks prices as a listed model's counts do.
+/// The four figures of five counts at the per-million cells `p`, the two writes summed.
 pub(crate) fn split_of(counts: phoebis_routing::PinUsage, p: &ModelPrice) -> CostSplit {
     let at = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
     CostSplit {

@@ -631,7 +631,7 @@ poll of one bucket write one Fable row and the gauge holds one Fable series ([Qu
 samples](statistics.md#quota-samples)). The request log orders by its arrival, attempts, duration, time to first byte,
 tokens in or tokens out, either way, and the routing log by its time either way, each page continuing at its last row
 ([API reference](api-reference.md)). The request log prices each attempt through the one price rule the fold uses, so a
-probe on a model the price list lacks reads dollars at the dearest listed standard cells where it read null
+probe on a model the price list lacks reads no dollars, as the model's other requests do
 ([Pricing](statistics.md#pricing)). An account's pause and resume land in the routing log as a registry change carrying
 the `enabled` pair, and a registry change names the account or the key it changed, so the routing log filtered by the
 account or the key lists it ([Routing log](console.md#routing-log)).
