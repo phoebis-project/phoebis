@@ -15,7 +15,7 @@ use phoebis_attention::{
     Attention, AttentionError, Condition, KeepaliveCap, Kind, Link, PairFacts, Subject,
     SubjectKind, BACKOFF_ATTENTION_AFTER_MS,
 };
-use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
+use phoebis_bus::{Kind as RequestKind, Origin, Outcome, QUEUE_DEPTH};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
@@ -994,6 +994,43 @@ async fn the_bus_arm_reads_the_request_outcomes_off_the_bus() {
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+}
+
+#[tokio::test]
+async fn a_completion_behind_more_events_than_the_arms_queue_holds_reaches_the_arm_with_no_drop() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // No await between the publishes, so the arm cannot drain its queue while the burst arrives.
+    for _ in 0..=QUEUE_DEPTH {
+        rig.bus.publish(observed("burst", Some("desktop"), "main"));
+    }
+    rig.bus
+        .publish(complete("r1", Outcome::Exhausted, None, None, NOW));
+    let stats = rig
+        .bus
+        .stats()
+        .into_iter()
+        .find(|(name, _)| *name == "attention")
+        .unwrap()
+        .1;
+    let observed_it = tokio::time::timeout(Duration::from_secs(5), async {
+        while !find(&read(&attention, NOW), Kind::PoolExhausted, "main")
+            .unwrap()
+            .holds
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .is_ok();
+    assert_eq!(
+        (
+            observed_it,
+            stats.dropped.load(std::sync::atomic::Ordering::SeqCst)
+        ),
+        (true, 0),
+        "the burst never reached the arm's queue, so the completion found room and the arm read it"
+    );
 }
 
 /// One scrape of the metrics listener over the reader's gauge source: its status and its text.

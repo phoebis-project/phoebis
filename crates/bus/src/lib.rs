@@ -71,7 +71,8 @@ impl Slot {
 #[derive(Clone, Default)]
 pub struct Bus {
     /// Every subscriber that ever attached, kept apart from the slots: a consumer that died is the one an
-    /// operator most needs to see, and its slot leaves the publish path the moment its queue closes.
+    /// operator most needs to see, and its slot leaves the publish path at the next event it is offered after its
+    /// queue closes.
     counters: Arc<Mutex<Vec<NamedStats>>>,
     slots: Arc<Mutex<Vec<Slot>>>,
 }
