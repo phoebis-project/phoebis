@@ -209,9 +209,10 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
     if (opening !== null || readingResets || !refocus.current) return;
     refocus.current = false;
     // The dialog's own close ran in a child's effect before this one, so its restore cannot undo this focus, and a
-    // control the operator moved to meanwhile keeps it.
+    // control the operator moved to meanwhile keeps it. A browser that focuses no button on a click puts the focus on
+    // the card, which is no such control.
     const active = document.activeElement;
-    const unmoved = active === null || active === document.body || active.closest('dialog:not([open])') !== null;
+    const unmoved = active === null || active === document.body || active.closest('dialog:not([open])') !== null || active === resetButton.current?.closest('.qcard');
     if (unmoved && resetButton.current !== null && !resetButton.current.disabled) resetButton.current.focus();
   }, [opening, readingResets]);
   const openResets = async () => {

@@ -5038,7 +5038,9 @@ async function quotaCardHeights(theme) {
  * card's Use reset opens the first page, the first row's Use reset the confirmation, and Back returns to the first page
  * with the focus on that row's button, since the page change unmounts the Back that held it. After the close through
  * Cancel the focus stands on the card's Use reset again, where a keyboard operator left off, not at the top of the
- * page. The walk sends no claim and ends at rest, so the view's shot draws the cards with no focus ring and no hover.
+ * page. It stands there too after a second opening from a click that left the focus on the card, as a browser that
+ * focuses no button on a click does, where the dialog hands the focus back to the card. The walk sends no claim and
+ * ends at rest, so the view's shot draws the cards with no focus ring and no hover.
  */
 async function quotaResetDialog(theme) {
   const say = (what) => failures.push(`${theme} /quota reset dialog: ${what}`);
@@ -5070,6 +5072,21 @@ async function quotaResetDialog(theme) {
     });
     measurements.push(`${theme} /quota reset dialog focus after close ${JSON.stringify(closed)}`);
     if (closed?.use !== true || closed.card !== 'primary') say(`the close left the focus on ${JSON.stringify(closed)}, not on primary's Use reset`);
+    // Chromium focuses a button on a real click, so the walk draws the path of a browser that focuses none and leaves
+    // the focus on the card: the focus set on the card by script, and a dispatched click, which moves no focus.
+    await card.evaluate((el) => el.focus());
+    await card.locator('.qcard__use').dispatchEvent('click');
+    await advance(600);
+    await dialog.waitFor({ state: 'visible', timeout: 5_000 });
+    await dialog.locator('[data-reset-cancel]').click();
+    await dialog.waitFor({ state: 'detached', timeout: 5_000 });
+    await advance(CLOCK_STEP_MS);
+    const fromCard = await page.evaluate(() => {
+      const active = document.activeElement;
+      return active instanceof HTMLElement ? { card: active.closest('.qcard')?.querySelector('.qcard__name')?.textContent?.trim() ?? null, tag: active.tagName.toLowerCase(), text: (active.textContent ?? '').trim().slice(0, 40), use: active.classList.contains('qcard__use') } : null;
+    });
+    measurements.push(`${theme} /quota reset dialog focus after close from the card ${JSON.stringify(fromCard)}`);
+    if (fromCard?.use !== true || fromCard.card !== 'primary') say(`the close after a click that left the focus on the card left it on ${JSON.stringify(fromCard)}, not on primary's Use reset`);
   } catch (e) {
     say(`the walk from primary's Use reset through Back stopped: ${e.message.split('\n')[0]}`);
   }
