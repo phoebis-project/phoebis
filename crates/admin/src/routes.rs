@@ -1046,7 +1046,8 @@ async fn claim_and_record(
     // The send that waits for room: a claim that left always leaves its row.
     let event = phoebis_ledger::limit_reset_claimed(&row.id, accounts::ACTOR, &grant, &claim);
     state.ledger.record_request(event).await;
-    if claim.outcome != ClaimOutcome::Refused {
+    // A slot or a refresh can flag the plan ended while the claim is out, and such an account gets no usage request.
+    if claim.outcome != ClaimOutcome::Refused && !QuotaPoll::plan_paused(&state.store, &row.id) {
         let poll = state.quota_poll();
         // A joined fetch can carry a reading from before the claim, so one sent before the answer is read again. A
         // reading with an error keeps the instant of the clean one before it, so it is not asked again, and the next
@@ -1078,7 +1079,7 @@ async fn claim_and_record(
             }
         }
         // Only this read shows whether an open claim spent the reset, so one that failed, or that the plan's pause
-        // kept back after the poll above, stays due for the next slot that reads the account.
+        // kept back, stays due for the next slot that reads the account.
         if !landed {
             state.usage.mark_limit_resets_due(&row);
         }
@@ -1126,7 +1127,8 @@ fn unanswered(detail: &str) -> Response {
 }
 
 /// The route's answer to a claim that left: 200 for a parsed answer, with the account's member read now, and a 502
-/// otherwise. Nothing read here after the request left turns the outcome into another answer.
+/// otherwise, its code from the claim's outcome and its words from the status or the error. Nothing read here after
+/// the request left turns the outcome into another answer.
 async fn claim_response(
     state: &AdminState,
     row: &AccountRow,
@@ -1139,13 +1141,14 @@ async fn claim_response(
             Some(status) => format!("HTTP {status}"),
             None => claim.error.unwrap_or_default(),
         };
-        return match claim.status {
-            Some(401 | 403 | 429) => failure_with_code(
+        // Every reader of a claim takes its class from the service's outcome, so no status rule is repeated here.
+        return match claim.outcome {
+            ClaimOutcome::Refused => failure_with_code(
                 StatusCode::BAD_GATEWAY,
                 "limit_reset_refused",
                 &format!("upstream: {detail}"),
             ),
-            _ => unanswered(&detail),
+            ClaimOutcome::Unsettled | ClaimOutcome::Used => unanswered(&detail),
         };
     };
     let mut uses = reset_uses_of(state, &row.id).await;
