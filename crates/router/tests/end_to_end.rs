@@ -4660,8 +4660,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         },
     )
     .await;
-    // The exhaustion below pins nothing, so this session of its own holds a pin of the pool's member when the pass
-    // reads `/pools`, where the members' pins must sum to more than 0.
+    // The pass reads `/pools`, where the members' pins must sum to more than 0, so this session gives that read a pin
+    // of its own, apart from `e2e-ui`'s keepalive story and the exhaustion below, which pins nothing.
     let pinned = fixture_request(&client, proxy_port, &secret, "e2e-pinned")
         .send()
         .await

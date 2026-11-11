@@ -99,8 +99,9 @@ fn sixth_step_taken_back(conn: &rusqlite::Connection) {
 }
 
 /// A registry as a version-5 build left it: the build's own file with the sixth step taken back through
-/// `sixth_step_taken_back`, where each of the step's statements keeps its take-back, the version row set to 5, then
-/// `seed`, the rows a case stands at version 5 before its reopen.
+/// `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case stands at version 5 before its
+/// reopen. Each of the step's column changes keeps its take-back. Its delete needs none, since a row it removed is
+/// seeded here, after the take-back.
 fn at_version_five(path: &std::path::Path, seed: &str) {
     let conn = rusqlite::Connection::open(path).unwrap();
     sixth_step_taken_back(&conn);

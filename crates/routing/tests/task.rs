@@ -1788,12 +1788,17 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
     assert!(
         matches!(fourth.result, SelectResult::Selected(ref s) if s.account.id == sel.account.id)
     );
-    assert!(handle
-        .pins()
-        .await
-        .unwrap()
-        .iter()
-        .any(|p| p.session_id == "s2" && p.account_id == sel.account.id));
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|p| (p.session_id.as_str(), p.account_id.as_str()))
+            .collect::<Vec<_>>(),
+        [("s2", sel.account.id.as_str())],
+        "s1's pin left with its deleted account"
+    );
 }
 
 #[tokio::test]
