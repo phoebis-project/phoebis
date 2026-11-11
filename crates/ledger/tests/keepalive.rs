@@ -7,8 +7,9 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
-    breakdown, fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, PriceRevisions, Record, RequestRecord, RollupSelect, Speed, UNATTRIBUTED,
+    breakdown, fold_keepalive, hour_of, read_expired_between_turns, read_rollups, AttemptRecord,
+    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, PriceRevisions, Record, RequestRecord,
+    RollupSelect, Speed, UNATTRIBUTED,
 };
 use phoebis_store::AccountKind;
 
@@ -706,5 +707,65 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
             .map(|r| r.funding.as_str()),
         Some("fast"),
         "a fast credit draws usage credits, so a subscription member's budget reads it as metered"
+    );
+}
+
+/// Lands a request of pool `main` under `key` whose serving attempt read nothing back under the miss reason `none`,
+/// which its rollup row counts as an expiry between turns.
+fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
+    db.insert_request_at(
+        &RequestRecord {
+            id: id.into(),
+            received_at,
+            key_id: Some(key.into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::ApiKey,
+            started_at: received_at,
+            outcome: "succeeded".into(),
+            cache_read_tokens: Some(0),
+            cache_miss_reason: Some("none".into()),
+            ..Default::default()
+        }],
+        None,
+        &PriceRevisions::shipped(),
+    )
+    .unwrap();
+}
+
+/// The attention item's `expired` is a pool and key's count over the day, which a pair's rows of several hours carry
+/// between them.
+#[test]
+fn the_expiry_read_sums_a_pool_and_keys_rows_across_hours() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let at = 1_700_000_000_000;
+    land_expiry(&db, "r1", at, "desktop");
+    land_expiry(&db, "r2", at + 3_600_000, "desktop");
+    land_expiry(&db, "r3", at, "laptop");
+    let read = db
+        .read_blocking(|c| read_expired_between_turns(c, hour_of(at), hour_of(at) + 7_200))
+        .unwrap();
+    let by_pair: BTreeMap<(String, String), u64> = read
+        .into_iter()
+        .map(|row| ((row.pool_id, row.key_id), row.expired))
+        .collect();
+    assert_eq!(
+        by_pair,
+        BTreeMap::from([
+            (("main".to_string(), "desktop".to_string()), 2),
+            (("main".to_string(), "laptop".to_string()), 1),
+        ]),
+        "the pair with an expiry in each of two hours counts both"
     );
 }
