@@ -197,12 +197,12 @@
       },
       {
         "at": 1791709200000,
-        "requests": 0,
+        "requests": 1,
         "failed": 0,
-        "tokens": 0,
-        "cost_usd": 0.0,
+        "tokens": 1800,
+        "cost_usd": 0.017625000000000002,
         "billed_usd": 0.0,
-        "equivalent": 0.0
+        "equivalent": 0.00015666666666666666
       },
       {
         "at": 1791712800000,

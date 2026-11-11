@@ -1,10 +1,11 @@
 //! A row's counts priced in one call: the dollars at the price revision in force at the row's instant, the shares of
-//! the account tier's windows and the Pro-week figure at the cost revision in force then. One function answers
-//! every figure so the native rule (a plan row in the equivalent, a billed row in dollars) is written once by the
-//! caller and never recomputed from the account tier the registry holds now.
+//! the account tier's windows and the Pro-week figure at the cost revision in force then. One function answers these
+//! figures so the native rule (a plan row in the equivalent, a billed row in dollars) is written once by the caller
+//! and never recomputed from the account tier the registry holds now. The burn series' Pro 5-hour figure, which no
+//! reader of that function asks for, is priced beside it under the same key.
 
 use phoebis_bus::Classifier;
-use phoebis_routing::{plan_windows, PinUsage, SEVEN_DAY};
+use phoebis_routing::{plan_windows, PinUsage, FIVE_HOUR, SEVEN_DAY};
 
 use crate::plan::{
     entrypoint_of_client, free_equivalent, free_shares, price_equivalent, price_shares, Funding,
@@ -220,6 +221,28 @@ pub(crate) fn price_equivalent_at(
     }
     price_equivalent(
         costs,
+        key.entrypoint,
+        key.model,
+        counts,
+        key.at,
+        key.band_at.unwrap_or(key.at),
+        key.now,
+    )
+}
+
+/// A plan key's Pro share of the 5-hour window over `counts`, beside the Pro-week figure `price_equivalent_at` answers:
+/// zero by rule for a free classifier call, which reads no weight, else the cost model's share of the anchor tier's
+/// 5-hour window under the key's regime, its band read at `band_at`, else at `at`.
+pub(crate) fn price_five_hour_at(
+    costs: &PlanTables,
+    key: &RowKey<'_>,
+    counts: PinUsage,
+) -> Option<f64> {
+    if key.classifier {
+        return Some(free_equivalent());
+    }
+    costs.equivalent_at(
+        FIVE_HOUR,
         key.entrypoint,
         key.model,
         counts,

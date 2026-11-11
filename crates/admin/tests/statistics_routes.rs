@@ -1762,6 +1762,14 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         close_to(&fable["model_week_share"], week_share) && close_to(&fable["equivalent"], fable_figure),
         "a Fable row reads its model week's share beside the shared windows and its figure: {fable}"
     );
+    // The Opus row's 4,000,000 units over the Pro tier's 5 on the 5-hour window, off the band on the rig's Sunday. Opus
+    // 5.5 draws no Fable week, so its bucket's Fable week figure reads a zero, while the Fable bucket's is its figure.
+    assert!(
+        close_to(&point["five_hour_equivalent"], 800_000.0)
+            && close_to(&point["fable_equivalent"], 0.0)
+            && close_to(&fable["fable_equivalent"], fable_figure),
+        "the Opus bucket's 5-hour figure and Fable week figure, then the Fable bucket's: {point} {fable}"
+    );
     let mut keys: Vec<&str> = point
         .as_object()
         .unwrap()
@@ -1775,9 +1783,12 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             "at",
             "cached_tokens",
             "equivalent",
+            "fable_equivalent",
+            "five_hour_equivalent",
             "five_hour_share",
             "group",
             "model_week_share",
+            "plan_usd",
             "seven_day_share",
             "tokens",
             "uncached_tokens",
@@ -1785,7 +1796,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             "unpriced",
             "usd"
         ],
-        "a point carries its shares, its Pro-week figure and the figure's unpriced flag: {point}"
+        "a point carries its shares, its dollars on both sides, its three Pro figures and the unpriced flag: {point}"
     );
     parts.ledger.record(Record::Request {
         request: RequestRecord {

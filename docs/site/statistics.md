@@ -270,8 +270,13 @@ A fast answer draws no plan window: it adds nothing to the share, the prediction
 round ranks by. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which
 Spend per minute charts under every grouping. An answer in overage reads the same in the burn figures, a zero share in
 Plan per hour and its dollars in `usd`. A usage-based seat's answer counts its dollars in `usd` with no share, and the
-burn route names its group's unit `usd`, as an API-key account's. A member's budget counts a fast answer at the fast
-cells, a subscription member's as an API-key member's.
+burn route names its group's unit `usd`, as an API-key account's. The burn route's `usd` keeps the billed answers'
+dollars alone, and `plan_usd` holds the list dollars of the plan-funded answers at the price list in force at each one.
+Beside the Pro-week figure, each point answers `five_hour_equivalent`, the plan-funded answers as a share of the Pro
+5-hour window under each request's own regime and band, and `fable_equivalent`, the Pro-week figure of the plan-funded
+answers on models that draw the Fable week, both under every grouping. A client classifier call on a tier the cost
+model does not size leaves a bucket's window shares as its other rows set them. A member's budget counts a fast answer
+at the fast cells, a subscription member's as an API-key member's.
 
 A client classifier call reads a zero share, a zero Pro-week figure and zero dollars on a subscription account, with the
 reason `client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat. A

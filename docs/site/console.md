@@ -1025,12 +1025,13 @@ to it, which its head says while another filter is set. The card "Plan per hour"
 a share of the chosen week") draws one line per group, named as the breakdown names it, the requests with no classifier
 call listed as `none` under the classifier grouping, each the group's subscription traffic per hour in the chosen week,
 the legend's figure in full on hover and its highest hour on the entry's hover, led by the whole session id under the
-session grouping. Beside it the cards "5-hour per hour" ("The subscription traffic per hour as a share of the chosen
-tier's 5-hour window, the peak band's factor applied by the hour") and "Fable week per hour" ("The subscription traffic
-per hour as a share of the chosen tier's Fable week") draw the same lines with each bucket's figure scaled to the chosen
-tier's 5-hour window, by the bucket's hour under the band, and to its Fable week, their tooltips carrying no account's
-hint, and each reads unpriced where the cost model holds no 5-hour capacity or no Fable week for the chosen tier, or, on
-the 5-hour card, where the browser does not know the peak band's zone. Under the Ultra week the 5-hour card's note reads
+session grouping. Beside it the card "5-hour per hour" ("The subscription traffic per hour as a share of the chosen
+tier's 5-hour window, the peak band's factor applied by the hour") draws the same lines from the burn route's 5-hour
+figure under every grouping and bucket size, scaled to the chosen tier's 5-hour window by the capacities with no band
+of its own, and reads unpriced where the cost model holds no 5-hour capacity for the chosen tier. The card "Fable week
+per hour" ("The subscription traffic per hour as a share of the chosen tier's Fable week") draws the same lines with
+each bucket's figure scaled to the chosen tier's Fable week, and reads unpriced where the cost model holds no Fable week
+for the chosen tier. The two cards' tooltips carry no account's hint. Under the Ultra week the 5-hour card's note reads
 "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window." A bucket the cost
 model could not price stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a model
 without a weight in the cost model prices no share and draws no point", and an idle bucket reads zero. Where one account
@@ -1040,11 +1041,16 @@ completion. Under that grouping or filter a subscription account charts as a pla
 or the range holds a priced bucket of it, so an account whose range ran on unpriced models alone keeps its line with its
 gaps, and an account the router prices no tier for (a free plan, no tier on file or one the cost model does not hold)
 whose range holds no priced bucket reads "tier unknown", while a usage-based seat draws no line on the card. The three
-plan cards' notes carry a "Cost reference" link that opens the dialog on Tiers and peak band. Spend per minute charts
-the dollars alone, among them a usage-based seat's whole spend and a subscription account's fast-mode and overage
-answers, and the four cards sit two to a row where the grid fits two columns or more. The section closes on Member
-budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its budget
-marked and one the ledger has not reported on reading "not reported".
+plan cards' notes carry a "Cost reference" link that opens the dialog on Tiers and peak band. Under the Unit setting
+"Plan per hour" charts the plan side, the chosen week's share per hour under Native and each group's `plan_usd` per
+hour under All in dollars and Dollar equivalent, and "Spend per minute" charts the billed side, `usd` per minute, under
+Native, All in dollars and Billed dollars, a usage-based seat's whole spend and a subscription account's fast-mode and
+overage answers among it. A card whose side has no figure in a position, "Plan per hour" under Billed dollars and
+"Spend per minute" under Dollar equivalent, keeps its place in the grid and draws one sentence in place of its chart,
+so the two cards together read `usd` plus `plan_usd` under All in dollars, `usd` under Billed dollars and `plan_usd`
+under Dollar equivalent. The four cards sit two to a row where the grid fits two columns or more. The section closes on
+Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member carries, a member at its
+budget marked and one the ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-dark.png#only-dark)

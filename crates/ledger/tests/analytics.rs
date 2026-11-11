@@ -3975,6 +3975,66 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_row
     );
 }
 
+/// A free classifier call spends no window: beside a priced row, one on a tier the cost model does not size and one on
+/// a tier sized on the 5-hour window alone leave the bucket's shares and its 5-hour figure as the priced row set them.
+#[test]
+fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five_hour_figure() {
+    let tables = share_tables();
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        accounts: vec!["a".into()],
+        ..SeriesFilter::default()
+    };
+    let row = |tier: &str, classifier: &str| RollupRow {
+        input_tokens: 1_000,
+        output_tokens: 100,
+        ..RollupRow::key(
+            3_600,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-sonnet-5-5",
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "standard",
+            PLAN_FUNDING,
+            "standard",
+            tier,
+            classifier,
+        )
+    };
+    let points = burn_series_over(
+        &[
+            row("test_tier", NO_CLASS),
+            row("unlisted_tier", "client"),
+            row("narrow_tier", "client"),
+        ],
+        &tables,
+        &PRICES,
+        &filter,
+        NOW,
+    )
+    .unwrap();
+    let point = point_at(&points, 3_600);
+    // 1,000 input and 100 output tokens at weight 1 are 2,000 units, over test_tier's 100 on the 5-hour window and
+    // 1,000 on the week, off the band at 01:00 UTC, and the 5-hour figure divides by the same 100 of the anchor tier.
+    assert_eq!(
+        (
+            point.five_hour_share,
+            point.seven_day_share,
+            point.five_hour_equivalent
+        ),
+        (Some(20.0), Some(2.0), Some(20.0)),
+        "the priced row's shares and 5-hour figure alone: {point:?}"
+    );
+}
+
 /// A classifier call's plan row reads zero shares and a zero figure through its session's series, while a plain row of
 /// the same counts on another account reads its figures there. The row's own price is the one reader that names why
 /// its shares read zero.
@@ -4468,8 +4528,13 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard
         standard.five_hour_share.is_some_and(|share| share > 0.0),
         "{standard:?}"
     );
+    // The plan's list dollars read the cells the row files under, as the breakdown's dollars price a row, so they are
+    // left out of the plan's shares and figures this case reads.
     assert_eq!(
-        point("fast"),
+        phoebis_ledger::BurnPoint {
+            plan_usd: standard.plan_usd,
+            ..point("fast")
+        },
         standard,
         "an asked speed never prices as a served one"
     );
@@ -5373,6 +5438,160 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
         every.model_week_share.is_none()
             && every.equivalent.is_some_and(|got| (got - both).abs() <= 1e-12 * both),
         "a read naming no account answers no week share and the two rows' figure: {every:?} vs {both}"
+    );
+}
+
+/// A plan row of 1,000 Sonnet 5.5 input tokens on account `a` under `tier` in the hour starting at `hour` seconds, its
+/// `client` the label whose entrypoint names its regime.
+fn regime_row(hour: i64, client: &str, tier: &str) -> RollupRow {
+    RollupRow {
+        input_tokens: 1_000,
+        ..RollupRow::key(
+            hour,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-sonnet-5-5",
+            "inference",
+            UNATTRIBUTED,
+            client,
+            "none",
+            NO_CLASS,
+            "standard",
+            PLAN_FUNDING,
+            "standard",
+            tier,
+            "-",
+        )
+    }
+}
+
+/// The 5-hour figure prices each row under its own regime and the band of its hour, over the anchor tier whatever tier
+/// served it: inside the band the base regime's factor of 0.5 doubles a base row's figure, while a desk row divides by
+/// the desk regime's own Pro capacity, twice the base one, at its factor of 1, and reads a quarter of it.
+#[test]
+fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its_hour() {
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    let hour = WEEKDAY_PEAK / 1_000;
+    let filter = SeriesFilter {
+        from: WEEKDAY_PEAK,
+        to: WEEKDAY_PEAK + 2 * 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let rows = [
+        regime_row(hour, UNATTRIBUTED, MAX_20X),
+        regime_row(hour + 3_600, "claude-code/desk", MAX_20X),
+    ];
+    let points = burn_series_over(&rows, &tables, &PRICES, &filter, NOW).unwrap();
+    // 1,000 input tokens at Sonnet 5.5's weight 2 are 2,000 units. The base row divides by Pro's 5 and the band's
+    // 0.5, the desk row by the desk regime's Pro 10 and its factor 1, both rows at 07:00 and 08:00 in Los Angeles.
+    assert_eq!(
+        (
+            point_at(&points, hour).five_hour_equivalent,
+            point_at(&points, hour + 3_600).five_hour_equivalent
+        ),
+        (Some(800.0), Some(200.0)),
+        "each row's 5-hour figure under its own regime: {points:?}"
+    );
+}
+
+/// A bucket's plan rows answer their list dollars in `plan_usd` and its billed rows theirs in `usd`, neither side
+/// counting the other's.
+#[test]
+fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_billed_rows_in_usd() {
+    let prices = priced_table("claude-sonnet-5-5", 1e-6);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let row = |funding: &str, tier: &str, input: u64, output: u64| RollupRow {
+        input_tokens: input,
+        output_tokens: output,
+        ..RollupRow::key(
+            3_600,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-sonnet-5-5",
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "standard",
+            funding,
+            "standard",
+            tier,
+            "-",
+        )
+    };
+    let rows = [
+        row(PLAN_FUNDING, "test_tier", 1_000, 100),
+        row(BILLED_FUNDING, UNATTRIBUTED, 2_000, 0),
+    ];
+    let point = point_at(
+        &burn_series_over(&rows, &share_tables(), &prices, &filter, NOW).unwrap(),
+        3_600,
+    );
+    // A dollar per million tokens of every type: the plan row's 1,100 tokens and the billed row's 2,000.
+    assert!(
+        (point.plan_usd - 0.0011).abs() < 1e-12 && (point.usd - 0.002).abs() < 1e-12,
+        "the plan row's dollars in plan_usd and the billed row's in usd: {point:?}"
+    );
+}
+
+/// The Fable week's figure counts the plan rows on a model that draws the Fable week and a zero for every other row
+/// with tokens, while the Pro-week figure keeps both: a busy bucket without a Fable row reads 0, not idle.
+#[test]
+fn the_fable_week_figure_counts_the_fable_rows_alone_and_a_busy_bucket_without_one_reads_zero() {
+    let filter = SeriesFilter {
+        from: 0,
+        to: 3 * 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let row = |hour: i64, model: &str| RollupRow {
+        input_tokens: 1_000,
+        ..RollupRow::key(
+            hour,
+            "k",
+            0,
+            "p",
+            "a",
+            model,
+            "inference",
+            UNATTRIBUTED,
+            UNATTRIBUTED,
+            "none",
+            NO_CLASS,
+            "standard",
+            PLAN_FUNDING,
+            "standard",
+            "test_tier",
+            "-",
+        )
+    };
+    let rows = [
+        row(3_600, "claude-fable-5-1"),
+        row(3_600, "claude-sonnet-5-5"),
+        row(7_200, "claude-sonnet-5-5"),
+    ];
+    let points = burn_series_over(&rows, &share_tables(), &PRICES, &filter, NOW).unwrap();
+    let figures = |hour: i64| {
+        let point = point_at(&points, hour);
+        (point.fable_equivalent, point.equivalent)
+    };
+    // 1,000 input tokens at Fable 5.1's weight 10 are 10,000 units and at Sonnet 5.5's weight 1 are 1,000, each over
+    // test_tier's 1,000 on the week.
+    assert_eq!(
+        (figures(3_600), figures(7_200)),
+        ((Some(10.0), Some(11.0)), (Some(0.0), Some(1.0))),
+        "the Fable row's figure alone beside both rows' figure, and a zero beside a Sonnet row's: {points:?}"
     );
 }
 

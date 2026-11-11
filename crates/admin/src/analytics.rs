@@ -821,14 +821,19 @@ pub(crate) struct BurnPoint {
     #[schema(example = "window_share")]
     pub unit: Option<String>,
     /// An API key account's estimated cost, and a usage-based seat's. It also carries a subscription account's
-    /// fast-mode and overage spend, which draws usage credits and no window.
+    /// fast-mode and overage spend, which draws usage credits and no window. It keeps the billed rows alone, and a
+    /// plan-funded row's list dollars read in `plan_usd`.
     pub usd: f64,
+    /// The list dollars of the bucket's plan-funded rows at the API price revision in force at each row, 0 for a
+    /// bucket with no plan row. `usd` keeps the billed rows alone.
+    pub plan_usd: f64,
     /// The share of the account's own 5-hour window, band-weighted by the hour the tokens landed in: a fraction of
     /// the window, not a percentage. Null under every grouping but `account` unless the `accounts` filter names
     /// exactly one account, for an API key account, one whose tier is unknown, a bucket with no row the cost model
     /// prices, such as an idle hour, or a bucket holding a row the cost model cannot price (a model without a weight,
-    /// or a tier it has no capacity for on that window), so a partial figure never reads as the bucket's share. Null
-    /// as well where the account's shared window set lacks the window.
+    /// or a tier it has no capacity for on that window, save a client classifier call, which spends no window), so a
+    /// partial figure never reads as the bucket's share. Null as well where the account's shared window set lacks the
+    /// window.
     pub five_hour_share: Option<f64>,
     /// The same tokens over the 7-day window, weighed by the week's own band factor, 1 in the shipped model. Null
     /// in the same cases.
@@ -840,6 +845,16 @@ pub(crate) struct BurnPoint {
     /// billed row adds a zero, so a bucket with tokens and no plan-funded row reads 0. Null for an idle bucket and for
     /// a bucket holding a plan-funded row the cost model cannot price, a model without a weight.
     pub equivalent: Option<f64>,
+    /// The bucket's plan rows as the Pro 5-hour figure: the share of the anchor tier's 5-hour window they spend, each
+    /// row priced under its own regime and the band of its own hour, or of its completion in the session series,
+    /// whatever tier served it, under every grouping and bucket size. A billed row adds a zero. Null where
+    /// `equivalent` reads null and where the cost model sizes no 5-hour window for a row of the bucket.
+    pub five_hour_equivalent: Option<f64>,
+    /// The Pro-week figure of the bucket's plan rows whose model draws the Fable week, under every grouping. A row on
+    /// such a model adds its figure and every other row with tokens a zero, so a bucket with traffic and no such row
+    /// reads 0. Null for an idle bucket and for a bucket holding a Fable-week row the cost model cannot price: null
+    /// beside `tokens` above 0 is the unpriced case.
+    pub fable_equivalent: Option<f64>,
     /// True for a bucket holding a plan-funded row with tokens the cost model could not price, so a null `equivalent`
     /// with the flag false is an idle bucket.
     pub unpriced: bool,
@@ -973,10 +988,13 @@ pub(crate) async fn burn(
                 group: group.clone(),
                 unit: unit.map(String::from),
                 usd: p.usd,
+                plan_usd: p.plan_usd,
                 five_hour_share: p.five_hour_share.filter(|_| !five_hour_lacked),
                 seven_day_share: p.seven_day_share.filter(|_| !seven_day_lacked),
                 model_week_share: p.model_week_share,
                 equivalent: p.equivalent,
+                five_hour_equivalent: p.five_hour_equivalent,
+                fable_equivalent: p.fable_equivalent,
                 unpriced: p.unpriced,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,

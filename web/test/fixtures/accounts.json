@@ -127,9 +127,9 @@
           "priority": 0
         },
         "requests": {
-          "last_24h": 15,
-          "last_7d": 15,
-          "lifetime": 15
+          "last_24h": 16,
+          "last_7d": 16,
+          "lifetime": 16
         },
         "usage": {
           "error": null,

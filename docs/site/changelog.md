@@ -404,8 +404,9 @@ request log carrying the agent, the filter disabled until a session is picked an
 filter, and each auto reload re-reads the first page alone ([Analytics](console.md#analytics)). The Analytics view's
 breakdown tables head a failed read with the table's name ([Analytics](console.md#analytics)). The Analytics view's Burn
 tab draws three plan cards, Plan per hour, 5-hour per hour and Fable week per hour, the subscription traffic per hour in
-the chosen week and the same figure scaled to the chosen tier's 5-hour window and to its Fable week, a bucket the cost
-model could not price staying a gap under a "model unlisted" entry ([Analytics](console.md#analytics)). The Analytics
+the chosen week, the burn route's 5-hour figure scaled to the chosen tier's 5-hour window, and the weekly figure scaled
+to its Fable week, a bucket the cost model could not price staying a gap under a "model unlisted" entry
+([Analytics](console.md#analytics)). The Analytics
 view's Cache warming tab spans its last card across the row where that card would sit alone, as the Burn tab does
 ([Analytics](console.md#analytics)). The Analytics view's group tables order through the bar's Sort control by Name or
 the open tab's columns ([Analytics](console.md#analytics)). The Analytics view's model grouping lists a request refused

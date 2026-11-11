@@ -1891,6 +1891,36 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     hold(&planted, "requests", "GET /admin/requests", ready);
+    // A plan-funded answer on a Fable model, which both shipped tables price, in an hour no other row lands in, so the
+    // burn capture carries a point whose Fable week figure, 5-hour figure and plan dollars each read a number. It lands
+    // after the requests capture, so the request list keeps its rows, and in no session, so the session rows keep
+    // their counts. The ledger lands records in order, so the unweighted row's wait below covers it.
+    let fable_at = now - 3 * 3_600_000;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            model: "claude-fable-5-1".into(),
+            canonical_model: "claude-fable-5-1".into(),
+            session_id: None,
+            ..request(
+                key_generation,
+                "r-fable",
+                fable_at,
+                "desktop",
+                "s1",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-fable",
+            1,
+            "business",
+            200,
+            "succeeded",
+            fable_at,
+        )],
+        bodies: None,
+    });
     // A plan-funded answer on a model the shipped cost model does not list, so it has no weight, so the attention
     // capture holds the unpriced model's item and the analytics captures a null figure beside priced ones. An unlisted
     // id rather than a listed unweighted one, so a revision that weighs a listed model moves nothing here. It lands
