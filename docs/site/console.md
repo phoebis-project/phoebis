@@ -1189,19 +1189,19 @@ Code 2.1.310 · epoch 2`, with the user agent as the client sent it and the epoc
 hover names the base and the depth, and where the list holds the base with both pins live, whether the base is on the
 same account or another and the base's account. A click on the badge scrolls to the base's row where the list holds it.
 Status reads main's lifecycle word as a badge with its sentence on hover: `busy`, `idle`, `parked` with the park's kind
-and its deadline or wake time on hover, `registered` for a session the mod registered before any real request reached
-the router, `released` or `unknown`. A finished session reads `finished`, and a session no mod reports, or one whose
-main the engine holds no record of, reads `unreported` in the muted ink. Under the word, a companion session reads `seen
-9s ago` while the mod reports, or `silent 2h 18m` in the warning ink once it went silent, with the companion's sentence
-and the instant on hover. Agents counts the session's agents less the ones the mod released, main counted where no line
-names it, over the agents by word (`1 busy, 2 idle, 1 parked`). Model reads main's model, short with the id on hover,
-and a "+N" badge where N agents of the session are pinned on another model, its hover naming each agent with its model
-and account in the lines' order. Account links to the pinned account's page with its kind on hover, then the speed chip
-on a slowed session with the Quota view's hover, the warning badge `leaving` while a shedding round's mark stands on the
-session's pin, its hover naming the account the mark was made on and its window, and a "+N" for the agents pinned on
-another account. A session that a round's move or a failover's landing already took off an account reads no badge. While
-a Model or an Account filter stands, that column's "+N" takes the accent tone where one of the agents it names matches
-every Agents filter. A row with no account reads a dash.
+and its deadline or wake time on hover, `registered` for a session whose main the mod registered or started again with
+no real request of it reaching the router since, `released` or `unknown`. A finished session reads `finished`, and a
+session no mod reports, or one whose main the engine holds no record of, reads `unreported` in the muted ink. Under the
+word, a companion session reads `seen 9s ago` while the mod reports, or `silent 2h 18m` in the warning ink once it went
+silent, with the companion's sentence and the instant on hover. Agents counts the session's agents less the ones the mod
+released, main counted where no line names it, over the agents by word (`1 busy, 2 idle, 1 parked`). Model reads main's
+model, short with the id on hover, and a "+N" badge where N agents of the session are pinned on another model, its hover
+naming each agent with its model and account in the lines' order. Account links to the pinned account's page with its
+kind on hover, then the speed chip on a slowed session with the Quota view's hover, the warning badge `leaving` while a
+shedding round's mark stands on the session's pin, its hover naming the account the mark was made on and its window, and
+a "+N" for the agents pinned on another account. A session that a round's move or a failover's landing already took off
+an account reads no badge. While a Model or an Account filter stands, that column's "+N" takes the accent tone where one
+of the agents it names matches every Agents filter. A row with no account reads a dash.
 
 Requests counts the session's client requests over its life under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists

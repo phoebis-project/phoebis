@@ -1804,10 +1804,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .await;
     // A session no companion reports, placed on `direct` a day and an hour back and failed over to `business` a second
     // later, as the relay's report of a rate limit on its pin's account leaves it, so `sessions.json` carries a stamped
-    // pin written later than its agent's first placement. The router's clock stands at each report's instant and the
-    // cooldown ends a few seconds in, so the move and the cooldown's rows land outside the day the analytics read and
-    // before the routing log's hour, and no account answer carries the cooldown. Its id sorts after `s-fixture`, which
-    // stays the list's first row.
+    // pin written later than its agent's first placement. The router's clock stands at the cooldown report's instant
+    // and the cooldown ends 30 seconds in, so the move and the cooldown's rows land outside the day the analytics read
+    // and before the routing log's hour, and no account answer carries the cooldown. The landed pin's renewal runs with
+    // the clock past the cooldown's end and carries the capture's instant. Its id sorts after `s-fixture`, which stays
+    // the list's first row.
     let moved_at = now - DAY - 3_600_000;
     let sonnet_on = |account: &str| -> Vec<_> {
         phoebis_routing::resolve(&snapshot, &key_row, "claude-sonnet-5", "claude-sonnet-5")

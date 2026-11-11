@@ -196,8 +196,9 @@ pub(crate) struct AgentContext {
     pub pinned_at: i64,
     /// The pin's agent ended and its next request has not arrived. The router leaves such a pin out of a round.
     pub ended: bool,
-    /// The agent's lifecycle word from the keepalive engine's record, in the row's six words, null where no mod
-    /// reports it.
+    /// The agent's lifecycle word from the keepalive engine's record: `busy`, `idle`, `parked`, `registered`,
+    /// `released` or `unknown`, where `registered` is an agent busy awaiting a real request since the mod registered it
+    /// or started it again. Null where no mod reports it.
     #[schema(example = "idle")]
     pub lifecycle: Option<String>,
 }

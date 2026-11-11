@@ -1,6 +1,6 @@
 //! The Sessions row the admin routes read from the engine: one of five states read off the agent's reason beside the
-//! engine's own pause bit, the reason itself as the cause, the mod's lifecycle word with the park, the day's probes and
-//! credits, and the seconds since the person was last seen at the terminal.
+//! engine's own pause bit, the reason itself as the cause, the agent's lifecycle word with the park, the day's probes
+//! and credits, and the seconds since the person was last seen at the terminal.
 mod common;
 
 use common::*;
