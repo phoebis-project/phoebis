@@ -127,7 +127,7 @@ pub fn control_request(
                 push("Authorization", &format!("Bearer {bearer}"));
             }
         }
-        // The probes sent the usage read's head in the client's shape too, and the upstream filled the block for it.
+        // The client sends its limit resets read with the same head as its usage read.
         ControlKind::Usage | ControlKind::LimitResets => {
             push("Content-Type", CONTENT_TYPE_JSON);
             push("User-Agent", profile.user_agent_cli);
