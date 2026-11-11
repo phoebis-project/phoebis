@@ -397,7 +397,7 @@ pub(crate) struct Event {
     ///   the mark's `marked_at`, `marked_on` and `marked_window`, the healing `projection` on `healed`, `stretch_ms`
     ///   and `threshold_ms` where the stretch healed the mark, and `limit`, the line the healing projection read under:
     ///   1.0 at the wall, the pool's ceiling at the five-hour bound, null on a heal by the stretch and under `moved`
-    ///   and `released`, absent on a row of an earlier build.
+    ///   and `released`, absent on an event of an earlier build.
     /// - `model_permitted`: the account that served a model another account had rejected for the same request.
     /// - `model_rejected`: an account refused the model the request named.
     /// - `overage_ended`: the account left overage, with `since`, when it entered.
@@ -440,6 +440,10 @@ pub(crate) struct Event {
     ///   `"secret_replaced": true` beside them where the edit staged a secret, whose value the diff never holds, and
     ///   `key_rotated` carries the new secret's `prefix` and `previous_secret_until`, the instant the retired secret
     ///   stops being accepted.
+    /// - `reservation_expired`: a booking left the account's prediction without the usage that would have replaced it,
+    ///   with the request's `attempt`, the `cause` (the relay's word for a request that ended without a committed
+    ///   usage, `canceled`, `exhausted`, `refused` or `transport_error`, or `timeout` where the purge gave up on the
+    ///   booking), `shares`, the rewrite the booking carried per plan window, and `age_ms`, how long it stood.
     /// - `router_started`: the router started, with what it loaded, `down_since`, the newest row the ledger held
     ///   before it, and `holds_lost`, since no held request survives a restart. A clock reset or a wind-down the
     ///   previous run announced before that row is not written again.
