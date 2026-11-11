@@ -84,7 +84,8 @@ pub(crate) struct KeyInput {
     /// `stale_edit`. A create accepts it and ignores it, since a create has no row to fence on. `revision` names one
     /// state of one key: an edit, a rotation or a revocation moves it, and a key deleted and created again under the
     /// same id never answers a token its predecessor did, so an edit read before the deletion answers `409` and
-    /// writes nothing.
+    /// writes nothing. A pool the edit names is read first, so an edit onto a pool that does not exist answers `404`
+    /// ahead of the token's `400` and `409`.
     // The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
     // its own sentence rather than read as "not sent" or refused with the body's.
     #[serde(default, deserialize_with = "present")]
@@ -566,6 +567,13 @@ pub(crate) async fn patch(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
+    // A pool the edit names is read first, so an edit onto a missing pool answers that ahead of a stale stamp: the
+    // reload a 409 asks for would open the same missing pool.
+    if let Some(pool_id) = &input.pool_id {
+        if let Err(refusal) = pool(&state, pool_id) {
+            return refusal;
+        }
+    }
     let read_at = match fence_token(
         input.expected_revision.as_ref(),
         row.incarnation,

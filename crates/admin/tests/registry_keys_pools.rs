@@ -4157,6 +4157,25 @@ async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothin
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Desktop");
 }
 
+#[tokio::test]
+async fn a_key_edit_onto_a_missing_pool_answers_404_ahead_of_a_stale_expected_revision() {
+    let (app, _up, _store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    pool_and_key(&app, &cookie).await;
+    let read = listed_revision(&app, &cookie, "keys", "desktop").await;
+    // The row's stamp under the next incarnation, which the fence refuses as stale.
+    let sent = read + (1 << 42);
+    let refused = patch(
+        &app,
+        "/admin/keys/desktop",
+        &format!(r#"{{"pool_id":"gone","expected_revision":{sent}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 404);
+    assert_eq!(json(refused).await["error"], "pool not found");
+}
+
 // Multi-threaded: the parked edit blocks the worker it runs on until the hold is released.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stale_key_edit_answers_404_when_the_key_is_deleted_while_it_is_saved() {

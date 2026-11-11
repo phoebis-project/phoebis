@@ -217,7 +217,7 @@ Every field, in the order the key's JSON body lists them, with the answer a valu
 | `body_capture_hours` | unset, inheriting the pool's | `0` turns capture off, else at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. `null` inherits again |
 | `auto_mode_server` | unset, inheriting the pool's | `true`, `false` or `null`: `auto_mode_server must be true, false, or null`. `null` inherits again |
 | `guardrails` | unchanged when absent | an ordered list of at most 64 ids, refused on a create, the refusals in the paragraph below |
-| `expected_revision` | unset | the `revision` the key was read at, a non-negative integer: `expected_revision is the revision the row was read at`. An edit lands only while the key still carries it, else `409 the key changed while it was being edited, so reload and try again` with the code `stale_edit` and nothing written. A create accepts it and ignores it |
+| `expected_revision` | unset | the `revision` the key was read at, a non-negative integer: `expected_revision is the revision the row was read at`. An edit lands only while the key still carries it, else `409 the key changed while it was being edited, so reload and try again` with the code `stale_edit` and nothing written, but an edit naming a pool that does not exist answers `404 pool not found` first. A create accepts it and ignores it |
 
 `guardrails` is the key's own guardrails as an ordered list of ids, replaced whole on an edit. They run after the
 pool's, which the key cannot drop and the key dialog draws first as inherited, and a guardrail on both the key and its
