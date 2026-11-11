@@ -1042,8 +1042,8 @@ figure under every grouping and bucket size, scaled to the chosen tier's 5-hour 
 of its own, and reads unpriced where the cost model holds no 5-hour capacity for the chosen tier. The card "Fable week
 per hour" ("The subscription traffic per hour as a share of the chosen tier's Fable week") draws the subscription
 traffic of the models that draw the Fable week, and of those alone, from the burn route's `fable_equivalent` scaled to
-the chosen tier's Fable week. A busy bucket with no such traffic reads zero, a group with no traffic on such a model
-over the whole range draws no line and no legend entry, and the card reads unpriced where the cost model holds no Fable
+the chosen tier's Fable week. A busy bucket with no such traffic reads zero, a group whose traffic over the whole range
+ran on no such model draws no line and no legend entry, and the card reads unpriced where the cost model holds no Fable
 week for the chosen tier. The two cards' tooltips carry no account's hint. Under the Ultra week the 5-hour card's note
 reads "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window." A bucket the
 cost model could not price stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a
@@ -1165,20 +1165,20 @@ filter together. A finished session, one whose main agent ended with the session
 stays out unless Finished sessions stands, and Released agents draws a live session's released agents, which stay hidden
 without it. Status reads each line's word as the Agents table draws it, so main's line of a session no mod reports
 matches `unreported`. The router lists a companion session within the session expiry and a session no mod reports while
-the latest of its last use, its last request and, where its companion ended the session, that end is within the
-non-companion timeout of the Settings page (`sessions.non_companion_idle_seconds`, 1h by default), and the view reads
-that list as it is. Each filter off its default stands as a chip on a line under the bar: a click on the chip opens its
-values again, its x removes it, and from two chips on "Clear all" returns every filter to its default. An Agents
-filter's chip reads `(any agent)` after its values in the secondary ink, its hover ending "matched by any one agent".
-The filters live in the page's address, so a reload or a shared link keeps them, and a bare `/sessions` reads the
-defaults. Where a read the rows wait on failed before it answered, the sessions, the recipes or the keys, a line under
-the bar names it, `Could not load the {read}: {reason}`, with Try again, and a failed accounts read draws a line of its
-own. The head under the bar reads "Every session the router lists: what it runs, where it is pinned, what it has spent
-and whether its prompt cache is warm." with the disclosure "How pins and recipes work", whose paragraph says what a pin
-and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. Auto reload starts at 5 s and reads
-the accounts, the recipes and the sessions at that one interval, and it waits while the Cost reference dialog, a row's
-menu or a popover of the bar is open. The probes and the recipe are explained on [Keepalive](keepalive.md), the mod's
-words under [The mod](keepalive.md#the-mod) and the recipe's states under
+the latest of its last use, its last request and, where its companion ended the session, that end is within the lesser
+of the non-companion timeout of the Settings page (`sessions.non_companion_idle_seconds`, 1h by default) and the session
+expiry, and the view reads that list as it is. Each filter off its default stands as a chip on a line under the bar: a
+click on the chip opens its values again, its x removes it, and from two chips on "Clear all" returns every filter to
+its default. An Agents filter's chip reads `(any agent)` after its values in the secondary ink, its hover ending
+"matched by any one agent". The filters live in the page's address, so a reload or a shared link keeps them, and a bare
+`/sessions` reads the defaults. Where a read the rows wait on failed before it answered, the sessions, the recipes or
+the keys, a line under the bar names it, `Could not load the {read}: {reason}`, with Try again, and a failed accounts
+read draws a line of its own. The head under the bar reads "Every session the router lists: what it runs, where it is
+pinned, what it has spent and whether its prompt cache is warm." with the disclosure "How pins and recipes work", whose
+paragraph says what a pin and a recipe are, and a "Cost reference" link that opens the dialog on Plan rates. Auto reload
+starts at 5 s and reads the accounts, the recipes and the sessions at that one interval, and it waits while the Cost
+reference dialog, a row's menu or a popover of the bar is open. The probes and the recipe are explained on
+[Keepalive](keepalive.md), the mod's words under [The mod](keepalive.md#the-mod) and the recipe's states under
 [The five states](keepalive.md#the-five-states).
 
 The card "Sessions", its title carrying "One row per session. Open a row for its agents, its routing and its cache
@@ -1381,10 +1381,10 @@ last reading `{problem}` in their place while the cost model reports a problem),
 the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as
 `at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long
 a session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod
-reports stays listed after its last use, which also bounds the lines its pins draw), and Admin secret as "configured"
-or "not configured", each path's, each retention line's and each session line's hover naming the bootstrap key that
-sets it, and closes on "The values the configuration file sets are on the installation page, and
-`phoebis check-config` prints this router's."
+reports stays listed after its last use, or the session expiry where that is the lesser of the two, which also bounds
+the lines its pins draw), and Admin secret as "configured" or "not configured", each path's, each retention line's and
+each session line's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets
+are on the installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point
