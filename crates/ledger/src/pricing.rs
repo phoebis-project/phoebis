@@ -410,7 +410,7 @@ impl PriceTable {
 
     /// The dearest listed standard cell of each type, per million tokens: the fallback rates `rate_table` hands the
     /// routing for a model the revision does not list.
-    pub fn dearest_cells(&self) -> ModelPrice {
+    fn dearest_cells(&self) -> ModelPrice {
         let dearest = |of: fn(&ModelPrice) -> f64| {
             self.models
                 .values()
@@ -499,7 +499,7 @@ impl PriceTable {
 }
 
 /// The four figures of five counts at the per-million cells `p`, the two writes summed.
-pub(crate) fn split_of(counts: phoebis_routing::PinUsage, p: &ModelPrice) -> CostSplit {
+fn split_of(counts: phoebis_routing::PinUsage, p: &ModelPrice) -> CostSplit {
     let at = |tokens: u64, price: f64| tokens as f64 * price / 1_000_000.0;
     CostSplit {
         input_usd: at(counts.input, p.input),

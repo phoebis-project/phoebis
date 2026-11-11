@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_routing::{
-    same_reset, window_for, window_length_ms, DAY_MS, FIVE_HOUR, HOUR_MS, RESET_SLACK_MS,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    same_reset, window_for, window_length_ms, DAY_MS, FIVE_HOUR, HEAD_PERCENT, HOUR_MS,
+    RESET_SLACK_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, Row, Transaction};
@@ -82,7 +82,7 @@ impl ReconciliationRow {
 
 /// How far a head may read under the poll before it and still join the run: the head truncates the percent the poll
 /// rounds, so one reading step down between the two is the same draw.
-const SOURCES_GAP: f64 = 0.01;
+const SOURCES_GAP: f64 = HEAD_PERCENT;
 
 #[derive(Clone, Copy, Debug)]
 struct Reading {
@@ -544,7 +544,7 @@ fn predicted(
         // and neither is a free classifier call (`is_free_classifier`).
         if key.funding != Funding::Plan
             || (window == SEVEN_DAY_FABLE && window_for(key.model) != SEVEN_DAY_FABLE)
-            || key.classifier
+            || key.free()
         {
             continue;
         }

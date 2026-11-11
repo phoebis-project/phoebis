@@ -5,11 +5,11 @@
 //! reader of that function asks for, is priced beside it under the same key.
 
 use phoebis_bus::Classifier;
-use phoebis_routing::{plan_windows, PinUsage, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{plan_windows, PinUsage, SEVEN_DAY};
 
 use crate::plan::{
-    entrypoint_of_client, free_equivalent, free_shares, price_equivalent, price_shares, Funding,
-    PlanTables, WindowShares,
+    entrypoint_of_client, free_equivalent, free_shares, price_shares, Funding, PlanTables,
+    WindowShares,
 };
 use crate::pricing::{Band, PriceRevisions, PriceTable, Speed};
 use crate::record::{AttemptRecord, RequestRecord};
@@ -72,6 +72,12 @@ impl<'a> RowKey<'a> {
             usage: attempt.usage(),
         }
         .key(table, now)
+    }
+
+    /// Whether the row is free by rule: a free classifier call the plan paid, which spends no window and costs no
+    /// dollars. A classifier call under another funding prices as any call.
+    pub(crate) fn free(&self) -> bool {
+        self.classifier && self.funding == Funding::Plan
     }
 }
 
@@ -167,13 +173,13 @@ pub fn price_row(
     }
     let in_force = costs.revisions.in_force(key.at);
     let sized = key.tier.filter(|tier| in_force.sizes(key.entrypoint, tier));
-    if key.classifier {
+    if key.free() {
         // A free call spends no window and costs no dollars, so every figure reads zero.
         let shares = sized.map(|tier| free_shares(costs, key.entrypoint, tier, key.model, key.at));
         return Priced {
             usd,
             shares,
-            equivalent: price_equivalent_at(costs, key, counts),
+            equivalent: Some(free_equivalent()),
             share_reason: Some(SHARE_REASON_CLIENT_CLASSIFIER),
         };
     }
@@ -200,7 +206,8 @@ pub fn price_row(
                 && std::ptr::eq(in_force, costs.revisions.in_force(key.now))
         })
         .and_then(|shares| shares.get(SEVEN_DAY).copied());
-    let equivalent = unit_week.unwrap_or_else(|| price_equivalent_at(costs, key, counts));
+    let equivalent =
+        unit_week.unwrap_or_else(|| price_equivalent_at(costs, key, SEVEN_DAY, counts));
     Priced {
         usd,
         shares,
@@ -209,40 +216,21 @@ pub fn price_row(
     }
 }
 
-/// A plan key's Pro-week figure over `counts`, as `price_row` answers it off the unit's tier: zero by rule for a free
-/// classifier call, which reads no weight, else the cost model's figure at the key's instants.
+/// A plan key's Pro figure on `window` over `counts`: the Pro-week figure on `SEVEN_DAY`, as `price_row` answers it off
+/// the unit's tier, and the Pro share of the 5-hour window on `FIVE_HOUR`. Zero by rule for a free classifier call,
+/// which reads no weight, else the cost model's share of the anchor tier's window under the key's regime at the key's
+/// instants, its band read at `band_at`, else at `at`.
 pub(crate) fn price_equivalent_at(
     costs: &PlanTables,
     key: &RowKey<'_>,
+    window: &str,
     counts: PinUsage,
 ) -> Option<f64> {
-    if key.classifier {
-        return Some(free_equivalent());
-    }
-    price_equivalent(
-        costs,
-        key.entrypoint,
-        key.model,
-        counts,
-        key.at,
-        key.band_at.unwrap_or(key.at),
-        key.now,
-    )
-}
-
-/// A plan key's Pro share of the 5-hour window over `counts`, beside the Pro-week figure `price_equivalent_at` answers:
-/// zero by rule for a free classifier call, which reads no weight, else the cost model's share of the anchor tier's
-/// 5-hour window under the key's regime, its band read at `band_at`, else at `at`.
-pub(crate) fn price_five_hour_at(
-    costs: &PlanTables,
-    key: &RowKey<'_>,
-    counts: PinUsage,
-) -> Option<f64> {
-    if key.classifier {
+    if key.free() {
         return Some(free_equivalent());
     }
     costs.equivalent_at(
-        FIVE_HOUR,
+        window,
         key.entrypoint,
         key.model,
         counts,
@@ -260,7 +248,7 @@ pub(crate) fn price_usd(
     key: &RowKey<'_>,
     counts: PinUsage,
 ) -> Option<CostSplit> {
-    if key.classifier && key.funding == Funding::Plan {
+    if key.free() {
         return Some(CostSplit::default());
     }
     prices

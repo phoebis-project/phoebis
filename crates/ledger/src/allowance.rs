@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use phoebis_routing::{account_window_id, SEVEN_DAY};
+use phoebis_routing::{account_window_id, is_weekly_window};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 
@@ -40,6 +40,15 @@ pub struct TermPair {
     pub tier: Option<String>,
 }
 
+/// An ended account's term end with the pairs its `term_ended` rows carry, per weekly window as `account_window_id`
+/// names it: the plan word and the tier of the router's stored reading of that window, where the account carries no
+/// plan-ended flag or the reading was observed before it. A window `pairs` lacks answers null.
+#[derive(Clone, Debug)]
+pub struct TermEnd {
+    pub end_at: i64,
+    pub pairs: BTreeMap<String, TermPair>,
+}
+
 /// The members of a `window_reset` row's detail the read takes.
 #[derive(serde::Deserialize)]
 struct ResetDetail {
@@ -50,10 +59,6 @@ struct ResetDetail {
     // A row written before the detail named the pair lacks both members, which read as none.
     plan: Option<String>,
     tier: Option<String>,
-}
-
-fn is_weekly(window: &str) -> bool {
-    window == SEVEN_DAY || window.starts_with("seven_day_")
 }
 
 fn share_left(utilization: f64) -> f64 {
@@ -68,17 +73,14 @@ fn share_left(utilization: f64) -> f64 {
 /// `seven_day_overage_included` folded into `seven_day_fable` with the newer reading standing, and a reading with no
 /// utilization skipped. A reading with no reset instant shows no open week. A reset of an account in `term_ends` at or
 /// after its end is left out, so the week the end cut short counts once. Ordered by account, window, then `reset_at`
-/// newest first. No rollup and no stored figure: the history is the events the purge still holds. `term_pairs` holds,
-/// per ended account and weekly window as `account_window_id` names it, the pair the window's `term_ended` row
-/// carries: the plan word and the tier of the router's stored reading of that window, where the account carries no
-/// plan-ended flag or the reading was observed before it. A window it lacks answers null.
+/// newest first. No rollup and no stored figure: the history is the events the purge still holds. Each `TermEnd`
+/// holds the account's end and the pairs of its `term_ended` rows.
 pub fn unused_allowance(
     conn: &Connection,
     accounts: &[String],
     from: i64,
     to: i64,
-    term_ends: &BTreeMap<String, i64>,
-    term_pairs: &BTreeMap<String, BTreeMap<String, TermPair>>,
+    term_ends: &BTreeMap<String, TermEnd>,
 ) -> Result<Vec<AllowanceReset>, LedgerError> {
     if accounts.is_empty() {
         return Ok(Vec::new());
@@ -112,10 +114,10 @@ pub fn unused_allowance(
         // An ended account's resets are left out by the reset's own instant: a late sample or a clock walk after a
         // restart announces a week that reset before the end only after it, and the week the end cut short is the
         // `term_ended` row's alone.
-        if !is_weekly(&detail.window)
+        if !is_weekly_window(&detail.window)
             || term_ends
                 .get(account_id.as_str())
-                .is_some_and(|&end_at| detail.reset_at >= end_at)
+                .is_some_and(|term| detail.reset_at >= term.end_at)
         {
             continue;
         }
@@ -141,9 +143,9 @@ pub fn unused_allowance(
           WHERE nth = 1 ORDER BY window",
     )?;
     // An end before the range drops the resets after it above, and its own row belongs to a range that holds it.
-    for (account_id, end_at) in term_ends.iter().filter(|(_, end_at)| **end_at >= from) {
+    for (account_id, term) in term_ends.iter().filter(|(_, term)| term.end_at >= from) {
         let mut last: BTreeMap<String, (f64, i64)> = BTreeMap::new();
-        let found = readings.query_map(params![account_id, end_at], |r| {
+        let found = readings.query_map(params![account_id, term.end_at], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, f64>(1)?,
@@ -160,18 +162,14 @@ pub fn unused_allowance(
                 }
             }
         }
-        let pairs = term_pairs.get(account_id);
         rows.extend(
             last.into_iter()
                 .map(|(window, (utilization, observed_at))| {
-                    let pair = pairs
-                        .and_then(|pairs| pairs.get(&window))
-                        .cloned()
-                        .unwrap_or_default();
+                    let pair = term.pairs.get(&window).cloned().unwrap_or_default();
                     AllowanceReset {
                         account_id: account_id.clone(),
                         window,
-                        reset_at: *end_at,
+                        reset_at: term.end_at,
                         share_left: share_left(utilization),
                         observed_at,
                         source: "term_ended".into(),

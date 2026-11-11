@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber, SubscriberStats};
 use phoebis_oauth::Clock;
+use phoebis_relay::CatalogChange;
 use phoebis_routing::{MemberSpend, RegistrySnapshot, Report, RouterHandle, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod, Store};
 use serde_json::json;
@@ -17,12 +18,12 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use crate::assemble::{Assembler, Record};
 use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{
-    backfill_serving_facts, begin_write, delete_parked_in, insert_decision_in, insert_event_in,
+    backfill_serving_slice, begin_write, delete_parked_in, insert_decision_in, insert_event_in,
     insert_request_in, insert_samples_in, newest_row_at, update_cache_map_in,
 };
-use crate::events::{spawn_event_mirror, MirrorBaseline};
+use crate::events::{catalog_changed, spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
-use crate::plan::{Funding, PlanTables};
+use crate::plan::{Funding, PlanTables, SubscriptionCosts};
 use crate::price::is_free_classifier;
 use crate::pricing::Pricing;
 use crate::query::{
@@ -235,25 +236,24 @@ impl Ledger {
     /// requests keeps its `since` and its count, and a weighted model enters nothing.
     pub fn note_listed(&self, added: &[String], at: i64) {
         let costs = self.tables.revisions.in_force(at);
-        let unweighted: Vec<&str> = added
+        let models: Vec<&str> = added
             .iter()
-            .filter(|listed| costs.weight(listed, SEVEN_DAY).is_none())
+            .filter(|listed| unweighted(costs, listed))
             .map(|listed| phoebis_routing::listing::undated_id(listed))
             .collect();
         let mut served = self.unpriced.lock().expect(UNPRICED_POISONED);
-        for model in unweighted {
+        for model in models {
             // A standing run keeps its date and its count, and a cleared entry starts a new run at the listing.
-            if served.get(model).is_none_or(|entry| entry.since.is_none()) {
-                served.insert(
-                    model.to_string(),
-                    UnpricedModel {
-                        model: model.to_string(),
-                        since: Some(at),
-                        requests: 0,
-                    },
-                );
-            }
+            open_run(&mut served, model, at);
         }
+    }
+
+    /// A catalog change in the ledger: its added models the cost model does not weigh enter through `note_listed`, then
+    /// its `catalog_changed` row is recorded.
+    pub fn on_catalog_change(&self, change: &CatalogChange) {
+        // A listed model the cost model does not weigh is unpriced from its listing on, before any request.
+        self.note_listed(&change.added, change.at);
+        self.record(catalog_changed(change));
     }
 
     pub fn dropped(&self) -> u64 {
@@ -1751,26 +1751,37 @@ fn note_unpriced(
     let model = phoebis_routing::listing::undated_id(canonical);
     let costs = tables.revisions.in_force(request.received_at);
     let mut served = unpriced.lock().expect(UNPRICED_POISONED);
-    match costs.weight(canonical, SEVEN_DAY) {
-        None => {
-            let entry = served
-                .entry(model.to_string())
-                .or_insert_with(|| UnpricedModel {
-                    model: model.to_string(),
-                    since: None,
-                    requests: 0,
-                });
-            // A cleared entry starts a new run.
-            entry.since.get_or_insert(request.received_at);
-            entry.requests += 1;
-        }
-        Some(_) => {
-            if let Some(entry) = served.get_mut(model) {
-                entry.since = None;
-                entry.requests = 0;
-            }
-        }
+    if unweighted(costs, canonical) {
+        // A cleared entry starts a new run.
+        open_run(&mut served, model, request.received_at).requests += 1;
+    } else if let Some(entry) = served.get_mut(model) {
+        entry.since = None;
+        entry.requests = 0;
     }
+}
+
+/// Whether the cost revision `costs` gives `model` no weight on the 7-day window, so its figure is null.
+fn unweighted(costs: &SubscriptionCosts, model: &str) -> bool {
+    costs.weight(model, SEVEN_DAY).is_none()
+}
+
+/// `model`'s entry with a run open at `at` where none stands: a new entry, or a cleared one, takes `at` as its `since`,
+/// and a standing run keeps its date and its count. A cleared entry holds no request, so dating it in place opens the
+/// run a new entry would.
+fn open_run<'m>(
+    served: &'m mut BTreeMap<String, UnpricedModel>,
+    model: &str,
+    at: i64,
+) -> &'m mut UnpricedModel {
+    let entry = served
+        .entry(model.to_string())
+        .or_insert_with(|| UnpricedModel {
+            model: model.to_string(),
+            since: None,
+            requests: 0,
+        });
+    entry.since.get_or_insert(at);
+    entry
 }
 
 /// One fold of the routing conditions at `now` on the purge task's connection, off the runtime thread. The windows
@@ -1858,10 +1869,10 @@ async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usi
     loop {
         // One blocking call per slice: a shutdown's abort lands at this await, between two slices, so the stop waits
         // for the slice in flight and no further one starts.
-        match blocking(db, backfill_serving_facts).await {
-            Ok(slice) => {
-                written += slice.written;
-                if slice.left > 0 {
+        match blocking(db, backfill_serving_slice).await {
+            Ok((filled, left)) => {
+                written += filled;
+                if left {
                     continue;
                 }
                 // A start whose own slice left none leaves this task nothing to report.

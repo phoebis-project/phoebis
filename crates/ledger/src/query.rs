@@ -17,16 +17,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::db::{
-    event_select, fill_guardrails, request_guardrails, row_to_event, row_to_extra_usage_sample,
-    row_to_quota_sample, row_to_request, with_attempts, LedgerDb, LANDING_STAMP_SQL,
-    REQUEST_SELECT,
+    event_select, fill_guardrails, opt_u64, request_guardrails, row_to_event,
+    row_to_extra_usage_sample, row_to_quota_sample, row_to_request, with_attempts, LedgerDb,
+    LANDING_STAMP_SQL, REQUEST_SELECT,
 };
 use crate::histogram::Histogram;
 use crate::pattern::{literal_like, Patterns, ESCAPE};
 use crate::plan::{free_shares, funding_of, CostRevisions, Funding, PlanTables, WindowShares};
-use crate::price::{
-    price_equivalent_at, price_five_hour_at, price_row, price_usd, AttemptFacts, Priced, RowKey,
-};
+use crate::price::{price_equivalent_at, price_row, price_usd, AttemptFacts, Priced, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
@@ -1376,15 +1374,12 @@ struct Answered {
 impl Answered {
     /// The five columns from `at` on, in the order both statements select them.
     fn read(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Answered> {
-        let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
-            Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
-        };
         Ok(Answered {
             status: r.get::<_, Option<i64>>(at)?.map(|n| n as u16),
-            input_tokens: tokens(at + 1)?,
-            cache_read_tokens: tokens(at + 2)?,
-            cache_write_5m_tokens: tokens(at + 3)?,
-            cache_write_1h_tokens: tokens(at + 4)?,
+            input_tokens: opt_u64(r, at + 1)?,
+            cache_read_tokens: opt_u64(r, at + 2)?,
+            cache_write_5m_tokens: opt_u64(r, at + 3)?,
+            cache_write_1h_tokens: opt_u64(r, at + 4)?,
         })
     }
 
@@ -2714,7 +2709,7 @@ impl PlanSums {
         }
         // Each part prices through `price_equivalent_at` at the row's key, whose classifier rule reads a free call's
         // every part at zero, so a model the cost model cannot price marks nothing unpriced for a charge of nothing.
-        let price = |usage: PinUsage| price_equivalent_at(costs, key, usage);
+        let price = |usage: PinUsage| price_equivalent_at(costs, key, SEVEN_DAY, usage);
         let halves = self
             .equivalent
             .add_priced(row, counted, priced.equivalent, price);
@@ -3718,7 +3713,7 @@ const SESSION_IDENTITY_CHUNK: usize = 900;
 /// as a fresh one, since this query reads no `since` bound of its own.
 pub fn session_identities(
     conn: &Connection,
-    sessions: &[(String, i64, String)],
+    sessions: &[SessionSpendKey],
 ) -> Result<Vec<SessionIdentity>, LedgerError> {
     let mut out = Vec::with_capacity(sessions.len());
     for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {
@@ -3729,7 +3724,7 @@ pub fn session_identities(
 
 /// The `named` table the identities read and the first fill seek the session index from, with its binds. Its
 /// placeholders number from `?1`, so a statement's further binds go after these.
-fn named_sessions(sessions: &[(String, i64, String)]) -> (String, Vec<rusqlite::types::Value>) {
+fn named_sessions(sessions: &[SessionSpendKey]) -> (String, Vec<rusqlite::types::Value>) {
     let mut binds = Vec::with_capacity(sessions.len() * 3);
     let values: Vec<String> = sessions
         .iter()
@@ -3762,7 +3757,7 @@ fn named_sessions(sessions: &[(String, i64, String)]) -> (String, Vec<rusqlite::
 /// lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs them by
 /// statistics the file may lack or that a key holding most rows can mislead.
 pub(crate) fn session_identities_statement(
-    sessions: &[(String, i64, String)],
+    sessions: &[SessionSpendKey],
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (named, binds) = named_sessions(sessions);
     // The client's quota probe is an `inference` row ahead of the session's first main request and names no
@@ -3788,7 +3783,7 @@ pub(crate) fn session_identities_statement(
 
 fn session_identities_chunk(
     conn: &Connection,
-    sessions: &[(String, i64, String)],
+    sessions: &[SessionSpendKey],
 ) -> Result<Vec<SessionIdentity>, LedgerError> {
     if sessions.is_empty() {
         return Ok(Vec::new());
@@ -4486,7 +4481,7 @@ pub(crate) fn price_request(
         // while a free call spends no window, so it leaves out a window where its tier does not size it.
         Funding::Plan => (
             priced.equivalent,
-            price_five_hour_at(tables, &key, usage),
+            price_equivalent_at(tables, &key, FIVE_HOUR, usage),
             priced.plan_shares(&key),
         ),
         // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at, so the
@@ -4899,13 +4894,11 @@ fn top_sessions_by_tokens(
 }
 
 /// The columns of `attempts a JOIN requests r` an attempt is priced from, in the order `PricedAttempt::read` reads
-/// them, beside the request's `kind`, which `PricedAttempt::read` skips and `SessionSpendRow::read` alone takes. The
-/// completion is aliased `completed`, so a statement's `WHERE` can bound it.
+/// them. The completion is aliased `completed`, so a statement's `WHERE` can bound it.
 pub(crate) const PRICED_ATTEMPT_COLUMNS: &str =
     "COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, r.canonical_model, \
      a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.output_tokens, \
-     r.received_at, a.speed, a.account_kind, a.overage_in_use, r.kind, a.tier, r.client, r.classifier, \
-     a.usage_based";
+     r.received_at, a.speed, a.account_kind, a.overage_in_use, a.tier, r.client, r.classifier, a.usage_based";
 
 /// One attempt's facts toward the share and the dollars it is priced at, read off its attempt and request rows.
 #[derive(Debug)]
@@ -4938,7 +4931,6 @@ impl PricedAttempt {
     // both readers of `PRICED_ATTEMPT_COLUMNS` name one place.
     const MODEL: usize = 1;
     const RECEIVED_AT: usize = 7;
-    const KIND: usize = 11;
 
     /// The attempt from `PRICED_ATTEMPT_COLUMNS` read from column `first` on, a missing or negative token count read
     /// as zero.
@@ -4960,10 +4952,10 @@ impl PricedAttempt {
             speed: row.get(first + 8)?,
             account_kind: row.get(first + 9)?,
             overage_in_use: row.get(first + 10)?,
-            tier: row.get(first + 12)?,
-            client: row.get(first + 13)?,
-            classifier: row.get(first + 14)?,
-            usage_based: row.get(first + 15)?,
+            tier: row.get(first + 11)?,
+            client: row.get(first + 12)?,
+            classifier: row.get(first + 13)?,
+            usage_based: row.get(first + 14)?,
         })
     }
 
@@ -5099,10 +5091,10 @@ impl SpendAttempt {
 /// `SessionSpendRow::read` reads them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
-     r.user_agent, r.request_class, r.landed_at, a.account_id";
+     r.user_agent, r.request_class, r.landed_at, a.account_id, r.kind";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
-const SESSION_SPEND_PRICED_FROM: usize = 10;
+const SESSION_SPEND_PRICED_FROM: usize = 11;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
@@ -5113,8 +5105,8 @@ const SERVING_ATTEMPT_NUMBER: &str =
 
 impl SessionSpendRow {
     /// A request no account served joins no attempt, so its attempt half reads null and must not reach
-    /// `PricedAttempt::read`. Its model, receipt and kind are request columns inside `PRICED_ATTEMPT_COLUMNS`, read by
-    /// their place there whether an attempt joined or not.
+    /// `PricedAttempt::read`. Its model and receipt are request columns inside `PRICED_ATTEMPT_COLUMNS`, read by their
+    /// place there whether an attempt joined or not.
     fn read(row: &Row) -> rusqlite::Result<(SessionSpendKey, SessionSpendRow)> {
         let first = SESSION_SPEND_PRICED_FROM;
         let attempt = match row.get::<_, Option<String>>(9)? {
@@ -5135,7 +5127,7 @@ impl SessionSpendRow {
                 landed_at: row.get(8)?,
                 canonical_model: row.get(first + PricedAttempt::MODEL)?,
                 received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
-                kind: row.get(first + PricedAttempt::KIND)?,
+                kind: row.get(10)?,
                 attempt,
             },
         ))
@@ -5166,7 +5158,7 @@ pub(crate) fn session_spend_since_statement(
 /// session index yields the order the statement sorts by, and on statistics that make a session look large the
 /// planner would walk the whole index in that order to spare the sort.
 pub(crate) fn session_spend_of_statement(
-    sessions: &[(String, i64, String)],
+    sessions: &[SessionSpendKey],
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (named, binds) = named_sessions(sessions);
     let sql = format!(
@@ -5192,10 +5184,10 @@ pub fn session_spend_rows_since(
 }
 
 /// Chunks of `SESSION_IDENTITY_CHUNK` named sessions, merged, as `session_identities` chunks its own, each row beside
-/// its key, the tuple `sessions` holds.
+/// its `SessionSpendKey`, the key `sessions` holds.
 pub fn session_spend_rows_of(
     conn: &Connection,
-    sessions: &[(String, i64, String)],
+    sessions: &[SessionSpendKey],
 ) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
     let mut out = Vec::new();
     for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {

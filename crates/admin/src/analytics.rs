@@ -13,7 +13,7 @@ use phoebis_ledger::{
     hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
     parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
     session_burn_series, AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample,
-    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, TermPair,
+    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, TermEnd, TermPair,
 };
 use phoebis_routing::{
     account_window_id, term, BurnUnit, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY,
@@ -1299,27 +1299,25 @@ pub(crate) async fn unused_allowance(
     // ended no plan, so a passed trial end ends a week only through a plan-ended flag that followed it, at the flag's
     // instant. An end still ahead of `now` ends no week yet, and a custom range may reach a day past it. An end before
     // `from` is listed too, since the week it cut short can reset inside the range, and the read drops that reset.
-    let term_ends: BTreeMap<String, i64> = oauth
+    let reported = reported_samples(&state).await;
+    let term_ends: BTreeMap<String, TermEnd> = oauth
         .iter()
         .filter_map(|id| {
-            let end = term::end_of(snapshot.term(id)?, to.min(now))?;
-            (end <= to.min(now)).then(|| (id.clone(), end))
-        })
-        .collect();
-    let reported = reported_samples(&state).await;
-    let term_pairs = term_ends
-        .keys()
-        .filter_map(|id| {
-            let flagged = snapshot.term(id).and_then(|term| term.plan_ended_at);
-            Some((id.clone(), weekly_pairs_before(reported.get(id)?, flagged)))
+            let held = snapshot.term(id)?;
+            let end = term::end_of(held, to.min(now))?;
+            (end <= to.min(now)).then(|| {
+                let pairs = reported
+                    .get(id)
+                    .map(|sample| weekly_pairs_before(sample, held.plan_ended_at))
+                    .unwrap_or_default();
+                (id.clone(), TermEnd { end_at: end, pairs })
+            })
         })
         .collect();
     let rows = match state
         .ledger
         .db()
-        .read(move |c| {
-            phoebis_ledger::unused_allowance(c, &oauth, from, to, &term_ends, &term_pairs)
-        })
+        .read(move |c| phoebis_ledger::unused_allowance(c, &oauth, from, to, &term_ends))
         .await
     {
         Ok(rows) => rows,

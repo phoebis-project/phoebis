@@ -9,7 +9,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{
     event_of, recent_events_of_kind, unused_allowance, AllowanceReset, EventRecord, LedgerConfig,
-    LedgerDb, QuotaSampleRecord, SampleSource, WriterRead,
+    LedgerDb, QuotaSampleRecord, SampleSource, TermEnd, WriterRead,
 };
 use phoebis_routing::RouterEvent;
 use phoebis_store::{
@@ -2884,8 +2884,13 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
                 &["a".into(), "c".into()],
                 from,
                 to,
-                &BTreeMap::from([("c".into(), end)]),
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "c".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
             )
         })
         .unwrap();
@@ -2904,7 +2909,7 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
          read from the last reading before it"
     );
     let none = db
-        .read_blocking(|c| unused_allowance(c, &[], from, to, &BTreeMap::new(), &BTreeMap::new()))
+        .read_blocking(|c| unused_allowance(c, &[], from, to, &BTreeMap::new()))
         .unwrap();
     assert_eq!(none, [], "an empty list reads no account's resets");
 }
@@ -2976,8 +2981,13 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
                 &["d".into()],
                 now - 30 * DAY,
                 now,
-                &BTreeMap::from([("d".into(), end)]),
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "d".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
             )
         })
         .unwrap();
@@ -3018,8 +3028,13 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
                 &["e".into()],
                 now - 30 * DAY,
                 now,
-                &BTreeMap::from([("e".into(), end)]),
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "e".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
             )
         })
         .unwrap();
@@ -3090,8 +3105,13 @@ fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
                 &["f".into()],
                 now - 30 * DAY,
                 now,
-                &BTreeMap::from([("f".into(), end)]),
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "f".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
             )
         })
         .unwrap();
@@ -3161,8 +3181,13 @@ fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its
                 &["g".into()],
                 from,
                 to,
-                &BTreeMap::from([("g".into(), end)]),
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "g".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
             )
         })
         .unwrap()
@@ -3215,14 +3240,7 @@ fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_t
     }
     let rows = db
         .read_blocking(|c| {
-            unused_allowance(
-                c,
-                &["a".into()],
-                now - 30 * DAY,
-                now,
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-            )
+            unused_allowance(c, &["a".into()], now - 30 * DAY, now, &BTreeMap::new())
         })
         .unwrap();
     assert_eq!(
@@ -3299,8 +3317,13 @@ fn a_term_end_s_row_names_no_pair_it_was_not_handed() {
                 &["h".into()],
                 now - 30 * DAY,
                 now,
-                &BTreeMap::from([("h".into(), end)]),
-                &BTreeMap::new(),
+                &BTreeMap::from([(
+                    "h".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
             )
         })
         .unwrap();

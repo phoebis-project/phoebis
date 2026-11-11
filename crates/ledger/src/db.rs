@@ -1008,10 +1008,14 @@ pub(crate) fn insert_request_in(
 }
 
 /// Request rows one slice of the backfill writes at most, the newest first, so the most recent history reads complete
-/// soonest. One slice read through `requests_serving_pending` beside ten filled slices holds the write lock for about
-/// 95 ms on a desktop host. A start writes one slice and a pass of the purge task the rest, slice after slice, each
-/// going on where the last one stopped.
+/// soonest. One slice read chunk by chunk through `requests_serving_pending` beside ten filled slices holds the write
+/// lock for about 95 ms on a desktop host. A start writes one slice and a pass of the purge task the rest, slice after
+/// slice, each going on where the last one stopped.
 pub const BACKFILL_SLICE: usize = 10_000;
+
+/// Pending rows one read of a slice takes, so a landing batch that begins during a slice waits for one chunk's read and
+/// one row rather than the whole slice's read, and a slice that yields discards one chunk at most.
+const BACKFILL_CHUNK: usize = 500;
 
 /// What one slice of the backfill did: the rows it wrote and the rows still null with attempts, read after the slice
 /// committed. The rare row whose trail lost every attempt stays in the pending index and counts in neither.
@@ -1031,81 +1035,36 @@ const SERVING_PENDING: &str = " INDEXED BY requests_serving_pending \
 /// exist, newest first through `requests_serving_pending`, the facts through `ServingFacts::of`, the one rule the
 /// landing runs, so a row landed after the step and a backfilled row with the same attempts read alike. The slice is
 /// one transaction under the purge handoff, as a retention slice is: it starts once every write begun before it has
-/// ended, and it ends after the row in progress once a write is waiting, so a batch waits for the slice's read and one
-/// row at most. The start calls it once before the ledger task writes, where nothing waits and the slice runs whole,
-/// and a pass of the purge task calls it slice after slice until `left` reads zero. `left` counts the same rows
-/// through the same index on the slice's connection after its transaction commits, with no write lock held.
+/// ended, and it ends after the row in progress once a write is waiting, so a batch waits for one chunk's read and one
+/// row at most. The start calls it once before the ledger task writes, where nothing waits and the slice runs whole.
+/// `left` counts the same rows through the same index on the slice's connection after its transaction commits, with no
+/// write lock held. A pass of the purge task runs the same slice through `backfill_serving_slice`, slice after slice
+/// until no row is left.
 pub fn backfill_serving_facts(db: &LedgerDb) -> Result<Backfilled, LedgerError> {
-    db.purge_yielding(fill_serving_slice)
+    db.purge_yielding(counted_serving_slice)
 }
 
-/// The slice on `conn`: the read, the fills until `waiting` answers true past the first row, the commit and the count.
-fn fill_serving_slice(
+/// One slice of the purge task's pass, answering the rows it wrote and whether a row is left, asked through the
+/// count's own predicate on the slice's connection after its commit. The pass reads nothing past whether to go on, so
+/// the probe stops at the first pending row rather than counting them all after every slice.
+pub(crate) fn backfill_serving_slice(db: &LedgerDb) -> Result<(usize, bool), LedgerError> {
+    db.purge_yielding(|conn, waiting| {
+        let written = fill_serving_slice(conn, waiting)?;
+        let left = conn.query_row(
+            &format!("SELECT EXISTS (SELECT 1 FROM requests{SERVING_PENDING})"),
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+        Ok((written, left))
+    })
+}
+
+/// The slice on `conn`, then the count of the rows it left.
+fn counted_serving_slice(
     conn: &mut Connection,
     waiting: &dyn Fn() -> bool,
 ) -> Result<Backfilled, LedgerError> {
-    let tx = begin_write(conn)?;
-    // `ServingFacts::of` reads the request's asked speed and its last attempt alone, so the slice joins each row's
-    // serving attempt and reads those columns, every other field of the two records at its default.
-    let pending = tx
-        .prepare(
-            "SELECT r.id, r.requested_speed, a.account_id, a.upstream_status, a.outcome, a.speed, \
-             a.cache_miss_reason, a.stop_reason, a.refusal_category, a.input_tokens, a.output_tokens, \
-             a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
-             FROM requests r INDEXED BY requests_serving_pending \
-             JOIN attempts a ON a.request_id = r.id \
-             AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
-             WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at DESC LIMIT ?1",
-        )?
-        .query_map(params![BACKFILL_SLICE as i64], |r| {
-            let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
-                Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
-            };
-            let request = RequestRecord {
-                id: r.get(0)?,
-                requested_speed: r.get(1)?,
-                ..Default::default()
-            };
-            let last = AttemptRecord {
-                account_id: r.get(2)?,
-                upstream_status: r.get::<_, Option<i64>>(3)?.map(|n| n as u16),
-                outcome: r.get(4)?,
-                speed: r.get(5)?,
-                cache_miss_reason: r.get(6)?,
-                stop_reason: r.get(7)?,
-                refusal_category: r.get(8)?,
-                input_tokens: tokens(9)?,
-                output_tokens: tokens(10)?,
-                cache_read_tokens: tokens(11)?,
-                cache_write_5m_tokens: tokens(12)?,
-                cache_write_1h_tokens: tokens(13)?,
-                ..Default::default()
-            };
-            Ok((request, last))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut written = 0;
-    {
-        let set = SERVING_COLUMNS
-            .iter()
-            .enumerate()
-            .map(|(i, column)| format!("{column} = ?{}", i + 2))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let mut fill = tx.prepare(&format!("UPDATE requests SET {set} WHERE id = ?1"))?;
-        for (request, last) in &pending {
-            // The first row lands whatever waits, so a slice under steady writes still moves the backfill on.
-            if written > 0 && waiting() {
-                break;
-            }
-            let facts = ServingFacts::of(request, std::slice::from_ref(last));
-            fill.execute(params_from_iter(
-                once(Value::from(request.id.clone())).chain(serving_values(&facts)),
-            ))?;
-            written += 1;
-        }
-    }
-    tx.commit()?;
+    let written = fill_serving_slice(conn, waiting)?;
     // Counted after the commit on the slice's own connection: no write lock is held, and no blocking worker of the
     // runtime waits on the reader pool.
     let left = conn.query_row(
@@ -1114,6 +1073,83 @@ fn fill_serving_slice(
         |r| r.get::<_, i64>(0),
     )? as usize;
     Ok(Backfilled { written, left })
+}
+
+/// The slice on `conn`: the reads chunk by chunk, the fills until `waiting` answers true past the first row, and the
+/// commit. Answers the rows it wrote.
+fn fill_serving_slice(
+    conn: &mut Connection,
+    waiting: &dyn Fn() -> bool,
+) -> Result<usize, LedgerError> {
+    let tx = begin_write(conn)?;
+    let mut written = 0;
+    {
+        // `ServingFacts::of` reads the request's asked speed and its last attempt alone, so the slice joins each row's
+        // serving attempt and reads those columns, every other field of the two records at its default.
+        let mut pending = tx.prepare(
+            "SELECT r.id, r.requested_speed, a.account_id, a.upstream_status, a.outcome, a.speed, \
+             a.cache_miss_reason, a.stop_reason, a.refusal_category, a.input_tokens, a.output_tokens, \
+             a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
+             FROM requests r INDEXED BY requests_serving_pending \
+             JOIN attempts a ON a.request_id = r.id \
+             AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
+             WHERE r.serving_account_id IS NULL AND r.attempts > 0 ORDER BY r.received_at DESC LIMIT ?1",
+        )?;
+        let set = SERVING_COLUMNS
+            .iter()
+            .enumerate()
+            .map(|(i, column)| format!("{column} = ?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut fill = tx.prepare(&format!("UPDATE requests SET {set} WHERE id = ?1"))?;
+        // A filled row leaves the pending index, so each chunk starts after the rows the one before it filled.
+        'slice: while written < BACKFILL_SLICE {
+            let chunk = pending
+                .query_map(
+                    params![BACKFILL_CHUNK.min(BACKFILL_SLICE - written) as i64],
+                    |r| {
+                        let request = RequestRecord {
+                            id: r.get(0)?,
+                            requested_speed: r.get(1)?,
+                            ..Default::default()
+                        };
+                        let last = AttemptRecord {
+                            account_id: r.get(2)?,
+                            upstream_status: r.get::<_, Option<i64>>(3)?.map(|n| n as u16),
+                            outcome: r.get(4)?,
+                            speed: r.get(5)?,
+                            cache_miss_reason: r.get(6)?,
+                            stop_reason: r.get(7)?,
+                            refusal_category: r.get(8)?,
+                            input_tokens: opt_u64(r, 9)?,
+                            output_tokens: opt_u64(r, 10)?,
+                            cache_read_tokens: opt_u64(r, 11)?,
+                            cache_write_5m_tokens: opt_u64(r, 12)?,
+                            cache_write_1h_tokens: opt_u64(r, 13)?,
+                            ..Default::default()
+                        };
+                        Ok((request, last))
+                    },
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            if chunk.is_empty() {
+                break;
+            }
+            for (request, last) in &chunk {
+                // The first row lands whatever waits, so a slice under steady writes still moves the backfill on.
+                if written > 0 && waiting() {
+                    break 'slice;
+                }
+                let facts = ServingFacts::of(request, std::slice::from_ref(last));
+                fill.execute(params_from_iter(
+                    once(Value::from(request.id.clone())).chain(serving_values(&facts)),
+                ))?;
+                written += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(written)
 }
 
 pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), LedgerError> {
@@ -1170,10 +1206,12 @@ pub(crate) fn update_cache_map_in(
 pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused, fallback_digest, serving_account_id, reached_upstream, outcome_class, speed, cache_miss_reason, stop_reason, refusal_category, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens FROM requests";
 pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest FROM attempts";
 
+/// Column `i` as an optional count, `None` where it is null.
+pub(crate) fn opt_u64(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Option<u64>> {
+    Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
+}
+
 pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestRecord> {
-    let opt_u64 = |i: usize| -> rusqlite::Result<Option<u64>> {
-        Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
-    };
     Ok(RequestRecord {
         id: r.get(0)?,
         received_at: r.get(1)?,
@@ -1192,8 +1230,8 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         status: r.get::<_, Option<i64>>(14)?.map(|n| n as u16),
         outcome: r.get(15)?,
         attempts: r.get(16)?,
-        request_bytes: opt_u64(17)?,
-        response_bytes: opt_u64(18)?,
+        request_bytes: opt_u64(r, 17)?,
+        response_bytes: opt_u64(r, 18)?,
         ttfb_ms: r.get(19)?,
         ttfc_ms: r.get(20)?,
         duration_ms: r.get(21)?,
@@ -1205,8 +1243,8 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
         user_agent: r.get(26)?,
         effort: r.get(27)?,
         thinking_type: r.get(28)?,
-        thinking_budget: opt_u64(29)?,
-        max_tokens: opt_u64(30)?,
+        thinking_budget: opt_u64(r, 29)?,
+        max_tokens: opt_u64(r, 30)?,
         tool_count: r.get::<_, i64>(31)? as u32,
         system_blocks: r.get::<_, i64>(32)? as u32,
         message_count: r.get::<_, i64>(33)? as u32,
@@ -1244,10 +1282,10 @@ pub(crate) fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<RequestR
             cache_miss_reason: r.get(63)?,
             stop_reason: r.get(64)?,
             refusal_category: r.get(65)?,
-            input_tokens: opt_u64(66)?,
-            output_tokens: opt_u64(67)?,
-            cache_read_tokens: opt_u64(68)?,
-            cache_write_tokens: opt_u64(69)?,
+            input_tokens: opt_u64(r, 66)?,
+            output_tokens: opt_u64(r, 67)?,
+            cache_read_tokens: opt_u64(r, 68)?,
+            cache_write_tokens: opt_u64(r, 69)?,
         },
     })
 }
@@ -1271,9 +1309,6 @@ pub(crate) fn request_guardrails(
 }
 
 pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptRecord> {
-    let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
-        Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
-    };
     Ok(AttemptRecord {
         request_id: r.get(0)?,
         attempt: r.get(1)?,
@@ -1289,11 +1324,11 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
         outcome: r.get(11)?,
         cooldown_scope: r.get(12)?,
         cooldown_until: r.get(13)?,
-        input_tokens: tokens(14)?,
-        output_tokens: tokens(15)?,
-        cache_read_tokens: tokens(16)?,
-        cache_write_5m_tokens: tokens(17)?,
-        cache_write_1h_tokens: tokens(18)?,
+        input_tokens: opt_u64(r, 14)?,
+        output_tokens: opt_u64(r, 15)?,
+        cache_read_tokens: opt_u64(r, 16)?,
+        cache_write_5m_tokens: opt_u64(r, 17)?,
+        cache_write_1h_tokens: opt_u64(r, 18)?,
         service_tier: r.get(19)?,
         cache_miss_reason: r.get(20)?,
         client_drift: r.get(21)?,
@@ -1306,15 +1341,15 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
         overage_in_use: r.get(28)?,
         overage_utilization: r.get(29)?,
         tier: r.get(44)?,
-        thinking_tokens: tokens(30)?,
-        web_search_requests: tokens(31)?,
-        web_fetch_requests: tokens(32)?,
+        thinking_tokens: opt_u64(r, 30)?,
+        web_search_requests: opt_u64(r, 31)?,
+        web_fetch_requests: opt_u64(r, 32)?,
         stop_reason: r.get(33)?,
         stop_sequence: r.get(34)?,
         served_model: r.get(35)?,
         speed: r.get(36)?,
         inference_geo: r.get(37)?,
-        cleared_input_tokens: tokens(38)?,
+        cleared_input_tokens: opt_u64(r, 38)?,
         refusal_category: r.get(39)?,
         refusal_recommended_model: r.get(40)?,
         selection: r.get(41)?,
@@ -2354,9 +2389,9 @@ mod tests {
         let slice = |write: bool| {
             db.purge_yielding(|conn, waiting| {
                 if write {
-                    db.write(|_| fill_serving_slice(conn, waiting))
+                    db.write(|_| counted_serving_slice(conn, waiting))
                 } else {
-                    fill_serving_slice(conn, waiting)
+                    counted_serving_slice(conn, waiting)
                 }
             })
             .unwrap()
