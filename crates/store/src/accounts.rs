@@ -701,17 +701,17 @@ static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
 
 pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
-    let profile = json_column(row, 7)?;
+    let profile = document_of(row, 7)?;
     term_of(row, profile.as_ref())
 }
 
 fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
     // Parsed once, so the term's class, its plan and the extras share it.
-    let profile = json_column(row, 7)?;
+    let profile = document_of(row, 7)?;
     let term = term_of(row, profile.as_ref())?;
     let extras = AccountExtras {
         created_at: row.get(12)?,
-        limit_resets: json_column(row, 9)?,
+        limit_resets: document_of(row, 9)?,
         limit_resets_epoch: row.get::<_, i64>(11)? as u64,
         limit_resets_read_at: row.get(10)?,
         profile,
@@ -721,7 +721,7 @@ fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
 }
 
 /// The JSON document in a text column of a `TERM_COLUMNS` row. A document that does not parse reads as absent.
-fn json_column(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<serde_json::Value>> {
+fn document_of(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<serde_json::Value>> {
     let raw: Option<String> = row.get(index)?;
     Ok(raw
         .as_deref()
