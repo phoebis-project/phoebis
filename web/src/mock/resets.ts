@@ -156,7 +156,7 @@ export function limitResetsWire(seed: string, blocks: Readonly<Record<string, Mo
   };
 }
 
-/** A Fable week given back: none left of one, and the week cleared. */
+/** A reset of a grant that clears the Fable week: none left of one, and the week cleared. */
 const FABLE_RESET: MockAnswer = { answer: { cleared: ['seven_day_fable'], cooldown_until: null, outcome: 'used', reason: null, resets_left: 0, result: 'reset', weekly_resets_at: null } };
 
 /** What a use of each grant answers: the route's 200 in its own names, or the refusal the call throws. */
@@ -167,6 +167,8 @@ export const RESET_ANSWERS: Readonly<Record<string, MockAnswer>> = {
   'rg-primary-2': FABLE_RESET,
   // A status other than 401, 403 or 429 leaves the claim unsettled.
   'rg-secondary-1': { refusal: { code: 'limit_reset_unanswered', message: 'upstream: HTTP 503', status: 502 }, upstream: 503 },
+  // The grant is usable once the block's cooldown passed, 40 minutes after the story's clock.
+  'rg-workshop-1': FABLE_RESET,
 };
 
 /** The block a claim's answer leaves, folded as the router's store folds it, the use stamped at `at` where it was used. */
