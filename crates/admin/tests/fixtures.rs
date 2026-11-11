@@ -591,6 +591,46 @@ async fn every_route_is_captured_and_holds_its_shape() {
             },
         )
         .unwrap();
+    const DAY: i64 = 86_400_000;
+    let free_end = now - 8 * DAY;
+    // Before its end the organization held Pro, and the head of its last request, three days before the end, read the
+    // week under that plan, so the term-ended row the allowance capture carries answers the pair. The router stamps a
+    // reading with the pair its snapshot holds as the reading lands, so the plan's document stands and a reload holds
+    // the account by then. The reading names no reset: each reload's purge walks the clock, which would announce a
+    // passed one.
+    parts.store.set_profile(
+        "free-org",
+        r#"{"account":{"uuid":"f","email":"free@example.invalid","display_name":"Free"},"organization":{"uuid":"g","name":"Free Org","organization_type":"claude_pro","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_ai","has_extra_usage_enabled":false}}"#,
+        &SubscriptionRow {
+            tier: Some("default_claude_ai".into()),
+            since: None,
+            trial_ends_at: None,
+        },
+    ).unwrap();
+    parts.router.reload().await.unwrap();
+    parts
+        .router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "free-org".into(),
+            sample: phoebis_routing::UtilizationSample {
+                observed_at: free_end - 3 * DAY,
+                ..Default::default()
+            }
+            .with(
+                "seven_day",
+                phoebis_routing::WindowReading {
+                    utilization: 0.3,
+                    reset: None,
+                    observed_at: free_end - 3 * DAY,
+                    source: phoebis_routing::WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: None,
+        })
+        .await;
     parts.store.set_profile(
         "free-org",
         r#"{"account":{"uuid":"f","email":"free@example.invalid","display_name":"Free"},"organization":{"uuid":"g","name":"Free Org","organization_type":"claude_free","billing_type":"free","rate_limit_tier":"default_claude_ai","has_extra_usage_enabled":false}}"#,
@@ -602,8 +642,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
     ).unwrap();
     // The free organization's term ended eight days ago, inside a week its reading below names, so the unused
     // allowance capture carries a term end. Set ahead of the pool's creation, whose reload brings it to the snapshot.
-    const DAY: i64 = 86_400_000;
-    let free_end = now - 8 * DAY;
     parts
         .store
         .set_canceled(

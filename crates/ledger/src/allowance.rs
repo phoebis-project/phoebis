@@ -25,8 +25,16 @@ pub struct AllowanceReset {
     pub observed_at: i64,
     /// `clock`, `sample` or `term_ended`.
     pub source: String,
-    /// The event's pair for a `sample` or `clock` reset, `None` where the event carries none and on a `term_ended`
-    /// row.
+    /// The event's pair for a `sample` or `clock` reset, `None` where the event carries none. A `term_ended` row
+    /// carries the pair `unused_allowance` is handed for its window, the router's stored reading of the week from
+    /// before the account's plan-ended flag, `None` where it is handed none.
+    pub plan: Option<String>,
+    pub tier: Option<String>,
+}
+
+/// The plan word and the tier a `term_ended` row carries.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TermPair {
     pub plan: Option<String>,
     pub tier: Option<String>,
 }
@@ -59,13 +67,17 @@ fn share_left(utilization: f64) -> f64 {
 /// `seven_day_overage_included` folded into `seven_day_fable` with the newer reading standing, and a reading with no
 /// utilization skipped. A reading with no reset instant shows no open week. A reset of an account in `term_ends` at or
 /// after its end is left out, so the week the end cut short counts once. Ordered by account, window, then `reset_at`
-/// newest first. No rollup and no stored figure: the history is the events the purge still holds.
+/// newest first. No rollup and no stored figure: the history is the events the purge still holds. `term_pairs` holds,
+/// per ended account and weekly window as `account_window_id` names it, the pair the window's `term_ended` row
+/// carries: the plan word and the tier of the router's stored reading of that window, where the account carries no
+/// plan-ended flag or the reading was observed before it. A window it lacks answers null.
 pub fn unused_allowance(
     conn: &Connection,
     accounts: &[String],
     from: i64,
     to: i64,
     term_ends: &BTreeMap<String, i64>,
+    term_pairs: &BTreeMap<String, BTreeMap<String, TermPair>>,
 ) -> Result<Vec<AllowanceReset>, LedgerError> {
     if accounts.is_empty() {
         return Ok(Vec::new());
@@ -147,17 +159,24 @@ pub fn unused_allowance(
                 }
             }
         }
+        let pairs = term_pairs.get(account_id);
         rows.extend(
             last.into_iter()
-                .map(|(window, (utilization, observed_at))| AllowanceReset {
-                    account_id: account_id.clone(),
-                    window,
-                    reset_at: *end_at,
-                    share_left: share_left(utilization),
-                    observed_at,
-                    source: "term_ended".into(),
-                    plan: None,
-                    tier: None,
+                .map(|(window, (utilization, observed_at))| {
+                    let pair = pairs
+                        .and_then(|pairs| pairs.get(&window))
+                        .cloned()
+                        .unwrap_or_default();
+                    AllowanceReset {
+                        account_id: account_id.clone(),
+                        window,
+                        reset_at: *end_at,
+                        share_left: share_left(utilization),
+                        observed_at,
+                        source: "term_ended".into(),
+                        plan: pair.plan,
+                        tier: pair.tier,
+                    }
                 }),
         );
     }

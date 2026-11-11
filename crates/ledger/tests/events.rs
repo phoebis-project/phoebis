@@ -2885,6 +2885,7 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
                 from,
                 to,
                 &BTreeMap::from([("c".into(), end)]),
+                &BTreeMap::new(),
             )
         })
         .unwrap();
@@ -2903,7 +2904,7 @@ fn the_unused_allowance_lists_each_weekly_reset_in_range_newest_first_and_a_term
          read from the last reading before it"
     );
     let none = db
-        .read_blocking(|c| unused_allowance(c, &[], from, to, &BTreeMap::new()))
+        .read_blocking(|c| unused_allowance(c, &[], from, to, &BTreeMap::new(), &BTreeMap::new()))
         .unwrap();
     assert_eq!(none, [], "an empty list reads no account's resets");
 }
@@ -2976,6 +2977,7 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
                 now - 30 * DAY,
                 now,
                 &BTreeMap::from([("d".into(), end)]),
+                &BTreeMap::new(),
             )
         })
         .unwrap();
@@ -3017,6 +3019,7 @@ fn a_term_end_reads_each_open_weeks_last_reading_once_and_leaves_out_the_resets_
                 now - 30 * DAY,
                 now,
                 &BTreeMap::from([("e".into(), end)]),
+                &BTreeMap::new(),
             )
         })
         .unwrap();
@@ -3088,6 +3091,7 @@ fn a_term_end_leaves_out_an_ended_accounts_resets_by_the_resets_own_instant() {
                 now - 30 * DAY,
                 now,
                 &BTreeMap::from([("f".into(), end)]),
+                &BTreeMap::new(),
             )
         })
         .unwrap();
@@ -3158,6 +3162,7 @@ fn a_term_end_before_the_range_drops_the_resets_after_it_and_lists_no_row_of_its
                 from,
                 to,
                 &BTreeMap::from([("g".into(), end)]),
+                &BTreeMap::new(),
             )
         })
         .unwrap()
@@ -3210,7 +3215,14 @@ fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_t
     }
     let rows = db
         .read_blocking(|c| {
-            unused_allowance(c, &["a".into()], now - 30 * DAY, now, &BTreeMap::new())
+            unused_allowance(
+                c,
+                &["a".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
         })
         .unwrap();
     assert_eq!(
@@ -3253,10 +3265,10 @@ fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_t
     );
 }
 
-/// The term end's row is the plan's end, and the reading before it already carries the pair, so the row names none
-/// while the account's resets name theirs.
+/// The term end's row carries the pair it is handed and no other, so a reset event's pair from before the end names
+/// none on it while the account's resets name theirs.
 #[test]
-fn a_term_end_s_row_names_no_pair() {
+fn a_term_end_s_row_names_no_pair_it_was_not_handed() {
     let db = LedgerDb::open_in_memory().unwrap();
     let now = 100 * DAY;
     let end = now - 5 * DAY;
@@ -3288,6 +3300,7 @@ fn a_term_end_s_row_names_no_pair() {
                 now - 30 * DAY,
                 now,
                 &BTreeMap::from([("h".into(), end)]),
+                &BTreeMap::new(),
             )
         })
         .unwrap();

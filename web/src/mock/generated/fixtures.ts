@@ -534,8 +534,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "lifetime": 0
           },
           "usage": {
-            "error": "the poll has not read this account yet",
-            "fetched_at": null,
+            "error": null,
+            "fetched_at": 1790770600000,
             "held_until": null,
             "poll": null
           },
@@ -10374,8 +10374,8 @@ export const FIXTURES: Record<string, Fixture> = {
                   "share_left": 0.7,
                   "observed_at": 1790770600000,
                   "source": "term_ended",
-                  "plan": null,
-                  "tier": null
+                  "plan": "pro",
+                  "tier": "default_claude_ai"
                 }
               ],
               "total_share_left": 0.7,
@@ -11265,7 +11265,7 @@ export const FIXTURES: Record<string, Fixture> = {
         },
         "attempted": [],
         "holds": [],
-        "registry_revision": 66,
+        "registry_revision": 67,
         "body_tokens": 0
       },
       "pin": {
@@ -13055,8 +13055,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "budget_until": null,
               "spends": [],
               "active_pins": 0,
-              "pace_score": 60,
-              "burn": null,
+              "pace_score": 42,
+              "burn": 0,
               "factor": null,
               "speed": null
             }

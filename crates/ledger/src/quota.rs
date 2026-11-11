@@ -64,7 +64,8 @@ enum ProfileRead {
 }
 
 /// Whether the profile document names an organization with no plan, the type an ended subscription's profile reads.
-fn reports_no_plan(profile: &serde_json::Value) -> bool {
+/// The poll flags an account by it, and the pairing confirm keeps the flag by it.
+pub fn reports_no_plan(profile: &serde_json::Value) -> bool {
     profile["organization"]["organization_type"] == "claude_free"
 }
 

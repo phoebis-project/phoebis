@@ -27,7 +27,7 @@ mod schema;
 mod task;
 mod usage;
 
-pub use allowance::{unused_allowance, AllowanceReset};
+pub use allowance::{unused_allowance, AllowanceReset, TermPair};
 pub use assemble::{Assembler, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{
     run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
@@ -84,7 +84,7 @@ pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRo
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};
 pub use query::{Direction, RequestOrder};
 pub use quota::{
-    lead_over_pace, polled, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
+    lead_over_pace, polled, reports_no_plan, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
     PROFILE_EVERY_POLLS,
 };
 pub use reconcile::{

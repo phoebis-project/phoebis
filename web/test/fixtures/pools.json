@@ -495,8 +495,8 @@
             "budget_until": null,
             "spends": [],
             "active_pins": 0,
-            "pace_score": 60.0,
-            "burn": null,
+            "pace_score": 42.0,
+            "burn": 0.0,
             "factor": null,
             "speed": null
           }

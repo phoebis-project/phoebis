@@ -240,8 +240,8 @@
           "lifetime": 0
         },
         "usage": {
-          "error": "the poll has not read this account yet",
-          "fetched_at": null,
+          "error": null,
+          "fetched_at": 1790770600000,
           "held_until": null,
           "poll": null
         },

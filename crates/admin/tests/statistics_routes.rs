@@ -2731,6 +2731,141 @@ async fn the_unused_allowance_route_answers_each_resets_plan_and_tier_and_null_o
     );
 }
 
+/// Both accounts carry a saved end and a plan-ended flag a quarter hour after it, and the router holds a weekly reading
+/// of each taken while the plan stood: the first a millisecond before its flag, so after its saved end, the second at
+/// its flag.
+#[tokio::test]
+async fn a_term_ended_row_takes_the_pair_of_the_routers_reading_from_before_the_plan_ended_flag() {
+    use common::patch;
+    use phoebis_routing::{Report, UtilizationSample, WindowReading, WindowSource};
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    const DAY: i64 = 24 * HOUR;
+    let end = now - DAY;
+    let flagged = end + 15 * 60_000;
+    let created = post(
+        &parts.app,
+        "/admin/accounts",
+        r#"{"id":"second","kind":"oauth","label":"Second"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    for (id, document, tier) in [
+        (
+            "business",
+            r#"{"organization":{"organization_type":"claude_max","rate_limit_tier":"default_claude_max_20x"}}"#,
+            "default_claude_max_20x",
+        ),
+        (
+            "second",
+            r#"{"organization":{"organization_type":"claude_pro","rate_limit_tier":"default_claude_ai"}}"#,
+            "default_claude_ai",
+        ),
+    ] {
+        parts
+            .store
+            .set_profile(
+                id,
+                document,
+                &phoebis_store::SubscriptionRow {
+                    tier: Some(tier.into()),
+                    ..phoebis_store::SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    parts.router.reload().await.unwrap();
+    for (id, observed_at) in [("business", flagged - 1), ("second", flagged)] {
+        parts
+            .router
+            .report(Report::Sample {
+                account_id: id.into(),
+                sample: UtilizationSample::default().with(
+                    "seven_day",
+                    WindowReading {
+                        utilization: 0.85,
+                        reset: Some(end + 2 * DAY),
+                        observed_at,
+                        source: WindowSource::Poll,
+                        plan: None,
+                        tier: None,
+                    },
+                ),
+                incarnation: 1,
+                source_request_id: None,
+            })
+            .await;
+        let saved = patch(
+            &parts.app,
+            &format!("/admin/accounts/{id}"),
+            &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(saved.status(), 200);
+        assert!(parts.store.set_plan_ended(id, flagged).unwrap());
+        parts
+            .db
+            .insert_samples(
+                &[phoebis_ledger::QuotaSampleRecord {
+                    account_id: id.into(),
+                    bucket: phoebis_ledger::bucket_of(end - DAY),
+                    window: "seven_day".into(),
+                    utilization: Some(0.8),
+                    reset_at: Some(end + 2 * DAY),
+                    source: phoebis_ledger::SampleSource::Poll,
+                    observed_at: end - DAY,
+                }],
+                None,
+            )
+            .unwrap();
+    }
+    parts.router.reload().await.unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            "/admin/analytics/unused_allowance",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let ended: Vec<_> = answer["accounts"]
+        .as_array()
+        .expect("the accounts")
+        .iter()
+        .map(|account| {
+            let row = &account["windows"][0]["resets"][0];
+            (
+                account["account_id"].clone(),
+                row["source"].clone(),
+                row["plan"].clone(),
+                row["tier"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ended,
+        [
+            (
+                serde_json::json!("business"),
+                serde_json::json!("term_ended"),
+                serde_json::json!("max_20x"),
+                serde_json::json!("default_claude_max_20x"),
+            ),
+            (
+                serde_json::json!("second"),
+                serde_json::json!("term_ended"),
+                serde_json::Value::Null,
+                serde_json::Value::Null,
+            ),
+        ],
+        "a reading from before the flag hands its pair to the row, and one at the flag hands none: {answer}"
+    );
+}
+
 #[tokio::test]
 async fn a_trial_end_that_passed_in_range_ends_a_week_only_where_the_plan_ended_flag_followed_it() {
     let parts = common::admin_parts_full().await;

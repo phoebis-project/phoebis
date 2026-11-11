@@ -195,14 +195,13 @@ test('the accounts list carries the poll standing and no usage route is read', a
   const calls = stub(() => answer(200, body));
   const accounts = await new HttpApi().listAccounts();
   assert.deepEqual(calls.map((c) => [c.init.method ?? 'GET', c.url]), [['GET', '/admin/accounts']], 'one read of the list, no usage read per account');
-  // The free organization's and the seat's polls have not read them yet, so their rows carry the sentence standing in
-  // for a snapshot.
-  const free = body.accounts.find((a) => a.id === 'free-org').usage;
+  // The seat's poll has not read it yet, so its row carries the sentence standing in for a snapshot. The free
+  // organization's row answers the reading the router holds from before its plan ended.
   const seat = body.accounts.find((a) => a.id === 'usage-seat').usage;
   assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [
     ['business', 'clean'],
     ['direct', null],
-    ['free-org', { accountId: 'free-org', error: free.error, fetchedAt: null, heldUntil: null, poll: null }],
+    ['free-org', { accountId: 'free-org', error: null, fetchedAt: '2026-09-30T12:16:40.000Z', heldUntil: null, poll: null }],
     ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null }],
   ]);
 });

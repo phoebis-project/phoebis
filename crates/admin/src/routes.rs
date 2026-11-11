@@ -984,7 +984,7 @@ pub(crate) struct Confirmed {
     #[schema(example = "confirmed")]
     pub status: String,
     /// The first usage poll runs in the background, so the account's windows land a few seconds after this
-    /// answer.
+    /// answer. False for an account whose plan-ended flag stands, which no usage poll reads.
     pub first_poll_in_flight: bool,
 }
 
@@ -1283,8 +1283,10 @@ async fn pairing_callback(
 /// The answer comes once the account's credential is committed, its state set to `ready`, its usage cache
 /// invalidated, and its cached catalog evicted, fetched again on the next read. The answer does not wait for the usage
 /// endpoint: the confirm reads it right after answering, records the first sample and hands it to the router, so the
-/// account's windows show within seconds. For a session started with `new`, the account row is created `ready` with
-/// its identity, its credential and its profile in one write, and the mutation log names the created account.
+/// account's windows show within seconds. An account whose plan-ended flag stands, kept by a profile that still
+/// reports no plan, takes no such read, as the usage poll reads no such account. For a session started with `new`, the
+/// account row is created `ready` with its identity, its credential and its profile in one write, and the mutation log
+/// names the created account.
 #[utoipa::path(
     post,
     path = "/admin/oauth/sessions/{id}/confirm",
@@ -1489,8 +1491,8 @@ async fn pairing_confirm(
         }
     }
     // The confirmed pairing names the plan its profile holds, so a flag an ended plan left goes with it, published by
-    // the reload below.
-    if !created {
+    // the reload below. A profile that still reports no plan keeps the flag, as the poll would set it again.
+    if !created && !phoebis_ledger::reports_no_plan(&pending.profile.raw) {
         match state.store.clear_plan_ended(&row.id) {
             Ok(true) => state.ledger.record(phoebis_ledger::plan_restored(
                 &row.id,
@@ -1515,27 +1517,31 @@ async fn pairing_confirm(
             // windows show as soon as the endpoint answers. The answer does not wait on it: the endpoint can be
             // slow and the pairing is committed either way, so a failed read records nothing and the next pass
             // reads the account. Tracked so a shutdown aborts a read still in flight rather than letting it
-            // record into the closing channel.
-            let polled = Arc::clone(&state);
-            let account_id = row.id.clone();
-            let handle = tokio::spawn(async move {
-                match polled.store.account(&account_id) {
-                    Ok(Some(committed)) => {
-                        let _ = polled.quota_poll().poll_account(&committed).await;
+            // record into the closing channel. A flag the confirm kept pauses the account's usage reads as it pauses
+            // the poll's schedule: a reading would land after the flag and take the term-ended row's pair with it.
+            let first_poll = !QuotaPoll::plan_paused(&state.store, &row.id);
+            if first_poll {
+                let polled = Arc::clone(&state);
+                let account_id = row.id.clone();
+                let handle = tokio::spawn(async move {
+                    match polled.store.account(&account_id) {
+                        Ok(Some(committed)) => {
+                            let _ = polled.quota_poll().poll_account(&committed).await;
+                        }
+                        Ok(None) => {
+                            tracing::debug!(account = %account_id, "the account was deleted before its first poll")
+                        }
+                        Err(error) => {
+                            tracing::debug!(account = %account_id, %error, "the account could not be re-read for its first poll")
+                        }
                     }
-                    Ok(None) => {
-                        tracing::debug!(account = %account_id, "the account was deleted before its first poll")
-                    }
-                    Err(error) => {
-                        tracing::debug!(account = %account_id, %error, "the account could not be re-read for its first poll")
-                    }
-                }
-            });
-            state.ledger.track(handle);
+                });
+                state.ledger.track(handle);
+            }
             Json(Confirmed {
                 account_id: row.id.clone(),
                 status: "confirmed".into(),
-                first_poll_in_flight: true,
+                first_poll_in_flight: first_poll,
             })
             .into_response()
         }
@@ -2161,7 +2167,7 @@ pub(crate) struct Account {
     /// stands. While it is set the usage poll sends the account no usage request and reads its profile every third
     /// poll, a quarter hour apart, the routing reads the account as past its end, the row answers the document the read
     /// found (`subscription.plan` `free`, and its `profile.organization_type`, `profile.billing_type` and
-    /// `subscription.tier`), and a profile read that finds a plan, or a pairing confirm, clears it.
+    /// `subscription.tier`), and a profile read or a pairing confirm that finds a plan clears it.
     pub plan_ended_at: Option<i64>,
     /// `disconnected`, `funding_required`, `reauth_required`, `ready` or `unpaired`.
     #[schema(value_type = String, example = "disconnected")]
@@ -2562,8 +2568,8 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         });
     // The token manager hands out no token for an `oauth` account in either state, and a flagged account's poll is
     // paused and its routing reads it as past its end, so neither the poll nor a request reads the account until it
-    // pairs again or a profile read finds a plan: what the router and the ledger still hold is its last reading, which
-    // both paths below would draw as live.
+    // pairs again, or for a flagged one until a pairing or a profile read finds a plan: what the router and the ledger
+    // still hold is its last reading, which both paths below would draw as live.
     let windows_withheld = row.kind == AccountKind::Oauth
         && (matches!(
             row.state,

@@ -176,12 +176,13 @@ due at once. While the flag stands the state stays as it was, the usage poll sen
 reads its profile every quarter hour, the account answers the plan `free` and the tier the document names, the router
 places nothing on the account, reading it as past its end, the account view answers no quota window, since the last
 reading would draw as live, and Refresh reads the profile before any usage request. The readings taken before the end
-keep the plan and the tier they were priced under. A profile read that finds a plan again, or a pairing confirmed on the
-account, clears the flag, and the usage poll reads the account from its next slot. A disconnect leaves the flag standing
-until the pairing after it. `GET /admin/accounts` answers the flag as `plan_ended_at`, and the routing log records
-`plan_ended` and `plan_restored`. A profile read that finds a Team or Enterprise plan whose tier the cost model holds no
-capacity row for logs one warning naming the account and the tier, once per account and tier until a restart, and the
-seat reads unpriced until the cost model holds the tier.
+keep the plan and the tier they were priced under. A profile read or a pairing confirmed on the account that finds a
+plan again clears the flag, and the usage poll reads the account from its next slot. A pairing whose profile still
+reports no plan keeps the flag and starts no usage read, and a disconnect leaves the flag standing until a pairing that
+finds a plan. `GET /admin/accounts` answers the flag as `plan_ended_at`, and the routing log records `plan_ended` and
+`plan_restored`. A profile read that finds a Team or Enterprise plan whose tier the cost model holds no capacity row for
+logs one warning naming the account and the tier, once per account and tier until a restart, and the seat reads unpriced
+until the cost model holds the tier.
 
 The Accounts view offers these actions, each through a control that [The console](console.md#accounts) describes, and
 each calls its own route:

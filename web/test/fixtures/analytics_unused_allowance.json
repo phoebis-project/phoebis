@@ -62,8 +62,8 @@
                 "share_left": 0.7,
                 "observed_at": 1790770600000,
                 "source": "term_ended",
-                "plan": null,
-                "tier": null
+                "plan": "pro",
+                "tier": "default_claude_ai"
               }
             ],
             "total_share_left": 0.7,

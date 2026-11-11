@@ -1182,6 +1182,69 @@ async fn a_pairing_confirm_clears_the_plan_ended_flag_and_writes_plan_restored_f
     );
 }
 
+/// A re-pair whose profile still reports no plan keeps the flag at its instant, records no `plan_restored` and starts
+/// no first poll, since the poll's schedule reads no flagged account.
+#[tokio::test]
+async fn a_pairing_confirm_on_a_profile_with_no_plan_keeps_the_plan_ended_flag_and_starts_no_poll()
+{
+    use common::{json, login, post};
+    let h = common::admin_parts_full().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let flagged = common::NOW - 60_000;
+    assert!(h.store.set_plan_ended("business", flagged).unwrap());
+    let mut profile: serde_json::Value =
+        serde_json::from_slice(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Profile,
+        ))
+        .unwrap();
+    profile["organization"]["organization_type"] = serde_json::json!("claude_free");
+    h.up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&profile).unwrap(),
+        },
+    );
+    let id = common::exchanged_session_for(&h.app, &cookie, "business").await;
+    let confirmed = post(
+        &h.app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200);
+    let confirmed = json(confirmed).await;
+    // The writer lands its channel in order, so once a row recorded behind the confirm shows, a `plan_restored` the
+    // confirm recorded shows too.
+    h.ledger
+        .record(phoebis_ledger::Record::Event(phoebis_ledger::EventRecord {
+            at: common::NOW,
+            kind: "settled".into(),
+            ..Default::default()
+        }));
+    let events = fake_upstream::wait_for_async(std::time::Duration::from_secs(5), || async {
+        let events = h.db.events(0, i64::MAX, 100).await.unwrap();
+        events.iter().any(|e| e.kind == "settled").then_some(events)
+    })
+    .await;
+    assert_eq!(
+        (
+            h.store
+                .subscription_term("business")
+                .unwrap()
+                .unwrap()
+                .plan_ended_at,
+            events.iter().filter(|e| e.kind == "plan_restored").count(),
+            &confirmed["first_poll_in_flight"],
+        ),
+        (Some(flagged), 0, &serde_json::json!(false)),
+        "the flag stands, no restore is recorded and no first poll starts: {confirmed}"
+    );
+}
+
 #[tokio::test]
 async fn the_account_row_answers_the_plan_ended_flag_as_an_instant_or_null() {
     use common::{get, json, login};
