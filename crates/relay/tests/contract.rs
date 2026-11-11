@@ -248,18 +248,20 @@ async fn a_classifier_call_off_its_judged_turns_account_is_reported_as_any_call_
         (None, Some(Classifier::ClientOff)),
         "the call off the judged turn completes with the second word, the one on it with the observation's"
     );
-    let pinned: Vec<String> = h
+    // The relay hands the judged pin back on the free call's usage report, so the call's tokens enter the classifier
+    // copy of s-1's pin at the call's model.
+    let pinned: Vec<(String, Option<String>)> = h
         .router
         .pins()
         .await
         .unwrap()
         .into_iter()
-        .map(|p| p.session_id)
+        .map(|p| (p.session_id, p.burn_unmetered_model))
         .collect();
     assert_eq!(
         pinned,
-        ["s-1"],
-        "neither call holds a pin, so the conversation's turn holds the one pin"
+        [("s-1".to_string(), Some("claude-sonnet-5".to_string()))],
+        "neither call holds a pin, so the conversation's turn holds the one pin, its copy folded by the free call"
     );
     up.shutdown().await;
 

@@ -1441,6 +1441,7 @@ struct Recorder {
     /// The slow-down hold step 5 answered, for its outcome's cycle.
     hold_plan: Option<HoldPlan>,
     /// Where the client's classifier call went (`judged_candidate`'s word, else `PLACED_DIRECTION`), for its Pin step.
+    /// `None` for a call a fallback credit directed, whose `credit` fact says where it went.
     direction: Option<&'static str>,
 }
 
@@ -1483,12 +1484,14 @@ impl Recorder {
             .find(|c| c.account_id == account_id)
     }
 
-    /// The fallback credit's directed placement shows under the `pin` step, which step 1 has already pushed: its
-    /// verdict reads `match` and it gains the fact `key` naming the account, so the record keeps its stations and its
-    /// verdict words.
-    fn directed_placed(&mut self, key: &'static str, account_id: &str) {
+    /// The fallback credit's directed placement shows under the `pin` step, which step 1 has already pushed: it gains
+    /// the fact `key` naming the account, so the record keeps its stations and its verdict words. Its verdict reads
+    /// `match`, but on the client's classifier call (`classifier`), whose step keeps `none` since the call holds no pin.
+    fn directed_placed(&mut self, key: &'static str, account_id: &str, classifier: bool) {
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
-            pin.verdict = "match";
+            if !classifier {
+                pin.verdict = "match";
+            }
             pin.facts
                 .push(Fact::text(key, account_id).about(account_id));
         }
@@ -1496,7 +1499,8 @@ impl Recorder {
 
     /// The `pin` step of the client's classifier call, which pins nothing and keeps the verdict `none` beside its
     /// reason: the turn it judges by that turn's pin's agent and model, the account `judged_turn` answers, the one the
-    /// charge reads, or `none` in a session with no turn to judge, then where the call went.
+    /// charge reads, or `none` in a session with no turn to judge, then where the call went. A call a fallback credit
+    /// directed carries no `direction`, since the `credit` fact `directed_placed` wrote names where it went.
     fn judged_pin_step(&mut self, account_id: Option<&str>, turn: Option<&PinRef>) {
         let direction = self.direction;
         if let Some(pin) = self.walk.iter_mut().find(|w| w.step == "pin") {
@@ -1530,7 +1534,8 @@ fn run(
     };
     let ttl_ms = affinity_ttl_ms(pool);
     // A marker-less request writes no cache, so under `when_cached` it has no pin to keep and spreads by the
-    // strategy instead of pinning; `always`, a marked request, or a non-portable one still pins.
+    // strategy instead of pinning. Every request under `always`, a marked one and a non-portable one still pin, the
+    // client's classifier call aside.
     let session = Some(request.session_id.as_str()).filter(|_| {
         !request.classifier
             && ttl_ms > 0
@@ -1780,13 +1785,14 @@ fn run(
         .map(|c| (c, CREDIT_WORDS))
         .or(judged.map(|(c, _)| (c, JUDGED_WORDS)));
     if let Some(c) = credit {
-        rec.directed_placed(CREDIT_WORDS.fact, &c.account_id);
+        rec.directed_placed(CREDIT_WORDS.fact, &c.account_id, request.classifier);
     }
     if request.classifier {
-        rec.direction = Some(match (credit, judged) {
-            (None, Some((_, direction))) => direction,
-            _ => PLACED_DIRECTION,
-        });
+        rec.direction = match (credit, judged) {
+            (Some(_), _) => None,
+            (None, Some((_, direction))) => Some(direction),
+            (None, None) => Some(PLACED_DIRECTION),
+        };
     }
 
     // A probe warms the pin it was sent for. With that member at its spend budget, disabled by the operator, past
@@ -1853,7 +1859,8 @@ fn run(
         rec.step("probe", "passed", facts);
     }
 
-    // Step 3: a non-portable request is bound to its pin.
+    // Step 3: a non-portable request is bound to the pin it holds. The client's classifier call holds none, so it goes
+    // where the direction read above or the placement sends it.
     if let (false, Some(((current, current_key), warmth))) =
         (request.portable, pin.as_ref().zip(warmth))
     {
@@ -6024,7 +6031,8 @@ const JUDGED_WORDS: DirectedWords = DirectedWords {
 };
 
 /// The `direction` of a classifier call neither of `judged_candidate`'s accounts took, placed by the rungs and the
-/// strategy as a request without a pin is.
+/// strategy as a request without a pin is. A call a fallback credit directs reads no direction, since its `credit`
+/// fact names where it went and no strategy ran.
 const PLACED_DIRECTION: &str = "strategy";
 
 /// The candidate the client's classifier call goes to, with the direction word that names it: the account and
@@ -6032,9 +6040,11 @@ const PLACED_DIRECTION: &str = "strategy";
 /// else the account and incarnation that turn's pin stands on now (`pin_account`), each among the eligible set and
 /// holding allowance, as the `with_main` rung admits a parent's account. In a session with no recorded turn end, as
 /// after a restart, the pin's account stands in for the first. The cap does not bound it, as it bounds no renewal:
-/// the call belongs to a session already on that account. `None` for every other request, for a count, a probe and a
-/// non-portable call, and where neither account can serve the call, which is then placed by the rungs and the
-/// strategy. The call holds no pin, so a call directed here moves none: the conversation's next turn makes the move.
+/// the call belongs to a session already on that account. A non-portable call takes the direction too: it holds no pin
+/// to be bound to, and the judged turn's account is where a reference of the conversation resolves. `None` for every
+/// other request, for a count and a probe, and where neither account can serve the call, which is then placed by the
+/// rungs and the strategy. The call holds no pin, so a call directed here moves none: the conversation's next turn
+/// makes the move.
 fn judged_candidate<'a>(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -6042,7 +6052,7 @@ fn judged_candidate<'a>(
     eligible: &[&'a Candidate],
     window: &str,
 ) -> Option<(&'a Candidate, &'static str)> {
-    if !request.classifier || request.count || request.probe || !request.portable {
+    if !request.classifier || request.count || request.probe {
         return None;
     }
     let serves = |account_id: &str, incarnation: u64| {

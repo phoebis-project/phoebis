@@ -1242,6 +1242,38 @@ fn a_body_carrying_a_known_credit_token_lands_on_the_issuing_account_ahead_of_pa
         Vec::new(),
         "the credit placed the request on b, so the trace does not also pass b over"
     );
+    // A classifier call of a session whose turn ran on a carries a credit b issued: the credit's read comes ahead of
+    // the call's direction, so the call goes to b, off the judged turn's account.
+    let turn = opus_turn(&s, "s-judged", "main", "main", &["b"], 1_000);
+    assert_eq!(picked(&select(&mut st, &s, &turn, &mut rng()).0), "a");
+    let call = credited(classifier_call(&s, "s-judged", 1_100), "b", 1);
+    let d = decide(&mut st, &s, &call, &mut rng());
+    assert_eq!(judged_on(&d.result), ("b", Some(JudgedCharge::Off)));
+    let pin = line(&d.record, "pin");
+    assert_eq!(
+        (
+            pin.verdict,
+            pin.facts
+                .iter()
+                .map(|f| (f.key, f.value.clone(), f.account_id.as_deref()))
+                .collect::<Vec<_>>()
+        ),
+        (
+            "none",
+            vec![
+                ("reason", FactValue::Text("classifier".into()), None),
+                ("credit", FactValue::Text("b".into()), Some("b")),
+                ("judged_agent", FactValue::Text("main".into()), None),
+                (
+                    "judged_model",
+                    FactValue::Text("claude-opus-5-5".into()),
+                    None
+                ),
+                ("judged", FactValue::Text("a".into()), Some("a")),
+            ]
+        ),
+        "the call pins nothing, and the credit names where it went in place of a direction"
+    );
 }
 
 #[test]
@@ -29626,6 +29658,16 @@ fn a_classifier_call_follows_the_sessions_turn_that_ended_last_onto_its_account(
         direction(&call.record),
         &FactValue::Text("pin_account".into())
     );
+    // A call that is not portable holds no pin to be bound to, so it takes the same direction.
+    let bound = SelectRequest {
+        portable: false,
+        ..classifier_call(&s, "s1", 2_600)
+    };
+    let call = decide(&mut st, &s, &bound, &mut r);
+    assert_eq!(
+        (picked(&call.result), direction(&call.record)),
+        ("b", &FactValue::Text("pin_account".into()))
+    );
     // The main agent's next turn ends last, so the next call follows it onto the main's account.
     let main_turn = opus_turn(&s, "s1", "main", "main", &[], 3_000);
     select(&mut st, &s, &main_turn, &mut r);
@@ -29689,6 +29731,16 @@ fn a_classifier_call_whose_judged_account_is_spent_lands_like_any_request() {
     let call = decide(&mut st, &s, &classifier_call(&s, "s1", 2_600), &mut r);
     assert_eq!(picked(&call.result), "a");
     assert_eq!(direction(&call.record), &FactValue::Text("strategy".into()));
+    // b fits no runway at a full 5-hour window, so the strategy ranked a alone, and the summary says so rather than
+    // naming the judged turn, which placed nothing.
+    assert_eq!(
+        call.summary
+            .fact
+            .iter()
+            .find(|f| f.key == "pick")
+            .map(|f| &f.value),
+        Some(&FactValue::Text("only candidate".into()))
+    );
     assert_eq!(
         session_pins(&st, "s1"),
         [

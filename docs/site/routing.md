@@ -259,24 +259,24 @@ With the pool's `auto_mode_server` on, or a key's override on, the upstream revi
 the model's own turn. Off, the client reviews them with classifier requests of its own, which the router routes as
 requests of the session: they carry its id, on the client's Sonnet default. A request that carries the classifier marker
 ([Auto mode behind the router](relay.md#auto-mode-behind-the-router)) runs without a pin: the router looks up, creates,
-renews and moves no pin for it and writes nothing to a conversation's pin. It judges the session's turn that ended last,
-the main agent's or a subagent's, and goes to the account that turn's stream ended on, where that account is eligible
-under the same incarnation and holds allowance, since the call is free there. Else it goes to the account the judged
-turn's pin stands on now, under the same conditions. Else it is placed as a request without a pin is, by the rungs and
-the strategy, and the upstream charges it. A turn here is a stream of the class `main` or `subagent`: the end of an
-auxiliary call, the subagent summary fork among them, names no turn. The read is best effort: the call names no agent,
-so the router infers the judged turn from the order of the session's stream ends. Two turns that end within the gap
-before a call, a selection repeated by a failover or a hold, and the calls after a restart before the session's next
-turn ends can follow the other turn, and such a call is charged by the upstream while the router's meter reads it free.
-A marked call whose committed attempt runs on the account and incarnation the judged turn's stream ended on takes no
-share of a plan window on a subscription account and the normal price of its model in the account's overage and on an
-API-key account ([Plan meter](statistics.md#plan-meter)). A call whose committed attempt runs off that account and
-incarnation, or in a session with no turn to judge, is charged as any call and recorded `client_off`. A charged call
-counts toward no pin, and the calls' usage folds into the classifier copy of the judged turn's pin where a call ran on
-that pin's account, priced in dollars at the call's model.
-A body whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice)
-is refused `400` with the error code `body_shape` before anything reaches the upstream. The mechanism is on [Auto mode
-behind the router](relay.md#auto-mode-behind-the-router).
+renews and moves no pin for it and writes nothing to a conversation's pin but the classifier copy. It judges the
+session's turn that ended last, the main agent's or a subagent's, and goes to the account that turn's stream ended on,
+where that account is eligible under the same incarnation and holds allowance, since the call is free there. Else it
+goes to the account the judged turn's pin stands on now, under the same conditions. Else it is placed as a request
+without a pin is, by the rungs and the strategy, and the upstream charges it. A turn here is a stream of the class
+`main` or `subagent`: the end of an auxiliary call, the subagent summary fork among them, names no turn. The read is
+best effort: the call names no agent, so the router infers the judged turn from the order of the session's stream ends.
+Two turns that end within the gap before a call, a selection repeated by a failover or a hold, and the calls after a
+restart before the session's next turn ends can follow the other turn, and such a call is charged by the upstream while
+the router's meter reads it free. A marked call whose committed attempt runs on the account and incarnation the judged
+turn's stream ended on takes no share of a plan window on a subscription account and the normal price of its model in
+the account's overage and on an API-key account ([Plan meter](statistics.md#plan-meter)). A call whose committed attempt
+runs off that account and incarnation, or in a session with no turn to judge, is charged as any call and recorded
+`client_off`. A charged call counts toward no pin, and the calls' usage folds into the classifier copy of the judged
+turn's pin where a call ran on that pin's account, priced in dollars at the call's model. A body whose `safeguards`
+member the router cannot cut under an off setting (spelled with an escape, or carried twice) is refused `400` with the
+error code `body_shape` before anything reaches the upstream. The mechanism is on [Auto mode behind the
+router](relay.md#auto-mode-behind-the-router).
 
 A conversation is identified by its session header: the session id the client sends names it, keys its pin and its
 session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at
@@ -334,7 +334,8 @@ eligible and holds allowance, the cap not read since the call belongs to a sessi
 the pick name the reason `classifier` ([Clients](#clients)). The call holds no pin, so its `pin` step reads `none` with
 the reason `classifier` and the facts `judged_agent` and `judged_model` (the turn it judges), `judged` (the account that
 turn's stream ended on, or the one its pin stands on where no end is recorded, `none` with no turn to judge) and
-`direction` (`turn_account`, `pin_account` or `strategy`, where the call went).
+`direction` (`turn_account`, `pin_account` or `strategy`, where the call went). A call a fallback credit directs keeps
+`none`, reads the fact `credit` and no `direction`.
 
 A fresh request with no live pin lands where its prefix is already warm. The deepest message boundary any account still
 holds wins first, for a main conversation and a subagent alike. Both rungs read entries of the request's own cache lane
