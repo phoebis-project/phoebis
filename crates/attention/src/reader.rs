@@ -32,6 +32,15 @@ pub const CERTIFICATE_WARNING_DAYS: i64 = 30;
 /// refresh moves: three days leave a weekend to re-pair the account.
 pub const PAIRING_WARNING_DAYS: i64 = 3;
 
+/// An item raised `lead_days` ahead of a fixed `end`: held from the lead's start on rather than by the whole-day count
+/// and dated from it, so a restart keeps the date and a dated item never starts in the future, with the whole days left
+/// to `end`.
+fn ahead_of(end: i64, lead_days: i64, now: i64) -> (bool, Option<i64>, i64) {
+    let from = end - lead_days * DAY_MS;
+    let holds = now >= from;
+    (holds, holds.then_some(from), (end - now).div_euclid(DAY_MS))
+}
+
 /// How many of a holder's newest settled refresh attempts one read walks: two make the condition, and the rest date
 /// the run's start as far back as the read reaches, which bounds the scan a scrape pays per account.
 pub const REFRESH_RUN_READ: usize = 16;
@@ -477,12 +486,18 @@ fn account_pools(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<String>> {
     pools
 }
 
-/// Each OAuth account's newest settled refresh attempts, read from the store rather than kept here, so a run of
-/// failures survives a restart.
-pub(crate) fn refresh_runs(
+pub(crate) struct RefreshFacts {
+    attempts: Vec<ResolvedAttempt>,
+    ends_at: Option<i64>,
+}
+
+/// Each OAuth account's newest settled refresh attempts and its refresh token end as its stored credential holds it,
+/// both read from the store at each read rather than kept here: a run of failures survives a restart, and the later
+/// end a re-pair stores clears the item at the next read.
+pub(crate) fn refresh_facts(
     store: &Store,
     accounts: &[AccountRow],
-) -> Result<HashMap<String, Vec<ResolvedAttempt>>, StoreError> {
+) -> Result<HashMap<String, RefreshFacts>, StoreError> {
     accounts
         .iter()
         .filter(|account| account.kind == AccountKind::Oauth)
@@ -492,25 +507,10 @@ pub(crate) fn refresh_runs(
                 account.incarnation,
                 REFRESH_RUN_READ,
             )?;
-            Ok((account.id.clone(), attempts))
-        })
-        .collect()
-}
-
-/// Each OAuth account's refresh token end as its stored credential holds it, read at each read rather than kept here,
-/// so the later end a re-pair stores clears the item at the next read.
-pub(crate) fn refresh_ends(
-    store: &Store,
-    accounts: &[AccountRow],
-) -> Result<HashMap<String, Option<i64>>, StoreError> {
-    accounts
-        .iter()
-        .filter(|account| account.kind == AccountKind::Oauth)
-        .map(|account| {
-            let end = store
+            let ends_at = store
                 .credential_metadata(&account.id)?
                 .and_then(|credential| credential.refresh_expires_at);
-            Ok((account.id.clone(), end))
+            Ok((account.id.clone(), RefreshFacts { attempts, ends_at }))
         })
         .collect()
 }
@@ -518,21 +518,20 @@ pub(crate) fn refresh_ends(
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
 /// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
-/// `refresh_runs` and `refresh_ends`, and the parked rows, before it takes the reader's state, and a read that fails
-/// fails the whole answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the
-/// parked rows, the fold's routing conditions and the expiries between turns of the last 24 hours by pool and key. It
-/// is `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions
-/// (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and `expired_between_turns` then has a
-/// series. Where one is built, `destination_spent` stops holding once a `window_cleared` followed its spent window.
-/// `pairs` is `None` where no listener is built, and neither certificate kind then has a series. `pairing_expiring` has
-/// a series for an OAuth account whose credential holds a refresh token end and for no other account. `unpriced` is
-/// the ledger's map, empty where no ledger is built.
+/// `refresh_facts`, and the parked rows, before it takes the reader's state, and a read that fails fails the whole
+/// answer, since a series answered without its evidence could clear a real alarm. `ledger` carries the parked rows, the
+/// fold's routing conditions and the expiries between turns of the last 24 hours by pool and key. It is `None` where no
+/// ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four routing conditions (`wall_reached`,
+/// `destination_spent`, `shed_no_runway` and `slowed_long`) and `expired_between_turns` then has a series. Where one is
+/// built, `destination_spent` stops holding once a `window_cleared` followed its spent window. `pairs` is `None` where
+/// no listener is built, and neither certificate kind then has a series. `pairing_expiring` has a series for an OAuth
+/// account whose credential holds a refresh token end and for no other account. `unpriced` is the ledger's map, empty
+/// where no ledger is built.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
     accounts: &[AccountRow],
-    refresh_runs: &HashMap<String, Vec<ResolvedAttempt>>,
-    refresh_ends: &HashMap<String, Option<i64>>,
+    refresh_facts: &HashMap<String, RefreshFacts>,
     router: &RouterHandle,
     ledger_degraded: bool,
     ledger: Option<&LedgerFacts>,
@@ -593,17 +592,15 @@ pub(crate) fn conditions(
             }),
         ));
         // Judged on this read's clock rather than at the load, so a pair loaded with time to spare raises the
-        // condition when its day comes without a reload. Dated from `not_after`, so a restart keeps the date, and held
-        // from that instant on rather than by the whole-day count, so a dated item never starts in the future.
-        let warning_from = pair.not_after_ms - CERTIFICATE_WARNING_DAYS * DAY_MS;
-        let days_left = (pair.not_after_ms - now).div_euclid(DAY_MS);
-        let expiring = now >= warning_from;
+        // condition when its day comes without a reload.
+        let (expiring, since, days_left) =
+            ahead_of(pair.not_after_ms, CERTIFICATE_WARNING_DAYS, now);
         out.push(condition_for(
             Kind::CertificateExpiring,
             Subject::router(&pair.key),
             None,
             expiring,
-            expiring.then_some(warning_from),
+            since,
             json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
         ));
     }
@@ -698,9 +695,9 @@ pub(crate) fn conditions(
             ));
         }
         if account.kind == AccountKind::Oauth {
-            let attempts = refresh_runs
-                .get(&account.id)
-                .map(Vec::as_slice)
+            let refresh = refresh_facts.get(&account.id);
+            let attempts = refresh
+                .map(|facts| facts.attempts.as_slice())
                 .unwrap_or_default();
             // A commit ends the run, and so does a `superseded` settlement, which exists only because a newer bundle
             // committed.
@@ -729,20 +726,18 @@ pub(crate) fn conditions(
                 }),
             ));
             // The refresh token ends at a fixed instant no refresh moves, so the item rises ahead of the failed
-            // refresh that would otherwise be its first sign. Dated from the lead's start, so a restart keeps the
-            // date, and held past the end until a re-pair stores an end more than 3 days away, or the account is
-            // disconnected or deleted.
-            if let Some(expires) = refresh_ends.get(&account.id).copied().flatten() {
-                let warning_from = expires - PAIRING_WARNING_DAYS * DAY_MS;
-                let expiring = now >= warning_from;
+            // refresh that would otherwise be its first sign. Held past the end until a re-pair stores an end more
+            // than 3 days away, or the account is disconnected or deleted.
+            if let Some(expires) = refresh.and_then(|facts| facts.ends_at) {
+                let (expiring, since, days_left) = ahead_of(expires, PAIRING_WARNING_DAYS, now);
                 out.push(condition(
                     Kind::PairingExpiring,
                     expiring,
-                    expiring.then_some(warning_from),
+                    since,
                     json!({
                         "account": account.id,
                         "label": account.label,
-                        "days_left": (expires - now).div_euclid(DAY_MS),
+                        "days_left": days_left,
                         "expires": expires,
                     }),
                 ));

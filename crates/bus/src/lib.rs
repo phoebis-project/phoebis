@@ -57,14 +57,13 @@ struct Slot {
     name: &'static str,
     delivery: Delivery,
     events: mpsc::Sender<Event>,
-    /// `None` for a slot offered every event.
-    reads: Option<fn(&Event) -> bool>,
+    reads: fn(&Event) -> bool,
     stats: Arc<SubscriberStats>,
 }
 
 impl Slot {
     fn reads(&self, event: &Event) -> bool {
-        self.reads.is_none_or(|reads| reads(event))
+        (self.reads)(event)
     }
 }
 
@@ -83,7 +82,7 @@ impl Bus {
     }
 
     pub fn subscribe(&self, name: &'static str, delivery: Delivery) -> Subscriber {
-        self.attach(name, delivery, None)
+        self.subscribe_filtered(name, delivery, |_| true)
     }
 
     /// A slot offered the events `reads` answers true for and no other, so its queue and its drop count hold the kinds
@@ -93,15 +92,6 @@ impl Bus {
         name: &'static str,
         delivery: Delivery,
         reads: fn(&Event) -> bool,
-    ) -> Subscriber {
-        self.attach(name, delivery, Some(reads))
-    }
-
-    fn attach(
-        &self,
-        name: &'static str,
-        delivery: Delivery,
-        reads: Option<fn(&Event) -> bool>,
     ) -> Subscriber {
         let (events_tx, events) = mpsc::channel(QUEUE_DEPTH);
         let stats = Arc::new(SubscriberStats::default());
@@ -157,16 +147,26 @@ impl Bus {
     /// outrun a consumer and a lost chunk is recorded as a truncated capture rather than a lost request.
     pub async fn publish_fact(&self, event: Event) {
         // Cloned out of the lock, so no await holds it.
-        let slots: Vec<Slot> = self.slots.lock().expect(LOCK_POISONED).clone();
-        let Some(last) = slots.iter().rposition(|slot| slot.reads(&event)) else {
+        let slots: Vec<Slot> = self
+            .slots
+            .lock()
+            .expect(LOCK_POISONED)
+            .iter()
+            .filter(|slot| slot.reads(&event))
+            .cloned()
+            .collect();
+        let Some(last) = slots.len().checked_sub(1) else {
             return;
         };
         let mut event = Some(event);
         let mut closed = Vec::new();
         for (at, slot) in slots.iter().enumerate() {
-            let Some(copy) = copy_for(slot, at, last, &mut event) else {
-                continue;
-            };
+            let copy = if at == last {
+                event.take()
+            } else {
+                event.clone()
+            }
+            .expect(EVENT_TAKEN);
             let gone = match slot.delivery {
                 Delivery::Durable => slot.events.send(copy).await.is_err(),
                 Delivery::BestEffort => !offer(slot, copy),

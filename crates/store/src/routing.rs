@@ -439,18 +439,22 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             pins: tx.prepare(&format!("SELECT {PIN_COLUMNS} FROM pins ORDER BY key_id, session_id, agent_id, model"))?
                 .query_map([], |r| Ok(PinRow {
-                    key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, model: r.get(3)?, account_id: r.get(4)?,
-                    epoch: r.get::<_, i64>(5)? as u64, created_at: r.get(6)?, last_used_at: r.get(7)?,
-                    key_generation: r.get(8)?, incarnation: r.get::<_, i64>(9)? as u64,
-                    burn_at: r.get(10)?, last_input_tokens: r.get::<_, i64>(11)? as u64,
-                    last_refresh_at: r.get(12)?, cache_ttl_ms: r.get(13)?,
-                    shed: shed_from(r, 14, 15, 44)?, static_hash: r.get(16)?, tail_hash: r.get(17)?,
-                    lane: r.get(18)?, burn: burn_from(r, 19)?, burn_banded: burn_from(r, 24)?,
-                    burn_fast: burn_from(r, 29)?, burn_unmetered: burn_from(r, 34)?,
-                    burn_unmetered_model: r.get(39)?,
-                    mark: mark_from(r, 40)?,
-                    entrypoint: none_if_empty(r.get(43)?),
-                    auxiliary_only: r.get(45)?, effort: none_if_empty(r.get(46)?), ended: r.get(47)?,
+                    key_id: r.get("key_id")?, session_id: r.get("session_id")?, agent_id: r.get("agent_id")?,
+                    model: r.get("model")?, account_id: r.get("account_id")?,
+                    epoch: r.get::<_, i64>("epoch")? as u64, created_at: r.get("created_at")?,
+                    last_used_at: r.get("last_used_at")?,
+                    key_generation: r.get("key_generation")?, incarnation: r.get::<_, i64>("incarnation")? as u64,
+                    burn_at: r.get("burn_at")?, last_input_tokens: r.get::<_, i64>("last_input_tokens")? as u64,
+                    last_refresh_at: r.get("last_refresh_at")?, cache_ttl_ms: r.get("cache_ttl_ms")?,
+                    shed: shed_from(r)?, static_hash: r.get("static_hash")?, tail_hash: r.get("tail_hash")?,
+                    lane: r.get("lane")?, burn: burn_from(r, BURN_COLUMNS)?,
+                    burn_banded: burn_from(r, BURN_BANDED_COLUMNS)?,
+                    burn_fast: burn_from(r, BURN_FAST_COLUMNS)?, burn_unmetered: burn_from(r, BURN_UNMETERED_COLUMNS)?,
+                    burn_unmetered_model: r.get("burn_unmetered_model")?,
+                    mark: mark_from(r)?,
+                    entrypoint: none_if_empty(r.get("entrypoint")?),
+                    auxiliary_only: r.get("auxiliary_only")?, effort: none_if_empty(r.get("effort")?),
+                    ended: r.get("ended")?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: all_resolutions(&tx)?,
@@ -815,8 +819,8 @@ fn in_transaction<T>(
     Ok(value)
 }
 
-// The load reads and the upsert binds the pin's columns in this one order. `burn_from` reads each burn copy's five
-// columns in it, the plain copy first.
+// The upsert binds the pin's columns in this one order, so `upsert_pin_on` lists its values in it. The load reads each
+// column by its name.
 const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, \
      key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, \
      static_hash, tail_hash, lane, \
@@ -827,37 +831,70 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_unmetered_write_5m, burn_unmetered_model, \
      marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended";
 
-fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
+// Each burn copy's columns, in `PinBurn`'s field order: `burn_from` takes them by position.
+const BURN_COLUMNS: [&str; 5] = [
+    "burn_cache_read",
+    "burn_input",
+    "burn_output",
+    "burn_write_1h",
+    "burn_write_5m",
+];
+const BURN_BANDED_COLUMNS: [&str; 5] = [
+    "burn_banded_cache_read",
+    "burn_banded_input",
+    "burn_banded_output",
+    "burn_banded_write_1h",
+    "burn_banded_write_5m",
+];
+const BURN_FAST_COLUMNS: [&str; 5] = [
+    "burn_fast_cache_read",
+    "burn_fast_input",
+    "burn_fast_output",
+    "burn_fast_write_1h",
+    "burn_fast_write_5m",
+];
+const BURN_UNMETERED_COLUMNS: [&str; 5] = [
+    "burn_unmetered_cache_read",
+    "burn_unmetered_input",
+    "burn_unmetered_output",
+    "burn_unmetered_write_1h",
+    "burn_unmetered_write_5m",
+];
+
+fn burn_from(
+    r: &rusqlite::Row<'_>,
+    [cache_read, input, output, write_1h, write_5m]: [&str; 5],
+) -> rusqlite::Result<PinBurn> {
     Ok(PinBurn {
-        cache_read: r.get(first)?,
-        input: r.get(first + 1)?,
-        output: r.get(first + 2)?,
-        write_1h: r.get(first + 3)?,
-        write_5m: r.get(first + 4)?,
+        cache_read: r.get(cache_read)?,
+        input: r.get(input)?,
+        output: r.get(output)?,
+        write_1h: r.get(write_1h)?,
+        write_5m: r.get(write_5m)?,
     })
 }
 
-/// The shed stamp of a row whose `from` and `at` columns are both set: every write sets or clears the two together.
-fn shed_from(
-    r: &rusqlite::Row<'_>,
-    from: usize,
-    at: usize,
-    reason: usize,
-) -> rusqlite::Result<Option<ShedStamp>> {
-    Ok(match (r.get(from)?, r.get(at)?) {
+/// The shed stamp of a row whose `shed_from` and `shed_at` columns are both set: every write sets or clears the two
+/// together.
+fn shed_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<ShedStamp>> {
+    Ok(match (r.get("shed_from")?, r.get("shed_at")?) {
         (Some(from), Some(at)) => Some(ShedStamp {
             from,
             at,
-            reason: r.get(reason)?,
+            reason: r.get("shed_reason")?,
         }),
         _ => None,
     })
 }
 
-/// The mark of a row whose three mark columns, from `first` on, are all set: every write sets or clears them together.
-fn mark_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Option<PinMark>> {
+/// The mark of a row whose three mark columns are all set: every write sets or clears them together.
+fn mark_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<PinMark>> {
     Ok(
-        match (r.get(first)?, r.get(first + 1)?, r.get(first + 2)?) {
+        match (
+            r.get("marked_at")?,
+            r.get("marked_on")?,
+            r.get("marked_window")?,
+        ) {
             (Some(at), Some(on), Some(window)) => Some(PinMark { at, on, window }),
             _ => None,
         },
