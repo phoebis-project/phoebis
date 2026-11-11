@@ -70,7 +70,7 @@ jobs:
     name: Tests
     needs: [rust, web]
     # Branch protection requires a job's check, not a workflow's: this job is the one check `main` requires, and
-    # it reports whatever the two jobs did, a cancelled or skipped one included.
+    # it reports whatever the two jobs did, a canceled or skipped one included.
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
