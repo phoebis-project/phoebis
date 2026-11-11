@@ -39,8 +39,8 @@ pub(crate) struct AttentionItem {
     /// 30 days before a certificate's end, the catalog listing that added an unpriced model or the first plan-funded
     /// landing of its run, whichever came first, the `window_end` of the oldest window the detail's `windows` lists, or
     /// the fold's instant where that end lies after it, for `meter_drift`, the oldest qualifying event of the trailing
-    /// 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down span
-    /// counted for `slowed_long`, which can predate the day for a span open from before it, or for the two account
+    /// 24 hours for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down
+    /// span counted for `slowed_long`, which can predate the day for a span open from before it, or for the two account
     /// states, a degraded writer, `keepalive_bus_gaps`, `keepalive_cap` and `expired_between_turns` the first read of
     /// this process that saw the state.
     pub since: Option<i64>,
@@ -52,29 +52,27 @@ pub(crate) struct AttentionItem {
     /// `expires` (the leaf's end) and `days_left` (whole days from the read, negative once past). `pairing_expiring`
     /// carries `account`, `label`, `expires` (the refresh token's end) and `days_left` (whole days from the read,
     /// negative once past). `model_unpriced` carries `model` and `requests` (the plan-funded requests its run served, 0
-    /// for a model a catalog listing added that no request has used yet).
-    /// `meter_drift` carries `windows` (per window whose newest reconciled row among
-    /// those that ended in the last eight days with a rise of at least 0.05 read a ratio under 0.8 or over 1.25 over a
-    /// priced share of at least 0.05, so a newer row with a smaller rise leaves it standing: `window`, `ratio`,
-    /// `observed_rise`, `predicted_share`, `window_end` and `requests`),
-    /// `source` (`shipped` or `file`, where the cost model came from) and `effective` (the `effective` of the revision
-    /// in force as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`), and names no setting,
-    /// since the fix is the cost model file. The other routing conditions carry
-    /// `setting`, the names of the settings they read against: `wall_reached` with `walls`, `windows`,
-    /// `projection_error` and `early_ms`, read off the newest shedding round on the account on the wall's window inside
-    /// the window's length before the wall (`projection_error` one less a projection round's projection, `early_ms`
-    /// after a stretch round the milliseconds the newest wall arrived before its window's reset, 0 at or after it, each
-    /// null after the other trigger's round and both null with none), `destination_spent` with `moves`, `fits` (the
-    /// moves' destination fits with counts) and `windows`, `shed_no_runway` with `rounds` and `accounts`, and
-    /// `slowed_long` with `spans` (the slow-down spans counted), `held_ms` (the slow-down's waits of the day's
-    /// requests, summed), `held` (the requests held), `bar_ms` (the bar the held time passed, twice the stretch
-    /// threshold of the newest counted span's start and at least an hour) and `open` (whether a span still stands).
-    /// `shed_no_runway` and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names,
-    /// present only for a pool the registry still holds). `keepalive_bus_gaps` carries `gaps` (the engine's gaps since
-    /// the start) and `last_at` (the last gap's instant), `keepalive_cap` carries `cap` (`sessions`, `agents` or
-    /// `retained`), `count`, `max` and `pct` (`count` over `max` as a fraction, 0 where `max` is 0), and
-    /// `expired_between_turns` carries `expired` (the cache entries that expired between turns in the trailing 24
-    /// hours).
+    /// for a model a catalog listing added that no request has used yet). `meter_drift` carries `windows` (per window
+    /// whose newest reconciled row among those that ended in the last eight days with a rise of at least 0.05 read a
+    /// ratio under 0.8 or over 1.25 over a priced share of at least 0.05, so a newer row with a smaller rise leaves it
+    /// standing: `window`, `ratio`, `observed_rise`, `predicted_share`, `window_end` and `requests`), `source`
+    /// (`shipped` or `file`, where the cost model came from) and `effective` (the `effective` of the revision in force
+    /// as its file wrote it, a date `YYYY-MM-DD` or an instant `YYYY-MM-DDTHH:MM:SSZ`), and names no setting, since the
+    /// fix is the cost model file. The other routing conditions carry `setting`, the names of the settings they read
+    /// against: `wall_reached` with `walls`, `windows`, `projection_error` and `early_ms`, read off the newest shedding
+    /// round on the account on the wall's window inside the window's length before the wall (`projection_error` one
+    /// less a projection round's projection, `early_ms` after a stretch round the milliseconds the newest wall arrived
+    /// before its window's reset, 0 at or after it, each null after the other trigger's round and both null with none),
+    /// `destination_spent` with `moves`, `fits` (the moves' destination fits with counts) and `windows`,
+    /// `shed_no_runway` with `rounds` and `accounts`, and `slowed_long` with `spans` (the slow-down spans counted),
+    /// `held_ms` (the slow-down's waits of the day's requests, summed), `held` (the requests held), `bar_ms` (the bar
+    /// the held time passed, twice the stretch threshold of the newest counted span's start and at least an hour) and
+    /// `open` (whether a span still stands). `shed_no_runway` and `slowed_long` add `setting_values` (the pool's value
+    /// of each setting `setting` names, present only for a pool the registry still holds). `keepalive_bus_gaps` carries
+    /// `gaps` (the engine's gaps since the start) and `last_at` (the last gap's instant), `keepalive_cap` carries `cap`
+    /// (`sessions`, `agents` or `retained`), `count`, `max` and `pct` (`count` over `max` as a fraction, 0 where `max`
+    /// is 0), and `expired_between_turns` carries `expired` (the cache entries that expired between turns in the
+    /// trailing 24 hours).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

@@ -2107,9 +2107,11 @@ async fn a_refresh_token_within_three_days_of_its_end_holds_pairing_expiring_sin
 ) {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
-    let inside = NOW + 3 * DAY - 1_000;
-    let outside = NOW + 3 * DAY + 1_000;
-    for (id, label, end) in [("near", "Near", inside), ("far", "Far", outside)] {
+    for (id, label, end) in [
+        ("lead", "Lead", NOW + 3 * DAY),
+        ("outside", "Outside", NOW + 3 * DAY + 1),
+        ("ended", "Ended", NOW - 1_000),
+    ] {
         rig.store
             .insert_account(&AccountRow {
                 id: id.into(),
@@ -2144,25 +2146,31 @@ async fn a_refresh_token_within_three_days_of_its_end_holds_pairing_expiring_sin
     }
 
     let conditions = read(&attention, NOW);
-    let held = find(&conditions, Kind::PairingExpiring, "near").unwrap();
+    let lead = find(&conditions, Kind::PairingExpiring, "lead").unwrap();
     assert_eq!(
-        (held.holds, held.since, &held.link, &held.detail),
+        (lead.holds, lead.since, &lead.link, &lead.detail),
         (
             true,
-            Some(NOW - 1_000),
+            Some(NOW),
             &Some(Link {
                 page: "accounts",
-                id: "near".into()
+                id: "lead".into()
             }),
-            &json!({ "account": "near", "days_left": 2, "expires": inside, "label": "Near" })
+            &json!({ "account": "lead", "days_left": 3, "expires": NOW + 3 * DAY, "label": "Lead" })
         ),
-        "an end a second inside the three days holds, dated three days before it"
+        "an end exactly three days out holds, dated from the read"
     );
-    let clear = find(&conditions, Kind::PairingExpiring, "far").unwrap();
+    let outside = find(&conditions, Kind::PairingExpiring, "outside").unwrap();
     assert_eq!(
-        (clear.holds, clear.since, &clear.detail["days_left"]),
+        (outside.holds, outside.since, &outside.detail["days_left"]),
         (false, None, &json!(3)),
-        "an end a second outside the three days reads clear"
+        "an end a millisecond past the three days reads clear"
+    );
+    let ended = find(&conditions, Kind::PairingExpiring, "ended").unwrap();
+    assert_eq!(
+        (ended.holds, ended.since, &ended.detail["days_left"]),
+        (true, Some(NOW - 3 * DAY - 1_000), &json!(-1)),
+        "an end a second ago still holds, its days left negative"
     );
 }
 
@@ -2235,6 +2243,7 @@ fn the_certificate_kinds_rank_among_the_others() {
         Kind::CertificateReloadFailed,
         Kind::PoolExhausted,
         Kind::RefreshFailed,
+        Kind::PairingExpiring,
         Kind::ModelUnpriced,
         Kind::WriterDegraded,
         Kind::FundingRequired,
@@ -2251,6 +2260,7 @@ fn the_certificate_kinds_rank_among_the_others() {
             "reauth_required",
             "funding_required",
             "refresh_failed",
+            "pairing_expiring",
             "certificate_expiring",
             "ledger_record_parked",
             "poll_backoff",

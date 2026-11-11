@@ -726,9 +726,10 @@ re-pairing settles a refresh still pending. A pairing records its own committed 
 nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
 
 **`pairing_expiring`** holds while an OAuth account's refresh token is within 3 days of its fixed end, past the end
-included. No refresh moves that end, so the account needs a new pairing. The subject is the account, and the item opens
-the Accounts page on it. It dates from 3 days before the end, so a restart keeps the date, and the detail names the
-account, the end and the whole days left, negative once past.
+included, and an OAuth account whose credential holds no end has no series for this kind. No refresh moves that end, so
+the account needs a new pairing. The subject is the account, and the item opens the Accounts page on it. It dates from 3
+days before the end, so a restart keeps the date, and the detail carries the account, its label, the end and the whole
+days left, negative once the end passed.
 
 **`certificate_expiring`** holds while the leaf a listener serves is within 30 days of its end, past the end included.
 It reads the pair the router loaded rather than the files, so a pair replaced on disk counts once `phoebis tls reload`

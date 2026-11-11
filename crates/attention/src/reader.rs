@@ -1,8 +1,8 @@
 //! The twenty conditions, read fresh on every call: the account states and the pools from the registry, the refresh
 //! runs and the refresh token ends from the store, the parked records, the ledger's degraded state, the unpriced models
-//! its landing or a catalog listing saw, the routing conditions its hourly fold wrote and the expiries between turns its
-//! rollups count from the ledger, the routing state writer's and the listeners' pairs from the router, the bus gaps and
-//! the caps from the keepalive engine, the poll's standing from the usage service, and the exhaustions and drift
+//! its landing or a catalog listing saw, the routing conditions its hourly fold wrote and the expiries between turns
+//! its rollups count from the ledger, the routing state writer's and the listeners' pairs from the router, the bus gaps
+//! and the caps from the keepalive engine, the poll's standing from the usage service, and the exhaustions and drift
 //! refusals from the request outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
