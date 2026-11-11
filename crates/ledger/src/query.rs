@@ -3655,28 +3655,30 @@ pub struct SessionActivity {
     /// The newest request of the session presented the retired secret, and under which rotation.
     pub on_retired_secret: bool,
     pub rotation_at: Option<i64>,
+    /// The user agent of the session's newest client request, refused or served, as the client sent it.
+    pub user_agent: Option<String>,
 }
 
-/// Every (key, key generation, session) with a client request since `since`, with the canonical model and the
-/// serving account of its newest request. Grouped by generation as well as id, so a key id created again never
-/// merges its sessions with an earlier holder's. One pass over the window's client requests: the newest request of
-/// a session is inside the window whenever any of its requests is, so the window alone answers the newest request's
-/// facts. Refused requests stay in the partition, so a session whose every request was refused keeps its newest
-/// request and is listed.
+/// Every (key, key generation, session) with a client request since `since`, with the canonical model, the serving
+/// account and the user agent of its newest request. Grouped by generation as well as id, so a key id created again
+/// never merges its sessions with an earlier holder's. One pass over the window's client requests: the newest request
+/// of a session is inside the window whenever any of its requests is, so the window alone answers the newest request's
+/// facts. Refused requests stay in the partition, so a session whose every request was refused keeps its newest request
+/// and is listed.
 pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
     let mut stmt = conn.prepare(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, serving_account_id FROM requests \
+         presented_retired, rotation_at, serving_account_id, user_agent FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
          ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth \
          FROM recent) \
          SELECT key_id, key_generation, grp, received_at, canonical_model, \
          serving_account_id, \
-         presented_retired, rotation_at \
+         presented_retired, rotation_at, user_agent \
          FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
     )?;
     let rows = stmt.query_map(params![since], |r| {
@@ -3689,6 +3691,7 @@ pub fn session_activity(
             account_id: r.get(5)?,
             on_retired_secret: r.get(6)?,
             rotation_at: r.get(7)?,
+            user_agent: r.get(8)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

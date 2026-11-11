@@ -40,7 +40,8 @@ pub(crate) struct Session {
     /// The session's client requests over its life under its key, the ones `spend` counts, 0 where the ledger holds
     /// none.
     pub requests: u64,
-    /// The user agent of the session's newest client request, as the client sent it.
+    /// The user agent of the session's newest client request as the client sent it, the newest served one's where the
+    /// session has one.
     pub user_agent: Option<String>,
     /// The session's spend over its life under its key, null where the ledger holds no request of it the router did
     /// not refuse.
@@ -85,8 +86,8 @@ pub(crate) struct Session {
     pub cycle_ms: Option<f64>,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: Option<i64>,
-    /// Whether the pinned account still holds the session's prompt cache, from the pin's last use and its cache
-    /// TTL. Null without a pin.
+    /// Whether the pinned account still holds the session's prompt cache, from the pin's last refresh and its cache
+    /// TTL as the selector reads it. Null without a pin.
     pub warm: Option<bool>,
     /// The context of the row's pin, the main agent's conversation pin where it holds one: its last turn's prompt in
     /// tokens, cache reads and writes included, 0 before its first turn.
@@ -148,9 +149,10 @@ pub(crate) struct AgentContext {
     pub last_input_tokens: u64,
     /// The cache TTL in force at the pin's last refresh.
     pub cache_ttl_ms: i64,
-    /// When a request last used the pin, the instant `warm` and the non-companion timeout read.
+    /// When a request last used the pin, the instant the non-companion timeout reads.
     pub last_used_at: i64,
-    /// Whether `now - last_used_at < cache_ttl_ms` at the read: the cache entry the pin warms is still alive.
+    /// Whether the cache entry the pin warms is still alive at the read: `now` is before the pin's last refresh plus
+    /// `cache_ttl_ms`, as the selector reads it.
     pub warm: bool,
     /// The pin's typed burn per hour in `burn_unit`, priced as the row's `burn` is for this pin.
     pub burn: Option<f64>,
@@ -412,7 +414,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 speed: standing.slow_down.map(|s| s.speed),
                 cycle_ms: standing.cycle_ms,
                 cache_ttl_ms: Some(p.cache_ttl_ms),
-                warm: Some(now - p.last_used_at < p.cache_ttl_ms),
+                warm: Some(phoebis_routing::warm(p, p.auxiliary_only, now)),
                 last_input_tokens: Some(p.last_input_tokens),
                 effort: p.effort.clone(),
                 last_refresh_at: Some(p.last_refresh_at),
@@ -446,6 +448,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             // Without a pin the serving account is the ledger's: the newest attempt of the newest request.
             entry.account_id = a.account_id;
         }
+        // The fold's spend rows leave a refused request out, so a session whose every request was refused keeps the
+        // agent of its newest one, and the fold's own replaces it below where the fold counted a client request.
+        entry.user_agent = a.user_agent;
     }
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
@@ -551,7 +556,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     last_input_tokens: pin.last_input_tokens,
                     cache_ttl_ms: pin.cache_ttl_ms,
                     last_used_at: pin.last_used_at,
-                    warm: now - pin.last_used_at < pin.cache_ttl_ms,
+                    warm: phoebis_routing::warm(pin, pin.auxiliary_only, now),
                     burn: priced.burn,
                     burn_unit: Some(standing.burn_unit),
                     burn_window: priced.window.map(String::from),
@@ -615,11 +620,21 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         let Some(figures) = fold.answer(key, now) else {
             continue;
         };
-        entry.user_agent = figures.user_agent;
+        if figures.spend.as_ref().is_some_and(|s| s.requests > 0) {
+            entry.user_agent = figures.user_agent;
+        }
         entry.spend = figures.spend;
         entry.day = figures.day;
         entry.agent_requests = figures.agent_requests;
         entry.requests = figures.requests;
+        // The fold prices by the tier a row recorded, so a share of a window the account's set lacks today is dropped
+        // at the answer, as the request list drops it. The account's key stays, since it marks that a plan paid.
+        if let Some(spend) = entry.spend.as_mut() {
+            strip_lacked(spend, &reported);
+        }
+        for agent in &mut entry.agent_requests {
+            strip_lacked(&mut agent.spend, &reported);
+        }
     }
     fold.retain(|key| rows.contains_key(key), now, state.session_expiry);
     let mut out: Vec<Session> = rows.into_values().collect();
@@ -701,6 +716,21 @@ fn price_pin_burn(p: &phoebis_store::PinRow, unit: BurnUnit, pricing: &BurnPrici
         window,
         equivalent,
         at: p.burn_at,
+    }
+}
+
+/// Takes out of `spend`'s shares and its probes' the shared windows each account's set lacks, as `windows_lacked` names
+/// them, and leaves every account's key in place.
+fn strip_lacked(
+    spend: &mut SessionSpend,
+    reported: &std::collections::BTreeMap<String, phoebis_routing::UtilizationSample>,
+) {
+    for shares in [&mut spend.shares, &mut spend.probes.shares] {
+        for (account_id, windows) in shares.iter_mut() {
+            for window in crate::routes::windows_lacked(reported, account_id) {
+                windows.remove(window);
+            }
+        }
     }
 }
 

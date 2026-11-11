@@ -28,7 +28,9 @@ pub(crate) struct SessionSpend {
     /// whatever account tier served it, null where a request priced nothing and 0 with no plan-funded request.
     pub equivalent: Option<f64>,
     /// The shares of each account's own windows under the tier the serving attempt recorded, per account, keyed
-    /// `five_hour`, `seven_day`, then `seven_day_<family>`, since a share names one account's plan.
+    /// `five_hour`, `seven_day`, then `seven_day_<family>`, since a share names one account's plan. A shared window the
+    /// account's set lacks today is left out, and the account's key stays, so a key with no window under it still marks
+    /// that a plan paid.
     pub shares: BTreeMap<String, BTreeMap<String, f64>>,
     /// The same figures over the router's cache probes of the session.
     pub probes: SessionSpendPart,
