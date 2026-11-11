@@ -418,13 +418,13 @@ its own.
 **The limit resets.** The router reads the usage endpoint a second time per account for the account's one-time limit
 resets, with the query Claude Code sends for them. The read leaves in the poll's own slot, after the usage reading: once
 an hour, in the slot whose reading shows another set of windows at their limit than the last read of the resets saw
-while the account holds a reset, in the slot after the upstream refused a use, and in the first slot after a confirmed
-pairing. The console's "Use reset", Refresh and "Refresh all" read them too, and so does a use whose outcome stayed
-open. A read whose answer could not be stored leaves again in the account's next slot, and so does a failed read after a
-use. The read counts against the usage endpoint's per-account limit and waits out its hold, and a slot that reads the
-profile sends none, so a slot sends two requests at most against that limit. An account under a plan-ended pause is sent
-none, and the startup fetch reads none. No key or field turns the read off: `usage.limit_reset_warning_days` sets the
-warning alone ([Quota samples](statistics.md#quota-samples)).
+while the account holds a reset, in the slot after the upstream refused a use, and after a confirmed pairing in the
+account's first slot that reads no profile. The console's "Use reset", Refresh and "Refresh all" read them too, and so
+does a use whose outcome stayed open. A read whose answer could not be stored leaves again in the account's next slot,
+and so does the read after an open outcome where it failed. The read counts against the usage endpoint's per-account
+limit and waits out its hold, and a slot that reads the profile sends none, so a slot sends two requests at most against
+that limit. An account under a plan-ended pause is sent none, and the startup fetch reads none. No key or field turns
+the read off: `usage.limit_reset_warning_days` sets the warning alone ([Quota samples](statistics.md#quota-samples)).
 
 **The use of a limit reset.** The router uses a reset on the operator's word alone: a click on "Use reset" on a Quota
 card, confirmed in its dialog ([Quota](console.md#quota)), sends one `POST` to the usage endpoint's host, the call
