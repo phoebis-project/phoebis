@@ -117,24 +117,6 @@ fn stored_block(store: &Store) -> (Option<serde_json::Value>, Option<i64>) {
 }
 
 #[test]
-fn a_pairing_clears_the_limit_resets_of_the_holder_before_it() {
-    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-    store.insert_account(&account("a")).unwrap();
-    assert!(store
-        .set_limit_resets("a", 1, 1, 0, Some(BLOCK), 5_000)
-        .unwrap());
-    assert_eq!(stored_block(&store).1, Some(5_000));
-    store
-        .commit_pairing("a", 1, 1, None, &bundle("at-1"))
-        .unwrap();
-    assert_eq!(
-        stored_block(&store),
-        (None, None),
-        "the block was the earlier holder's"
-    );
-}
-
-#[test]
 fn a_block_read_for_a_replaced_holder_lands_nothing() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();

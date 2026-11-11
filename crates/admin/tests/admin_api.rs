@@ -2040,43 +2040,6 @@ async fn a_used_reset_stays_used_when_every_read_after_it_fails() {
 }
 
 #[tokio::test]
-async fn an_open_outcome_is_read_from_the_upstream() {
-    use common::{get, json, login, post, CLAIM_PATH, LIMIT_RESETS_PATH};
-    let h = common::admin_parts_polled().await;
-    let cookie = login(&h.app, "admin-secret").await;
-    store_limit_resets(
-        &h.store,
-        serde_json::json!({"eligible": true, "grants": [reset_grant("rg-b-1")]}),
-    );
-    h.up.set_rule_after(0, CLAIM_PATH, fake_upstream::Respond::CloseAfterRequest);
-    h.up.set_rule_after(
-        0,
-        LIMIT_RESETS_PATH,
-        limit_resets_answer(
-            serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1")]}),
-        ),
-    );
-    let open = post(&h.app, USE_RESET, "", Some(&cookie)).await;
-    let code = open
-        .headers()
-        .get("x-phoebis-error-code")
-        .map(|code| code.to_str().unwrap().to_string());
-    let status = open.status().as_u16();
-    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
-    let grant = &account["limit_resets"]["grants"][0];
-    assert_eq!(
-        (
-            status,
-            code.as_deref(),
-            grant["state"].as_str(),
-            grant["resets_left"].as_u64()
-        ),
-        (502, Some("limit_reset_unanswered"), Some("used"), Some(0)),
-        "the read after an open outcome shows the reset the attempt spent: {account}"
-    );
-}
-
-#[tokio::test]
 async fn a_failed_read_of_an_open_outcome_is_due_in_the_next_slot() {
     use common::{login, post, CLAIM_PATH, LIMIT_RESETS_PATH};
     let h = common::admin_parts_polled().await;

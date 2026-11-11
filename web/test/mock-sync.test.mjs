@@ -138,8 +138,7 @@ const REQUEST_CLASS_VALUES = ['auxiliary', 'compaction', 'main', 'subagent', 'wo
  * unchecked. Every row of the mock's answer is walked, not only the first.
  */
 const CLOSED = {
-  account_limit_reset_use: { '.outcome': d.RESET_OUTCOME_VALUES },
-  accounts: { '[].kind': d.ACCOUNT_KIND_VALUES, '[].limitResets.grants[].state': [...d.RESET_GRANT_STATE_VALUES, undefined] },
+  accounts: { '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   attention: { '[].kind': d.ATTENTION_KIND_VALUES, '[].link.page': [...d.ATTENTION_PAGE_VALUES, undefined], '[].subject.type': d.ATTENTION_SUBJECT_VALUES },

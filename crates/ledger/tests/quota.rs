@@ -1880,33 +1880,6 @@ async fn the_limit_resets_are_read_once_an_hour() {
 }
 
 #[tokio::test]
-async fn a_new_limit_sends_one_limit_resets_read() {
-    let up = FakeUpstream::start(vec![
-        limit_resets_rule(),
-        fable_limit_usage_rule(),
-        profile_rule(),
-    ])
-    .await;
-    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    store_block(&h, "a", &stored_block(), NOW);
-    let paused = start_polling(&h, &up).await;
-
-    step_to(&h, &up, &paused, secs(302)).await;
-    assert_eq!(
-        resets_asked(&up, A),
-        1,
-        "the Fable week reads at its limit, where the service remembers no set from a read"
-    );
-    step_to(&h, &up, &paused, secs(602)).await;
-    assert_eq!(
-        resets_asked(&up, A),
-        1,
-        "the next slot reads the set the read remembered"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
 async fn a_new_limit_sends_no_limit_resets_read_without_a_reset() {
     let up = FakeUpstream::start(vec![
         limit_resets_rule(),

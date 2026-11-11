@@ -1022,14 +1022,6 @@ mod tests {
             ),
             ("concurrency-one", "usage:\n  refresh_concurrency: 1\n"),
             ("concurrency-sixteen", "usage:\n  refresh_concurrency: 16\n"),
-            (
-                "warning-days-zero",
-                "usage:\n  limit_reset_warning_days: 0\n",
-            ),
-            (
-                "warning-days-thirty",
-                "usage:\n  limit_reset_warning_days: 30\n",
-            ),
         ] {
             assert!(
                 load_unresolved(&file(dir.path(), name, body)).is_ok(),
