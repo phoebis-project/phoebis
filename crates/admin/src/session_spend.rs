@@ -377,15 +377,6 @@ impl Accumulator {
     }
 }
 
-/// Moves the key's strings out and leaves them empty in the row, since `Accumulator::fold` reads neither.
-fn key_of(row: &mut SessionSpendRow) -> (String, i64, String) {
-    (
-        std::mem::take(&mut row.key_id),
-        row.key_generation,
-        std::mem::take(&mut row.session_id),
-    )
-}
-
 /// What the fold copies out before the ledger read: the watermark and the sessions it holds, so the read's statements
 /// bind them and the lock is never held across the read.
 pub(crate) struct FoldCursor {
@@ -398,8 +389,8 @@ pub(crate) struct FoldCursor {
 /// with and the snapshot's newest landing.
 pub(crate) struct PollRows {
     pub fill: Vec<(String, i64, String)>,
-    pub fill_rows: Vec<SessionSpendRow>,
-    pub since_rows: Vec<SessionSpendRow>,
+    pub fill_rows: Vec<((String, i64, String), SessionSpendRow)>,
+    pub since_rows: Vec<((String, i64, String), SessionSpendRow)>,
     pub watermark: i64,
     /// `newest_landed_at` in the snapshot, since the incremental read leaves out the rows the fold passes over and
     /// their landings still move the watermark.
@@ -415,10 +406,10 @@ pub(crate) struct SessionFigures {
     pub requests: u64,
 }
 
-/// The fold's reads of one poll, on the closure's transaction after the activity read: the start watermark where the
-/// cursor holds none (`newest_landed_at`, before the first fill), the first fill over the `keys` the cursor does not
-/// hold, then the incremental read after the watermark and the newest landing. A function of its own so a test runs
-/// the sequence on an in-memory ledger as the route does.
+/// The fold's reads of one poll, on the closure's transaction after the activity read: the newest landing, which is
+/// the start watermark where the cursor holds none, then the first fill over the `keys` the cursor does not hold, then
+/// the incremental read after the watermark. A function of its own so a test runs the sequence on an in-memory ledger
+/// as the route does.
 pub(crate) fn read_poll(
     conn: &Connection,
     cursor: &FoldCursor,
@@ -515,17 +506,16 @@ impl SessionSpendFold {
             .into_iter()
             .map(|key| (key, Accumulator::new(now)))
             .collect();
-        for mut row in rows.fill_rows {
-            if let Some(accumulator) = filled.get_mut(&key_of(&mut row)) {
+        for (key, row) in rows.fill_rows {
+            if let Some(accumulator) = filled.get_mut(&key) {
                 accumulator.fold(row, prices, tables, now);
             }
         }
         let folded_to = inner.watermark;
-        for mut row in rows.since_rows {
+        for (key, row) in rows.since_rows {
             if folded_to.is_some_and(|watermark| row.landed_at <= watermark) {
                 continue;
             }
-            let key = key_of(&mut row);
             if filled.contains_key(&key) {
                 continue;
             }
@@ -622,25 +612,29 @@ mod tests {
     }
 
     /// A client request no account served, for the tests whose figures are counts.
-    fn row(session: &str, received_at: i64, landed_at: i64) -> SessionSpendRow {
-        SessionSpendRow {
-            session_id: session.into(),
-            key_id: "k".into(),
-            key_generation: 0,
-            agent_id: None,
-            agent_type: None,
-            user_agent: None,
-            request_class: None,
-            canonical_model: MODEL.into(),
-            kind: "inference".into(),
-            received_at,
-            landed_at,
-            attempt: None,
-        }
+    fn row(
+        session: &str,
+        received_at: i64,
+        landed_at: i64,
+    ) -> ((String, i64, String), SessionSpendRow) {
+        (
+            key(session),
+            SessionSpendRow {
+                agent_id: None,
+                agent_type: None,
+                user_agent: None,
+                request_class: None,
+                canonical_model: MODEL.into(),
+                kind: "inference".into(),
+                received_at,
+                landed_at,
+                attempt: None,
+            },
+        )
     }
 
     /// The ledger's rows of `session`, as the first fill reads them.
-    fn rows_of(db: &LedgerDb, session: &str) -> Vec<SessionSpendRow> {
+    fn rows_of(db: &LedgerDb, session: &str) -> Vec<((String, i64, String), SessionSpendRow)> {
         db.read_blocking(|c| phoebis_ledger::session_spend_rows_of(c, &[key(session)]))
             .unwrap()
     }
@@ -759,7 +753,7 @@ mod tests {
                 fill: vec![s.clone()],
                 fill_rows: rows_of(&db, "s")
                     .into_iter()
-                    .filter(|r| r.received_at == at)
+                    .filter(|(_, r)| r.received_at == at)
                     .collect(),
                 since_rows: Vec::new(),
                 watermark: 1,
