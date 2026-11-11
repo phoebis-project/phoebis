@@ -5054,7 +5054,8 @@ async fn on_listing_costs(up: &FakeUpstream, dir: &std::path::Path) -> Harness {
 }
 
 /// A catalog change enters each added model the cost model does not weigh under its undated id, dated at the
-/// change and with no request, and enters nothing for an added model the cost model weighs.
+/// change and with no request, and enters nothing for an added model the cost model weighs. A later change that adds
+/// the same model, as a second account's listing does, keeps the first date.
 #[tokio::test]
 async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_change_with_no_request(
 ) {
@@ -5076,6 +5077,17 @@ async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_ch
             requests: 0,
         }],
         "the unweighted model enters at the change's instant, and the weighted one stays out"
+    );
+    h.ledger
+        .note_listed(&["claude-opus-9-20260101".to_string()], NOW + 120_000);
+    assert_eq!(
+        h.ledger.unpriced_served(),
+        [phoebis_ledger::UnpricedModel {
+            model: "claude-opus-9".into(),
+            since: Some(NOW + 60_000),
+            requests: 0,
+        }],
+        "a later listing of the model keeps the first listing's date"
     );
     up.shutdown().await;
 }

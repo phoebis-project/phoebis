@@ -3483,11 +3483,11 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
             .is_some_and(|models| !models.is_empty())
     })
     .await;
-    // A made-up model the shipped cost model does not weigh, so the listing that adds it raises its unpriced item.
+    // An id no release names, so the listing that adds it raises its unpriced item.
     up.set_rule_after(
         0,
         "/v1/models",
-        listing(&["claude-opus-9", "claude-sonnet-4-5"]),
+        listing(&["claude-mystery-9", "claude-sonnet-4-5"]),
     );
     let refreshed: serde_json::Value = client
         .get(admin("/accounts/a/catalog?refresh=1"))
@@ -3519,7 +3519,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
     };
     assert_eq!(
         row("catalog_changed")["detail"],
-        serde_json::json!({ "added": ["claude-opus-9"], "removed": [], "count": 2 }),
+        serde_json::json!({ "added": ["claude-mystery-9"], "removed": [], "count": 2 }),
         "{log}"
     );
     // The hook enters the model before it hands the change to the ledger, so the item stands once the row has landed.
@@ -3541,9 +3541,9 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
     assert_eq!(
         unpriced,
         [(
-            &serde_json::json!("claude-opus-9"),
+            &serde_json::json!("claude-mystery-9"),
             &row("catalog_changed")["at"],
-            &serde_json::json!({ "model": "claude-opus-9", "requests": 0 })
+            &serde_json::json!({ "model": "claude-mystery-9", "requests": 0 })
         )],
         "the listing raises the added model's item at the change with no request: {attention}"
     );

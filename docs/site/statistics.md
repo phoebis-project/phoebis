@@ -746,13 +746,13 @@ previous listing, with 0 requests, or from the first plan-funded request on such
 request priced at no window share, its figure null ([Plan meter](#plan-meter)). The ledger keeps the run in memory, so
 it starts over at a restart, and the next plan-funded request on the model raises it again. An account's first listing
 after a start raises nothing, since no listing of the account stands before it, so a model listed before a restart and
-not used since reads no item until a plan-funded request lands on it. A later plan-funded request priced at a cost model
-entry that weighs the model clears it, and a client classifier call raises nothing, where a call recorded `client_off`
-on a model the cost model does not weigh raises it as any plan-funded call does. The subject is the model, the
-dashboard's line reads the item as "Model unpriced" in the info tone, and it carries no link, since the cost reference
-dialog shows the model's cells as dashes with the weight cell "not weighed". It dates from the listing or the run's
-first request, whichever came first, and the detail names the model and the plan-funded requests served since, 0 for a
-listed model no request has used yet.
+not used since reads no item until a plan-funded request lands on it or a later listing adds it to an account's previous
+one. A later plan-funded request priced at a cost model entry that weighs the model clears it, and a client classifier
+call raises nothing, where a call recorded `client_off` on a model the cost model does not weigh raises it as any
+plan-funded call does. The subject is the model, the dashboard's line reads the item as "Model unpriced" in the info
+tone, and it carries no link, since the cost reference dialog shows the model's cells as dashes with the weight cell
+"not weighed". It dates from the listing or the run's first request, whichever came first, and the detail names the
+model and the plan-funded requests served since, 0 for a listed model no request has used yet.
 
 **`meter_drift`** holds while, for any window kind, the account's newest completed window with a rise of at least 5%
 reads a ratio outside 0.8 to 1.25 between the rise the upstream's readings showed and the share the router priced for
