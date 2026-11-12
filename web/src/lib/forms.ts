@@ -37,7 +37,7 @@ export function modelRulesRefusal(rules: ModelRule[]): string | null {
   return null;
 }
 
-type WholeEngineKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
+export type WholeEngineKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
 
 /** The pool routes' inclusive bound on each whole-number engine field. The cap and the ceiling are fractions. */
 export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'shedCap' | 'windowCeiling'>, { max: number; min: number }> = {
@@ -123,13 +123,11 @@ const listed = (label: string) => `${label} is one of its listed choices.`;
 
 /** What the pool dialog knows beyond the input it sends. */
 export interface PoolChecks {
-  /** The input sends 0 for capture off, so the retention is read from its field, and only while capture is on. */
+  /** The retention is checked only while capture is on, since the input sends 0 with it off. */
   capture?: {
     /** The bootstrap's limit, absent until the settings read answers and after it fails, when the floor of 1 alone is checked. */
     maxHours?: number;
     on: boolean;
-    /** The retention its field reports, NaN for an emptied field or text the browser could not parse. */
-    typed: number;
   };
   /** On create the id derives from the name, so a taken one is held before the route's 409; a rename keeps its id. */
   identity?: { isNew: boolean; poolIds: ReadonlySet<string> };
@@ -232,7 +230,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
     refuse('keepalive', KEEPALIVE_FIELD_LABELS[key], value === null || whole(value, KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max) ? null : boundText(KEEPALIVE_FIELD_LABELS[key], KEEPALIVE_BOUNDS[key]));
   }
 
-  if (checks.capture?.on) refuse('bodyCapture', 'Capture retention in hours', hoursRefusal('Retention is a whole number of hours', checks.capture.typed, checks.capture.maxHours));
+  if (checks.capture?.on) refuse('bodyCapture', 'Capture retention in hours', hoursRefusal('Retention is a whole number of hours', input.bodyCaptureHours, checks.capture.maxHours));
   return out;
 }
 

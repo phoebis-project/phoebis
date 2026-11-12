@@ -85,7 +85,7 @@ const pin = (accountId, sessionId, burn, warm, over = {}) => ({
   keyId: 'desktop',
   lastInputTokens: 1_000,
   lastRefreshAt: at(warm ? NOW - MINUTE : NOW - 10 * MINUTE),
-  markedOn: null,
+  mark: null,
   model: 'claude-sonnet-5',
   pinned: true,
   sessionId,

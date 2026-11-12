@@ -1,5 +1,6 @@
 import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
+import { openMark } from './keepalive';
 import { endOf, minuteSpan, windowOf } from './quota';
 import { speedWord, windingDown } from './selection';
 import { compareFigures } from './sort';
@@ -298,7 +299,7 @@ export function shedPreview(
           // A pin with no prompt size reported yet ranks as the cheapest rewrite.
           rewrite: Math.max(s.lastInputTokens ?? 0, 1),
           runway: hasRunway(account.id, s.model),
-          standing: s.markedOn === account.id,
+          standing: openMark(s) !== null,
           warm: s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs,
         };
       });

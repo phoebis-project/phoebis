@@ -215,7 +215,11 @@ export function verdictTone(verdict: string, stepId?: string): VerdictTone {
 export const words = (name: string) => name.replace(/_/g, ' ');
 export const wordOf = (map: Record<string, string>, name: string) => lookup(map, name) ?? words(name);
 /** A window's tag, or the key's words where the console does not know the window. */
-export const windowTagWord = (key: string): string => windowTagOf(key) ?? words(key);
+const windowTagWord = (key: string): string => windowTagOf(key) ?? words(key);
+/** The window whose trigger set a shedding mark, as the Pin fold and the Sessions view word it. */
+export const triggerPhrase = (window: string): string => `by the ${windowTagWord(window)} trigger`;
+/** A no-return stamp's origin. A failover's landing stamps the pin as a round's move does, so the reason picks it. */
+export const shedOrigin = (reason: string): string => (reason === 'round' ? 'shed from' : 'failed over from');
 
 const msOf = (value: number | string) => (typeof value === 'number' ? value : Date.parse(value));
 
@@ -2402,11 +2406,9 @@ export function pinRows(record: DecisionRecord, now: number): CardRow[] {
   if (p.slowDownUntil !== null) rows.push({ chips: [plain(formatFact(p.slowDownUntil, 'time', now))], label: 'Slowed until' });
   if (p.marked || p.shed !== null) {
     // A version 1 record carried the mark alone, with no account, instant or window.
-    const trigger = p.markedWindow === null ? [] : [plain(`by the ${windowTagWord(p.markedWindow)} trigger`)];
+    const trigger = p.markedWindow === null ? [] : [plain(triggerPhrase(p.markedWindow))];
     const marked = p.markedOn !== null && p.markedAt !== null ? [accountChip(p.markedOn, 'marked on'), plain(formatFact(p.markedAt, 'time', now), 'at'), ...trigger] : [plain('marked by a round')];
-    // A failover's landing stamps the pin as a round's move does, so the reason picks the word the status page uses.
-    const origin = p.shed?.reason === 'round' ? 'shed from' : 'failed over from';
-    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, origin), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
+    rows.push({ chips: [...(p.marked ? marked : []), ...(p.shed !== null ? [accountChip(p.shed.from, shedOrigin(p.shed.reason)), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
   }
   return [...rows, ...released];
 }

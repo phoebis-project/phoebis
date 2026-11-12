@@ -15,7 +15,7 @@ import { SortControl } from '@/components/SortControl';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, SkeletonRows, StampSub } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorRow, Menu, Skeleton, SkeletonRows, StampSub } from '@/components/ui/primitives';
 import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortDirOf, type KeysAddress } from '@/lib/address';
 import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
@@ -267,13 +267,7 @@ export function KeysPage() {
                 <tbody>
                   {!keys.data
                     ? keys.error
-                      ? (
-                          <tr>
-                            <td colSpan={8}>
-                              <ErrorState title="Could not load the keys" body={keys.error} retry={keys.reload} />
-                            </td>
-                          </tr>
-                        )
+                      ? <ErrorRow colSpan={8} error={keys.error} errorTitle="Could not load the keys" retry={keys.reload} />
                       : <SkeletonRows count={3} colSpan={8} />
                     : ordered.map((k) => {
                         const captureHours = effectiveCaptureHours(k, poolById.get(k.poolId) ?? null);

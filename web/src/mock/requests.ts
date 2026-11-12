@@ -440,6 +440,8 @@ function countOrder(ids: string[], poolId: string, atMs: number, model: string, 
 
 /** The morning's shedding round: secondary's 5-hour window projects past the pool's ceiling at 11:00. */
 export const SHED_ROUND = { accountId: UNPRICED_ACCOUNT, at: clock(11, 0) };
+/** Studio's round fired by the stretch, at the renewal its slowed request's hold led to. */
+export const STRETCH_ROUND = { accountId: 'studio', at: clock(14, 5) };
 
 /** The plan windows a head reads spent, the later reset first, as the relay cools the account until it. */
 const spentWindows = (windows: AttemptWindow[]) =>

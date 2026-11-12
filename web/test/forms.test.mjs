@@ -357,7 +357,7 @@ test('a pool refusal names the group its control sits in', () => {
 });
 
 test('a retention while capture is on must be a whole number of hours inside the limit', () => {
-  const retention = (typed, on = true, maxHours = 72) => d.poolRefusals(input, accounts, { capture: { maxHours, on, typed } });
+  const retention = (typed, on = true, maxHours = 72) => d.poolRefusals({ ...input, bodyCaptureHours: typed }, accounts, { capture: { maxHours, on } });
   const refused = (maxHours) => [{ field: 'Capture retention in hours', group: 'bodyCapture', text: `Retention is a whole number of hours from 1 to ${maxHours}.` }];
   for (const typed of [Number.NaN, 0, 1.5, -1, 73]) assert.deepEqual(retention(typed), refused(72), `${typed} is refused`);
   for (const typed of [1, 72]) assert.deepEqual(retention(typed), [], `${typed} is inside`);
@@ -366,7 +366,7 @@ test('a retention while capture is on must be a whole number of hours inside the
 });
 
 test('a retention while the limit is unread checks the floor of 1 alone', () => {
-  const retention = (typed) => d.poolRefusals(input, accounts, { capture: { on: true, typed } });
+  const retention = (typed) => d.poolRefusals({ ...input, bodyCaptureHours: typed }, accounts, { capture: { on: true } });
   const floor = [{ field: 'Capture retention in hours', group: 'bodyCapture', text: 'Retention is a whole number of hours of at least 1.' }];
   for (const typed of [Number.NaN, 0, 1.5, -1]) assert.deepEqual(retention(typed), floor, `${typed} is refused`);
   for (const typed of [1, 5, 500]) assert.deepEqual(retention(typed), [], `${typed} is inside, since no upper bound applies before the limit is read`);
@@ -402,7 +402,7 @@ test('the Keepalive group refuses its three numbers in the order it draws them',
 });
 
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
-  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***') }, accounts, { capture: { maxHours: 72, on: true, typed: Number.NaN } });
+  const refusals = d.poolRefusals({ ...input, bodyCaptureHours: Number.NaN, name: '', members: [], modelRules: rules('a***') }, accounts, { capture: { maxHours: 72, on: true } });
   assert.deepEqual(
     refusals.map((r) => r.group),
     ['identity', 'members', 'models', 'bodyCapture'],

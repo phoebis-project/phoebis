@@ -123,15 +123,15 @@ test('under Billed dollars a plan request reads a dash titled nothing billed', (
 });
 
 test('a plan rate reads its Pro-week figure under native, its list dollars under the two equivalent positions and a dash under Billed dollars, and a billed rate its dollars and a dash under Dollar equivalent', () => {
-  const plan = { billedUsd: null, equivalent: 0.0009, planUsd: 0.42, side: 'plan' };
+  const plan = { equivalent: 0.0009, side: 'plan', usd: 0.42 };
   assert.deepEqual(d.rateUnder('native', plan), { figure: 0.0009, kind: 'equivalent' });
   assert.deepEqual(d.rateUnder('all', plan), { kind: 'dollars', usd: 0.42 }, 'all: the dollars, never the week share');
   assert.deepEqual(d.rateUnder('usd', plan), { kind: 'dash', title: d.RATE_NOTHING_BILLED_TITLE });
   assert.deepEqual(d.rateUnder('equivalent', plan), { kind: 'dollars', usd: 0.42 }, 'equivalent: the dollars, never the week share');
-  const billed = { billedUsd: 0.12, equivalent: null, planUsd: null, side: 'billed' };
+  const billed = { equivalent: null, side: 'billed', usd: 0.12 };
   for (const position of ['native', 'all', 'usd']) assert.deepEqual(d.rateUnder(position, billed), { kind: 'dollars', usd: 0.12 }, position);
   assert.deepEqual(d.rateUnder('equivalent', billed), { kind: 'dash', title: d.NO_EQUIVALENT_TITLE });
-  assert.equal(d.rateUnder('all', { ...plan, planUsd: null }), null, 'a plan rate with a Pro-week figure and no list dollars draws no rate, never $0.00');
+  assert.equal(d.rateUnder('all', { ...plan, usd: null }), null, 'a plan rate with a Pro-week figure and no list dollars draws no rate, never $0.00');
 });
 
 test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {

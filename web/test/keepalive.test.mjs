@@ -138,9 +138,9 @@ test("expiryOf reads a row no companion reports as listed until the lesser limit
 });
 
 test("openMark reads a mark that stands on the row's own account, and none off a no-return stamp alone", () => {
-  const moved = { accountId: 'overflow', markedAt: null, markedOn: null, markedWindow: null, shedAt: iso(ms(14, 2)), shedFrom: 'primary', shedReason: 'cooldown' };
+  const moved = { accountId: 'overflow', mark: null, shed: { at: iso(ms(14, 2)), from: 'primary', reason: 'cooldown' } };
   assert.equal(d.openMark(moved), null, 'a pin a failover moved off primary onto overflow');
-  const marked = { accountId: 'studio', markedAt: iso(ms(14, 5)), markedOn: 'studio', markedWindow: 'five_hour', shedAt: null, shedFrom: null, shedReason: null };
+  const marked = { accountId: 'studio', mark: { at: iso(ms(14, 5)), on: 'studio', window: 'five_hour' }, shed: null };
   assert.deepEqual(d.openMark(marked), { at: iso(ms(14, 5)), on: 'studio', window: 'five_hour' });
 });
 

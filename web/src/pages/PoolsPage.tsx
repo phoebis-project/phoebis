@@ -32,7 +32,7 @@ import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -58,6 +58,7 @@ const finiteOrNull = (value: number | null) => (value !== null && Number.isFinit
 /** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
 const CEILING_PERCENT = { max: 100, min: 50 } as const;
 const CAP_PERCENT = { max: 100, min: 10 } as const;
+const KNOWN_MOVE_REASONS: ReadonlySet<string> = new Set([...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS, ...CAUSE_MOVE_REASONS]);
 /**
  * The strip: the features a pool has on, and the shedding's state, in the rail's order, each opening the dialog on the
  * group that edits it.
@@ -628,8 +629,7 @@ function PoolCard({
   const ruleMoves = among(RULE_MOVE_REASONS);
   const failovers = among(FAILOVER_MOVE_REASONS);
   const causes = among(CAUSE_MOVE_REASONS);
-  const known: readonly string[] = [...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS, ...CAUSE_MOVE_REASONS];
-  const others = moveCounts.filter(([reason]) => !known.includes(reason));
+  const others = moveCounts.filter(([reason]) => !KNOWN_MOVE_REASONS.has(reason));
   const movesTotal = ruleMoves.reduce((s, [, count]) => s + count, 0);
   const moveLine = ([reason, count]: [string, number]) => `${moveLabel(reason)} ${fmtInt(count)}`;
   const movesTitle = [
@@ -1016,12 +1016,11 @@ function WordedBadge({ badge, tone }: { badge: StandingBadge; tone: 'serious' | 
   );
 }
 
-type EngineNumberKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
 /** The engine's settings as the dialog holds them, each number as its field reports it. */
 type EngineForm = { [K in keyof PoolEngineFields]: PoolEngineFields[K] extends number ? number | null : PoolEngineFields[K] };
 
 /** The engine's settings, each number through `numberOf`, by default as the save reads it, an emptied entry as NaN. */
-const engineInput = (e: EngineForm, numberOf: (key: EngineNumberKey) => number = (key) => held(e[key])): PoolEngineFields => ({
+const engineInput = (e: EngineForm, numberOf: (key: WholeEngineKey) => number = (key) => held(e[key])): PoolEngineFields => ({
   ...e,
   burnAverageSeconds: numberOf('burnAverageSeconds'),
   inFlightCap: numberOf('inFlightCap'),
@@ -1089,6 +1088,10 @@ interface PoolForm {
 }
 
 const NO_BUDGET: PoolForm['budgets'][string] = { daily: null, monthly: null };
+const BUDGET_FIELDS = [
+  { column: 'budget_daily', field: 'daily', word: 'Daily' },
+  { column: 'budget_monthly', field: 'monthly', word: 'Monthly' },
+] as const;
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
 
@@ -1384,7 +1387,7 @@ export function PoolDialog({
   const listed = new Set(accounts.map((a) => a.id));
   // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
   const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)), {
-    capture: { maxHours: captureMaxHours, on: form.capture, typed: held(form.captureHours) },
+    capture: { maxHours: captureMaxHours, on: form.capture },
     identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
   });
   const { first, invalid, refusalOf, refusedFields, refusedGroups } = refusalsView(refusals);
@@ -1538,8 +1541,9 @@ export function PoolDialog({
                   <tr>
                     <th className="col-fill">Account</th>
                     <th className="right col-fit">Priority</th>
-                    <th className="right col-fit">Daily budget, USD</th>
-                    <th className="right col-fit">Monthly budget, USD</th>
+                    {BUDGET_FIELDS.map((b) => (
+                      <th key={b.column} className="right col-fit">{`${b.word} budget, USD`}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -1603,30 +1607,20 @@ export function PoolDialog({
                             aria-invalid={invalid(memberField('priority', a.id))}
                           />
                         </td>
-                        <td className="right col-fit">
-                          <NumberInput
-                            min={0.01}
-                            step="any"
-                            value={budgetOf(a.id).daily}
-                            disabled={!on}
-                            placeholder="none"
-                            onNumber={(v) => setBudget(a.id, { daily: v })}
-                            aria-label={`Daily budget for ${a.label}, USD`}
-                            aria-invalid={invalid(memberField('budget_daily', a.id))}
-                          />
-                        </td>
-                        <td className="right col-fit">
-                          <NumberInput
-                            min={0.01}
-                            step="any"
-                            value={budgetOf(a.id).monthly}
-                            disabled={!on}
-                            placeholder="none"
-                            onNumber={(v) => setBudget(a.id, { monthly: v })}
-                            aria-label={`Monthly budget for ${a.label}, USD`}
-                            aria-invalid={invalid(memberField('budget_monthly', a.id))}
-                          />
-                        </td>
+                        {BUDGET_FIELDS.map((b) => (
+                          <td key={b.column} className="right col-fit">
+                            <NumberInput
+                              min={0.01}
+                              step="any"
+                              value={budgetOf(a.id)[b.field]}
+                              disabled={!on}
+                              placeholder="none"
+                              onNumber={(v) => setBudget(a.id, { [b.field]: v })}
+                              aria-label={`${b.word} budget for ${a.label}, USD`}
+                              aria-invalid={invalid(memberField(b.column, a.id))}
+                            />
+                          </td>
+                        ))}
                       </tr>
                     );
                   })}
@@ -1653,12 +1647,11 @@ export function PoolDialog({
                       <td className="right col-fit">
                         <Input type="number" value={finiteOrNull(form.members[id]) ?? ''} disabled aria-label={`Priority for ${id}`} />
                       </td>
-                      <td className="right col-fit">
-                        <Input type="number" value={finiteOrNull(budgetOf(id).daily) ?? ''} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
-                      </td>
-                      <td className="right col-fit">
-                        <Input type="number" value={finiteOrNull(budgetOf(id).monthly) ?? ''} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
-                      </td>
+                      {BUDGET_FIELDS.map((b) => (
+                        <td key={b.column} className="right col-fit">
+                          <Input type="number" value={finiteOrNull(budgetOf(id)[b.field]) ?? ''} disabled placeholder="none" aria-label={`${b.word} budget for ${id}, USD`} />
+                        </td>
+                      ))}
                     </tr>
                   ))}
                 </tbody>

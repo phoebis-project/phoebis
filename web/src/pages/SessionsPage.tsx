@@ -18,15 +18,15 @@ import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, r
 import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
-import { tierOrder, weekReadingOf } from '@/lib/costs';
+import { tierOrder } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
 import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
-import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
+import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
-import { ageWord, aroundSubject, logHref, windowTagWord } from '@/lib/routingLog';
+import { ageWord, aroundSubject, logHref, shedOrigin, triggerPhrase } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
 import { windowHint } from '@/lib/windows';
@@ -123,11 +123,6 @@ interface Row {
    * phrase reads the clock, so `noRecipeText` writes it at draw time and a tick rebuilds no row.
    */
   idleLimit: { ranOutAt: string | null } | null;
-  /**
-   * The instant the Last used cell reads. A session known from the ledger or from a registration alone carries no
-   * activity of its own, so the last ledgered request stands in for it.
-   */
-  lastUsed: string | null;
   /** The session's lines in the view's order, the released ones among them, which `hiddenLines` draws or hides. */
   lines: SessionLine[];
   /** Why a session carries no recipe at all, the causes that need no clock, null while it has one. */
@@ -236,14 +231,13 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       expiresAt: expiryOf(session, limits),
       finished,
       idleLimit,
-      lastUsed: session.lastUsedAt,
       lines: orderLines(lines, sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
       pool,
       poolId: key?.poolId ?? null,
       recipe: agents.length === 0 || idleLimitOnly ? null : rowRecipe(agents),
       session,
-      split: lifecycleSplit(session, lines),
+      split: lifecycleSplit(lines),
       status: statusOf(session, finished),
     };
   });
@@ -350,11 +344,10 @@ export function SessionsPage() {
   const pools = useAsync(() => api.listPools(), []);
   const recipes = useAsync(() => api.listKeepaliveRecipes(), [], reread);
   const sessions = useAsync(() => api.listSessions(), [], reread);
+  const { modelTiers, unit, week } = useAppSettings();
   // The listing limits, the non-companion timeout and the session expiry, and the cost model whose capacities scale a
   // spend to the chosen week.
-  const settings = useAsync(() => api.getSettings(), []);
-  const { modelTiers, unit, week } = useAppSettings();
-  const weekReading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);
+  const { reading: weekReading, settings } = useWeekReading(week);
   const now = useNow(5_000);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   // The open rows whose fold line was opened, by row, so each row unfolds the agents the filters hide on its own.
@@ -559,8 +552,7 @@ export function SessionsPage() {
 function burnReading(pin: BurnFigures | null, cost: CostContext): { dash: boolean; text: string; title: string | undefined } | null {
   if (pin === null || pin.burnUnit === null) return null;
   const billed = pin.burnUnit === 'usd';
-  if (pin.burn === null && !billed && cost.unit === 'native') return null;
-  const reading = rateUnder(cost.unit, { billedUsd: billed ? pin.burn : null, equivalent: billed ? null : pin.burnEquivalent, planUsd: billed ? null : pin.burnUsd, side: billed ? 'billed' : 'plan' });
+  const reading = rateUnder(cost.unit, { equivalent: pin.burn === null ? null : pin.burnEquivalent, side: billed ? 'billed' : 'plan', usd: billed ? pin.burn : pin.burnUsd });
   if (reading === null) return null;
   if (reading.kind === 'dash') return { dash: true, text: '-', title: reading.title };
   const title = billed || pin.burn === null || pin.burnWindow === null ? undefined : `${fmtShare(pin.burn)} of ${windowHint(pin.burnWindow)}`;
@@ -635,6 +627,8 @@ function BilledBadge({ usd }: { usd: number }) {
   );
 }
 
+const requestsFigure = (n: number): ReactNode => (n > 0 ? fmtInt(n) : <span className="muted">0</span>);
+
 /** An account's link to its page with the kind on its title, described to a reader that never hovers. */
 function AccountLink({ account, id }: { account: Account | null; id: string }) {
   const title = account ? KIND_HINT[account.kind] : undefined;
@@ -664,13 +658,13 @@ function RowAccount({ accent, account, others, session, speed }: { accent: boole
 }
 
 /** The window a mark's trigger read, as the routing log's Pin fold words it, and nothing where the mark names none. */
-const triggerWords = (window: string | null): string => (window === null ? '' : ` by the ${windowTagWord(window)} trigger`);
+const triggerWords = (window: string | null): string => (window === null ? '' : ` ${triggerPhrase(window)}`);
 
 /**
  * The warning badge `leaving` while a shedding round's mark stands on the session's pin, the mark's account, window and
  * instant on hover.
  */
-function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'markedAt' | 'markedOn' | 'markedWindow'> }) {
+function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'mark'> }) {
   const mark = openMark(session);
   if (mark === null) return null;
   return (
@@ -680,14 +674,10 @@ function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'markedAt
   );
 }
 
-/**
- * The pin's no-return stamp as the move that wrote it, in the Pin fold's words, or null with no stamp. A stamp written
- * before the pin carried a reason reads as a round's move, as the route documents it.
- */
-const movedWord = (session: Pick<Session, 'shedAt' | 'shedFrom' | 'shedReason'>): string | null => {
-  if (session.shedFrom === null) return null;
-  const origin = session.shedReason === null || session.shedReason === 'round' ? 'shed from' : 'failed over from';
-  return `${origin} ${session.shedFrom}${session.shedAt === null ? '' : ` at ${fmtAbsolute(session.shedAt)}`}`;
+/** The pin's no-return stamp as the move that wrote it, in the Pin fold's words, or null with no stamp. */
+const movedWord = (session: Pick<Session, 'shed'>): string | null => {
+  if (session.shed === null) return null;
+  return `${shedOrigin(session.shed.reason)} ${session.shed.from}${session.shed.at === null ? '' : ` at ${fmtAbsolute(session.shed.at)}`}`;
 };
 
 /** The mod's state for a session: `reporting` with `seen {ago}`, `silent` with how long, or `none` muted. */
@@ -808,7 +798,7 @@ function SessionRows({
   unfolded: boolean;
   visible: ReadonlySet<SessionColumnId>;
 }) {
-  const { expiresAt, lastUsed, recipe, session, status } = row;
+  const { expiresAt, recipe, session, status } = row;
   const account = cost.accountById.get(session.accountId ?? '') ?? null;
   const noRecipe = noRecipeText(row, now);
   const recipes = shownLines.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
@@ -856,8 +846,8 @@ function SessionRows({
   const warmingId = useId();
   const navigate = useNavigate();
   const pinnedSince = open ? (row.lines.find((l) => l.agentId === MAIN_AGENT)?.pin?.pinnedAt ?? session.pinnedAt) : null;
-  const mark = openMark(session);
-  const moved = movedWord(session);
+  const mark = open ? openMark(session) : null;
+  const moved = open ? movedWord(session) : null;
   const speed = memberSpeed(session, account, now);
   const agentRow = (agentId: string, line: SessionLine | null, figures: AgentFigures | null) => (
     <AgentRow
@@ -952,15 +942,15 @@ function SessionRows({
         )}
         {visible.has('requests') && (
           <td className="right num col-fit" title={sentences([REQUESTS_HINT, session.lastRequestAt === null ? null : `Last request ${fmtAbsolute(session.lastRequestAt)}`])}>
-            {requestCount(session) > 0 ? fmtInt(requestCount(session)) : <span className="muted">0</span>}
+            {requestsFigure(requestCount(session))}
             {session.lastRequestAt !== null && <span className="sub">{fmtRelative(session.lastRequestAt, now)}</span>}
           </td>
         )}
         {visible.has('cost') && <CostCell accountId={session.accountId} burn={<BurnLine cost={cost} session={session} />} cost={cost} spend={session.spend} />}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
-          <td className="col-fit" title={fmtAbsolute(lastUsed)}>
-            {fmtRelative(lastUsed, now)}
+          <td className="col-fit" title={fmtAbsolute(session.lastUsedAt)}>
+            {fmtRelative(session.lastUsedAt, now)}
             {expiresAt !== null && (
               <span className="sub" title={`The router stops listing this session at ${fmtAbsolute(expiresAt)}`}>
                 expires {fmtRelative(expiresAt, now)}
@@ -1426,7 +1416,7 @@ function AgentRow({
   const context = contextCell(tokens);
   const burn = burnReading(pin, cost);
   // A line reads unreported where the route answers no word for its agent, as the row's Status does for main.
-  const word = line === null ? null : lineWordOf(session, line);
+  const word = line === null ? null : lineWordOf(line);
   const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now) : '';
   const hint = LIFECYCLE_HINT[word ?? 'unreported'];
   return (
@@ -1444,7 +1434,7 @@ function AgentRow({
         <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
       </td>
       <td title={burn?.title}>{burn === null || burn.dash ? <span className="muted">-</span> : <span className="num">{burn.text}</span>}</td>
-      <td className="right num">{figures !== null && requestCount(figures) > 0 ? fmtInt(requestCount(figures)) : <span className="muted">0</span>}</td>
+      <td className="right num">{requestsFigure(figures === null ? 0 : requestCount(figures))}</td>
       <CostCell accountId={accountId} cost={cost} spend={figures?.spend ?? null} />
       <td>
         {line === null ? (

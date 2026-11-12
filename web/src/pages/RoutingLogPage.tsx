@@ -14,7 +14,7 @@ import type { Option } from '@/components/ui/OptionList';
 import { IconChevronRight } from '@/components/ui/icons';
 import { PagerNav } from '@/components/ui/PagerNav';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Card, EmptyState, ErrorState, SkeletonRows, toggleRow, useHostedDescription } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, ErrorRow, SkeletonRows, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { addressWindow, ROUTING_LOG_CODEC, ROUTING_LOG_SORT_KEYS, sortDirOf } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
@@ -211,17 +211,17 @@ export function RoutingLogPage() {
                         </Fragment>
                       );
                     })}
-                {!log.loading && rows.length === 0 && (
-                  <tr>
-                    <td colSpan={9}>
-                      {error ? (
-                        <ErrorState title="Could not load the routing log" body={error} retry={log.reload} />
-                      ) : (
+                {!log.loading &&
+                  rows.length === 0 &&
+                  (error ? (
+                    <ErrorRow colSpan={9} error={error} errorTitle="Could not load the routing log" retry={log.reload} />
+                  ) : (
+                    <tr>
+                      <td colSpan={9}>
                         <EmptyState title="No decisions or events in this range." body="Widen the range or clear a filter." />
-                      )}
-                    </td>
-                  </tr>
-                )}
+                      </td>
+                    </tr>
+                  ))}
               </tbody>
             </table>
           </div>

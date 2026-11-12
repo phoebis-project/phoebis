@@ -9,10 +9,10 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, WORKSHOP_SESSION_ID, expiredBetweenTurns } from './requests';
+import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, expiredBetweenTurns } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
-import { HOUR, MINUTE, NOW, ago, ahead, clock, iso, startOfHour } from './time';
+import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
 
 const rng = createRng(2_024);
 
@@ -411,9 +411,9 @@ const datedLines = (createdAt: string | null, session: string, lines: readonly U
 /** The summary of a row main holds no recipe for. */
 const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
 /** A pin no round marked, and a row with no pin. */
-const NO_MARK: Pick<Session, 'markedAt' | 'markedOn' | 'markedWindow'> = { markedAt: null, markedOn: null, markedWindow: null };
+const NO_MARK: Pick<Session, 'mark'> = { mark: null };
 /** A pin with no no-return stamp, and a row with no pin. The story's stamping moves land on no pinned row it lists. */
-const NO_STAMP: Pick<Session, 'shedAt' | 'shedFrom' | 'shedReason'> = { shedAt: null, shedFrom: null, shedReason: null };
+const NO_STAMP: Pick<Session, 'shed'> = { shed: null };
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -837,11 +837,10 @@ const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h')
 const studioRunwayMs = studioFive?.burn ? Math.round(((poolById.get('work')!.windowCeiling - studioFive.utilization) / studioFive.burn) * HOUR) : null;
 const studioSlowed = servedFigures('studio', NOW, poolById.get('work')!.slowDown);
 /**
- * The mark studio's stretch round set on the two sessions it marked, the round of 14:05 that the 5-hour window fired
- * (`STRETCH_ROUND` in mock/routingLog.ts, which reads these rows, so its instant is written here). Neither session sent
- * a request since, so the mark stands.
+ * The mark studio's stretch round set on the two sessions it marked, the round of 14:05 that the 5-hour window fired.
+ * Neither session sent a request since, so the mark stands.
  */
-const STRETCH_MARK: Pick<Session, 'markedAt' | 'markedOn' | 'markedWindow'> = { markedAt: iso(clock(14, 5)), markedOn: 'studio', markedWindow: 'five_hour' };
+const STRETCH_MARK: Pick<Session, 'mark'> = { mark: { at: iso(STRETCH_ROUND.at), on: STRETCH_ROUND.accountId, window: 'five_hour' } };
 SLOWED_PINS.forEach((pin, k) => {
   // The rows run newest first, and the main agent's newest turn is the pin's last use.
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);

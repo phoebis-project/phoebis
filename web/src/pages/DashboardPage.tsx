@@ -409,6 +409,8 @@ function RecentTable({ accounts, rows, error, reading, settings }: { accounts: A
   );
 }
 
+const SUMMARY_FIGURES = [['Agents', 'agents'], ['Busy', 'busy'], ['Idle', 'idle'], ['Parked', 'parked']] as const;
+
 /**
  * The hero is the router's own pin count: the session rows also hold sessions the ledger or the keepalive engine
  * alone knows and earlier key holders' ones, so only the rows still pinned name the accounts. The grid counts the live
@@ -424,7 +426,7 @@ function SessionsSummary({ activePins, busGaps, expired, keepalive, now, recipes
     const bySession = groupInto(recipeData, (r) => `${r.keyId}:${r.sessionId}`);
     const live = sessions.flatMap((session) => {
       const lines = sessionLines(session, session.historical ? [] : (bySession.get(`${session.keyId}:${session.sessionId}`) ?? []));
-      return isFinished(session, lines) ? [] : [{ lines, session }];
+      return isFinished(session, lines) ? [] : [{ lines }];
     });
     return lineTotals(live);
   }, [sessions, recipeData]);
@@ -439,22 +441,12 @@ function SessionsSummary({ activePins, busGaps, expired, keepalive, now, recipes
       </div>
       {recipesFailed && <ReadNotice className="sess-summary__notice" error={recipes.error} name="recipes" retry={recipes.reload} />}
       <dl className="sess-summary__grid">
-        <div>
-          <dt>Agents</dt>
-          <dd className="num">{figure(totals?.agents)}</dd>
-        </div>
-        <div>
-          <dt>Busy</dt>
-          <dd className="num">{figure(totals?.busy)}</dd>
-        </div>
-        <div>
-          <dt>Idle</dt>
-          <dd className="num">{figure(totals?.idle)}</dd>
-        </div>
-        <div>
-          <dt>Parked</dt>
-          <dd className="num">{figure(totals?.parked)}</dd>
-        </div>
+        {SUMMARY_FIGURES.map(([label, key]) => (
+          <div key={key}>
+            <dt>{label}</dt>
+            <dd className="num">{figure(totals?.[key])}</dd>
+          </div>
+        ))}
       </dl>
       <KeepaliveEngine busGaps={busGaps} expired={expired} now={now} read={keepalive} />
     </div>

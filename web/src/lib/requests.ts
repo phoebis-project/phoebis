@@ -150,20 +150,27 @@ export const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this tra
 type RateReading = { kind: 'dash'; title: string } | { kind: 'dollars'; usd: number } | { figure: number; kind: 'equivalent' } | null;
 
 /**
- * A rate under a Unit position, by `fundedUnit`'s rule. `side` is who pays the traffic the rate measures, `equivalent`
- * the plan side's Pro-week figure per time, `planUsd` its list dollars per time and `billedUsd` the billed side's
- * dollars per time, the time base the caller's own. A plan rate reads the Pro-week figure under Native, its list
- * dollars under All in dollars and Dollar equivalent, and a dash under Billed dollars. A billed rate reads its
- * dollars under Native, All in dollars and Billed dollars, and a dash under Dollar equivalent.
+ * What a rate reads under a Unit position, by `fundedUnit`'s rule, `side` being who pays the traffic the rate
+ * measures. A plan rate reads the Pro-week figure under Native, its list dollars under All in dollars and Dollar
+ * equivalent, and a dash under Billed dollars. A billed rate reads its dollars under Native, All in dollars and Billed
+ * dollars, and a dash under Dollar equivalent.
  */
-export function rateUnder(unit: UnitPosition, rate: { billedUsd: number | null; equivalent: number | null; planUsd: number | null; side: 'billed' | 'plan' }): RateReading {
-  if (rate.side === 'billed') {
-    if (unit === 'equivalent') return { kind: 'dash', title: NO_EQUIVALENT_TITLE };
-    return rate.billedUsd === null ? null : { kind: 'dollars', usd: rate.billedUsd };
-  }
+export function rateKind(unit: UnitPosition, side: 'billed' | 'plan'): { kind: 'dash'; title: string } | { kind: 'dollars' } | { kind: 'equivalent' } {
+  if (side === 'billed') return unit === 'equivalent' ? { kind: 'dash', title: NO_EQUIVALENT_TITLE } : { kind: 'dollars' };
   if (unit === 'usd') return { kind: 'dash', title: RATE_NOTHING_BILLED_TITLE };
-  if (unit === 'native') return rate.equivalent === null ? null : { figure: rate.equivalent, kind: 'equivalent' };
-  return rate.planUsd === null ? null : { kind: 'dollars', usd: rate.planUsd };
+  return unit === 'native' ? { kind: 'equivalent' } : { kind: 'dollars' };
+}
+
+/**
+ * A rate under a Unit position, of the kind `rateKind` reads. `equivalent` is the plan side's Pro-week figure per time
+ * and `usd` the side's dollars per time, the plan side's list dollars or the billed side's own, the time base the
+ * caller's own.
+ */
+export function rateUnder(unit: UnitPosition, rate: { equivalent: number | null; side: 'billed' | 'plan'; usd: number | null }): RateReading {
+  const reading = rateKind(unit, rate.side);
+  if (reading.kind === 'dash') return reading;
+  if (reading.kind === 'equivalent') return rate.equivalent === null ? null : { figure: rate.equivalent, kind: 'equivalent' };
+  return rate.usd === null ? null : { kind: 'dollars', usd: rate.usd };
 }
 
 /** `hint` is `shareHint` over the row, composed by the surface that holds the account and the cost model. */

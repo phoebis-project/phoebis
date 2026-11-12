@@ -16,7 +16,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
@@ -611,8 +611,6 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
 
 /** Primary's afternoon round, which finds no sibling with runway for either of its two pins. */
 const NO_RUNWAY_ROUND = { accountId: 'primary', at: clock(14, 12, 30) };
-/** Studio's round fired by the stretch, at the renewal its slowed request's hold led to. */
-const STRETCH_ROUND = { accountId: 'studio', at: clock(14, 5) };
 /** Nightly's morning round on its 7-day Fable window, fired while the 5-hour window is under the hold. */
 const FABLE_WEEK_ROUND = { accountId: 'nightly', at: clock(8, 30) };
 /** The story's four rounds, which a later decision on the account reads as within the dwell. */
