@@ -566,6 +566,14 @@
   background: var(--accent);
 }
 
+.meter--absent {
+  background: var(--surface-3);
+}
+
+.meter--absent .meter__fill {
+  background: repeating-linear-gradient(135deg, var(--hairline-strong) 0 2px, transparent 2px 6px);
+}
+
 /* Skeleton / empty */
 .skeleton {
   display: inline-block;
@@ -1107,6 +1115,37 @@ textarea.input {
 .pattern-editor__source {
   flex: none;
   font-size: 12px;
+}
+
+/* The conditions editor draws its box, rows, actions and refusal line with the pattern editor's classes, and its own
+   line wraps. */
+.conditions-editor__line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* The cell grid widens every select to its cell, which on a condition's line would push the other cells off it. */
+.conditions-editor .conditions-editor__line .select {
+  flex: none;
+  width: auto;
+}
+
+.conditions-editor__line .input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.conditions-editor__actions {
+  margin-left: auto;
+}
+
+.conditions-editor__foot {
+  display: flex;
+  gap: 10px;
+  align-items: center;
 }
 
 /* One width for the trailing slot of both kinds of guardrail row, the three sm ghost buttons' with their two gaps,
@@ -1903,6 +1942,21 @@ textarea.input {
   color: var(--ink-2);
 }
 
+.stat__value.is-critical {
+  color: var(--critical-ink);
+}
+
+.stat__value.is-warning {
+  color: var(--warning-ink);
+}
+
+/* A native Cost figure stays whole, so a narrow tile moves the funding's word under the figure rather than breaking
+   the figure. The inline block leaves a break before the word. */
+.cost-figure {
+  display: inline-block;
+  white-space: nowrap;
+}
+
 /* Charts */
 .chart-tip {
   min-width: 160px;
@@ -1981,6 +2035,23 @@ textarea.input {
   font-size: 18px;
   font-weight: 600;
   fill: var(--ink);
+}
+
+/* Donut legend */
+.remaining__list li {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  transition: opacity var(--motion-base);
+}
+
+.remaining__list li.is-dim {
+  opacity: 0.4;
+}
+
+.remaining__list a {
+  color: inherit;
 }
 
 .toast {
@@ -2479,28 +2550,6 @@ textarea.input {
   }
 }
 
-/* Donut legend */
-.remaining__list li {
-  display: grid;
-  grid-template-columns: 10px 1fr auto;
-  gap: 10px;
-  align-items: center;
-  transition: opacity var(--motion-base);
-}
-
-.remaining__list li.is-dim {
-  opacity: 0.4;
-}
-
-.remaining__list a {
-  color: inherit;
-}
-
-/* Attempt trail: the status badge's attempt mark */
-.badge__extra {
-  opacity: 0.8;
-}
-
 /* Fast lane */
 /* Text that wraps rather than a chip: both shares and the reset run past a pill's width on a quota card. */
 .fast-lane__line {
@@ -2572,7 +2621,8 @@ textarea.input {
 }
 
 /* Utilization bar */
-/* The pool form's utilization bar. The side padding keeps a handle at 0 or 100 % inside the field. */
+/* The pool form's utilization bar. The track's 8 px height and its background come from `.hbars__track, .ubar__track`
+   in pages.css, and the ticks center on that track. The side padding keeps a handle at 0 or 100 % inside the field. */
 .ubar {
   display: flex;
   flex-direction: column;
@@ -2631,39 +2681,12 @@ textarea.input {
   color: var(--ink-2);
 }
 
-/* Conditions editor */
-/* The conditions editor draws its box, rows, actions and refusal line with the pattern editor's classes, and its own
-   line wraps. */
-.conditions-editor__line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  min-width: 0;
+/* Attempt trail */
+/* The trail's steps take their size from `.trail__step, .requests__attempts > .badge` in pages.css. */
+.badge__extra {
+  opacity: 0.8;
 }
 
-/* The cell grid widens every select to its cell, which on a condition's line would push the other cells off it. */
-.conditions-editor .conditions-editor__line .select {
-  flex: none;
-  width: auto;
-}
-
-.conditions-editor__line .input {
-  flex: 1;
-  min-width: 120px;
-}
-
-.conditions-editor__actions {
-  margin-left: auto;
-}
-
-.conditions-editor__foot {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-/* Attempt trail: the count and its card */
 .trail-count {
   cursor: default;
   white-space: nowrap;
@@ -2678,7 +2701,15 @@ textarea.input {
   padding: 6px 8px;
 }
 
+.trail {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 260px;
+}
+
 /* Decision card and event detail */
+/* The candidate and pin cell rules stay in pages.css, after the routing log's cell rules they tie with. */
 /* The decision card spans the open row's tint, so its candidate table is the log's card less 16 px either side. The
    event detail is a bordered panel on the same tint. Chips in both are one line high. */
 .decision-card,
@@ -3155,6 +3186,10 @@ textarea.input {
   border-bottom: 1px solid var(--hairline);
 }
 
+.section-bar {
+  z-index: calc(var(--z-sticky) - 1);
+}
+
 /* Columns control */
 .cols-popover {
   display: grid;
@@ -3178,7 +3213,7 @@ textarea.input {
   border-top: 1px solid var(--hairline);
 }
 
-/* Group by: the Groups popover */
+/* Group by */
 /* The Groups popover's field keeps the box's 8 px inset, as the Custom range popover's fields do. */
 .groups-popover {
   padding: 4px 8px 8px;
@@ -3188,6 +3223,21 @@ textarea.input {
   resize: vertical;
   min-width: 220px;
   font-size: inherit;
+}
+
+/* The page's group-by: a 160 px select after its label. */
+.groupby-select {
+  width: 160px;
+}
+
+/* Range control */
+/* The Custom range popover's fields keep the head's and the foot's 8 px inset, so they line up with its title and its
+   buttons. */
+.range-control__fields {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 8px;
 }
 
 /* Pager nav */
@@ -3287,8 +3337,37 @@ textarea.input {
   border-radius: var(--radius-pill);
 }
 
+.probe-bar {
+  height: 10px;
+  border-radius: var(--radius-pill);
+}
+
+.probe-bar__seg--ok {
+  background: var(--good);
+}
+
+/* Matches the migrated slice of the analytics probe chart, --series-3. */
+.probe-bar__seg--migrated {
+  background: var(--series-3);
+}
+
+/* Matches the held slice of the analytics probe chart, --series-muted. */
+.probe-bar__seg--held {
+  background: var(--series-muted);
+}
+
+/* Matches the skipped slice of the analytics probe chart, --series-4. */
+.probe-bar__seg--skipped {
+  background: var(--series-4);
+}
+
+.probe-bar__seg--failed {
+  background: var(--critical);
+}
+
 /* Body viewer */
-/* One line of the mono text, 12 px at 1.5. The viewer places its rows by the same figure. */
+/* One line of the mono text, the 12 px at 1.5 that `.body-block__pre, .snippet` sets in pages.css. The viewer places
+   its rows by the same figure. */
 .body-block__pre {
   --body-row: 18px;
   max-height: 260px;
@@ -3319,35 +3398,6 @@ textarea.input {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
-/* Probe bar */
-.probe-bar {
-  height: 10px;
-  border-radius: var(--radius-pill);
-}
-
-.probe-bar__seg--ok {
-  background: var(--good);
-}
-
-/* Matches the migrated slice of the analytics probe chart, --series-3. */
-.probe-bar__seg--migrated {
-  background: var(--series-3);
-}
-
-/* Matches the held slice of the analytics probe chart, --series-muted. */
-.probe-bar__seg--held {
-  background: var(--series-muted);
-}
-
-/* Matches the skipped slice of the analytics probe chart, --series-4. */
-.probe-bar__seg--skipped {
-  background: var(--series-4);
-}
-
-.probe-bar__seg--failed {
-  background: var(--critical);
-}
-
 /* Key dialog */
 /* The processed list of a saved key, one line per entry with the level it came from. */
 .effective-rules {
@@ -3375,23 +3425,6 @@ textarea.input {
   font-size: 12.5px;
   font-weight: 500;
   color: var(--ink-2);
-}
-
-/* Tile: the value's tones */
-.stat__value.is-critical {
-  color: var(--critical-ink);
-}
-
-.stat__value.is-warning {
-  color: var(--warning-ink);
-}
-
-/* Attempt trail: the trail of badges */
-.trail {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-width: 260px;
 }
 
 /* Cost reference */
@@ -3801,33 +3834,4 @@ textarea.input {
 
 .cost-ref__panel {
   container-type: inline-size;
-}
-
-/* Section bar */
-.section-bar {
-  z-index: calc(var(--z-sticky) - 1);
-}
-
-/* Group by: the select */
-/* The page's group-by: a 160 px select after its label. */
-.groupby-select {
-  width: 160px;
-}
-
-/* Range control */
-/* The Custom range popover's fields keep the head's and the foot's 8 px inset, so they line up with its title and its
-   buttons. */
-.range-control__fields {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 4px 8px;
-}
-
-/* Tile: the cost figure */
-/* A native Cost figure stays whole, so a narrow tile moves the funding's word under the figure rather than breaking
-   the figure. The inline block leaves a break before the word. */
-.cost-figure {
-  display: inline-block;
-  white-space: nowrap;
 }

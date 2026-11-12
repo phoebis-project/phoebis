@@ -2582,14 +2582,6 @@
   color: var(--ink-2);
 }
 
-.meter--absent {
-  background: var(--surface-3);
-}
-
-.meter--absent .meter__fill {
-  background: repeating-linear-gradient(135deg, var(--hairline-strong) 0 2px, transparent 2px 6px);
-}
-
 /* Account detail header and equal-height pair */
 .detail__ident {
   display: flex;
