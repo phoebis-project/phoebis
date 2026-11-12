@@ -4605,9 +4605,10 @@ async function quotaChips(theme) {
 }
 
 /**
- * The extra usage flag on the story's `nightly` card: its computed ink against its computed fill at 4.5 to 1 or
- * more, read in every walk since a theme or a palette block could redefine either of the flag's two tokens. Mock pass
- * alone, since the router's seed has no subscription account. Records to `measurements`.
+ * The extra usage flag on the story's `nightly` card: its computed ink, composited over its fill where the ink is
+ * translucent, against its computed fill at 4.5 to 1 or more, read in every walk since a theme or a palette block could
+ * redefine either of the flag's two tokens. Mock pass alone, since the router's seed has no subscription account.
+ * Records to `measurements`.
  */
 async function quotaFlagInk(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -4618,9 +4619,15 @@ async function quotaFlagInk(theme) {
     const style = getComputedStyle(flag);
     return { fill: style.backgroundColor, ink: style.color, text: flag.textContent?.trim() ?? '' };
   });
-  const ratio = read === null ? null : contrastOf(colorChannels(read.ink).rgb, colorChannels(read.fill).rgb);
+  // `colorChannels` reads a color in any other form, such as `oklch()`, by its bare numbers, which gives a ratio wrong
+  // either way. A fill with any transparency reads through to what lies under it, so it has no contrast of its own.
+  const unread = read === null ? [] : Object.entries({ fill: read.fill, ink: read.ink }).filter(([, color]) => !/^rgba?\([\d., /]+\)$|^color\(srgb [-\d.e]+ [-\d.e]+ [-\d.e]+(?: \/ [-\d.e]+)?\)$/.test(color));
+  const fill = read === null ? null : colorChannels(read.fill);
+  const ratio = read === null || unread.length > 0 || fill.alpha < 1 ? null : contrastOf(composite(colorChannels(read.ink), fill), fill.rgb);
   measurements.push(`${theme} /quota nightly's extra usage flag ${JSON.stringify({ ...read, ratio })}`);
   if (read === null) say("nightly's card draws no extra usage flag to read");
+  else if (unread.length > 0) unread.forEach(([part, color]) => say(`the extra usage flag's ${part} ${color} is in a form the measure cannot read`));
+  else if (fill.alpha < 1) say(`the extra usage flag's fill ${read.fill} is translucent and has no contrast of its own to read`);
   else if (ratio < 4.5) say(`the extra usage flag reads ${read.ink} on ${read.fill} at ${ratio}:1, under 4.5:1`);
 }
 
