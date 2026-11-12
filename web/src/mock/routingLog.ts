@@ -2086,8 +2086,8 @@ function storySpecs(): Spec[] {
     // account's pins ahead of the shed rule. The 5-hour window the story spends at 13:10:21 opened at 08:11, so it is
     // 19 minutes old at the round, under all's hold of an hour, while its burn still carries the previous window's, and
     // its projection reads under the wall at its reset besides: the 7-day Fable window fires in its place, over all's
-    // ceiling at the five-hour bound. The Opus pin draws no 7-day Fable window, so the round lists it and counts nothing
-    // of it. The burns replace the account's, so the 5-hour burn stands beside the 7-day Fable window's.
+    // ceiling at the five-hour bound. The Opus pin draws no 7-day Fable window, so the round lists it and counts
+    // nothing of it. The burns replace the account's, so the 5-hour burn stands beside the 7-day Fable window's.
     at('req_3e2b9d47-c18', 1, 1, t(8, 21, 40), 'placed', 'nightly'),
     at('req_3e7a5c19-f84', 1, 1, t(8, 30), 'renewed', 'nightly', {
       burns: { nightly: { five_hour: 0.03, seven_day_fable: FABLE_WEEK_BURN } },
@@ -2317,9 +2317,9 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
  * from the shed line and the line its trigger read as the ceiling, the wall where the projection fired at a reset or an
  * end horizon, the round's figures, and each pin with the rewrite and the runway it would take on the destination
  * planned for it, each planned move counted against the next one's runway there. The rewrite is the pin's Pro-week
- * figure under `rewrite_unit`, a figure of the pin alone, so an API-key destination reads it too, with the weekly window
- * the pick compared on named, and the share floor the round applied. An event of an earlier build (`earlier`) stored
- * the rewrite as the story's 20x equivalent of that window and names no unit and no floor.
+ * figure under `rewrite_unit`, a figure of the pin alone, so an API-key destination reads it too, with the weekly
+ * window the pick compared on named, and the share floor the round applied. An event of an earlier build (`earlier`)
+ * stored the rewrite as the story's 20x equivalent of that window and names no unit and no floor.
  */
 function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventSeed | null {
   const record = DECISIONS.get(decision);

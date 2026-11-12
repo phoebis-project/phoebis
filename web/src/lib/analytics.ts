@@ -437,7 +437,11 @@ export const sidesLine = (sides: { billed: number | undefined; equivalent: numbe
   nativeFiguresOf(sides, week, scale)
     .figures.map((f) => (f.word === 'billed' ? `${f.text} billed` : f.text))
     .join(', ');
-/** A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. */
+/**
+ * A dollar position's dollars of a sum: every row's, the billed rows', or the plan rows' at the API price list. The
+ * routes add a row's dollars to both sums in one pass, so their difference needs no tolerance, where the console adds
+ * a session spend's billed dollars again from a map per funding.
+ */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
 /**
  * The figure a funded sum draws in the chosen unit: under native its Pro-week figure, null where a plan row priced

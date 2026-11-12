@@ -375,7 +375,7 @@ test("a window fact reads the Fable tag under the stored key's spelling, and a w
   assert.equal(d.valueText('window', 'seven_day_opus', null, NOW), 'seven day opus');
 });
 
-test('PIN_RELEASE_LABEL words every release reason and releaseLabel keeps an unknown one as sent', () => {
+test('releaseLabel words the cooldown and expired reasons and keeps an unknown one as sent', () => {
   assert.equal(d.releaseLabel('cooldown'), 'account cooled');
   assert.equal(d.releaseLabel('expired'), 'pin idle past the affinity window');
   assert.equal(d.releaseLabel('a_reason_added_later'), 'a_reason_added_later');

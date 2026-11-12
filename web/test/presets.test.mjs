@@ -152,7 +152,8 @@ test('a standing mark counts as removed and lifts no guard, a covering pin is th
       sliver: d.shedMarks([{ burn: 0.1, id: 's', standing: true }, { burn: 0.03, id: 'a' }, { burn: 0.4, id: 'b' }, { burn: 0.4, id: 'c' }], 0.9),
       // s's 0.4 is a move pending, so the rest of the target of 0.5 is 0.1, which b covers.
       standing: d.shedMarks([{ burn: 0.4, id: 's', standing: true }, { burn: 0.35, id: 'b' }, { burn: 0.25, id: 'c' }], 0.5),
-      // An unpriced pin under a standing mark is leaving, so it is not the pin that stays, and b's mark would leave 0.05.
+      // An unpriced pin under a standing mark is leaving, so it is not the pin that stays, and b's mark would leave
+      // 0.05.
       standingUnpriced: d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }, { burn: null, id: 's', standing: true }], 0.95),
     },
     { cheapest: ['c'], sliver: ['b'], standing: ['b'], standingUnpriced: ['a', 'c'] },

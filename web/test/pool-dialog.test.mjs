@@ -124,7 +124,7 @@ test('the pool retention is unbounded with the short hint and the floor alone un
   const field = () => container.querySelector('dialog[open] input[aria-label="Capture retention in hours"]');
   const hint = () => shownText(fieldIn(container, 'Retention (hours)')?.querySelector('.field__hint'));
   assert.equal(field()?.value, String(pool.bodyCaptureHours), 'the field opens on the stored retention');
-  assert.equal(field()?.hasAttribute('max'), false, 'no ceiling stands before the read answers');
+  assert.equal(field()?.hasAttribute('max'), false, 'no ceiling stands until the page hands the limit down');
   assert.equal(hint(), "At most the bootstrap's body capture limit, shown on the Settings page's About card.");
   type(field(), '');
   assert.equal(statusOf(container), 'Save is held: Retention is a whole number of hours of at least 1.', 'an emptied field names the floor alone');
@@ -176,7 +176,7 @@ test("the key override is unbounded with the floor's sentence until the page han
   const capture = () => [...container.querySelectorAll('dialog[open] section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Capture');
   const field = () => capture()?.querySelector('input[aria-label="Capture hours for this key"]');
   act(() => capture()?.querySelectorAll('.radio-list__item')[1]?.querySelector('input[type="radio"]')?.click());
-  assert.equal(field()?.hasAttribute('max'), false, 'no ceiling stands before the read answers');
+  assert.equal(field()?.hasAttribute('max'), false, 'no ceiling stands until the page hands the limit down');
   type(field(), '');
   assert.equal(statusOf(container), 'Save is held: Capture hours is a whole number of at least 1.', 'an emptied field names the floor alone');
   await draw(keyDialog(LIMIT));

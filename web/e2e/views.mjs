@@ -5832,10 +5832,10 @@ async function savingTiles(theme) {
 /**
  * The Cost tab over the mock's default range, whose Sonnet 4.5 plan requests price nothing, since the cost model has
  * no weight for that model: the Cost tile's subscription line reads a dash under the unpriced title in the type and ink
- * of the Cost per request tile's first figure beside it, on that tile's top, and the Cost by card's note reads on a line
- * of its own under the subtitle's text, at its left edge, in the subtitle's type and ink. The tab's click moves the
- * page's clock, so the page loads again at the origin and the measures after it and the view's shot read the view as it
- * first drew.
+ * of the Cost per request tile's first figure beside it, on that tile's top, and the Cost by card's note reads on a
+ * line of its own under the subtitle's text, at its left edge, in the subtitle's type and ink. The tab's click moves
+ * the page's clock, so the page loads again at the origin and the measures after it and the view's shot read the view
+ * as it first drew.
  */
 async function costUnpricedNote(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);

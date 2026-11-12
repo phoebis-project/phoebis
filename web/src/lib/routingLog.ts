@@ -2372,7 +2372,7 @@ function classifierPinRows(record: DecisionRecord): CardRow[] {
   };
   const [agent, model, direction] = [text('judged_agent'), text('judged_model'), text('direction')];
   const [judged, credit] = [factOf('judged'), factOf('credit')];
-  const sentTo = direction !== null ? [plain(DIRECTION_WORDS[direction] ?? direction)] : credit !== undefined ? [account(credit, keyWord('credit'))] : null;
+  const sentTo = direction !== null ? [plain(lookup(DIRECTION_WORDS, direction) ?? direction)] : credit !== undefined ? [account(credit, keyWord('credit'))] : null;
   return [
     { chips: [plain(PIN_REASON_LABEL.classifier)], label: 'Pin' },
     ...(agent === null ? [] : [{ chips: [plain(agent), ...(model === null ? [] : [modelChip(model)])], label: 'Judged turn' }]),

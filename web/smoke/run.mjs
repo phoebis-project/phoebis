@@ -537,7 +537,9 @@ const COST_HEADER_TITLE = {
 };
 const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
 const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
-/** The dash's title of a plan-funded rate under Billed dollars, and the sentence of a rate card with no figure there. */
+/**
+ * The dash's title of a plan-funded rate under Billed dollars, and the sentence of a rate card with no figure there.
+ */
 const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this traffic';
 /** The Analytics filter bar's Group by select, the one the Burn section follows, told by its Burn-only option. */
 const pageGroupBy = (page) => {
@@ -19348,9 +19350,9 @@ await forView('/analytics', async () => {
 
 // The Burn tab's two rate cards follow the Unit setting, each position switched on the top bar under the model
 // grouping, where the story's Sonnet 4.5 plan rows, which the cost model has no weight for, make a group of their own:
-// under Native it reads a dash with no point beside the model unlisted entry, and under All in dollars its plan dollars.
-// The 5-hour and the Fable week card keep the share of the chosen tier's window under every position. jsdom lays
-// nothing out, so the chart containers read a browser's size here and the cards draw their axes.
+// under Native it reads a dash with no point beside the model unlisted entry, and under All in dollars its plan
+// dollars. The 5-hour and the Fable week card keep the share of the chosen tier's window under every position. jsdom
+// lays nothing out, so the chart containers read a browser's size here and the cards draw their axes.
 await forView('/analytics', async () => {
   const measure = window.HTMLElement.prototype.getBoundingClientRect;
   window.HTMLElement.prototype.getBoundingClientRect = function () {
