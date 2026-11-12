@@ -7297,6 +7297,8 @@ const BAR_CHIPS = {
   '/requests': '?accounts=primary&keys=laptop&models=claude-opus-5&pools=jobs&statuses=200',
   '/routing-log': '?accounts=primary&keys=laptop&kinds=moved,held,shedding_round,mark_cleared,wind_down_started,slow_down_started,slow_down_ended&models=claude-opus-5&pools=jobs',
 };
+/** The address `barRow` reads the Requests row on with the Output tokens key picked, its Sort button the longer. */
+const BAR_SORT = { '/requests': '?sort=output' };
 /** A view whose row draws no search holds its slots under this width at rest, far from a second line. */
 const ROW_BOUND = {
   // The row measured 850 px with its range, Group by select and Sort control, past the Routing log's 700, so the bound
@@ -7320,12 +7322,13 @@ const MIDNIGHT = (origin) => {
  * The bar's measure on `view`, called after its shot: the row 32 px at rest and the bar 66 with a chip line (49 and 83
  * on the Analytics sticky bar, whose 8 px of padding above and below and hairline add 17), every row child 32 px at one
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
- * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
- * ranged view, with a span across midnight, and the row against the first card's head. Under the mock's story the
- * Requests row at 1280 by 800 holds two lines in every case, since the count's slot keeps the width of its longest text
- * whatever the count reads: the slots take 1284 px in the 992 px row and the edge wraps alone onto the second line, the
- * row 72 px and the bar 72 at rest and across midnight and 106 with its chips. At 1440 by 900 it holds one line at rest
- * and with its chips, and two across midnight, whose Custom pill takes the slots to 1444 px in the 1152 px row (the row
+ * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips, on a ranged
+ * view with a span across midnight and on Requests under "Sort: Output tokens", and the row against the first card's
+ * head. Under the mock's story the Requests row at 1280 by 800 holds two lines in every case, since the count's slot
+ * keeps the width of its longest text whatever the count reads: the slots take 1284 px in the 992 px row and the edge
+ * wraps alone onto the second line, the row 72 px and the bar 72 at rest, across midnight and under the sort and 106
+ * with its chips. At 1440 by 900 it holds one line at rest, with its chips and under the sort (the slots 1152 px in
+ * the 1152 px row), and two across midnight, whose Custom pill takes the slots to 1444 px in the 1152 px row (the row
  * and the bar 72 px). Against another story the row holds two lines where its slots run past it and one otherwise. On a
  * card view the element after the bar and the tiles stand under the bar's bottom. The row's
  * `width`, its slots' widths and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the
@@ -7414,7 +7417,7 @@ async function barRow(theme, view) {
       [1440, 900],
     ]) {
       await page.setViewportSize({ height, width });
-      const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : [])];
+      const cases = [['at rest', '', false], ...(BAR_CHIPS[view] ? [['with its chips', BAR_CHIPS[view], true]] : []), ...(ranged ? [['with a span across midnight', MIDNIGHT(clockOrigin), false]] : []), ...(BAR_SORT[view] ? [['under Sort: Output tokens', BAR_SORT[view], false]] : [])];
       for (const [label, search, chipped] of cases) {
         await page.goto(`${base}${view}${search}`);
         await booted();
@@ -7428,6 +7431,11 @@ async function barRow(theme, view) {
         const lines = mock ? (view === '/requests' && (width === 1280 || label === 'with a span across midnight') ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped, lines);
+        // An address that dropped the pick would measure the bare row's shorter button.
+        if (search === BAR_SORT[view]) {
+          const sortText = (await page.locator('.filter-bar button[aria-label="Sort"]').textContent())?.trim() ?? null;
+          if (sortText !== 'Sort: Output tokens') say(`${width} by ${height} ${label}: the Sort button reads ${JSON.stringify(sortText)}, not "Sort: Output tokens"`);
+        }
         if (chipped) {
           await cutReaders(theme, `${view} at ${width} by ${height} ${label}`);
           await hiddenNodes(theme, `${view} at ${width} by ${height} ${label}`);
@@ -8753,7 +8761,7 @@ async function quotaSortControl(theme) {
 
 /** The radios each log's Sort popover lists, its keys then the two directions. */
 const LOG_SORT_RADIOS = {
-  '/requests': ['Time', 'Attempts', 'Duration', 'TTFB', 'Ascending', 'Descending'],
+  '/requests': ['Time', 'Attempts', 'Duration', 'TTFB', 'Uncached input', 'Output tokens', 'Ascending', 'Descending'],
   '/routing-log': ['Time', 'Ascending', 'Descending'],
 };
 
@@ -8831,7 +8839,7 @@ async function logSortControl(theme, view) {
   }
 }
 
-/** The Requests bar's sort control (`logSortControl`), its four keys. */
+/** The Requests bar's sort control (`logSortControl`), its six keys. */
 const requestsSortControl = (theme) => logSortControl(theme, '/requests');
 /** The Routing log bar's sort control (`logSortControl`), its one key. */
 const routingLogSortControl = (theme) => logSortControl(theme, '/routing-log');

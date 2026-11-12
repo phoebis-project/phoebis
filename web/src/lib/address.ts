@@ -277,9 +277,11 @@ export const REQUEST_SORT_KEYS = [
   { defaultDir: 'desc', id: 'attempts', label: 'Attempts' },
   { defaultDir: 'desc', id: 'duration', label: 'Duration' },
   { defaultDir: 'desc', id: 'ttfb', label: 'TTFB' },
+  { defaultDir: 'desc', id: 'input', label: 'Uncached input' },
+  { defaultDir: 'desc', id: 'output', label: 'Output tokens' },
 ] as const satisfies readonly SortKey[];
 /** The route's order word per key. */
-export const REQUEST_ORDER_OF = { attempts: 'attempts', duration: 'duration_ms', received: 'received_at', ttfb: 'ttfb_ms' } as const satisfies Record<(typeof REQUEST_SORT_KEYS)[number]['id'], RequestOrder>;
+export const REQUEST_ORDER_OF = { attempts: 'attempts', duration: 'duration_ms', input: 'input_tokens', output: 'output_tokens', received: 'received_at', ttfb: 'ttfb_ms' } as const satisfies Record<(typeof REQUEST_SORT_KEYS)[number]['id'], RequestOrder>;
 /** The route's order words the console sends, which the poll's comparator reads. */
 export type RequestOrderWord = (typeof REQUEST_ORDER_OF)[keyof typeof REQUEST_ORDER_OF];
 

@@ -11531,7 +11531,7 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const button = columnsButton(m);
   results.push({
     name: '/requests the Columns control is an icon button reading the count of shown columns, every column counted in its title',
-    ok: button?.textContent?.trim() === '10' && button.getAttribute('title') === 'Columns: 10 of 14 shown' && button.querySelector('svg') !== null && button.getAttribute('aria-haspopup') === 'dialog',
+    ok: button?.textContent?.trim() === '10' && button.getAttribute('title') === 'Columns: 10 of 16 shown' && button.querySelector('svg') !== null && button.getAttribute('aria-haspopup') === 'dialog',
     missing: [button ? `${JSON.stringify(button.textContent?.trim())} titled ${JSON.stringify(button.getAttribute('title'))}` : 'no Columns button'],
   });
 }
@@ -11576,24 +11576,28 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
       poolAt === withPool.indexOf('Key') + 1 &&
       poolCells.length > 0 &&
       poolCells.every((c) => c.length > 0) &&
-      poolCount === '11, Columns: 11 of 14 shown',
+      poolCount === '11, Columns: 11 of 16 shown',
     missing: [JSON.stringify(withPool), String(poolCount)],
   });
   // Transport stays a column the control offers, so its badges draw once it is turned on.
   await turn('Transport');
   expect('/requests turning Transport on through the Columns control draws its SSE badges', m.text(), ['SSE', 'Transport']);
-  // With Duration and Kind on as well, every one of the fourteen columns is drawn, so the hidden ones carry their class
-  // too.
+  // With Duration, Kind, Uncached input and Output tokens on as well, every one of the sixteen columns is drawn, so the
+  // hidden ones carry their class too.
   await turn('Duration');
   await turn('Kind');
+  await turn('Uncached input');
+  await turn('Output tokens');
   // A turn that finds no label does nothing, so the head is counted before the classes are read. The links column's
-  // empty head is the fifteenth cell.
-  results.push({ name: '/requests with Duration, Kind, Pool and Transport on the head draws fifteen cells, the four among them', ok: heads().length === 15 && ['Duration', 'Kind', 'Pool', 'Transport'].every((h) => heads().includes(h)), missing: heads() });
-  columnsMarked('/requests every one of the fourteen columns is fit or fill, with Time the fill', m.container.querySelector('.requests__table'), ['Time']);
+  // empty head is the seventeenth cell.
+  results.push({ name: '/requests with Duration, Kind, Output tokens, Pool, Transport and Uncached input on the head draws seventeen cells, the six among them', ok: heads().length === 17 && ['Duration', 'Kind', 'Output tokens', 'Pool', 'Transport', 'Uncached input'].every((h) => heads().includes(h)), missing: heads() });
+  columnsMarked('/requests every one of the sixteen columns is fit or fill, with Time the fill', m.container.querySelector('.requests__table'), ['Time']);
   await turn('Duration');
   await turn('Kind');
   await turn('Pool');
   await turn('Transport');
+  await turn('Uncached input');
+  await turn('Output tokens');
   // A table whose drawn columns hold no fill takes its content width. jsdom lays nothing out, so the class is read
   // here and the browser pass reads the width.
   const noFill = () => m.container.querySelector('.requests__table')?.classList.contains('table--no-fill') ?? null;
@@ -13575,6 +13579,79 @@ await forView('/requests', async () => {
     name: "/requests the Columns control turns the Duration column on after TTFB, its cell the request's duration",
     ok: JSON.stringify(duration) === JSON.stringify({ after: 'Duration', cell: '9.0 s' }),
     missing: [JSON.stringify(duration)],
+  });
+});
+
+// The two token keys on the ci key's day at ten rows a page, each picked with its column on and read across the three
+// pages its cursors reach. Nineteen of the 24 rows carry the serving attempt's counts. The other five stand last with a
+// dash, by id descending: the drawn req_b68906d8-252, whose one attempt answered 429, then the story's four rows with
+// no attempt (req_9b4f1c62-a07, req_6c3a9e27-5b1, req_51d0e2b8-7a0 and req_2d8e5b13-f40 in `web/src/mock/requests.ts`).
+// The first of the five is the twentieth row, so the third page's cursor carries no figure. Uncached input reads the
+// drawn token count req_bacc2d06-4d8's 45,588 first and req_30bc648a-338's 63 last. Output tokens reads the crossing's
+// 2,900 first (BUDGET_CROSSING_ID) and the three drawn token counts' zero output last among the figures, by id.
+await forView('/requests', async () => {
+  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+  const column = (p, head) => {
+    const at = [...p.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === head);
+    return [...p.container.querySelectorAll('.requests__table tbody tr')].map((tr) => ({ id: idOf(tr), text: at < 0 ? null : (tr.children[at]?.firstChild?.textContent?.trim() ?? null) }));
+  };
+  const read = async (label) => {
+    const recorded = recordedCalls('listRequests');
+    const sent = () => {
+      const q = recorded.calls.at(-1)?.args[0] ?? {};
+      return { cursor: q.cursor ?? null, dir: q.dir ?? null, order: q.order ?? null };
+    };
+    try {
+      const page = await mount('/requests?keys=ci&rows=10', { now: CLOCK_ORIGIN });
+      columnsButton(page)?.click();
+      await page.settle(100);
+      [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
+      await page.settle(100);
+      columnsButton(page)?.click();
+      await page.settle(100);
+      page.container.querySelector('.filter-bar button[aria-label="Sort"]')?.click();
+      await page.settle(100);
+      [...(document.querySelector('.popover .sort-popover')?.querySelectorAll('[role="radio"]') ?? [])].find((r) => r.textContent?.trim() === label)?.click();
+      await page.settle(300);
+      const cells = column(page, label);
+      const reads = [sent()];
+      const next = async () => {
+        page.container.querySelector('button[aria-label="Next page"]')?.click();
+        await page.settle();
+        cells.push(...column(page, label));
+        reads.push(sent());
+      };
+      await next();
+      await next();
+      const search = page.location().search;
+      page.unmount();
+      // The rows with a figure, the first and last with their cells, then the first and last of the rows after them and
+      // their count, each with a dash.
+      const figured = cells.filter((c) => c.text !== '-');
+      const rest = cells.slice(figured.length);
+      return {
+        figured: [figured[0]?.id ?? null, figured[0]?.text ?? null, figured.at(-1)?.id ?? null, figured.at(-1)?.text ?? null],
+        rest: [rest[0]?.id ?? null, rest.at(-1)?.id ?? null, rest.every((c) => c.text === '-') ? rest.length : 'interleaved'],
+        search,
+        sent: reads,
+      };
+    } finally {
+      recorded.restore();
+    }
+  };
+  const sentUnder = (order, cursor) => [null, cursor, ':req_b68906d8-252'].map((c) => ({ cursor: c, dir: 'desc', order }));
+  const without = ['req_b68906d8-252', 'req_2d8e5b13-f40', 5];
+  const input = await read('Uncached input');
+  results.push({
+    name: '/requests a pick of Uncached input with its column on pages by the serving count descending, the rows without one last with a dash, and the read sends input_tokens',
+    ok: JSON.stringify(input) === JSON.stringify({ figured: ['req_bacc2d06-4d8', '45.6K', 'req_30bc648a-338', '63'], rest: without, search: '?keys=ci&sort=input&rows=10', sent: sentUnder('input_tokens', '5066:req_c395d225-780') }),
+    missing: [JSON.stringify(input)],
+  });
+  const output = await read('Output tokens');
+  results.push({
+    name: '/requests a pick of Output tokens with its column on pages by the serving count descending, the rows without one last with a dash, and the read sends output_tokens',
+    ok: JSON.stringify(output) === JSON.stringify({ figured: ['req_7c19e4a0-2f3', '2.9K', 'req_0739aa56-cac', '0'], rest: without, search: '?keys=ci&sort=output&rows=10', sent: sentUnder('output_tokens', '1033:req_52f62e67-839') }),
+    missing: [JSON.stringify(output)],
   });
 });
 

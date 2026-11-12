@@ -13,6 +13,12 @@ import type { UnitPosition, WeekPosition } from '@/lib/unit';
 /** The route's order, newest first and the higher id first at one instant, which a poll's merge and the mock keep. */
 export const compareRequests = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || byteOrder(b.id, a.id);
 
+/**
+ * A request's token count as the route orders by it: its serving attempt's, null where that attempt answered no 200,
+ * so a row the route files as lacking the figure draws a dash and sorts last, never as the wire's zero.
+ */
+export const orderedTokens = (r: Pick<RequestLog, 'attempts' | 'usage'>, kind: 'input' | 'output'): number | null => (servingAttempt(r)?.upstreamStatus === 200 ? r.usage[kind] : null);
+
 /** The route's order key read off the row, null where the row carries no figure. */
 function figureOf(r: RequestLog, order: RequestOrderWord): number | null {
   switch (order) {
@@ -24,6 +30,10 @@ function figureOf(r: RequestLog, order: RequestOrderWord): number | null {
       return r.durationMs;
     case 'ttfb_ms':
       return r.ttfbMs;
+    case 'input_tokens':
+      return orderedTokens(r, 'input');
+    case 'output_tokens':
+      return orderedTokens(r, 'output');
   }
 }
 

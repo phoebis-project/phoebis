@@ -34,7 +34,7 @@ import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, row
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
-import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, orderedTokens, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
@@ -55,11 +55,13 @@ const COLUMNS = [
   { id: 'ttfb', label: 'TTFB' },
   { id: 'duration', label: 'Duration' },
   { id: 'tokens', label: 'Tokens' },
+  { id: 'input', label: 'Uncached input' },
+  { id: 'output', label: 'Output tokens' },
   { id: 'cost', label: 'Cost' },
 ] as const;
 type ColumnId = (typeof COLUMNS)[number]['id'];
-// The drawer names all four, and leaving them out lets the default set fit the card at 1280 by 800.
-const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['duration', 'kind', 'pool', 'transport'];
+// The drawer names all six, and leaving them out lets the default set fit the card at 1280 by 800.
+const HIDDEN_BY_DEFAULT: readonly ColumnId[] = ['duration', 'input', 'kind', 'output', 'pool', 'transport'];
 /** The columns the table shows while the drawer is open: derived at render, so the chosen set returns on close. */
 const COMPACT: readonly ColumnId[] = ['time', 'model', 'status', 'attempts'];
 
@@ -171,6 +173,12 @@ function HeldBadge({ held }: { held: CohortHold }) {
       {words.badge}
     </Badge>
   );
+}
+
+/** A token count's cell, a component of its own so the expression-bodied row map reads the count once. */
+function OrderedTokensCell({ kind, request }: { kind: 'input' | 'output'; request: RequestLog }) {
+  const count = orderedTokens(request, kind);
+  return <td className="right num col-fit">{count === null ? <span className="muted">-</span> : fmtCompact(count)}</td>;
 }
 
 /**
@@ -406,6 +414,8 @@ export function RequestsPage() {
                     {shown.has('ttfb') && <th className="right col-fit">TTFB</th>}
                     {shown.has('duration') && <th className="right col-fit">Duration</th>}
                     {shown.has('tokens') && <th className="right col-fit">Tokens</th>}
+                    {shown.has('input') && <th className="right col-fit">Uncached input</th>}
+                    {shown.has('output') && <th className="right col-fit">Output tokens</th>}
                     {shown.has('cost') && (
                       <th className="right col-fit" title={costHeaderTitle(unit)}>
                         Cost
@@ -490,6 +500,8 @@ export function RequestsPage() {
                               <span className="sub">{r.usage.cacheRead > 0 ? `${fmtCompact(r.usage.cacheRead)} cached` : 'uncached'}</span>
                             </td>
                           )}
+                          {shown.has('input') && <OrderedTokensCell kind="input" request={r} />}
+                          {shown.has('output') && <OrderedTokensCell kind="output" request={r} />}
                           {shown.has('cost') && <CostCell context={context} request={r} unit={unit} />}
                           <td className="right col-fit">
                             <span className="requests__links">
