@@ -2115,6 +2115,7 @@ const agentLine = (agent_id, model, members = {}) => ({
   cache_ttl_ms: 300_000,
   created_at: 1_791_717_340_000,
   effort: 'medium',
+  ended: true,
   last_input_tokens: 12_000,
   last_used_at: 1_791_721_000_000,
   lifecycle: 'busy',
@@ -2140,8 +2141,8 @@ test("a session row reads main's effort and every agent line with all its member
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', pinnedAt, warm: true, warmUntil },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', ended: true, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', pinnedAt, warm: false, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', ended: true, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', pinnedAt, warm: true, warmUntil },
   ]);
 });
 

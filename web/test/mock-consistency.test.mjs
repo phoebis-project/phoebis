@@ -2603,6 +2603,54 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`a round the projection fired records the line its horizon set, the wall at a 5-hour reset and the pool's ceiling at the five-hour bound, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    // The 08:30 round's 7-day Fable reset lies days past the five-hour bound, so it tests all's ceiling of 0.75
+    // (`windowCeiling` in mock/pools.ts). The stretch tests work's ceiling of 0.95 at every horizon.
+    assert.deepEqual(
+      rounds.map((e) => [e.requestId, e.detail.window, e.detail.trigger, e.detail.ceiling]),
+      [
+        ['req_3e7a5c19-f84', 'seven_day_fable', 'projection', 0.75],
+        ['req_1eaa9bc1-a18', 'five_hour', 'projection', 1],
+        ['req_9f2e7c5a-c49', 'five_hour', 'slow_down', 0.95],
+        ['req_6e1f3b98-a24', 'five_hour', 'projection', 1],
+      ],
+    );
+  });
+
+  test(`every round's marks leave a tenth of its burn sum on its unmarked priced pins unless an unpriced pin stands, and an ended agent's pin burns nothing in it, at ${at}`, async () => {
+    const s = await story;
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+    const round5 = (x) => Math.round(x * 1e5) / 1e5;
+    // Each round's burn sum, the priced burn its marks leave and whether an unpriced pin stands unmarked, off the seeds
+    // in mock/routingLog.ts, each left figure at least a tenth of its sum: the Fable session's 0.03 of
+    // `FABLE_WEEK_BURN`, the 0.0052 and 0.0071 `ROUND_PINS` leave of their 0.0299, the 0.002, 0.026, 0.0206 and 0.025
+    // `STRETCH_PINS` leave of their 0.1286, and the 0.033 of the one priced pin of `NO_RUNWAY_PINS`, which an unpriced
+    // pin stands beside. The afternoon round lists the pin of the session the mod released whole under `ended` with no
+    // burn, so its sum is its priced pin's alone.
+    assert.deepEqual(
+      {
+        ended: rounds.flatMap((e) => e.detail.pins.filter((p) => p.skip === 'ended').map((p) => [e.requestId, p.burn])),
+        left: rounds.map((e) => [
+          e.requestId,
+          e.detail.burn_sum,
+          round5(e.detail.pins.filter((p) => p.burn !== null && !p.marked).reduce((n, p) => n + p.burn, 0)),
+          e.detail.pins.some((p) => p.skip === 'unpriced' && !p.marked),
+        ]),
+      },
+      {
+        ended: [['req_6e1f3b98-a24', null]],
+        left: [
+          ['req_3e7a5c19-f84', 0.03, 0.03, false],
+          ['req_1eaa9bc1-a18', 0.0299, 0.0123, false],
+          ['req_9f2e7c5a-c49', 0.1286, 0.0736, false],
+          ['req_6e1f3b98-a24', 0.033, 0.033, true],
+        ],
+      },
+    );
+  });
+
   test(`a round leaves a pin out on the fast lane only under window share, where the pin's stored lane is fast, and never the current pin of a standard request, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);

@@ -1192,6 +1192,17 @@ test('a mark healed under the threshold says so', () => {
   assert.deepEqual(reason(page.rows[1]), ['healed: the 5h projection read 91% under the ceiling']);
 });
 
+test('a mark healed by the projection names the line it read under: the wall, the ceiling with its figure, or neither on a stored event', () => {
+  const healed = (projection, limit) => ({
+    type: 'event', account_id: 'secondary', actor: null, agent_id: 'main', at: ms(14, 20),
+    detail: { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'secondary', marked_window: 'five_hour', projection, reason: 'healed', stretch_ms: null, threshold_ms: null, ...limit },
+    id: 33, key_id: 'desktop', kind: 'mark_cleared', model: 'claude-sonnet-5-5', pool_id: 'all', request_id: null, session_id: 's2-0000-4000',
+  });
+  const page = d.decodeRoutingLogPage({ counts: null, next_cursor: null, rows: [healed(0.98, { limit: 1 }), healed(0.91, { limit: 0.95 }), healed(0.91, {})] });
+  const reason = (row) => texts(d.detailPairs(row, NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Reason').chips);
+  assert.deepEqual(page.rows.map(reason), [['healed: the 5h projection read 98% under the wall'], ['healed: the 5h projection read 91% under the ceiling 95%'], ['healed: the 5h projection read 91% under the ceiling']]);
+});
+
 test("a shedding round's rates read share per hour of the window that fired: the cap with its target and the burn removed, and each pin's burn", () => {
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const round = fixture.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');

@@ -42,23 +42,54 @@ export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'retryInPlaceSeco
   return presetOf(FAILOVER_PRESETS, (v) => v.inFlightCap === p.inFlightCap && v.retryInPlaceSeconds === p.retryInPlaceSeconds);
 }
 
+/** The share of a round's burn sum that its marks leave on the account's unmarked priced pins, as the router's. */
+const SHED_MARK_SHARE = 0.1;
+
 /**
  * The round's marking rule, the mirror of the router's walk: pins in the round's order with their burns on the round's
- * window, marked until the marked burn reaches `target`, never the last unmarked pin, none for a zero target. An
- * unpriced pin and one flagged `skip` stay unmarked and count nothing toward the target.
+ * window, marked until the removed burn reaches `target`, none for a zero target. A pin under a standing mark is a move
+ * pending, so its burn counts as removed and the walk skips it. Once one pin from the walk's position on covers what
+ * the target still asks, the walk marks the covering pin whose move costs the least, the first in the order among
+ * equals, and stops. Otherwise a pin under `SHED_MARK_SHARE` of that rest stays as a sliver, and the pin at the
+ * position is marked. A mark that would leave the account's other priced pins, those neither marked nor under a
+ * standing mark, under `SHED_MARK_SHARE` of the round's burn sum is refused, and the walk goes on. A pin flagged `skip`
+ * stays unmarked and so counts among those pins, as the router counts a pin it passes over. An unpriced pin's burn is
+ * unknown and not none, so while one stands unmarked and under no standing mark the round refuses no mark. An
+ * unpriced pin and one flagged `skip` count nothing toward the target.
  */
-export function shedMarks(ordered: { burn: number | null; id: string; skip?: boolean }[], target: number): string[] {
+export function shedMarks(ordered: { burn: number | null; cost?: number; id: string; skip?: boolean; standing?: boolean }[], target: number): string[] {
+  type Pin = (typeof ordered)[number];
   const marks: string[] = [];
   if (Number.isNaN(target) || target <= 0) return marks;
-  let marked = 0;
-  for (const pin of ordered) {
-    // An indivisible pin may carry the marked burn past the target, and the round stops there.
-    if (marked >= target || marks.length + 1 >= ordered.length) break;
-    // An unpriced burn moves the marked sum nowhere, so marking the pin would shed a session on a guess. A pin with
-    // no sibling to move to stays where it is. Either still counts as one of the account's pins for the last-pin rule.
-    if (pin.burn === null || pin.skip === true) continue;
+  const sum = ordered.reduce((n, pin) => n + (pin.burn ?? 0), 0);
+  const unpricedStays = ordered.some((pin) => pin.burn === null && pin.standing !== true);
+  // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
+  let removed = ordered.reduce((n, pin) => n + (pin.standing === true ? (pin.burn ?? 0) : 0), 0);
+  const refused = (burn: number) => !unpricedStays && sum - removed - burn < SHED_MARK_SHARE * sum;
+  // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess. A pin with no
+  // sibling to move to stays where it is, and its burn stays on the account.
+  const open = (pin: Pin): pin is Pin & { burn: number } => pin.burn !== null && pin.skip !== true && pin.standing !== true;
+  for (const [index, pin] of ordered.entries()) {
+    // An indivisible pin may carry the removed burn past the target, and the round stops there.
+    if (removed >= target) break;
+    if (!open(pin)) continue;
+    const rest = target - removed;
+    // A pin is indivisible, so once one from here on covers the rest, the cheapest such move meets the target.
+    const pick = ordered
+      .slice(index)
+      .filter(open)
+      .filter((q) => q.burn >= rest && !refused(q.burn))
+      .reduce<Pin | null>((best, q) => (best !== null && (best.cost ?? 0) <= (q.cost ?? 0) ? best : q), null);
+    if (pick !== null) {
+      marks.push(pick.id);
+      break;
+    }
+    // A pin under the floor relieves too little of the rest to be worth its move, so it stays.
+    if (pin.burn < SHED_MARK_SHARE * rest) continue;
+    // The guard refuses this pin alone: a later pin's smaller mark may still leave a tenth on the account.
+    if (refused(pin.burn)) continue;
     marks.push(pin.id);
-    marked += pin.burn;
+    removed += pin.burn;
   }
   return marks;
 }
@@ -153,6 +184,9 @@ export interface ShedPreview {
   warm: number;
 }
 
+/** Whether the line of a row's display pin reads that the pin's agent ended and its next request has not arrived. */
+const endedPin = (s: Session): boolean => s.agentContexts.some((c) => c.agentId === s.agentId && c.model === s.model && c.ended);
+
 /**
  * The shedding round's dry run, replayed from the data the routes serve. Each member's served projection is read at
  * its served horizon on the windows its pins draw, in the trigger's order, and the first window over the ceiling fires
@@ -161,8 +195,11 @@ export interface ShedPreview {
  * keys, which the caller filters, since the router's round marks the triggering pool's pins alone. It orders them by
  * their served 5-hour burn, decayed from the instant it was served to `now`: cold pins first by burn, then warm ones by
  * burn over their last input size, bounded by the warm-sessions mode. It marks until the removed burn covers the excess
- * under `shedCap`, passing over a pin with no sibling that has runway for it. A member without `eligible` counts as
- * eligible, as a member of a pool not saved yet does.
+ * under `shedCap`, passing over a pin with no sibling that has runway for it, by `shedMarks`: a pin whose row's mark
+ * stands on the member is a move pending, and a move costs the pin's last input size where the pin is warm or the
+ * mode reads `always`, nothing for a cold pin. A row whose display pin's line reads its agent ended is out of the
+ * round, its order, its sum and its counts, as the router's round leaves an ended agent's pin out. A member without
+ * `eligible` counts as eligible, as a member of a pool not saved yet does.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnAverageSeconds' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'windDownMinutes' | 'windowCeiling'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
@@ -214,7 +251,7 @@ export function shedPreview(
   for (const { account } of listed) {
     if (account.kind === 'api_key') continue;
     const pins = sessions
-      .filter((s) => s.pinned && s.accountId === account.id)
+      .filter((s) => s.pinned && s.accountId === account.id && !endedPin(s))
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
       .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.model ?? '', b.model ?? ''));
     const five = windowOf(account, '5h');
@@ -261,6 +298,7 @@ export function shedPreview(
           // A pin with no prompt size reported yet ranks as the cheapest rewrite.
           rewrite: Math.max(s.lastInputTokens ?? 0, 1),
           runway: hasRunway(account.id, s.model),
+          standing: s.markedOn === account.id,
           warm: s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs,
         };
       });
@@ -272,11 +310,17 @@ export function shedPreview(
     const cold = walked.filter((p) => !p.warm).sort((a, b) => pricedFirst(a.order, b.order));
     const warm = walked.filter((p) => p.warm).sort(byRewrite);
     const ordered = pool.warmSessions === 'always' ? [...cold, ...warm].sort(byRewrite) : [...cold, ...warm];
-    // Under `never` the walk stops after the cold pins, so a warm pin stays in the order, where the last-pin rule
-    // still counts it among the member's pins, and is never marked.
+    // Under `never` the walk stops after the cold pins, so a warm pin stays in the order, where the burn guard still
+    // counts its burn among the member's unmarked pins, and is never marked.
     const open = (p: Pin) => p.burn !== null && !(pool.warmSessions === 'never' && p.warm);
     const total = walked.reduce((sum, p) => sum + (p.burn ?? 0), 0);
-    const marks = new Set(shedMarks(ordered.map((p) => ({ burn: p.burn, id: p.id, skip: !open(p) || !p.runway })), Math.min(excess, pool.shedCap * total)));
+    // A cold pin's move costs nothing, since its cache is rewritten wherever it runs next.
+    const marks = new Set(
+      shedMarks(
+        ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? p.rewrite : 0, id: p.id, skip: !open(p) || !p.runway, standing: p.standing })),
+        Math.min(excess, pool.shedCap * total),
+      ),
+    );
     const taken = walked.filter((p) => marks.has(p.id));
     covered += Math.min(taken.reduce((sum, p) => sum + (p.burn ?? 0), 0), excess);
     marked += taken.length;

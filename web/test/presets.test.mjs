@@ -69,9 +69,14 @@ const win = (id, projection, horizonIn = 2 * HOUR, burn = 0.01) => ({
 });
 /** A subscription account with its 5-hour and 7-day projections, and its 7-day Fable window's where one is named. */
 const oauth = (id, five, seven, fable = null) => ({ fableWindow: fable === null ? null : win('7d_fable', fable, 5 * HOUR), id, kind: 'oauth', label: id, windows: [win('5h', five), win('7d', seven, 5 * HOUR)] });
-/** A pin as the Sessions route serves it: its burn on `burnWindow` decayed to `burnAt`, the instant of the read. */
+/**
+ * A pin as the Sessions route serves it: its burn on `burnWindow` decayed to `burnAt`, the instant of the read, main's,
+ * with no line and no mark.
+ */
 const pin = (accountId, sessionId, burn, warm, over = {}) => ({
   accountId,
+  agentContexts: [],
+  agentId: 'main',
   burn,
   burnAt: at(NOW),
   burnUnit: 'window_share',
@@ -80,6 +85,7 @@ const pin = (accountId, sessionId, burn, warm, over = {}) => ({
   keyId: 'desktop',
   lastInputTokens: 1_000,
   lastRefreshAt: at(warm ? NOW - MINUTE : NOW - 10 * MINUTE),
+  markedOn: null,
   model: 'claude-sonnet-5',
   pinned: true,
   sessionId,
@@ -100,9 +106,9 @@ const line = (accounts, sessions, over = {}) => d.shedPreviewLine(d.shedPreview(
 // hot projects 99 % at its 5-hour reset two hours out, nine points past the ceiling: an excess of 4.5 points an hour.
 const hot = oauth('hot', 0.99, 0.4);
 const cool = oauth('cool', 0.3, 0.2);
-const three = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.04, true), pin('hot', 'warm-c', 0.01, true)];
+const three = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.025, true), pin('hot', 'warm-c', 0.01, true)];
 
-test('the round marks pins in order until the target, never the last unmarked pin, and passes over a pin it may not mark', () => {
+test('the round marks pins in order until the target, refuses a mark that leaves the account none of its burn, and passes over a pin it may not mark', () => {
   const ordered = [
     { burn: 3, id: 'cold-3' },
     { burn: 4, id: 'warm-4' },
@@ -110,22 +116,55 @@ test('the round marks pins in order until the target, never the last unmarked pi
     { burn: 1, id: 'warm-1' },
   ];
   assert.deepEqual(d.shedMarks(ordered, 5), ['cold-3', 'warm-4'], 'marked in order until the target is reached');
-  assert.deepEqual(d.shedMarks([{ burn: 9, id: 'only' }], 9), [], 'never the last unmarked pin');
+  assert.deepEqual(d.shedMarks([{ burn: 9, id: 'only' }], 9), [], 'a mark that leaves none of the burn on the account is refused');
   assert.deepEqual(d.shedMarks(ordered, 0), [], 'nothing for a zero target');
   assert.deepEqual(d.shedMarks([{ burn: 1, id: 'priced' }, { burn: null, id: 'unpriced' }, { burn: 2, id: 'last' }], 3), ['priced', 'last'], 'an unpriced pin is passed over and stays the one unmarked pin');
   assert.deepEqual(d.shedMarks([{ burn: 3, id: 'stuck', skip: true }, { burn: 2, id: 'free' }, { burn: 1, id: 'last' }], 2), ['free'], 'a pin with no sibling to move to is passed over and counts nothing toward the target');
 });
 
+test('the round refuses a mark that leaves the unmarked priced pins under a tenth of its burn sum, and marks a later pin that leaves more', () => {
+  // Of a sum of 1.0, a's mark leaves 0.5. b's would leave c's 0.05, under the tenth of 0.1, and c's leaves b's 0.45.
+  assert.deepEqual(d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }], 0.95), ['a', 'c']);
+});
+
+test('the round refuses no mark while an unpriced pin stands unmarked', () => {
+  // The unpriced pin's burn is unknown rather than none, so it stays on the account and b's mark leaves it there.
+  assert.deepEqual(d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }, { burn: null, id: 'unpriced' }], 0.95), ['a', 'b']);
+});
+
+test('a pin the walk passes over counts among the unmarked priced pins the guard reads', () => {
+  // stuck has no sibling to move to, so its 0.6 of the sum of 0.95 stays on the account beside free's mark.
+  assert.deepEqual(d.shedMarks([{ burn: 0.6, id: 'stuck', skip: true }, { burn: 0.35, id: 'free' }], 0.35), ['free']);
+});
+
+test('a standing mark counts as removed and lifts no guard, a covering pin is the cheapest move, and a sliver stays', () => {
+  assert.deepEqual(
+    {
+      // The rest is 0.5 past s's 0.1. b and c each cover it, and c's move costs 2 where b's costs 9.
+      cheapest: d.shedMarks([{ burn: 0.1, id: 's', standing: true }, { burn: 0.3, cost: 5, id: 'a' }, { burn: 0.6, cost: 9, id: 'b' }, { burn: 0.6, cost: 2, id: 'c' }], 0.6),
+      // The rest is 0.8 past s's 0.1, and a's 0.03 is under its tenth. c's mark after b's would leave a's 0.03 of the
+      // sum of 0.93, under its tenth.
+      sliver: d.shedMarks([{ burn: 0.1, id: 's', standing: true }, { burn: 0.03, id: 'a' }, { burn: 0.4, id: 'b' }, { burn: 0.4, id: 'c' }], 0.9),
+      // s's 0.4 is a move pending, so the rest of the target of 0.5 is 0.1, which b covers.
+      standing: d.shedMarks([{ burn: 0.4, id: 's', standing: true }, { burn: 0.35, id: 'b' }, { burn: 0.25, id: 'c' }], 0.5),
+      // An unpriced pin under a standing mark is leaving, so it is not the pin that stays, and b's mark would leave 0.05.
+      standingUnpriced: d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }, { burn: null, id: 's', standing: true }], 0.95),
+    },
+    { cheapest: ['c'], sliver: ['b'], standing: ['b'], standingUnpriced: ['a', 'c'] },
+  );
+});
+
 test('the preview reads one member over the ceiling and the round that marks two of its sessions, word for word', () => {
-  // The cap bounds the target at half of the 8 points an hour the pins burn: cold-a's 3 then warm-b's 4 reach it, and
-  // the 7 they carry fall under the 9.5 points an hour that a projection of 109 % two hours out asks for.
+  // The cap bounds the target at half of the 6.5 points an hour the pins burn, which no pin covers alone: cold-a's 3
+  // goes first, then warm-b's 2.5, the first of the two warm pins that cover the rest at one cost, reaches it. The 5.5
+  // they carry fall under the 9.5 points an hour that a projection of 109 % two hours out asks for.
   const over = oauth('hot', 1.09, 0.4);
-  assert.equal(line([over, cool], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 7.0 %/h of the excess, to move to a sibling with runway.');
+  assert.equal(line([over, cool], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 5.5 %/h of the excess, to move to a sibling with runway.');
   const preview = d.shedPreview(pool([over, cool]), [over, cool], three, NOW);
-  assert.deepEqual([preview.hot.map((h) => [h.label, h.window]), preview.sessions, preview.warm, preview.covered.toFixed(3)], [[['hot', '5h']], 2, 1, '0.070']);
+  assert.deepEqual([preview.hot.map((h) => [h.label, h.window]), preview.sessions, preview.warm, preview.covered.toFixed(3)], [[['hot', '5h']], 2, 1, '0.055']);
   // The marks overshoot an excess of 4.5 points an hour, so the round covers the excess whole.
   assert.equal(line([hot, cool], three), '1 member projects over the ceiling: hot. A round there would mark 2 sessions (1 warm), 4.5 %/h of the excess, to move to a sibling with runway.');
-  assert.equal(line([hot, cool], three, { shedCap: 0.25 }), '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.', 'a quarter of the burn is 2 points an hour, which cold-a reaches alone');
+  assert.equal(line([hot, cool], three, { shedCap: 0.25 }), '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.', "a quarter of the burn is about 1.6 points an hour, which cold-a's cold move covers at no cost");
 });
 
 /**
@@ -381,16 +420,17 @@ test('with load shedding off the preview opens by saying no round runs, then nam
 });
 
 test('the round marks cold pins first, then warm ones by burn over the prompt they would rewrite, all by that under always, and cold ones alone under never', () => {
-  // The cap is half of the 7.7 points an hour the four pins burn. By burn over rewrite warm-b's 4 over 100 tokens
-  // leads cold-a's 3 over 1000, cold-c's 0.5 over 1000 and warm-e's 0.2 over 1000.
-  const pins = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.04, true, { lastInputTokens: 100 }), pin('hot', 'cold-c', 0.005, false), pin('hot', 'warm-e', 0.002, true)];
+  // The cap is half of the 4.9 points an hour the three pins burn, which no pin covers alone. By burn over rewrite
+  // warm-b's 2 over 100 tokens leads warm-e's 0.9 over 1000 and cold-a's 2 over 5000. Once one pin is marked, each pin
+  // left covers the rest of 0.45 points, and the round marks the cheapest move among those it may mark.
+  const pins = [pin('hot', 'cold-a', 0.02, false, { lastInputTokens: 5_000 }), pin('hot', 'warm-b', 0.02, true, { lastInputTokens: 100 }), pin('hot', 'warm-e', 0.009, true)];
   const read = (warmSessions) => {
     const p = d.shedPreview(pool([hot, cool], { warmSessions }), [hot, cool], pins, NOW);
     return [p.sessions, p.warm];
   };
-  assert.deepEqual(read('when_needed'), [3, 1], 'cold-a and cold-c fall short of the cap, so warm-b follows');
-  assert.deepEqual(read('always'), [1, 1], 'warm-b alone reaches the cap');
-  assert.deepEqual(read('never'), [2, 0], 'the two cold pins, short of the cap, and no warm one');
+  assert.deepEqual(read('when_needed'), [2, 1], "cold-a first, then warm-b, whose rewrite is cheaper than warm-e's");
+  assert.deepEqual(read('always'), [2, 2], "warm-b first, then warm-e, whose rewrite is cheaper than cold-a's");
+  assert.deepEqual(read('never'), [1, 0], 'cold-a alone, short of the cap, and no warm pin');
 });
 
 test("the round decays each pin's served burn from the instant it was served to the preview's own, and never marks an unpriced pin", () => {
@@ -402,4 +442,16 @@ test("the round decays each pin's served burn from the instant it was served to 
   assert.deepEqual([preview.sessions, preview.covered.toFixed(4)], [1, '0.0120']);
   const unpriced = d.shedPreview(pool([hot, cool], { shedCap: 1 }), [hot, cool], [pin('hot', 'priced', 0.03, false), pin('hot', 'unpriced', null, false)], NOW);
   assert.deepEqual([unpriced.sessions, unpriced.covered], [1, 0.03], 'the unpriced pin stays unmarked and counts among the pins, so the priced one is not the last');
+});
+
+test("the preview's round leaves out a pin whose line reads its agent ended, from its order, its sum and its count", () => {
+  // With both pins walked the cap's half of their 5 points an hour is 2.5, which a's 3 covers, leaving b's 2 on hot.
+  // With b's agent ended the round walks a alone, and its mark would leave none of the burn on hot.
+  const b = (ended) => pin('hot', 'b', 0.02, false, { agentContexts: [{ agentId: 'main', ended, model: 'claude-sonnet-5' }] });
+  const read = (sessions) => {
+    const preview = d.shedPreview(pool([hot, cool]), [hot, cool], sessions, NOW);
+    return [preview.sessions, preview.covered, preview.quiet];
+  };
+  assert.deepEqual(read([pin('hot', 'a', 0.03, false), b(false)]), [1, 0.03, null]);
+  assert.deepEqual(read([pin('hot', 'a', 0.03, false), b(true)]), [0, 0, 'last']);
 });

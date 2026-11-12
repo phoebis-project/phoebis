@@ -2217,15 +2217,18 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const markedWindow = str(d.marked_window);
       const stretch = num(d.stretch_ms);
       const threshold = num(d.threshold_ms);
+      const limit = num(d.limit);
+      // A stored event carries no limit and keeps the words it read. A limit of 1 is the wall, any other the ceiling.
+      const under = limit === null ? 'under the ceiling' : limit >= 1 ? 'under the wall' : `under the ceiling ${fmtPct(limit)}`;
       pin();
-      // A mark heals when the account's projection reads under the ceiling again on the window that fired, or under the
+      // A mark heals when the account's projection reads under its line again on the window that fired, or under the
       // slow-down when its stretch reads under the threshold. The threshold is the detail's own, since the pool's
       // setting may have moved since.
       const healed =
         stretch !== null && threshold !== null
           ? `healed: the stretch read ${span(stretch)} under the threshold ${span(threshold)}`
           : projection !== null
-            ? `healed: the ${markedWindow === null ? 'window' : windowTagWord(markedWindow)} projection read ${fmtPct(projection)} under the ceiling`
+            ? `healed: the ${markedWindow === null ? 'window' : windowTagWord(markedWindow)} projection read ${fmtPct(projection)} ${under}`
             : null;
       add('Reason', plain(reason === 'healed' && healed !== null ? healed : words(reason)));
       add('Marked', time(marked), str(d.marked_on) === null ? null : accountChip(str(d.marked_on) ?? '', 'on'));

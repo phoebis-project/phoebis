@@ -18138,7 +18138,8 @@ await forView('/routing-log', async () => {
       plan_restored: () => ({ 'Organization type': ['claude max'], 'Rate-limit tier': ['default claude max 20x'], Source: ['profile read'], 'Subscription status': ['active'] }),
       registry_changed: (e) => (e.detail.diff?.secret_replaced === true ? { Secret: ['replaced'] } : {}),
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
-      shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the ceiling ${fmtPct(e.detail.ceiling)}`] }),
+      // The newest round, primary's of the afternoon, fired at its 5-hour reset, a horizon whose line is the wall.
+      shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the wall`] }),
       // The closed span of 09:12 drains its row at 10:40:36, and the open span starts at 13:48 under the threshold.
       slow_down_ended: (e) => ({ Effect: ["requests of the account's sessions pass unheld again"], Held: ['36 s'], Lasted: ['1 h 26 min'], Slowest: [`${e.detail.factor_min}x`] }),
       slow_down_started: (e) => ({

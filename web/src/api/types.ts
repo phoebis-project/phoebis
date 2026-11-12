@@ -1903,6 +1903,8 @@ export interface AgentContext extends BurnFigures {
   createdAt: string | null;
   /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
   effort: string | null;
+  /** Whether the pin's agent ended and its next request has not arrived. A shedding round leaves such a pin out. */
+  ended: boolean;
   lastInputTokens: number | null;
   lastUsedAt: string | null;
   /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */

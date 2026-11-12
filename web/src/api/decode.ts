@@ -853,7 +853,7 @@ const burnFigures = (r: Rec): BurnFigures => ({ burn: numOrNull(r.burn), burnEqu
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);
-  return { accountId: str(c.account_id), agentId: str(c.agent_id), ...burnFigures(c), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), lifecycle: lifecycle(c.lifecycle), model: str(c.model), pinnedAt: isoOrNull(c.pinned_at), warm: bool(c.warm), warmUntil: isoOrNull(c.warm_until) };
+  return { accountId: str(c.account_id), agentId: str(c.agent_id), ...burnFigures(c), cacheTtlMs: numOrNull(c.cache_ttl_ms), createdAt: isoOrNull(c.created_at), effort: strOrNull(c.effort), ended: bool(c.ended), lastInputTokens: numOrNull(c.last_input_tokens), lastUsedAt: isoOrNull(c.last_used_at), lifecycle: lifecycle(c.lifecycle), model: str(c.model), pinnedAt: isoOrNull(c.pinned_at), warm: bool(c.warm), warmUntil: isoOrNull(c.warm_until) };
 }
 
 function decodeSessionSpendPart(v: unknown): SessionSpendPart {

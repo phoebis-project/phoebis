@@ -50,6 +50,12 @@ const WRITTEN_SUBAGENTS: Partial<KeepaliveRecipe>[] = [
   { agentState: 'released', cause: 'agent_released', deadline: null, lastProbeAt: ago(7 * MINUTE), lastRequestAt: ago(12 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
   { agentState: 'released', cause: 'session_ended', deadline: null, lastProbeAt: ago(6 * MINUTE), lastRequestAt: ago(11 * MINUTE), nextProbeAt: null, parkKind: null, state: 'ended', wakeAt: null },
 ];
+/**
+ * The written session's idle subagent: its last turn stopped with `end_turn` and its next request has not arrived, so
+ * the router holds its pin as ended while its line keeps the word the mod reports. It is not its row's display pin, and
+ * every round of the story ran before that turn, so no round's record owes it a row.
+ */
+const ENDED_SUBAGENT = WRITTEN_SUBAGENTS[2];
 
 // `state: null` marks a session with no cache-warming recipe: the `ci` key permits
 // no cache warming and `jobs` keeps no caches warm.
@@ -693,10 +699,11 @@ SESSIONS.forEach((pin, i) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
-        const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
+        const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
         return [pinLine(line, { burn: pin.burn }, pin.lastRefreshAt)];
       }
-      const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
+      const ended = i < sessionSpec.length && sessionSpec[i].writtenSubagents?.[j - 2] === ENDED_SUBAGENT;
+      const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
       return [pinLine(line, servedBeside(pin, line, pin.createdAt), line.lastUsedAt)];
     }),
   );
@@ -832,6 +839,7 @@ SLOWED_PINS.forEach((pin, k) => {
       agentId,
       cacheTtlMs: HOUR,
       effort: agentId === 'main' ? effort : effortAt(k + j),
+      ended: false,
       lastInputTokens: promptOf(newest.usage),
       lastUsedAt: servingAttempt(newest)!.startedAt,
       lifecycle: null,
@@ -886,7 +894,7 @@ if (FLEET_PINS.length > 0) {
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = servingAttempt(pin)!;
     const pinnedAt = runStart(fleetRows.filter((r) => r.canonicalModel === pin.canonicalModel)).at;
-    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
+    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
   });
   SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
@@ -905,7 +913,7 @@ const WORKSHOP_BURN = 0.0021;
   const createdAt = workshopRows[workshopRows.length - 1].at;
   // A pin holds one model, so the line's pin was written at the session's oldest turn on that model.
   const pinnedAt = workshopRows.filter((r) => r.canonicalModel === WORKSHOP_PIN.canonicalModel).at(-1)!.at;
-  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
+  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
   SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
@@ -976,6 +984,7 @@ const auxiliaryOnlyLine = {
   agentId: auxiliaryOnlyRecipe.agentId,
   cacheTtlMs: 5 * MINUTE,
   effort: 'high',
+  ended: false,
   lastInputTokens: 23_400,
   lastUsedAt: auxiliaryOnlyRecipe.lastRequestAt,
   lifecycle: auxiliaryOnlyRecipe.agentState,
@@ -983,8 +992,8 @@ const auxiliaryOnlyLine = {
 };
 const NO_MOD_CREATED_AT = ago(47 * MINUTE);
 const NO_MOD_BURN = 0.22;
-const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
-const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
+const noModMain = { accountId: 'contract', agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: 'max', ended: false, lastInputTokens: 41_200, lastUsedAt: ago(2 * MINUTE), lifecycle: null, model: 'claude-sonnet-5-5' };
+const noModSubagent = { accountId: 'contract', agentId: '5c8e', cacheTtlMs: 5 * MINUTE, effort: 'low', ended: false, lastInputTokens: 7_900, lastUsedAt: ago(25 * MINUTE), lifecycle: null, model: HAIKU };
 const WRITTEN_SESSIONS = [
   writtenRow(
     {
