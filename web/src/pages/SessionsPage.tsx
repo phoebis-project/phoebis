@@ -845,7 +845,9 @@ function SessionRows({
   const tableId = useId();
   const warmingId = useId();
   const navigate = useNavigate();
-  const pinnedSince = open ? (row.lines.find((l) => l.agentId === MAIN_AGENT)?.pin?.pinnedAt ?? session.pinnedAt) : null;
+  // The route answers the row's own instant as its display pin's, main's newest where main holds one, so it stays put
+  // when main holds pins on two models and the lines change order with the sort.
+  const pinnedSince = open ? session.pinnedAt : null;
   const mark = open ? openMark(session) : null;
   const moved = open ? movedWord(session) : null;
   const speed = memberSpeed(session, account, now);

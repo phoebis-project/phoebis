@@ -26377,6 +26377,34 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
+    // The router's row shows main's newest conversation pin and answers its `pinned_at` as that pin's. The written
+    // session's main is handed an Opus pin, written at 09:00 and last used at 10:00, beside the Fable pin the row
+    // shows. Under Last activity main's two lines swap with the direction around its recipe's last request at 11:53
+    // (`sessionSpec[9]` in mock/operations.ts), and Pinned since reads the Fable pin's instant under both.
+    const opusOf = (s) => s.agentContexts.filter((c) => c.agentId === 'main').map((c) => ({ ...c, lastUsedAt: '2026-09-16T10:00:00.000Z', model: 'claude-opus-5-5', pinnedAt: '2026-09-16T09:00:00.000Z' }));
+    const { listSessions } = api;
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? { ...s, agentContexts: [...s.agentContexts, ...opusOf(s)] } : s));
+    const readOf = async (search) => {
+      const page = await mount(`/sessions${search}`, { now: CLOCK_ORIGIN });
+      const detail = await openRow(page, written);
+      const read = { lines: agentsOf(detail).rows.filter((r) => r.agent === 'main').map((r) => r.modelTitle), pinnedSince: textOf(factsOf(detail, 'Routing').values['Pinned since']) };
+      page.unmount();
+      return read;
+    };
+    const read = { asc: await readOf('?sort=activity&dir=asc'), desc: await readOf('?sort=activity') };
+    api.listSessions = listSessions;
+    const shown = `${fmtAbsolute(written?.pinnedAt ?? null)}, ${fmtRelative(written?.pinnedAt ?? null, CLOCK_ORIGIN)}`;
+    const want = {
+      asc: { lines: ['claude-opus-5-5', 'claude-fable-5-1'], pinnedSince: shown },
+      desc: { lines: ['claude-fable-5-1', 'claude-opus-5-5'], pinnedSince: shown },
+    };
+    results.push({
+      name: '/sessions Pinned since reads the pin the row shows under either direction of a sort, where main holds pins on two models',
+      ok: written !== undefined && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
     // The Agents table reads each line's own facts beside the session's: the written session's main line first with
     // its own pin (claude-fable-5-1 at high effort, 16,228 tokens), main's two seed rows summed into its Requests, then
     // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
