@@ -623,16 +623,17 @@ test('a confirmed re-pair keeps a plan-ended flag and starts no first poll where
     };
     // Sunset's stored document names the free organization its ended plan left, so the confirm keeps the flag, and the
     // poll's schedule reads no flagged account, so no first reading lands on the row.
-    const kept = await repair('sunset');
-    assert.equal(kept.firstPollInFlight, false, 'a confirm that keeps the flag starts no first poll');
+    await repair('sunset');
     now += 2_200;
     assert.deepEqual((await storyAccount(api, 'sunset')).windows, [], 'no first reading lands on the flagged row past the poll');
     // A paid organization reports a plan. The row and its document are new objects, since the seed's document is the
     // one every mock of the process shares.
     const flagged = api.accounts.find((a) => a.id === 'sunset');
     api.putAccount({ ...flagged, subscription: { ...flagged.subscription, organizationType: 'claude_pro' } });
-    await repair('sunset');
+    const cleared = await repair('sunset');
     assert.equal((await storyAccount(api, 'sunset')).planEndedAt, null, 'the confirm clears the flag');
+    // The router reads the first poll after the clear, so a confirm that clears the flag starts one.
+    assert.equal(cleared.firstPollInFlight, true, 'a confirm that clears the flag starts the first poll');
     await repair('reserve');
     const { rows } = await api.listRoutingLog({ kinds: ['plan_restored'] });
     // The router writes the row from the confirmed profile: the paid organization on sunset's seed tier.
