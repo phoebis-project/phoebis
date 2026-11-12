@@ -2054,6 +2054,7 @@ textarea.input {
   color: inherit;
 }
 
+/* Layout helpers, page head and toast, then the grouped dialog, shell, top bar and unit setting at narrow widths */
 .toast {
   position: fixed;
   bottom: 20px;

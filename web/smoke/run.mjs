@@ -814,16 +814,16 @@ await forView('/', async () => {
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-two, nightly's reset item among them, while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-three, nightly's reset item among them, while no layout folds it",
     ok:
-      lead() === '22 need attention' &&
+      lead() === '23 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
       ages[8] === 'started 18d ago' &&
-      /^started 1h( 1m)? ago$/.test(ages[9] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[11] ?? '') &&
+      /^started 1h( 1m)? ago$/.test(ages[10] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[12] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -904,7 +904,7 @@ await forView('/', async () => {
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: "/ the story back, the next tick draws its twenty-two items again, nightly's reset item among them", ok: lead() === '22 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: "/ the story back, the next tick draws its twenty-three items again, nightly's reset item among them", ok: lead() === '23 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -989,10 +989,10 @@ await forView('/', async () => {
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its twenty-two items, nightly's reset item among them, shows the four that fit and folds the other eighteen behind \"+18 more\" titled with their words one per line, whose list holds all twenty-two worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its twenty-three items, nightly's reset item among them, shows the four that fit and folds the other nineteen behind \"+19 more\" titled with their words one per line, whose list holds all twenty-three worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+18 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+19 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -1004,7 +1004,7 @@ await forView('/', async () => {
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+21 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+22 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -15778,7 +15778,7 @@ await forView('/routing-log', async () => {
   } finally {
     recorded.restore();
   }
-  const up = { arrow: 'up', first: ['event/337', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
+  const up = { arrow: 'up', first: ['event/338', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
   const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
   results.push({
     name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',

@@ -1077,6 +1077,13 @@ test("a mark's move reads as a failover with its cause, an event with no account
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
+test('a used limit reset claim draws its Cleared pair and a Resets left of 0 between its Result and its Status', () => {
+  // The smoke's per-kind read takes workshop's refused claim, which draws neither of these two pairs.
+  const used = { cleared: ['seven_day_fable'], cooldown_until: null, error: null, grant_id: 'rg-a-1', label: 'Launch reset', outcome: 'used', reason: null, request_id: '00000000-0000-4000-8000-0000000000c1', resets_left: 0, result: 'reset', status: 200, weekly_resets_at: null };
+  const labels = d.detailPairs(event('limit_reset_claimed', used), NOW, [], PRO, NO_TIERS).map((p) => p.label);
+  assert.deepEqual(labels, ['When', 'Account', 'Grant', 'Outcome', 'Result', 'Cleared', 'Resets left', 'Status', 'Request id', 'Actor']);
+});
+
 test("a move an account's state forced reads its cause in the release's words, and the same word with no list reads the failover's", () => {
   const pairs = (detail) => Object.fromEntries(d.detailPairs(event('pin_migrated', { agent_id: 'main', cause: null, epoch: 57, from_account: 'secondary', ...detail }), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   // The router writes the replaced pin's whole list beside the cause, the first word of its order the list holds.
