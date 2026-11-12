@@ -691,6 +691,17 @@ test('a session sent with no last use reads its last request as its last use', (
   assert.equal(s.lastUsedAt, new Date(1_791_721_000_000).toISOString());
 });
 
+test("a session reads its pin's open mark, its stamp's instant and the instant its pin was written on its account", () => {
+  // No other check reads these wire keys: the captured rows carry no mark, `mock-sync` takes any mock value against a
+  // decoded null, and the mock's rows reach the pages without the decoder.
+  const row = fixture('sessions').sessions[0];
+  const s = d.decodeSession({ ...row, marked_at: 1_791_720_000_000, marked_on: 'studio', marked_window: 'five_hour', pinned_at: 1_791_719_100_000, shed_at: 1_791_719_100_000, shed_from: 'primary', shed_reason: 'cooldown' });
+  assert.deepEqual(
+    { markedAt: s.markedAt, markedOn: s.markedOn, markedWindow: s.markedWindow, pinnedAt: s.pinnedAt, shedAt: s.shedAt },
+    { markedAt: '2026-10-11T12:00:00.000Z', markedOn: 'studio', markedWindow: 'five_hour', pinnedAt: '2026-10-11T11:45:00.000Z', shedAt: '2026-10-11T11:45:00.000Z' },
+  );
+});
+
 test('a session decodes its runway and whether it is bounded', () => {
   const row = fixture('sessions').sessions[0];
   const read = (wire) => {

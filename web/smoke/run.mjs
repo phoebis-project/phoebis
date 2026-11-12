@@ -25344,8 +25344,8 @@ await forView('/sessions', async () => {
 await forView(['/analytics', '/sessions'], async () => {
 m = await mount('/sessions');
 // The bare page's words: the head's sentence, the card's title and its summary line, the default columns' heads and the
-// words the story's rows draw. `finished` reads under the Finished sessions filter alone, and `leaving` and `unknown`,
-// which no story row draws, are read on wrapped reads below.
+// words the story's rows draw. `finished` reads under the Finished sessions filter alone, and `unknown`, which no story
+// row draws, is read on a wrapped read below.
 expect('/sessions', m.text(), ['Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.', 'How pins and recipes work', 'Cost reference', 'Sessions', 'agents:', 'busy', 'idle', 'parked', 'requests and', 'in 24 h', 'Expand all', 'Session', 'Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'registered', 'unreported', 'warm', 'cold', 'no recipe', 'no pin', 'fork', 'Claude Code 2.1.310', 'epoch 2', 'seen ', 'expires in', 'fable-5-1']);
 {
   // The tiles left the view for the Dashboard's Sessions card, so none of their words reads here.
@@ -25886,12 +25886,15 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // the first placement. The notebook session studio's stretch round marked (`MARKED_SESSION_IDS[0]` and
     // `STRETCH_MARK` in mock/operations.ts) reads the badge with the mark's account and window in Shed mark and on
     // main's line, which sits on the row's account, and Moved none. Pinned since and the hover pick the instant apart,
-    // so the case reads both.
+    // so the case reads both. The story's first session is handed a stamp off overflow that names no reason, as a pin
+    // stamped before the stamp carried one, which reads as a round's move: Moved reads `shed from`, its instant in the
+    // smoke's UTC zone.
     const marked = live('9c2d7e4a-3b81-4f59-a6e0-1d8c5b7a2e93');
     const landed = written === undefined || written.createdAt === null ? null : isoAt(Date.parse(written.createdAt) + 10 * 60_000);
     const stamp = (s) => ({ ...s, agentContexts: s.agentContexts.map((c) => (c.agentId === 'main' ? { ...c, pinnedAt: landed } : c)), pinnedAt: landed, shedAt: landed, shedFrom: 'secondary', shedReason: 'cooldown' });
+    const reasonless = (s) => ({ ...s, shedAt: '2026-09-16T14:10:00.000Z', shedFrom: 'overflow', shedReason: null });
     const { listSessions } = api;
-    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? stamp(s) : s));
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? stamp(s) : at(story)(s) ? reasonless(s) : s));
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const leavingIn = (cell) => [...(cell?.querySelectorAll('.badge') ?? [])].some((b) => b.textContent?.trim() === 'leaving');
     const readOf = async (s) => {
@@ -25910,17 +25913,18 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         shedMark: textOf(routing.values['Shed mark']),
       };
     };
-    const read = { marked: await readOf(marked), stamped: await readOf(written) };
+    const read = { marked: await readOf(marked), reasonless: (await readOf(story)).moved, stamped: await readOf(written) };
     page.unmount();
     api.listSessions = listSessions;
     const since = (iso) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, CLOCK_ORIGIN)}`;
     const want = {
       marked: { created: since(marked?.createdAt ?? null), hover: `Pinned since ${since(marked?.pinnedAt ?? null)}.`, line: true, moved: 'none', pinnedSince: since(marked?.pinnedAt ?? null), row: true, shedMark: 'leaving on studio by the 5h trigger' },
+      reasonless: 'shed from overflow at Sep 16, 2026, 14:10:00',
       stamped: { created: since(written?.createdAt ?? null), hover: `Pinned since ${since(landed)}.`, line: false, moved: `failed over from secondary at ${fmtAbsolute(landed)}`, pinnedSince: since(landed), row: false, shedMark: 'none' },
     };
     results.push({
-      name: "/sessions a standing mark draws leaving and a no-return stamp none: the stamped row reads Moved with the account it left and the instant, and Pinned since and main's hover at the move",
-      ok: marked !== undefined && written !== undefined && JSON.stringify(read) === JSON.stringify(want),
+      name: "/sessions a standing mark draws leaving and a no-return stamp none: a stamped row reads Moved with the account it left and the instant, a stamp with no reason as shed from, and Pinned since and main's hover at the move",
+      ok: marked !== undefined && story !== undefined && written !== undefined && JSON.stringify(read) === JSON.stringify(want),
       missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
     });
   }
