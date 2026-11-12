@@ -268,8 +268,8 @@ for (const r of REQUESTS) {
 const newestRequestAt = new Map<string, string>();
 /**
  * Each agent's requests of its session that placed a pin, any of which the router may first have seen the agent at: an
- * inference request with an attempt, since the router writes the record at the first placement and a count, a probe or
- * a refusal before any attempt places none.
+ * inference request with an attempt, since the router writes the record at the first placement and a classifier call,
+ * a count, a probe or a refusal before any attempt places none.
  */
 const placingRequests = new Map<string, string[]>();
 for (const r of REQUESTS) {
@@ -279,7 +279,7 @@ for (const r of REQUESTS) {
     const seen = newestRequestAt.get(id);
     if (seen === undefined || Date.parse(r.at) > Date.parse(seen)) newestRequestAt.set(id, r.at);
   }
-  if (r.kind === 'inference' && r.attempts.length > 0) {
+  if (r.kind === 'inference' && r.classifier === null && r.attempts.length > 0) {
     const list = placingRequests.get(id);
     if (list) list.push(r.at);
     else placingRequests.set(id, [r.at]);

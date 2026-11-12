@@ -2501,7 +2501,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },
-        savingUsd: sumOf(keptHere, (r) => savingUsdOf(r.model, keptOf(r), promptOf(r.usage), servingResponse(r)?.speed === 'fast', r.at)),
+        // The ledger prices a freed call's kept tokens under the row's own key, which reads zero, as its cost does.
+        savingUsd: freed ? 0 : sumOf(keptHere, (r) => savingUsdOf(r.model, keptOf(r), promptOf(r.usage), servingResponse(r)?.speed === 'fast', r.at)),
         probes: probes ?? { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated,
         probeCostUsd,

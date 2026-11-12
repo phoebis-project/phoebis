@@ -2673,14 +2673,15 @@ const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
 
 /**
  * Studio upgraded from Pro to Max 5x at its subscription's start, inside its second-newest week, so its third and
- * fourth weeks ran under Pro on both its windows. Sunset was a Pro login until its plan ended, so its weeks before
- * the end ran under Pro, whatever plan the profile read found after it.
+ * fourth weeks ran under Pro on both its windows. Sunset was a Pro login until its plan ended, and the router stores a
+ * reading with the pair of the profile it held when it took the reading, which names Pro up to the read that set the
+ * plan-ended flag, so its readings before the flag carry Pro's pair.
  */
 const STUDIO_BEFORE_UPGRADE: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('studio')?.subscription?.since ?? '') };
-const SUNSET_BEFORE_END: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('sunset')?.subscription?.endsAt ?? '') };
+const SUNSET_BEFORE_FLAG: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('sunset')?.planEndedAt ?? '') };
 const EARLIER_PAIRS = new Map<string, EarlierPair>([
   ['studio', STUDIO_BEFORE_UPGRADE],
-  ['sunset', SUNSET_BEFORE_END],
+  ['sunset', SUNSET_BEFORE_FLAG],
 ]);
 
 /**
