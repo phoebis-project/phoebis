@@ -4703,6 +4703,50 @@ await m.navigate('/accounts/spare');
 }
 m.unmount();
 });
+await forView(['/accounts', '/routing-log'], async () => {
+  // Sunset's stored document names the free organization its canceled plan left (`claude_free` in mock/accounts.ts),
+  // and the mock's pending profile is that document, so its re-pair confirms a profile that reports no plan. The
+  // router then keeps the plan-ended flag, writes no `plan_restored` event and starts no first poll: the detail keeps
+  // its Plan ended row and the Usage card's plan-ended sentence, and the day's plan restored rows stay the story's own.
+  // The confirm stores nothing, so the checks after this one read the story as it was.
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const day = { from: new Date(CLOCK_ORIGIN - 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
+  const story = (await api.listRoutingLog({ ...day, kinds: ['plan_restored'] })).rows.map((e) => `event/${e.id}`);
+  const page = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
+  const reading = () => {
+    const identity = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+    const ended = [...(identity?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Plan ended');
+    const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+    return { ended: ended?.querySelector('dd')?.textContent?.trim() ?? null, usage: usage?.querySelector('p.muted')?.textContent?.trim() ?? null };
+  };
+  const before = reading();
+  [...(page.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair')?.click();
+  await page.settle(500);
+  const dlg = openDialogs(page).pop() ?? null;
+  const state = new URLSearchParams((dlg?.querySelector('.pairing__url')?.textContent ?? '').split('?')[1] ?? '').get('state');
+  const input = dlg?.querySelector('input[placeholder^="http://localhost"]') ?? null;
+  if (input) {
+    setter.call(input, `http://localhost:54545/callback?code=abc123&state=${state}`);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await page.settle(120);
+  }
+  buttonIn(dlg, 'Submit')?.click();
+  const submitted = await until(page, () => buttonIn(dlg, 'Confirm')?.disabled === false);
+  buttonIn(dlg, 'Confirm')?.click();
+  const closed = await until(page, () => openDialogs(page).length === 0);
+  // The confirm's reload lands before the read.
+  await page.settle(300);
+  const after = reading();
+  page.unmount();
+  const log = await mount('/routing-log?kinds=plan_restored&range=24h', { now: CLOCK_ORIGIN });
+  const drawn = [...log.container.querySelectorAll('.routing-log__table tbody tr.routing-log__row')].map((tr) => tr.getAttribute('data-row'));
+  log.unmount();
+  results.push({
+    name: "/accounts/sunset a re-pair whose stored profile names a free organization keeps the Plan ended row and the Usage card's plan-ended sentence, and adds no plan restored row to the routing log",
+    ok: submitted && closed && before.ended !== null && before.usage?.startsWith('No quota window is read since the plan ended') === true && JSON.stringify(after) === JSON.stringify(before) && story.length > 0 && JSON.stringify(drawn) === JSON.stringify(story),
+    missing: [`Confirm enabled ${submitted}, closed ${closed}`, `before ${JSON.stringify(before)}`, `after ${JSON.stringify(after)}`, `the story's rows ${JSON.stringify(story)}, drawn ${JSON.stringify(drawn)}`],
+  });
+});
 await forView(['/', '/accounts', '/quota'], async () => {
   // studio's seed reads the pool's factor and the realized speed both at 0.5, so the chip cases read one figure under
   // either key. Served apart, every chip draws the realized speed and the hover names the factor beside it.
@@ -5441,20 +5485,19 @@ await forView('/accounts', async () => {
 
   // Sunset's saved end passed three days back inside its week, so its latest reset is the term's end, read off the last
   // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of its week. Its three weeks before left
-  // 0.52, 0.48 and 0.57, each under the Pro pair the account held before its plan ended (`WEEKLY_RESETS`), so under
-  // Native each prices at Pro's tier. The term's end carries no pair and reads at the account's plan, free, which the
-  // router prices no capacity for, so its figure and the total it joins read a dash beside the Free note. Each hover
-  // names the plan its figure prices at: Free on the term's end beside its dash, Pro on the three weeks before it.
+  // 0.52, 0.48 and 0.57, each under the Pro pair the account held before its plan ended (`WEEKLY_RESETS`). The term's
+  // end carries the pair of the window's stored reading, its last clean poll before the end, which landed before the
+  // plan-ended flag under Pro too. So every week and the total price at Pro's tier, and each hover names Pro. The Free
+  // note stands on the account's own plan, free, which the router prices no capacity for.
   const sunset = story.get('sunset');
   const end = Date.parse(sunset.subscription.endsAt);
   const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
   const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
   const term = blockOf(ended);
-  const termColumn = columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, weekOf('default_claude_ai'), ['Free', 'Pro', 'Pro', 'Pro'], { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") });
-  const termWant = [{ ...termColumn, head: ['7-day', '-'], total: ['Total, 4 weeks', '-'] }];
+  const termWant = [columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, weekOf('default_claude_ai'), 'Pro', { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") })];
   const freeNote = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
   results.push({
-    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and its weeks before the end at Pro's tier, a dash for the term's end and the total, with the Free note while its plan reads free",
+    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and every week and the total at Pro's tier, the pair its readings held before the plan ended, with the Free note while its plan reads free",
     ok: sunset.subscription.plan === 'free' && JSON.stringify(term?.columns) === JSON.stringify(termWant) && term?.note === freeNote,
     missing: [sunset.subscription.plan, JSON.stringify(term?.columns ?? null), JSON.stringify(termWant), term?.note ?? 'no note'],
   });
@@ -19599,10 +19642,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // Each week prices at the tier it ran under, as on the Accounts block: studio's seed (`claude_max` on
     // `default_claude_max_5x` in mock/accounts.ts) started its subscription 16 days back, so its resets at or before
     // that start carry Pro's pair, and its row reads its newest week at Max 5x's tier and its four weeks the weeks' own
-    // figures added, the block's total. Sunset's term's end carries no pair and reads at its free plan, so its row
-    // reads a dash for both and the fleet's note leaves it out. The 7-day fleet total adds the other rows' four weeks,
-    // derived from the cost table the page reads and the shares off the route, since the drawn texts round, in the
-    // Ultra week the shell names and then in the Pro week the top bar's control picks.
+    // figures added, the block's total. Sunset's term's end carries the Pro pair of its stored reading, observed before
+    // its plan-ended flag, and its weeks before the end ran under Pro. Its document stands on Pro's tier word
+    // (`default_claude_ai` in mock/accounts.ts), so `ranUnder` prices its weeks at Pro's tier, its row reads a figure
+    // in both cells and the fleet's note counts it priced. The 7-day fleet total adds every row's four weeks, derived
+    // from the cost table the page reads and the shares off the route, since the drawn texts round, in the Ultra week
+    // the shell names and then in the Pro week the top bar's control picks.
     const sum = (values) => values.reduce((a, b) => a + b, 0);
     const costs = (await api.getSettings()).subscriptionCosts;
     const story = new Map((await api.listAccounts()).map((a) => [a.id, a]));
@@ -19617,11 +19662,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const studio = answer.accounts.find((a) => a.accountId === 'studio');
     const rowOf = (drawn, id) => drawn?.rows[drawn.ids.indexOf(id)]?.slice(2, 4) ?? null;
     const studioWant = (week) => (studio === undefined ? null : [weekShort(weeksOf(studio)[0].shareLeft * weekWeight(story.get('studio').subscription.rateLimitTier) * scaleOf(week), week), weekShort(fourWeeks(studio, week), week)]);
-    const fleet = (week) => weekShort(sum(answer.accounts.filter((a) => a.accountId !== 'sunset').map((a) => fourWeeks(a, week))), week);
+    const sunset = answer.accounts.find((a) => a.accountId === 'sunset');
+    const sunsetWant = (week) => (sunset === undefined ? null : [weekShort(weeksOf(sunset)[0].shareLeft * weekWeight(ranUnder('sunset', weeksOf(sunset)[0])) * scaleOf(week), week), weekShort(fourWeeks(sunset, week), week)]);
+    const fleet = (week) => weekShort(sum(answer.accounts.map((a) => fourWeeks(a, week))), week);
     results.push({
-      name: "/analytics the unused allowance card prices each week in the Ultra week at the tier it ran under, studio's four weeks at their own tiers, sunset's row a dash and the fleet total over the priced rows",
-      ok: shellWeek(page)?.value === 'ultra' && studioWant('ultra') !== null && JSON.stringify(rowOf(native, 'studio')) === JSON.stringify(studioWant('ultra')) && JSON.stringify(rowOf(native, 'sunset')) === '["-","-"]' && native?.totals[0]?.[1] === fleet('ultra') && native.totals[2]?.[2] === '4 accounts priced, sunset left out unpriced',
-      missing: [shellWeek(page)?.value ?? 'no control', JSON.stringify(rowOf(native, 'studio')), JSON.stringify(studioWant('ultra')), JSON.stringify(rowOf(native, 'sunset')), JSON.stringify(native?.totals ?? null), fleet('ultra')],
+      name: "/analytics the unused allowance card prices each week in the Ultra week at the tier it ran under, studio's four weeks at their own tiers, sunset's at Pro's with its term's end, and the fleet total over every row",
+      ok: shellWeek(page)?.value === 'ultra' && studioWant('ultra') !== null && sunsetWant('ultra') !== null && JSON.stringify(rowOf(native, 'studio')) === JSON.stringify(studioWant('ultra')) && JSON.stringify(rowOf(native, 'sunset')) === JSON.stringify(sunsetWant('ultra')) && native?.totals[0]?.[1] === fleet('ultra') && native.totals[2]?.[2] === '5 accounts priced',
+      missing: [shellWeek(page)?.value ?? 'no control', JSON.stringify(rowOf(native, 'studio')), JSON.stringify(studioWant('ultra')), JSON.stringify(rowOf(native, 'sunset')), JSON.stringify(sunsetWant('ultra')), JSON.stringify(native?.totals ?? null), fleet('ultra')],
     });
     await chooseWeek(page, 'pro');
     const pro = read(page);

@@ -20,7 +20,7 @@ import { keyById } from './pools';
 import { bandAt, freesPlanShare, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
-import type { EventSeed } from './routingLog';
+import { readingPairAt, type EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
@@ -834,11 +834,15 @@ export function termEndOf(a: Account, at: number): number | null {
 /**
  * The weekly resets in range per subscription account as the route answers them, from the story's `window_reset` rows
  * with the pair each event carries and, for an account whose term ended in range, one `term_ended` reset per weekly
- * window at the end with no pair, its share the last reading of the window's quota history strictly before the end, as
- * the ledger reads `observed_at < end`. A reset at or after an end the read has reached is left out, an end before the
- * range's start included, as the ledger drops the resets at or after every end it lists, so the week the end cut short
- * counts once. The `term_ended` rows build for an end inside the range alone. The term is read at the range's end
- * capped at the story's now, and the windows run in key order, the 7-day window first.
+ * window at the end, its share the last reading of the window's quota history strictly before the end, as the ledger
+ * reads `observed_at < end`. Its pair is the one the router's stored reading of the window carries, for which the
+ * window's newest sample of the history stands in: the pair the story stores for a reading at that sample's instant
+ * where the account carries no plan-ended flag or the sample lies strictly before the flag, and null for both where it
+ * lies at or after the flag or the history holds no sample, since the stored profile names the plan up to the flag.
+ * A reset at or after an end the read has reached is left out, an end before the range's start included, as the ledger
+ * drops the resets at or after every end it lists, so the week the end cut short counts once. The `term_ended` rows
+ * build for an end inside the range alone. The term is read at the range's end capped at the story's now, and the
+ * windows run in key order, the 7-day window first.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -862,12 +866,15 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
         add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
       }
       if (ended !== null) {
+        const flagged = a.planEndedAt === null ? null : Date.parse(a.planEndedAt);
         for (const h of history) {
           const window = WINDOW_KEY[h.windowId] ?? h.windowId;
           if (h.accountId !== a.id || !isWeekly(window)) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];
-          if (last) add(window, { observedAt: last.at, plan: null, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended', tier: null });
+          const stored = h.samples.length === 0 ? null : Date.parse(h.samples[h.samples.length - 1].at);
+          const { plan, tier } = stored !== null && (flagged === null || stored < flagged) ? readingPairAt(a.id, stored) : { plan: null, tier: null };
+          if (last) add(window, { observedAt: last.at, plan, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended', tier });
         }
       }
       const windows = [...byWindow]

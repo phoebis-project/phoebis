@@ -2640,15 +2640,15 @@ const PRO_READING: ReadingPair = { plan: 'pro', tier: 'default_claude_ai' };
 
 /**
  * A weekly window's resets over the four weeks before the story's, a week apart back from `resetsAtMs`, its current
- * reset, each storing the reading before it so the share left is one less it, newest first, with that reading's pair:
- * the account's current one, or `earlier`'s for a reset at or before its instant. The clock walk announces a reset no
- * poll read after it, which names no next reset, as the engine writes it.
+ * reset, each storing the reading before it so the share left is one less it, newest first, with the pair
+ * `readingPairAt` gives that reading at the reset. The clock walk announces a reset no poll read after it, which names
+ * no next reset, as the engine writes it.
  */
-function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1, earlier: EarlierPair | null = null): EventSeed[] {
+function weeklyResets(accountId: string, window: string, resetsAtMs: number, shares: number[], clockAt = -1): EventSeed[] {
   return shares.map((share, i) => {
     const reset = resetsAtMs - (i + 1) * WEEK;
     const clockWalk = i === clockAt;
-    const { plan, tier } = earlier !== null && reset <= earlier.through ? earlier.pair : currentPair(accountId);
+    const { plan, tier } = readingPairAt(accountId, reset);
     return { accountId, at: iso(reset), detail: { next_reset: clockWalk ? null : reset + WEEK, observed: clockWalk ? 'clock' : 'sample', plan, reset_at: reset, tier, utilization_before: round3(1 - share), window }, kind: 'window_reset' };
   });
 }
@@ -2665,6 +2665,20 @@ const resetOf = (accountId: string, window: '7d' | '7d_fable'): number => {
  */
 const STUDIO_BEFORE_UPGRADE: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('studio')?.subscription?.since ?? '') };
 const SUNSET_BEFORE_END: EarlierPair = { pair: PRO_READING, through: Date.parse(accountById.get('sunset')?.subscription?.endsAt ?? '') };
+const EARLIER_PAIRS = new Map<string, EarlierPair>([
+  ['studio', STUDIO_BEFORE_UPGRADE],
+  ['sunset', SUNSET_BEFORE_END],
+]);
+
+/**
+ * The pair the story stores for a reading of the account taken at `at`: the account's earlier pair for an instant at
+ * or before its `through`, else its current one. A term's end reads it beside the weekly resets, since its pair is the
+ * one the window's stored reading carries.
+ */
+export function readingPairAt(accountId: string, at: number): ReadingPair {
+  const earlier = EARLIER_PAIRS.get(accountId);
+  return earlier !== undefined && at <= earlier.through ? earlier.pair : currentPair(accountId);
+}
 
 /**
  * The story's weekly resets, the routing log's rows the unused allowance route answers from: each weekly window of the
@@ -2678,9 +2692,9 @@ export const WEEKLY_RESETS: EventSeed[] = [
   ...weeklyResets('secondary', 'seven_day', resetOf('secondary', '7d'), [0.61, 0.55, 0.7, 0.58]),
   ...weeklyResets('nightly', 'seven_day', resetOf('nightly', '7d'), [0.18, 0.22, 0.15, 0.29], 2),
   ...weeklyResets('nightly', 'seven_day_fable', resetOf('nightly', '7d_fable'), [0.31, 0.36, 0.28, 0.4]),
-  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47], -1, STUDIO_BEFORE_UPGRADE),
-  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82], -1, STUDIO_BEFORE_UPGRADE),
-  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57], -1, SUNSET_BEFORE_END),
+  ...weeklyResets('studio', 'seven_day', resetOf('studio', '7d'), [0.44, 0.39, 0.5, 0.47]),
+  ...weeklyResets('studio', 'seven_day_fable', resetOf('studio', '7d_fable'), [0.79, 0.84, 0.76, 0.82]),
+  ...weeklyResets('sunset', 'seven_day', NOW + SUNSET_WEEK_RESETS_IN, [0.52, 0.48, 0.57]),
 ];
 
 /**

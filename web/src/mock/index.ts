@@ -381,6 +381,12 @@ const budgetUntilOf = (member: BudgetedSeed, now: number): string | null =>
     })
     .reduce<string | null>((latest, s) => (latest === null || Date.parse(s.periodEnd ?? '') > Date.parse(latest) ? s.periodEnd : latest), null);
 
+/**
+ * Whether the stored document reports a plan, as the router's `reports_no_plan` reads a profile: every organization
+ * type but the free one, so a row with no document reports one too.
+ */
+const reportsPlan = (a: Pick<Account, 'subscription'>): boolean => a.subscription?.organizationType !== 'claude_free';
+
 /** Whether the router reads the account's term as over: canceled with its saved end passed, or flagged plan ended. */
 const termEnded = (a: Account, now: number): boolean => {
   const end = termEndOf(a, now);
@@ -871,15 +877,17 @@ export class MockApi implements Api {
       // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
       this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
     }
-    // The router's confirm clears a plan-ended flag, since the confirmed profile holds a plan, and records the plan
-    // found again under the pairing's source. The mock's profile is the stored document, so the row carries its words.
-    if (held !== undefined && held.planEndedAt !== null) {
+    // The router's confirm clears a plan-ended flag and records the plan found again only where the confirmed profile
+    // reports a plan. The mock's profile is the stored document, so a document that names a free organization keeps
+    // the flag, and a confirm that keeps it starts no first poll, since the poll's schedule reads no flagged account.
+    const kept = held !== undefined && held.planEndedAt !== null && !reportsPlan(held);
+    if (held !== undefined && held.planEndedAt !== null && reportsPlan(held)) {
       this.putAccount({ ...held, planEndedAt: null });
       const detail = { organization_type: held.subscription?.organizationType ?? null, rate_limit_tier: held.subscription?.rateLimitTier ?? null, source: 'pairing', subscription_status: 'active' };
       this.writeEvent('plan_restored', held.id, null, mockClock.now(), detail);
     }
-    this.firstPolls.set(pairing.accountId, mockClock.now());
-    return latency({ accountId: pairing.accountId, firstPollInFlight: true, status: 'confirmed' }, 250);
+    if (!kept) this.firstPolls.set(pairing.accountId, mockClock.now());
+    return latency({ accountId: pairing.accountId, firstPollInFlight: !kept, status: 'confirmed' }, 250);
   }
 
   async createAccount(input: AccountInput): Promise<Account> {

@@ -1411,11 +1411,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
     }
     // The week the end cut short reads the last sample of sunset's 7-day series before the end, the reading its seed
-    // names, 0.46, so 0.54 of the week was left.
+    // names, 0.46, so 0.54 of the week was left. Its pair is that of the stored reading, the series' newest sample:
+    // sunset's last clean poll, five minutes before the end and so before the plan-ended flag, which read it under Pro.
     const series = (await s.api.getQuotaHistory('sunset')).find((h) => h.windowId === '7d');
     const before = series.samples.filter((x) => Date.parse(x.at) < end).at(-1);
     const ended = answer.accounts.find((a) => a.accountId === 'sunset').windows[0].resets[0];
-    assert.deepEqual(ended, { observedAt: before.at, plan: null, resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended', tier: null }, "the term's end carries no pair");
+    assert.deepEqual(ended, { observedAt: before.at, plan: 'pro', resetAt: iso(end), shareLeft: 1 - before.utilization, source: 'term_ended', tier: 'default_claude_ai' }, "the term's end carries the Pro pair its stored reading held before the flag");
     assert.ok(near(ended.shareLeft, 0.54), `sunset left ${ended.shareLeft} of its last week`);
     const one = await s.api.getAnalyticsUnusedAllowance(span, { accountIds: ['studio'] });
     assert.deepEqual(one.accounts, answer.accounts.filter((a) => a.accountId === 'studio'), 'the Accounts filter keeps its account alone');
