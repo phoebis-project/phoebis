@@ -3106,6 +3106,29 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const rec of records) assert.deepEqual([rec.outcome.kind, rec.outcome.reservation, rec.walk.at(-1)?.step, rec.walk.at(-1)?.verdict], ['placed', null, 'reserve', 'none'], rec.requestId);
   });
 
+  test(`no classifier call of the story holds a pin: its decision names the reason, and no pin event and no round's pin stands on its pin key, at ${at}`, async () => {
+    const s = await story;
+    const calls = s.requests.filter((r) => r.classifier !== null);
+    const keys = new Set(calls.map(pinOf));
+    const records = (await decisionsOf(s)).filter((rec) => calls.some((r) => r.id === rec.requestId));
+    const events = (await logOf(s)).filter((row) => row.type === 'event');
+    const roundPins = events.filter((e) => e.kind === 'shedding_round').flatMap((e) => e.detail.pins.map((p) => ({ pin: { agentId: p.agent_id, keyId: p.key_id, model: p.model, sessionId: p.session_id }, round: e.requestId })));
+    assert.deepEqual(
+      {
+        calls: calls.map((r) => r.classifier).sort(),
+        decisions: records.map((rec) => [rec.requestId, rec.pin, rec.pinReason]).sort(),
+        pinEvents: events.filter((e) => e.kind.startsWith('pin_') && keys.has(pinOf(e))).map((e) => `${e.kind} at ${e.at}`),
+        roundPins: roundPins.filter((x) => keys.has(pinOf(x.pin))).map((x) => `${x.round}: ${x.pin.sessionId}`),
+      },
+      {
+        calls: ['client', 'client', 'client_off'],
+        decisions: [['req_4d9a1e6b-c20', null, 'classifier'], ['req_63a8d2f5-b17', null, 'classifier'], ['req_7c2e9f41-d03', null, 'classifier']],
+        pinEvents: [],
+        roundPins: [],
+      },
+    );
+  });
+
   test(`the story's contract refusal names the missing item on a Claude Code row no account served, at ${at}`, async () => {
     const s = await story;
     const refusals = s.requests.filter((r) => r.errorCode === 'client_contract');

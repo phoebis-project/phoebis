@@ -630,6 +630,32 @@ test("the pin step's credit fact names its account once, as an account chip labe
   assert.deepEqual(pin.chips.slice(1), [{ entity: { id: 'team_seat', kind: 'account' }, label: 'credit issuer', value: 'team_seat' }]);
 });
 
+test("a classifier call's Pin fold reads the turn it judged, that turn's account or none, and where the call went", () => {
+  // The router writes every fact of the step as text, the judged account about itself, and no turn in a session that
+  // holds none. A call a fallback credit sends to its issuer names the issuer and no direction.
+  const call = (facts) => record({ pin: null, pinReason: 'classifier', walk: [wstep('pin', 'none', [wfact('reason', 'classifier', 'text'), ...facts])] });
+  const fold = (r) => d.pinRows(r, NOW).map((row) => [row.label, row.chips]);
+  const turn = [wfact('judged_agent', 'a5e1', 'text'), wfact('judged_model', 'claude-haiku-4-5-20251001', 'text'), wfact('judged', 'primary', 'text', 'primary')];
+  const followed = call([...turn, wfact('direction', 'turn_account', 'text')]);
+  const unjudged = call([wfact('judged', 'none', 'text'), wfact('direction', 'strategy', 'text')]);
+  const credited = call([wfact('credit', 'secondary', 'text', 'secondary'), ...turn]);
+  const pin = { value: 'classifier call without a pin' };
+  assert.deepEqual(
+    { credited: fold(credited).find(([label]) => label === 'Sent to'), followed: fold(followed), unjudged: fold(unjudged), unjudgedChips: d.factChips(unjudged.walk[0].facts[1], unjudged, NOW) },
+    {
+      credited: ['Sent to', [{ entity: { id: 'secondary', kind: 'account' }, label: 'credit issuer', value: 'secondary' }]],
+      followed: [
+        ['Pin', [pin]],
+        ['Judged turn', [{ value: 'a5e1' }, { entity: { id: 'claude-haiku-4-5-20251001', kind: 'model' }, mono: true, value: 'claude-haiku-4-5-20251001' }]],
+        ['Judged account', [{ entity: { id: 'primary', kind: 'account' }, value: 'primary' }]],
+        ['Sent to', [{ value: "the judged turn's account" }]],
+      ],
+      unjudged: [['Pin', [pin]], ['Judged account', [{ value: 'none' }]], ['Sent to', [{ value: 'placed by the strategy' }]]],
+      unjudgedChips: [{ label: 'judged account', value: 'none' }],
+    },
+  );
+});
+
 test("a refusal's walk is two lines, the admission's reason and the rest of the walk not run", () => {
   const r = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash' }, upstreamModel: null }, pin: null, pinReason: 'not_looked_up', walk: [wstep('admission', 'refused', [wfact('reason', 'hash')]), wstep('selection', 'not_run')] });
   // The version rides the summary's `client` fact, so the reason names the trigger alone.

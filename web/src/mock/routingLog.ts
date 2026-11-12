@@ -1163,6 +1163,20 @@ function markOf(accountId: string, at: number): { at: number; on: string; window
 }
 
 /**
+ * The turn each of the story's classifier calls judges, by its agent and model, the account that turn's stream ended
+ * on, and where the router sent the call. The two `client` calls of the laptop session judge their own subagents' tool
+ * calls on primary and follow them there. The story holds no turn of either subagent, so their model is Haiku 4.5, the
+ * one the session's other subagent runs. The `client_off` call judges main's turn that ended on secondary at 14:01:47,
+ * whose pin stood there until 14:05:12, and secondary read its 5-hour window spent at 14:02:11, so the call follows
+ * neither and the strategy places it.
+ */
+const JUDGED_TURNS: Record<string, { account: string; agent: string; direction: 'pin_account' | 'strategy' | 'turn_account'; model: string }> = {
+  'req_4d9a1e6b-c20': { account: 'primary', agent: 'a5e1', direction: 'turn_account', model: HAIKU },
+  'req_63a8d2f5-b17': { account: 'primary', agent: 'd8f3', direction: 'turn_account', model: HAIKU },
+  'req_7c2e9f41-d03': { account: 'secondary', agent: 'main', direction: 'strategy', model: 'claude-sonnet-4-5' },
+};
+
+/**
  * The pin step: the pin the request found, or the reason it read none. A live pin is the one the routing state holds
  * where the day's rows last left it inside the pool's window, else the trace's own, which the walk writes back with a
  * fresh epoch where the state held none.
@@ -1170,6 +1184,11 @@ function markOf(accountId: string, at: number): { at: number; on: string; window
 function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin | null; pinReason: PinReason | null; steps: WalkStep[] } {
   const r = spec.request;
   const held = pins.get(pinKey);
+  if (spec.pin === 'classifier') {
+    const turn = JUDGED_TURNS[r.id];
+    const facts = [fact('reason', 'classifier', 'text'), fact('judged_agent', turn.agent, 'text'), fact('judged_model', turn.model, 'text'), fact('judged', turn.account, 'text', turn.account), fact('direction', turn.direction, 'text')];
+    return { pin: null, pinReason: 'classifier', steps: [step('pin', 'none', facts)] };
+  }
   if (typeof spec.pin === 'string' && spec.pin !== 'none') return { pin: null, pinReason: spec.pin, steps: spec.kind === 'refused' ? [] : [step('pin', 'none', [fact('reason', spec.pin)])] };
   if (spec.pin === 'none') {
     // A first placement that replaced the session's row reads the row the purge had not yet taken, idle past the
@@ -1185,10 +1204,6 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
       return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'expired_idle'), ...pinFacts(held, idleMs, spec.at - held.lastRefreshAt)])] };
     }
     const pin: RecordPin = { accountId: null, createdAt: null, cycleMs: null, epoch: null, found: 'none', idleMs: null, incarnation: null, lane: null, lastRefreshAt: null, lastUsedAt: null, marked: false, markedAt: null, markedOn: null, markedWindow: null, refreshAgeMs: null, released: [], shed: null, slowDownUntil: null, warmth: null, warmthCause: null };
-    // The story's `client` calls are the ones the router directed to their judged turn's account, which the engine
-    // names under the pin step with a matching verdict.
-    const judged = r.classifier === 'client' ? spec.accountId : null;
-    if (judged !== null) return { pin, pinReason: null, steps: [step('pin', 'match', [fact('found', 'none'), fact('judged', judged, null, judged)])] };
     return { pin, pinReason: null, steps: [step('pin', 'none', [fact('found', 'none')])] };
   }
   const on = spec.from ?? spec.accountId ?? '';
@@ -1671,8 +1686,10 @@ function derivedSpecs(r: RequestLog): Spec[] {
   const specs: Spec[] = [];
   const base = { attempted: [] as string[], request: r };
   const pool = poolById.get(r.poolId ?? '');
-  const pinning = (pool?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null;
-  const noPin: Spec['pin'] = pinning ? 'none' : 'pinning_off';
+  // A classifier call holds no pin of its own, so it creates, renews and moves none and its word names why.
+  const classifier = r.classifier !== null;
+  const pinning = !classifier && (pool?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null;
+  const noPin: Spec['pin'] = classifier ? 'classifier' : pinning ? 'none' : 'pinning_off';
   const at = Date.parse(r.at);
   // The engine holds a request only with every member at its cap, whether it waits on its cohort's account or on the
   // strategy's pick, and a request the bound ran out on waited so too.
@@ -1767,17 +1784,17 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
  * The 11:00 round's four walked pins on secondary in its order: the cold one, then the warm ones by burn over their
  * prompt. Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour,
  * which sum to the account's burn. The first two cover the target under the cap and plan their moves to primary, where
- * they fit, and the walk stops before the current pin. A fifth pin, the current session's auto-mode classifier, made
- * only client classifier calls on secondary, which the router frees, so it has no priced burn on the window and leaves
- * the round before the order. The round is an earlier build's record, which priced Sonnet 4.5 through its fallback
- * weight, so its burns and marks stand as it stored them.
+ * they fit, and the walk stops before the current pin. A fifth pin, a subagent's placed on secondary in the minute
+ * before the round, reads warm under its fresh five-minute cache and holds no prompt size and no burn while its first
+ * request runs, so the walk leaves it out before the order. The round is an earlier build's record, which priced Sonnet
+ * 4.5 through its fallback weight, so its burns and marks stand as it stored them.
  */
 const ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
   { agentId: 'e90b', burn: 0.0142, cold: false, keyId: 'desktop', lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('c64358b5'), skip: null },
   { agentId: 'e90b', burn: 0.0052, cold: false, keyId: 'desktop', lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-4-5', note: 'current', sessionId: sessionId('407dd39b'), skip: null },
   { agentId: 'c21e', burn: 0.0071, cold: false, keyId: 'desktop', lastInputTokens: 64_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('76ddb35b'), skip: null },
-  { agentId: 'b4e9', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 3_400, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('407dd39b'), skip: 'no_burn' },
+  { agentId: 'f2c8', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 0, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('407dd39b'), skip: 'no_burn' },
 ];
 
 /**
@@ -1789,18 +1806,14 @@ const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyI
 /**
  * The afternoon round's pins on primary, cold first. The cold pin holds Sonnet 4.5, which has no weight of its own, so
  * the round prices no burn for it and skips it as unpriced rather than shed a session on a guess. No sibling has
- * runway for the two other walked pins, since nightly projects past the ceiling, secondary is spent and cooling, and
- * the Overflow workspace needs funding: the current pin, and the pin of the classifier call placed here at 14:02:40 off
- * its judged account, which the router folds as a standard answer. That pin's burn is its call's five-hour share of
- * 0.000053 over all's half-hour burn average, decayed over the 590 s since: 0.000106 an hour times e^(-590/1800), about
- * 0.000076. Two pins leave the round before the order: the parked Opus pin rides the fast lane, so it holds no share
- * of a plan window, and the pin of the session the mod released whole after its one turn at 14:03 belongs to an agent
- * that ended.
+ * runway for the other walked pin, the current one, since nightly projects past the ceiling, secondary is spent and
+ * cooling, and the Overflow workspace needs funding. Two pins leave the round before the order: the parked Opus pin
+ * rides the fast lane, so it holds no share of a plan window, and the pin of the session the mod released whole after
+ * its one turn at 14:03 belongs to an agent that ended.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
   { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
-  { agentId: 'main', burn: 0.000076, cold: false, keyId: 'desktop', lastInputTokens: 3_600, marked: false, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 18_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
 ];
@@ -2001,9 +2014,10 @@ function storySpecs(): Spec[] {
     at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'placed', 'primary'),
     at('req_4b0e9d17-c31', 2, 2, t(14, 27, 1), 'placed', 'nightly', { attempted: ['primary'], failover: 'fast_lane', from: 'primary', pin: live() }),
     at('req_f8085653-422', 1, 1, t(14, 27, 28), 'renewed', 'primary', { pin: live('continues_pin', 506_000) }),
-    // The client's two classifier calls are placed on primary and book nothing there, as a fast request books nothing.
-    at('req_4d9a1e6b-c20', 1, 1, t(12, 41, 8), 'placed', 'primary'),
-    at('req_63a8d2f5-b17', 1, 1, t(12, 41, 10), 'placed', 'primary'),
+    // The client's two classifier calls follow their judged turns to primary. A classifier call books nothing and holds
+    // no pin.
+    at('req_4d9a1e6b-c20', 1, 1, t(12, 41, 8), 'placed', 'primary', { pin: 'classifier' }),
+    at('req_63a8d2f5-b17', 1, 1, t(12, 41, 10), 'placed', 'primary', { pin: 'classifier' }),
     // A conversation the Overflow workspace takes at 10:52:30, with primary full and secondary's window too far along
     // for its rewrite, returns to a plan with its 640k-token context, cold there nine minutes on. Primary fits but is
     // full, and the rest fall short of the ceiling, so the gate answers the least bad set and Pace takes nightly, whose

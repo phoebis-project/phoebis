@@ -109,10 +109,21 @@ export function releaseLabel(reason: string): string {
   return known === undefined ? reason : PIN_RELEASE_LABEL[known];
 }
 
-/** The Pin fold's row for a record that pins nothing: 'not looked up' (a refusal's) or 'pinning off'. */
+/**
+ * The Pin fold's row for a record that pins nothing: 'classifier call without a pin', which heads the rows of the turn
+ * the call judged, 'not looked up' (a refusal's) or 'pinning off'.
+ */
 const PIN_REASON_LABEL: Record<PinReason, string> = {
+  classifier: 'classifier call without a pin',
   not_looked_up: 'not looked up',
   pinning_off: 'pinning off',
+};
+
+/** Where a classifier call went, in the Pin fold's words. A word the console lacks reads as sent. */
+const DIRECTION_WORDS: Record<string, string> = {
+  pin_account: 'the account its pin stands on',
+  strategy: 'placed by the strategy',
+  turn_account: "the judged turn's account",
 };
 
 export type VerdictTone = 'critical' | 'good' | 'neutral' | 'warning';
@@ -1115,12 +1126,12 @@ export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chi
       return [];
     case 'account_id':
       return typeof v === 'string' ? [accountChip(v, 'on')] : [];
-    // The pin step writes the issuer's id as the value and about the same account, so one chip names it once.
+    // The pin step writes the issuer's or the judged turn's account as the value and about the same account, so one
+    // chip names it once. A value about no account, the text `none` among them, reads as a plain fact.
     case 'credit':
-      return typeof v === 'string' ? [accountChip(v, 'credit issuer')] : [];
-    // The judged turn's account a classifier call followed, written the same way.
     case 'judged':
-      return typeof v === 'string' ? [accountChip(v, 'judged turn')] : [];
+      if (typeof v === 'string' && f.accountId === v) return [accountChip(v, keyWord(f.key))];
+      break;
     case 'lane':
       if (typeof v === 'string') return laneChips(v);
       break;
@@ -2339,9 +2350,31 @@ export function requestRows(record: DecisionRecord, row: DecisionSummary): CardR
   ];
 }
 
-/** The Pin and warmth fold. A record that pins nothing reads one row, Pin, with why. */
+/**
+ * The Pin fold of a classifier call, read off its `pin` step's facts: the call holds no pin and follows the turn it
+ * judges. A call a fallback credit directs carries the issuer in its `credit` fact and no `direction`, so its "Sent
+ * to" row names the issuer. A fact the step lacks draws no row.
+ */
+function classifierPinRows(record: DecisionRecord): CardRow[] {
+  const facts = record.walk.find((s) => s.step === 'pin')?.facts ?? [];
+  const text = (key: string): string | null => str(facts.find((f) => f.key === key)?.value);
+  const [agent, model, judged, direction, credit] = [text('judged_agent'), text('judged_model'), text('judged'), text('direction'), text('credit')];
+  const sentTo = direction !== null ? [plain(DIRECTION_WORDS[direction] ?? direction)] : credit !== null ? [accountChip(credit, keyWord('credit'))] : null;
+  return [
+    { chips: [plain(PIN_REASON_LABEL.classifier)], label: 'Pin' },
+    ...(agent === null ? [] : [{ chips: [plain(agent), ...(model === null ? [] : [modelChip(model)])], label: 'Judged turn' }]),
+    ...(judged === null ? [] : [{ chips: [judged === 'none' ? plain('none') : accountChip(judged)], label: 'Judged account' }]),
+    ...(sentTo === null ? [] : [{ chips: sentTo, label: 'Sent to' }]),
+  ];
+}
+
+/**
+ * The Pin and warmth fold. A record that pins nothing reads one row, Pin, with why, and a classifier call's fold goes
+ * on to the turn it judged and where the call went.
+ */
 export function pinRows(record: DecisionRecord, now: number): CardRow[] {
   const p = record.pin;
+  if (p === null && record.pinReason === 'classifier') return classifierPinRows(record);
   if (p === null) return [{ chips: [plain(record.pinReason === null ? 'none' : PIN_REASON_LABEL[record.pinReason])], label: 'Pin' }];
   const rows: CardRow[] = [];
   const released = p.released.length > 0 ? [{ chips: p.released.map((r) => plain(releaseLabel(r))), label: 'Released' }] : [];

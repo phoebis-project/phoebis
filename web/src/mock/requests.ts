@@ -1568,9 +1568,9 @@ function storySeeds(): StorySeed[] {
     // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns.
     { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
     // A classifier call judging a tool call of the desktop turn that ended on secondary at 14:01:47, sent 53 s later,
-    // after secondary's head at 14:02:11 read its 5-hour window spent: the judged account holds no allowance, so the
-    // router does not direct the call there and places it as any request, on primary's plan tier, off the judged
-    // account. It prices from its usage on primary's plan.
+    // after secondary's head at 14:02:11 read its 5-hour window spent. The judged account holds no allowance and the
+    // judged turn's pin still stands there, so the router places the call by the strategy, on primary's plan tier, off
+    // the judged account. It prices from its usage on primary's plan.
     { agentId: 'main', at: t(14, 2, 40), attempts: [{ accountId: 'primary', at: t(14, 2, 40), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '0d588de5', unseeded: true, usage: { input: 3_600, output: 22 } },
     // The held conversation's next turn, 630 s after its turn on nightly ended at 13:11:09 and so the row's last use,
     // inside the purge's minute past all's 600 s: the placement finds the row expired, releases it for that and for

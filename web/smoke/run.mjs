@@ -15624,7 +15624,7 @@ await forView('/routing-log', async () => {
   } finally {
     recorded.restore();
   }
-  const up = { arrow: 'up', first: ['event/338', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
+  const up = { arrow: 'up', first: ['event/335', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
   const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
   results.push({
     name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',
@@ -17504,20 +17504,18 @@ await forView('/routing-log', async () => {
         seq: 1,
         terminus: ['chosen', 'Chosen', 'renewed'],
         // The round marked nothing, so its Round group names each pin it passed over and why, in the round's order: the
-        // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin and the
-        // off-account classifier call's pin with no runway on any sibling, then the two left out before the walk
-        // (`NO_RUNWAY_PINS` in mock/routingLog.ts): the parked Opus pin on the fast lane and the released session's
-        // pin whose agent ended.
+        // cold Sonnet 4.5 pin unpriced, since its model has no weight of its own, the Sonnet 5.5 pin with no runway on
+        // any sibling, then the two left out before the walk (`NO_RUNWAY_PINS` in mock/routingLog.ts): the parked Opus
+        // pin on the fast lane and the released session's pin whose agent ended.
         own: async (card, record, page) => {
           const round = groupOfPopover(await popoverOf(page, stationButton(card, 'move:shed')), 'Round');
           const skipped = popoverRowOf(round, 'skipped') ?? [];
           return (
-            skipped.length === 5 &&
+            skipped.length === 4 &&
             /^skipped [0-9a-f]{8}: unpriced$/.test(skipped[0]) &&
             /^skipped [0-9a-f]{8}: no runway$/.test(skipped[1]) &&
-            /^skipped [0-9a-f]{8}: no runway$/.test(skipped[2]) &&
-            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[3]) &&
-            /^skipped [0-9a-f]{8}: ended$/.test(skipped[4])
+            /^skipped [0-9a-f]{8}: fast lane$/.test(skipped[2]) &&
+            /^skipped [0-9a-f]{8}: ended$/.test(skipped[3])
           );
         },
         what: 'round that marked nothing',

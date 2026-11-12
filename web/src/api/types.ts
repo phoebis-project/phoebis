@@ -1079,8 +1079,9 @@ export const DECISION_KIND_VALUES = ['exhausted', 'held', 'moved', 'placed', 're
 /** A decision's kind as the routing log names it. A probe's decision keeps its kind and the row's `probe` marks it. */
 export type DecisionKind = (typeof DECISION_KIND_VALUES)[number];
 
-export const PIN_REASON_VALUES = ['not_looked_up', 'pinning_off'] as const;
-/** Why a record pins nothing. `not_looked_up` is a refusal's, made before the pin lookup whatever session it named. */
+export const PIN_REASON_VALUES = ['classifier', 'not_looked_up', 'pinning_off'] as const;
+/** Why a record pins nothing. `classifier` is a classifier call's, which holds no pin and follows the turn it
+ *  judges. `not_looked_up` is a refusal's, made before the pin lookup whatever session it named. */
 export type PinReason = (typeof PIN_REASON_VALUES)[number];
 
 export const FACT_UNIT_VALUES = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'] as const;
