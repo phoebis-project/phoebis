@@ -24056,6 +24056,24 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     });
   }
   {
+    // A session view's Traffic cards fold the request log, which the route bounds at the range's end, while Migration
+    // rewrites reads its own route, which sums whole hours up to the hour ceiling of that end. The span ends at 09:30,
+    // inside its last hourly bucket, and the clock stands at 14:30: the fold's 09:00 bucket covers it up to 09:30 and
+    // is partial, and the route's covers it to 10:00, its own end, and is whole. A session counts among the filters the
+    // rewrites route passes by, so that card names them.
+    const name = "/analytics a past session span ending inside an hour notes the folded outcome chart's cut last bucket, and Migration rewrites, whole on its route, carries no note";
+    const session = requests.find((r) => r.agentId === 'c21e')?.sessionId ?? '';
+    const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=2026-09-16T02:30:00.000Z&to=2026-09-16T09:30:00.000Z`, { now: CLOCK_ORIGIN });
+    const subtitleOf = (title) => [...page.container.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
+    const read = { outcome: subtitleOf('Requests by outcome'), rewrites: subtitleOf('Migration rewrites') };
+    page.unmount();
+    results.push({
+      name,
+      ok: JSON.stringify(read) === JSON.stringify({ outcome: "Per bucket, stacked. The last bucket is partial: it holds the traffic up to the range's end", rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The filters above do not apply here' }),
+      missing: [JSON.stringify(read)],
+    });
+  }
+  {
     // Clear all writes every dimension's empty value in one patch, the session's among them, and the key lifetime
     // belongs to the session it arrived with, so it leaves with the session. The grouping and the range stay.
     const name = '/analytics Clear all clears every chip with and without a session, and a session change drops the key lifetime';
