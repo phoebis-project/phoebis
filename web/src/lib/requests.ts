@@ -136,7 +136,7 @@ function fundedUnit(funding: Funding, unit: UnitPosition, p: { dollars: number; 
 export const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this traffic';
 
 /** A rate under a Unit position: its figure, a dash with why, or null where the route answered no figure for it. */
-export type RateReading = { kind: 'dash'; title: string } | { kind: 'dollars'; usd: number } | { figure: number; kind: 'equivalent' } | null;
+type RateReading = { kind: 'dash'; title: string } | { kind: 'dollars'; usd: number } | { figure: number; kind: 'equivalent' } | null;
 
 /**
  * A rate under a Unit position, by `fundedUnit`'s rule. `side` is who pays the traffic the rate measures, `equivalent`

@@ -2228,7 +2228,15 @@ const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
 const SPEND_TITLE = 'Spend per minute';
-const SPEND_NOTE = "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota is charted beside it as a share of the chosen week";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers";
+/** The note's second sentence: what Plan per hour beside the card charts under each position, none where it draws a
+ *  sentence and no chart. */
+const SPEND_PLAN_NOTE: Record<UnitPosition, string | null> = {
+  all: 'Its plan quota is charted beside it in dollars at the API price list',
+  equivalent: 'Its plan quota is charted beside it in dollars at the API price list',
+  native: 'Its plan quota is charted beside it as a share of the chosen week',
+  usd: null,
+};
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST = 'Other (fast mode or overage)';
@@ -2250,6 +2258,9 @@ const FIVE_HOUR_ULTRA_NOTE = "The Ultra tier's 5-hour capacity row is assumed, a
 const FABLE_WEEK_TITLE = 'Fable week per hour';
 const FABLE_WEEK_SUBTITLE = "The subscription traffic per hour as a share of the chosen tier's Fable week";
 const NO_PLAN_TRAFFIC = 'No subscription traffic in this range.';
+/** Plan per hour's empty sentence under a dollar position where the range holds subscription traffic, a line or a tier
+ *  unknown entry under Native, and no group's plan dollars are above zero. */
+const NO_LISTED_PLAN_TRAFFIC = 'No subscription traffic in this range carries an API list price.';
 const NO_FABLE_TRAFFIC = 'No subscription traffic drew the Fable week in this range.';
 
 /** A plan card's figure under the chosen week, in full for a hover and short for the legend. */
@@ -2383,9 +2394,11 @@ function BurnCharts({
   // holds one account's rows only a line in the plan's unit draws: one the router sizes or whose points carry a figure.
   const plannedOf = (cardLines: BurnLine[]) => cardLines.map((l, i) => ({ i, l })).filter(({ l }) => !l.other && (!shared || l.unit === 'window_share') && (l.unpriced || (l.perHour !== null && l.perHour > 0)));
   const unknownOf = (cardLines: BurnLine[]) => (shared ? cardLines.filter((l) => !l.other && l.unit === 'unknown') : []);
+  // The range holds subscription traffic where Plan per hour under Native draws a line or a tier unknown entry.
+  const subscribed = plannedOf(lines).length > 0 || unknownOf(lines).length > 0;
   // The Fable week fold keeps the groups with Fable traffic alone, so where Plan per hour draws subscription traffic
   // the Fable week card with no line says that traffic drew no Fable week.
-  const fableNoLine = plannedOf(lines).length > 0 || unknownOf(lines).length > 0 ? NO_FABLE_TRAFFIC : NO_PLAN_TRAFFIC;
+  const fableNoLine = subscribed ? NO_FABLE_TRAFFIC : NO_PLAN_TRAFFIC;
   const headOf = (subtitle: string, note: string | null) => (
     <>
       {subtitle}.{partial ? ` ${PARTIAL_NOTE}.` : ''}
@@ -2504,7 +2517,7 @@ function BurnCharts({
         subtitle={headOf(PLAN_USD_SUBTITLE, null)}
         failure={failed(error)}
         loading={loading}
-        empty={empty ?? (planned.length > 0 ? undefined : NO_PLAN_TRAFFIC)}
+        empty={empty ?? (planned.length > 0 ? undefined : subscribed ? NO_LISTED_PLAN_TRAFFIC : NO_PLAN_TRAFFIC)}
         legend={planned.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, title: sentences([titleOf(l) ?? null, l.planUsdPeak === null ? null : `Highest hour ${fmtUsd(l.planUsdPeak)}`]) || undefined, value: fmtUsd(l.planUsdPerHour) }))}
       >
         <LineChart data={rows} margin={CHART_MARGIN}>
@@ -2526,7 +2539,8 @@ function BurnCharts({
       {null}
     </ChartCard>
   );
-  const spendNote = `${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`;
+  const planNote = SPEND_PLAN_NOTE[unit];
+  const spendNote = `${SPEND_NOTE}${planNote === null ? '' : `. ${planNote}${byAccount ? '' : ' when grouped by account'}`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`;
   return (
     <div className="grid-2 burn-grid">
       {unit === 'native'

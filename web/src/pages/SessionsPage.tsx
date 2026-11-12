@@ -559,7 +559,7 @@ export function SessionsPage() {
 function burnReading(pin: BurnFigures | null, cost: CostContext): { dash: boolean; text: string; title: string | undefined } | null {
   if (pin === null || pin.burnUnit === null) return null;
   const billed = pin.burnUnit === 'usd';
-  if (pin.burn === null && (billed || cost.unit === 'native')) return null;
+  if (pin.burn === null && !billed && cost.unit === 'native') return null;
   const reading = rateUnder(cost.unit, { billedUsd: billed ? pin.burn : null, equivalent: billed ? null : pin.burnEquivalent, planUsd: billed ? null : pin.burnUsd, side: billed ? 'billed' : 'plan' });
   if (reading === null) return null;
   if (reading.kind === 'dash') return { dash: true, text: '-', title: reading.title };

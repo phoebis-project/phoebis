@@ -533,8 +533,9 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     s.cached += r.tokens.cacheRead;
     s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;
-    // The route splits a row's dollars by its funding: a plan row's list dollars, priced at the revision in force at
-    // it, to the plan side, and every other row's to the billed side. A free classifier call adds the zero it stored.
+    // The route prices each row at the read, at the revision in force at the row, and splits the dollars by the row's
+    // funding: a plan row's list dollars to the plan side and every other row's to the billed side. A free classifier
+    // call prices at zero, so it adds nothing.
     if (oauth && !billed) s.planUsd += r.costUsd;
     else s.usd += r.costUsd;
     // A row with no token has nothing to price, as the route reads it: a failed request on a model the cost model has

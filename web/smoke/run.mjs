@@ -19281,6 +19281,7 @@ await forView('/analytics', async () => {
     return {
       legend: [...(card?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']),
       sentence: card?.querySelector('p.muted')?.textContent?.trim() ?? null,
+      subtitle: card?.querySelector('.card__subtitle')?.textContent ?? null,
       ticks: [...(card?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? ''),
     };
   };
@@ -19292,6 +19293,17 @@ await forView('/analytics', async () => {
   await chooseUnit(page, 'native');
   localStorage.removeItem('phoebis.unit');
   page.unmount();
+  // A range whose subscription traffic carries no API list price, in the case's own answer, since every model the
+  // story's plan traffic runs on has one: one hour of plan rows on a model neither the cost model nor the price list
+  // holds, so its bucket prices no share, reads flagged and adds no plan dollars.
+  const at = new Date(CLOCK_ORIGIN - 3_600_000).toISOString();
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, group: 'claude-unlisted', tokens: 1_000, uncachedTokens: 1_000, unpriced: true })] });
+  localStorage.setItem('phoebis.unit', 'all');
+  const unlisted = await mount('/analytics?by=model#burn', { now: CLOCK_ORIGIN });
+  const unlistedPlan = [...unlisted.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelector('p.muted')?.textContent?.trim() ?? null;
+  unlisted.unmount();
+  localStorage.removeItem('phoebis.unit');
+  delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
   const entry = (read, label) => read.legend.find(([l]) => l === label)?.[1] ?? null;
   const all = reads.all.plan;
@@ -19318,6 +19330,26 @@ await forView('/analytics', async () => {
     name: '/analytics the 5-hour and the Fable week card read the same under all four positions',
     ok: reads.native.fiveHour.legend.length > 0 && reads.native.fable.legend.length > 0 && moved.length === 0,
     missing: [JSON.stringify([reads.native.fiveHour, reads.native.fable]), ...moved.map((p) => `${p}: ${JSON.stringify([reads[p].fiveHour, reads[p].fable])}`)],
+  });
+  // Spend per minute's note says what Plan per hour beside it charts: the chosen week's share, the plan dollars, or
+  // nothing where it draws a sentence. The range ends at the clock, inside its last hour, so a chart's note closes on
+  // the partial bucket's, which the sentence card under Dollar equivalent leaves out.
+  const spendNotes = Object.fromEntries(['native', 'all', 'usd', 'equivalent'].map((p) => [p, reads[p].spend.subtitle]));
+  const wantNotes = {
+    native: "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota is charted beside it as a share of the chosen week when grouped by account. The last bucket is partial, rated over the part of its width it covers",
+    all: "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota is charted beside it in dollars at the API price list when grouped by account. The last bucket is partial, rated over the part of its width it covers",
+    usd: "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. The last bucket is partial, rated over the part of its width it covers",
+    equivalent: "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota is charted beside it in dollars at the API price list when grouped by account",
+  };
+  results.push({
+    name: "/analytics Spend per minute's note says Plan per hour charts the week's share beside it under Native, the plan dollars under the two equivalent positions, and nothing under Billed dollars",
+    ok: JSON.stringify(spendNotes) === JSON.stringify(wantNotes),
+    missing: [JSON.stringify(spendNotes)],
+  });
+  results.push({
+    name: '/analytics under All in dollars Plan per hour says a range whose subscription traffic prices at no dollars carries no API list price',
+    ok: unlistedPlan === 'No subscription traffic in this range carries an API list price.',
+    missing: [String(unlistedPlan)],
   });
 });
 
@@ -21742,7 +21774,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // Ultra week, while Spend per minute under the key grouping, which sizes nothing, still draws. Under the Pro week
     // the figure reads without the cost model, and the 5-hour and Fable week cards, which scale through it, draw the
     // error. Under the account grouping the plan card sizes its lines by the tiers the cost model holds, so the Pro
-    // week's plan card draws the error too. The page reads the settings once per load, so each read mounts a page.
+    // week's plan card draws the error too. Under All in dollars the plan card charts the plan dollars, which read no
+    // cost model, so it draws its lines under the Ultra week. The page reads the settings once per load, so each read
+    // mounts a page.
     const { getSettings } = api;
     api.getSettings = () => Promise.reject(new Error('the settings read failed'));
     const cardIn = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.textContent ?? '';
@@ -21760,9 +21794,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const proAccountPlan = cardIn(proByAccount, PLAN);
     proByAccount.unmount();
     localStorage.removeItem('phoebis.week');
+    localStorage.setItem('phoebis.unit', 'all');
+    const dollars = await mount('/analytics#burn');
+    const dollarCard = [...dollars.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === PLAN);
+    const dollarPlan = { entries: dollarCard?.querySelectorAll('.legend li').length ?? 0, text: dollarCard?.textContent ?? '' };
+    dollars.unmount();
+    localStorage.removeItem('phoebis.unit');
     api.getSettings = getSettings;
     results.push({
-      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, and the Pro week reads the plan card without the cost model, the 5-hour and Fable week cards' error and under the account grouping the plan card's error",
+      name: "/analytics a failed settings read draws the plan card's error under the Ultra week and leaves Spend per minute under the key grouping, the Pro week reads the plan card without the cost model, the 5-hour and Fable week cards' error and under the account grouping the plan card's error, and All in dollars draws the plan card's dollar lines",
       ok:
         failed.plan.includes('Could not load plan per hour') &&
         !failed.spend.includes('Could not load') &&
@@ -21770,8 +21810,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         proEntries > 0 &&
         proSiblings.fiveHour.includes('Could not load 5-hour per hour') &&
         proSiblings.fable.includes('Could not load fable week per hour') &&
-        proAccountPlan.includes('Could not load plan per hour'),
-      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fable.slice(0, 120)}`, `Pro by account: ${proAccountPlan.slice(0, 120)}`],
+        proAccountPlan.includes('Could not load plan per hour') &&
+        !dollarPlan.text.includes('Could not load') &&
+        dollarPlan.entries > 0,
+      missing: [`plan: ${failed.plan.slice(0, 120)}`, `spend: ${failed.spend.slice(0, 120)}`, `pro: ${proPlan.slice(0, 120)}`, `${proEntries} legend entries on the Pro card`, `Pro 5-hour: ${proSiblings.fiveHour.slice(0, 120)}`, `Pro Fable week: ${proSiblings.fable.slice(0, 120)}`, `Pro by account: ${proAccountPlan.slice(0, 120)}`, `All in dollars: ${dollarPlan.entries} legend entries, ${dollarPlan.text.slice(0, 120)}`],
     });
   }
   await burnGroup('key');
@@ -25926,6 +25968,26 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: "/sessions the card's summary line reads the day's spend as a figure once every kept row's day is priced",
       ok: parts !== null && /^\d[\d.]*% Ultra week$/.test(parts[3]),
       missing: [subtitle],
+    });
+  }
+  {
+    // A billed pin whose burn the route answers as null, the fleet session's (`FLEET_BURN`) with its burn taken out,
+    // still draws its dash under Dollar equivalent, which needs no figure from a billed pin.
+    const { listSessions } = api;
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (s.sessionId === FLEET_ID ? { ...s, burn: null } : s));
+    const unburnt = await mount('/sessions', { now: CLOCK_ORIGIN });
+    await chooseUnit(unburnt, 'equivalent');
+    const row = subjects.fleet === undefined ? null : unburnt.container.querySelector(`[id="${sessionRowId(subjects.fleet)}"]`);
+    const line = [...(sessionCell(unburnt, row, 'Cost')?.querySelectorAll(':scope > .sub') ?? [])].at(-1);
+    const read = line === undefined ? null : { text: line.textContent?.trim() ?? '', title: line.getAttribute('title') };
+    await chooseUnit(unburnt, 'native');
+    localStorage.removeItem('phoebis.unit');
+    unburnt.unmount();
+    api.listSessions = listSessions;
+    results.push({
+      name: '/sessions a billed pin whose burn reads null draws its dash titled why under Dollar equivalent',
+      ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify({ text: '-', title: NO_EQUIVALENT_TITLE }),
+      missing: [JSON.stringify(read)],
     });
   }
   {

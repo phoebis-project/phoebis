@@ -51,9 +51,9 @@ test('a range ending now, twenty minutes into the running hour, rates that bucke
   const end = at13 + HOUR + 20 * 60_000;
   const { lines, rows } = d.foldBurn(
     [
-      point(at13, 'primary', { equivalent: 0.3, uncachedTokens: 6_000, unit: 'window_share' }),
+      point(at13, 'primary', { equivalent: 0.3, planUsd: 0.3, uncachedTokens: 6_000, unit: 'window_share' }),
       point(at13, 'overflow', { unit: 'usd', usd: 6 }),
-      point(at13 + HOUR, 'primary', { equivalent: 0.2, uncachedTokens: 4_000, unit: 'window_share' }),
+      point(at13 + HOUR, 'primary', { equivalent: 0.2, planUsd: 0.2, uncachedTokens: 4_000, unit: 'window_share' }),
       point(at13 + HOUR, 'overflow', { unit: 'usd', usd: 4 }),
     ],
     'account',
@@ -67,9 +67,11 @@ test('a range ending now, twenty minutes into the running hour, rates that bucke
   assert.deepEqual([rows[0].uncached[primary], rows[1].uncached[primary]], [100, 200], 'tokens per minute of the time each bucket covers');
   assert.ok(Math.abs(rows[1].usd[overflowLine] - 0.2) < 1e-12, 'four dollars over twenty minutes');
   assert.ok(Math.abs(rows[1].equivalent[primary] - 0.6) < 1e-12, 'a figure of 20% over a third of an hour is 60% an hour');
+  assert.ok(Math.abs(rows[1].planUsd[primary] - 0.6) < 1e-12, 'plan dollars of $0.20 over a third of an hour are $0.60 an hour');
   // Weighed 3:1 by the seconds each bucket covers: (100 x 3 + 200) / 4 and (0.3 x 3 + 0.6) / 4.
   assert.ok(Math.abs(lines[primary].tokensPerMinute - 125) < 1e-9, 'the legend weighs each bucket by the time it covers');
   assert.ok(Math.abs(lines[primary].perHour - 0.375) < 1e-12, 'and the figure');
+  assert.ok(Math.abs(lines[primary].planUsdPerHour - 0.375) < 1e-12, 'and the plan dollars');
   assert.ok(Math.abs(lines[overflowLine].usdPerMinute - 0.125) < 1e-12, 'and the dollars');
 });
 
@@ -107,7 +109,7 @@ test('a range that ended inside the running hour, read ten minutes later, rates 
 
 test('a running bucket sets the peak and the axis only once it covers a tenth of its width', () => {
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const points = [point(at13, 'primary', { equivalent: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'primary', { equivalent: 0.02, uncachedTokens: 100, unit: 'window_share' })];
+  const points = [point(at13, 'primary', { equivalent: 0.06, planUsd: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'primary', { equivalent: 0.02, planUsd: 0.02, uncachedTokens: 100, unit: 'window_share' })];
   const sized = new Set(['primary']);
   const fold = (seconds) => d.foldBurn(points, 'account', 3_600, sized, at13 + HOUR + seconds * 1_000, at13 + HOUR + seconds * 1_000);
 
@@ -115,6 +117,7 @@ test('a running bucket sets the peak and the axis only once it covers a tenth of
   assert.deepEqual(early.rows.map((r) => [r.seconds, r.partial, r.setsScale]), [[3_600, false, true], [20, true, false]]);
   assert.ok(Math.abs(early.rows[1].equivalent[0] - 3.6) < 1e-12, 'the running bucket keeps its rate: 2% over 20 seconds');
   assert.equal(early.lines[0].peak, early.rows[0].equivalent[0], 'twenty seconds in, the peak is the full hour');
+  assert.equal(early.lines[0].planUsdPeak, 0.06, "twenty seconds in, the plan dollars' peak is the full hour's $0.06, never the running $3.60");
 
   const later = fold(7 * 60);
   assert.deepEqual(later.rows.map((r) => [r.seconds, r.partial, r.setsScale]), [[3_600, false, true], [420, true, true]]);
