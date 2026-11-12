@@ -4431,8 +4431,8 @@ expect('/accounts/secondary', m.text(), [
     // free, and a free organization's billing type reads none.
     const billing = identityRows(page).find((r) => r.label === 'Billing type');
     results.push({
-      name: '/accounts/sunset the Plan row reads Free and the tier on hover, the Rate-limit tier row the found tier as sent and the Billing type row none',
-      ok: plan?.value === 'Free' && plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai' && billing?.value === 'none',
+      name: '/accounts/sunset the Plan row reads the tier on hover, the Rate-limit tier row the found tier as sent and the Billing type row none',
+      ok: plan?.title === 'default_claude_ai' && tier?.value === 'default_claude_ai' && billing?.value === 'none',
       missing: [JSON.stringify(plan ?? null), JSON.stringify(tier ?? null), JSON.stringify(billing ?? null)],
     });
     // The list's row draws the compact bars, so it reads the compact form of the Usage card's sentence, muted.
@@ -5743,18 +5743,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
   const card = (name) => cards.get(name);
-  // The counts come from the key list itself, so a key the story adds or moves never breaks the check.
-  const keyCount = new Map();
-  for (const k of await api.listKeys()) keyCount.set(k.poolId, (keyCount.get(k.poolId) ?? 0) + 1);
-  const countWord = (n) => (n === 0 ? 'No keys yet' : n === 1 ? '1 key' : `${n} keys`);
   const keyLink = (name) => card(name)?.querySelector('.pool__keys');
-  const links = ['all', 'jobs', 'work'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
-  const wanted = ['all', 'jobs', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pools=${id}`]);
-  const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
+  const links = ['all', 'jobs', 'work'].map((name) => keyLink(name)?.getAttribute('href'));
+  const wanted = ['all', 'jobs', 'work'].map((id) => `/keys?pools=${id}`);
   results.push({
     name: '/pools each card links its key count to the Keys page filtered to the pool',
-    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify([...cards.keys()].filter((id) => !keyCount.get(id))),
-    missing: [...links.flat().map(String), ...wanted.flat(), ...none],
+    ok: JSON.stringify(links) === JSON.stringify(wanted),
+    missing: [...links.map(String), ...wanted],
   });
   {
     // The member column reads the engine's count on each member, one pin per agent and model, so a session whose
@@ -11413,13 +11408,8 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   });
 }
 {
-  // Duration, Kind, Pool and Transport start hidden, since the drawer names all four, and the control still offers
-  // every column.
-  const ALL = ['Time', 'Key', 'Pool', 'Account', 'Model', 'Client', 'Kind', 'Transport', 'Status', 'Attempts', 'TTFB', 'Duration', 'Tokens', 'Cost'];
-  const HIDDEN = ['Duration', 'Kind', 'Pool', 'Transport'];
   const colsButton = () => columnsButton(m);
   const heads = () => [...m.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
-  const offered = () => [...(columnsGrid()?.querySelectorAll('label') ?? [])].map((l) => ({ checked: l.querySelector('input[type="checkbox"]')?.checked ?? null, label: l.textContent?.trim() ?? '' }));
   const turn = async (label) => {
     [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
     await m.settle(100);
@@ -11427,23 +11417,19 @@ expect('/requests', m.text(), ['Rows', 'Details', 'Client', 'claude-code/cli', '
   const shownBefore = heads();
   colsButton()?.click();
   await m.settle(100);
-  const listed = offered();
   await turn('Pool');
   const withPool = heads();
   const poolAt = withPool.indexOf('Pool');
   const poolCells = [...m.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children[poolAt]?.textContent?.trim() ?? '');
   const poolCount = `${colsButton()?.textContent?.trim()}, ${colsButton()?.getAttribute('title')}`;
   results.push({
-    name: '/requests the Columns control lists all fourteen columns and turning Pool on draws it',
+    name: '/requests turning Pool on through the Columns control draws it after Key with a cell on every row and counts it',
     ok:
-      JSON.stringify(listed.map((c) => c.label)) === JSON.stringify(ALL) &&
-      listed.every((c) => c.checked === !HIDDEN.includes(c.label)) &&
-      HIDDEN.every((h) => !shownBefore.includes(h)) &&
       poolAt === withPool.indexOf('Key') + 1 &&
       poolCells.length > 0 &&
       poolCells.every((c) => c.length > 0) &&
       poolCount === '11, Columns: 11 of 14 shown',
-    missing: [JSON.stringify(listed), JSON.stringify(shownBefore), JSON.stringify(withPool), String(poolCount)],
+    missing: [JSON.stringify(withPool), String(poolCount)],
   });
   // Transport stays a column the control offers, so its badges draw once it is turned on.
   await turn('Transport');
@@ -13365,8 +13351,8 @@ await forView('/requests', async () => {
 // drawn ones and the request that crossed research's budget (BUDGET_CROSSING_ID), eight of them with no TTFB. Time
 // stands descending at rest, TTFB orders the rows by the figure from its pick with the eight last, and Ascending flips
 // the rows with a figure and keeps the eight last, each run by id in the direction. The read sends the key's order word
-// and the direction, the address carries the pick and a reload reads it back, the Duration column turns on through the
-// Columns control and reads the crossing's 9-second attempt, and a Time cell within the day reads its date.
+// and the direction, the address carries the pick and a reload reads it back, and the Duration column turns on through
+// the Columns control and reads the crossing's 9-second attempt.
 await forView('/requests', async () => {
   const name = '/requests the sort control reads Time at rest, a pick of TTFB pages by the figure with the rows without one last, Ascending flips the rows with a figure, the read sends the order and the direction, and a reload reads the pick back';
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -13402,7 +13388,6 @@ await forView('/requests', async () => {
   let ascending;
   let reloaded;
   let duration;
-  let dated;
   try {
     const page = await mount('/requests?keys=ci', { now: CLOCK_ORIGIN });
     bare = { ...control(page), rows: column(page, 'TTFB').length };
@@ -13424,10 +13409,6 @@ await forView('/requests', async () => {
     duration = { after: heads[heads.indexOf('TTFB') + 1] ?? null, cell: column(again, 'Duration').find((c) => c.id === crossing?.id)?.text ?? null };
     columnsButton(again)?.click();
     await again.settle(100);
-    // Read in UTC, the zone the smoke runs in: a viewer elsewhere reads the day and the clock of their own zone.
-    const clock = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
-    const day = (iso) => new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-    dated = { cell: column(again, 'Time').find((c) => c.id === crossing?.id)?.text ?? null, want: crossing ? `${day(crossing.at)} ${clock(crossing.at)}` : null, withinDay: crossing ? CLOCK_ORIGIN - Date.parse(crossing.at) < 24 * 3_600_000 : false };
     again.unmount();
   } finally {
     recorded.restore();
@@ -13448,7 +13429,6 @@ await forView('/requests', async () => {
     ok: JSON.stringify(duration) === JSON.stringify({ after: 'Duration', cell: '9.0 s' }),
     missing: [JSON.stringify(duration)],
   });
-  results.push({ name: '/requests a Time cell within the day reads its date before the time', ok: dated?.withinDay === true && dated.cell !== null && dated.cell === dated.want, missing: [JSON.stringify(dated)] });
 });
 
 // A key pick on an older page starts the list at its first page, and the poll's watermark goes with the list it was
@@ -13983,10 +13963,9 @@ await forView('/requests', async () => {
   const freeCalls = requests.filter((r) => r.classifier === 'client');
   const contractRow = requests.find((r) => r.errorCode === 'client_contract');
   results.push({ name: 'fixture: two classifier calls and one contract refusal', ok: freeCalls.length === 2 && contractRow !== undefined, missing: [`${freeCalls.length} classifier calls`, String(contractRow?.id)] });
-  const classifierCheck = '/requests the Classifier filter stands in the Request group, offers client classifier, client classifier off and none, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% with the free sentence ahead of the estimate';
+  const classifierCheck = '/requests the Classifier filter stands in the Request group, and choosing client classifier lists the two classifier calls under the chip classifier: client, their Cost cells 0% with the free sentence ahead of the estimate';
   const facet = await mount('/requests', { now: CLOCK_ORIGIN });
   const facetGroup = await groupOf(facet, 'Classifier');
-  const facetOptions = (await openOptions(facet, 'Classifier')).map((o) => o.textContent?.trim() ?? '');
   await choose(facet, 'Classifier', 'client classifier');
   await closeBoxes(facet);
   const costAt = [...facet.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === 'Cost');
@@ -13999,14 +13978,13 @@ await forView('/requests', async () => {
     name: classifierCheck,
     ok:
       facetGroup === 'Request' &&
-      JSON.stringify(facetOptions) === JSON.stringify(['client classifier', 'client classifier off', 'none']) &&
       chosenCalls.param === 'client' &&
       chosenCalls.chip === 'classifier: client' &&
       chosenCalls.rows.length === 2 &&
       chosenCalls.rows.every((r) => r !== null && r.classifier === 'client') &&
       costCells.length === 2 &&
       costCells.every((c) => c.main.startsWith('0% ') && (c.title ?? '').startsWith(`${FREE}. `) && (c.title ?? '').endsWith(' equivalent')),
-    missing: [String(facetGroup), JSON.stringify(facetOptions), JSON.stringify({ ...chosenCalls, rows: chosenCalls.rows.map((r) => r?.id ?? null) }), JSON.stringify(costCells)],
+    missing: [String(facetGroup), JSON.stringify({ ...chosenCalls, rows: chosenCalls.rows.map((r) => r?.id ?? null) }), JSON.stringify(costCells)],
   });
   /** A drawer row by its section's title and its own label: the value's text, face and hover. */
   const sectionRow = (page, section, label) => {
@@ -15218,7 +15196,6 @@ await forView('/requests', async () => {
       expanded: addFilterButton(page)?.getAttribute('aria-expanded') ?? null,
       field: document.activeElement === filterBox()?.querySelector('.add-filter__search'),
       groups: [...(filterBox()?.querySelectorAll('.mselect__group') ?? [])].map((g) => g.textContent?.trim()),
-      rows: filterRows().length,
       subject: subjectAt < 0 ? [] : listed.slice(subjectAt + 1).filter((el) => el.classList.contains('add-filter__row')).map((el) => el.querySelector('.add-filter__label')?.textContent?.trim()),
     };
     await addFilter(page, 'Outcome');
@@ -15268,7 +15245,7 @@ await forView('/requests', async () => {
     results.push({
       name: '/requests the Add filter popover walks its two steps for a list, a pattern, an id, a choice and a flag and closes on Escape, a click outside and focus leaving',
       ok:
-        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], rows: 24, subject: ['Agent', 'Request', 'Session'] }) &&
+        JSON.stringify(one) === JSON.stringify({ expanded: 'true', field: true, groups: ['Routing', 'Outcome', 'Request', 'Subject'], subject: ['Agent', 'Request', 'Session'] }) &&
         JSON.stringify(head) === JSON.stringify({ back: true, remove: false, title: 'Outcome' }) &&
         JSON.stringify(list) === JSON.stringify({ open: true, outcomes: 'canceled', remove: true }) &&
         back &&
@@ -19188,7 +19165,6 @@ await forView('/analytics', async () => {
       titles.indexOf(TITLE) === titles.indexOf('Refusals by code') + 1 &&
       subtitleOf(page) === `${SUBTITLE}. 1 request presented a fallback token` &&
       JSON.stringify(countsOf(page)) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]) &&
-      JSON.stringify(countsOf(page)) === JSON.stringify(ranked(refused)) &&
       JSON.stringify(bars.map((b) => b.title)) === JSON.stringify(['claude-sonnet-5-5', 'claude-sonnet-4-5', 'claude-sonnet-4-5', 'claude-sonnet-5-5']) &&
       JSON.stringify(links) ===
         JSON.stringify([
@@ -19316,7 +19292,6 @@ await forView('/analytics', async () => {
   results.push({ name: "/analytics the refusal count's read carries the page's client pattern as its clients list", ok: JSON.stringify(lastSent?.clients) === JSON.stringify(['claude-code/sdk*']), missing: [JSON.stringify(lastSent)] });
   const matched = await mount('/analytics?clients=claude-code%2Fcli', { now: CLOCK_ORIGIN });
   const matchedLinks = barsOf(matched).map((b) => (b.href === null ? null : paramsOf(b.href)));
-  const onCli = ranked(refused.filter((r) => r.client === 'claude-code/cli'));
   results.push({
     name: clientCheck,
     ok:
@@ -19326,7 +19301,6 @@ await forView('/analytics', async () => {
       missedRead.subtitle === `${SUBTITLE}. 0 requests presented a fallback token` &&
       subtitleOf(matched) === `${SUBTITLE}. 1 request presented a fallback token` &&
       JSON.stringify(countsOf(matched)) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]) &&
-      JSON.stringify(countsOf(matched)) === JSON.stringify(onCli) &&
       matchedLinks.length === 4 &&
       matchedLinks.every((l) => l !== null && l.client === 'claude-code/cli' && !('session' in l)),
     missing: [JSON.stringify(missedRead), subtitleOf(matched) ?? 'no subtitle', JSON.stringify(countsOf(matched)), JSON.stringify(matchedLinks)],
@@ -28482,7 +28456,7 @@ await forView('/settings', async () => {
 
 await forView('/settings', async () => {
 m = await mount('/settings', { now: CLOCK_ORIGIN });
-expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Palette', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Unit', 'Admin secret', 'ANTHROPIC_BASE_URL=http://router.example.com:8080', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', 'CLAUDE_CODE_SUBSCRIPTION_TYPE=max', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {

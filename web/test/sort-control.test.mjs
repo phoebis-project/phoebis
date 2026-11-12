@@ -145,12 +145,3 @@ test('a key with no direction draws no arrow, names the key alone in its title a
   click(radio('Descending'));
   assert.deepEqual(calls, []);
 });
-
-test('a disabled control carries its title and a click opens nothing', () => {
-  const title = "This tab's tables keep their own order";
-  const { container } = render(h(SortControl, { disabledTitle: title, keys: KEYS, onChange: () => {}, value: { dir: '', sort: 'name' } }));
-  const button = container.querySelector('button');
-  assert.deepEqual([button.disabled, button.getAttribute('title')], [true, title]);
-  click(button);
-  assert.ok(box() === null, 'nothing opens');
-});

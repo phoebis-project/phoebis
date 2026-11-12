@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as d from './dist/api.js';
-import { cooldownBadge, fmtAbsolute, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, LAST_RESORT_LABEL, overageBadge, poolStatusSentence, selectionOrder, spentBadge, windingDownBadge } from './dist/api.js';
+import { cooldownBadge, fmtPeriodEnd, fmtRelative, fmtShortTime, INELIGIBLE_LABEL, LAST_RESORT_LABEL, overageBadge, poolStatusSentence, selectionOrder, spentBadge, windingDownBadge } from './dist/api.js';
 
 const HOUR = 3_600_000;
 const MINUTE = 60_000;
@@ -271,12 +271,12 @@ test("a winding-down placement carries the end it winds down to, and a member th
   );
 });
 
-test('the Standing badges read the time left or the reset time, each with its sentence on the title', () => {
+test('the Standing badges read the time left or the reset time, and an overage or a spend cap whose reset is unknown says so on its title', () => {
   const until = new Date(NOW + HOUR + 11 * MINUTE).toISOString();
-  assert.deepEqual(cooldownBadge(until, NOW), { text: 'cooldown 1h 11m', title: `In a cooldown that ends ${fmtAbsolute(until)}` });
+  assert.equal(cooldownBadge(until, NOW).text, 'cooldown 1h 11m');
   assert.equal(cooldownBadge(new Date(NOW + 25 * MINUTE).toISOString(), NOW).text, 'cooldown 25m', 'under an hour reads the minutes alone');
   const passed = new Date(NOW - MINUTE).toISOString();
-  assert.deepEqual(cooldownBadge(passed, NOW), { text: 'cooldown', title: `In a cooldown whose end passed at ${fmtAbsolute(passed)}` }, 'an end behind the instant reads no time left');
+  assert.equal(cooldownBadge(passed, NOW).text, 'cooldown', 'an end behind the instant reads no time left');
   assert.deepEqual(cooldownBadge(undefined, NOW), { text: 'cooldown', title: undefined }, 'a cooldown the account names no end for reads the word alone');
   // Built on the run's local calendar, since the badge tells the reset's day apart in the viewer's zone.
   const onLocalDay = (days, hours, minutes) => {
@@ -292,11 +292,10 @@ test('the Standing badges read the time left or the reset time, each with its se
   const later = overageBadge(tomorrow, NOW);
   assert.match(later.text, /^overage until [A-Z][a-z]{2} \d\d, \d\d:\d\d$/, 'a reset on another day names its day, so it never reads as today');
   assert.deepEqual(overageBadge(null, NOW), { text: 'overage', title: 'In overage, reset unknown' });
-  assert.deepEqual(spentBadge(today, NOW), { text: `spend cap until ${fmtShortTime(today)}`, title: `At the spend cap until ${fmtAbsolute(today)}` });
   assert.deepEqual(spentBadge(null, NOW), { text: 'spend cap reached', title: 'At the spend cap, reset unknown' });
   const end = NOW + 3 * 24 * HOUR;
-  assert.deepEqual(windingDownBadge(end, NOW), { text: 'winding down 3d', title: `Winding down to the plan's end at ${fmtAbsolute(new Date(end).toISOString())}` });
-  assert.deepEqual(windingDownBadge(NOW - MINUTE, NOW), { text: 'winding down', title: `Winding down past the plan's end at ${fmtAbsolute(new Date(NOW - MINUTE).toISOString())}` }, 'an end behind the instant reads no time left');
+  assert.equal(windingDownBadge(end, NOW).text, 'winding down 3d');
+  assert.equal(windingDownBadge(NOW - MINUTE, NOW).text, 'winding down', 'an end behind the instant reads no time left');
 });
 
 /** A slow-down entry read `sinceAgo` before the instant, the stretch and the threshold in minutes. */

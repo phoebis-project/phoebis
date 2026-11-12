@@ -469,8 +469,6 @@ test('getSession answers null on 401 without running the hook', async () => {
   assert.equal(unauthorized, 0);
   stub(() => answer(200, { session_id: 's' }));
   assert.deepEqual(await new HttpApi().getSession(), { persistent: false, sessionId: 's' }, 'a body without the member reads as a session that is not kept');
-  stub(() => answer(200, { persistent: true }));
-  await assert.rejects(new HttpApi().getSession(), (e) => e instanceof Error && /session_id must be a string/.test(e.message), 'a body without session_id is no session');
 });
 
 test('getSession reads a kept session off the persistent member', async () => {

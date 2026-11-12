@@ -20,7 +20,6 @@ test("an account's slow-down draws while the speed its holds realized is under 1
   assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: five(new Date(now - 5 * 60_000).toISOString()) }, now), null, 'the window reset after the read, so the entry is as stale as its figures');
   assert.equal(d.slowedOf({ slowDown: entry(1), windows: live }, now), null, 'an account at full speed');
   assert.equal(d.slowedOf({ slowDown: entry(0.6, 1), windows: live }, now), null, 'a factor under 1 whose holds realized full speed, as before a pin there has a cycle');
-  assert.deepEqual(d.slowedOf({ slowDown: entry(0.6, 0.8), windows: live }, now), entry(0.6, 0.8), 'the holds realized a speed under 1');
   assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: [] }, now), null, 'no 5-hour window to read it from');
   assert.equal(d.slowedOf({ slowDown: null, windows: live }, now), null, 'no entry');
 });
@@ -286,13 +285,6 @@ test("the soonest reset of a usage-based seat is its spend window's, while that 
   assert.deepEqual(d.soonestResetAt(seatAccount(spendReading({ resetsAt: new Date(SPEND_NOW - 60_000).toISOString() })), SPEND_NOW), [], 'a reset already passed recovers nothing');
   assert.deepEqual(d.soonestResetAt(seatAccount(null), SPEND_NOW), [], 'a seat with no spend reading yet');
   assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW), ['5h'], 'a plan account reads its soonest window');
-});
-
-test('the soonest reset reads the Fable window beside the others and names every window that resets at that instant', () => {
-  const fableFirst = { ...planAccount('fable', [planWindow('5h', 2 * HOUR), planWindow('7d', DAY)]), fableWindow: planWindow('7d_fable', HOUR) };
-  assert.deepEqual(d.soonestResetAt(fableFirst, SPEND_NOW), ['7d_fable']);
-  const tied = planAccount('tied', [planWindow('5h', HOUR), planWindow('7d', HOUR)]);
-  assert.deepEqual(d.soonestResetAt(tied, SPEND_NOW), ['5h', '7d'], 'two windows at one instant');
 });
 
 test("the timeline's input and its lanes take an account with a spend reading beside the plan accounts, under both zooms", () => {

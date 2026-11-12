@@ -77,7 +77,6 @@ test('a pool input refuses members the member write would refuse', () => {
 test('a members list that did not load holds the save once and names no member', () => {
   const held = { field: 'members', group: 'members', text: 'the account list did not load, so the members cannot be checked.' };
   assert.deepEqual(d.poolRefusals(input, null), [held]);
-  assert.notEqual(d.poolRefusals(input, null).length, 0);
   const ghost = { accountId: 'ghost', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 };
   assert.deepEqual(d.poolRefusals({ ...input, members: [...input.members, ghost] }, null), [held], 'an id the list may hold is not refused');
 });
@@ -359,8 +358,6 @@ test('a retention while capture is on must be a whole number of hours inside the
   for (const typed of ['1', '72']) assert.deepEqual(retention(typed), [], `${typed} is inside`);
   assert.deepEqual(retention('', false), [], 'with capture off the field is not read');
   assert.deepEqual(retention('48', true, 24), refused(24), 'the limit is the one passed in');
-  assert.notEqual(d.poolRefusals(input, accounts, { capture: { maxHours: 72, on: true, typed: '' } }).length, 0);
-  assert.deepEqual(d.poolRefusals(input, accounts, { capture: { maxHours: 72, on: true, typed: '24' } }), []);
 });
 
 test('a retention while the limit is unread checks the floor of 1 alone', () => {

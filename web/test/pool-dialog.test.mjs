@@ -116,7 +116,7 @@ function poolDialog(props) {
   });
 }
 
-test('the pool retention is unbounded with the short hint and the floor alone until the settings read lands the limit', async () => {
+test('the pool retention is unbounded with the short hint and the floor alone until the page hands the limit down as a prop', async () => {
   const pool = pools.find((p) => p.bodyCaptureHours > 0);
   assert.ok(pool, 'the mock holds a pool that captures bodies');
   const { container, draw } = mount();
@@ -166,7 +166,7 @@ test('a pool dialog whose account list failed draws the failure with its retry, 
   assert.equal(reloads, 1, 'Try again reads the list again');
 });
 
-test("the key override is unbounded with the floor's sentence until the settings read lands the limit", async () => {
+test("the key override is unbounded with the floor's sentence until the page hands the limit down as a prop", async () => {
   const key = (await mock.listKeys()).find((k) => k.id === 'desktop');
   assert.ok(key, 'the mock holds the desktop key');
   const keyPools = pools.map((p) => ({ autoModeServer: p.autoModeServer, bodyCaptureHours: p.bodyCaptureHours, id: p.id, members: p.members.map((m) => ({ accountId: m.accountId })), modelRules: p.modelRules, name: p.name }));

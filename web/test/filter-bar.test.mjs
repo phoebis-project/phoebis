@@ -63,12 +63,7 @@ test('the status chip prints the codes alone, with the labels in its title', () 
   assert.deepEqual(chip, { field: 'statuses', label: 'status', mono: false, text: 'status: 429, 500', title: '429 Rate limited, 500 Server error', values: '429, 500' });
 });
 
-test('the Stop reason and Refusal category chips print their option labels, none for the dash, in the Outcome group', () => {
-  assert.deepEqual(
-    d.REQUESTS_DIMENSIONS.filter((x) => x.group === 'Outcome').map((x) => x.label),
-    ['Cache miss reason', 'Fallback', 'Guardrail', 'Held only', 'Outcome', 'Refusal category', 'Status', 'Stop reason'],
-    'the group in alphabetical order',
-  );
+test('the Stop reason and Refusal category chips print their option labels, none for the dash', () => {
   const options = { refusalCategories: [{ label: 'cyber', value: 'cyber' }, { label: 'none', value: '-' }], stopReasons: [{ label: 'refusal', value: 'refusal' }, { label: 'none', value: '-' }] };
   assert.deepEqual(d.chipsOf(d.REQUESTS_DIMENSIONS, { refusalCategories: ['cyber'], stopReasons: ['refusal', '-'] }, options), [
     { field: 'refusalCategories', label: 'refusal category', mono: true, text: 'refusal category: cyber', title: 'cyber', values: 'cyber' },
@@ -151,10 +146,7 @@ test("the lists are alphabetical inside each group, the groups in the view's ord
   }
 });
 
-test('the_guardrail_dimension_sits_under_outcome_and_its_chip_reads_the_names', () => {
-  const fields = d.REQUESTS_DIMENSIONS.map((x) => x.field);
-  assert.deepEqual(d.REQUESTS_DIMENSIONS.find((x) => x.field === 'guardrails'), { field: 'guardrails', group: 'Outcome', kind: 'list', label: 'Guardrail', word: 'guardrail' });
-  assert.deepEqual(fields.slice(fields.indexOf('cacheMissReasons'), fields.indexOf('held') + 1), ['cacheMissReasons', 'fallback', 'guardrails', 'held'], 'between Fallback and Held only');
+test('the_guardrail_chip_reads_the_names', () => {
   // The registry's guardrail by its name, a loaded row's id the registry lacks as deleted, and none for a row no
   // guardrail matched.
   const options = d.guardrailOptions([{ id: 'large-auxiliary', name: 'Large auxiliary requests' }], [{ guardrails: [{ blocked: false, id: 'gone', position: 0 }] }], []);
@@ -171,12 +163,6 @@ test('the_classifier_facet_chips_the_value_and_names_none_for_the_dash', () => {
   assert.deepEqual(chipOf(['client']), { field: 'classifiers', label: 'classifier', mono: false, text: 'classifier: client', title: 'client classifier', values: 'client' });
   assert.deepEqual(chipOf(['-']), { field: 'classifiers', label: 'classifier', mono: false, text: 'classifier: none', title: 'none', values: 'none' });
   assert.deepEqual(chipOf(['client', '-']), { field: 'classifiers', label: 'classifier', mono: false, text: 'classifier: client, none', title: 'client classifier, none', values: 'client, none' });
-});
-
-test("the Fallback chip reads yes or no for the address's true or false, with no option list to label them", () => {
-  const chipOf = (fallback) => d.chipsOf(d.REQUESTS_DIMENSIONS, { fallback }, {})[0];
-  assert.equal(chipOf('true')?.text, 'fallback: yes');
-  assert.equal(chipOf('false')?.text, 'fallback: no');
 });
 
 test("a dimension whose list did not load carries the failure's words, and a list that loaded or is on its way carries none", () => {

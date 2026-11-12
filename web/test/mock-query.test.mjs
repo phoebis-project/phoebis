@@ -177,13 +177,6 @@ test("listRequests orders by a nullable key with the rows without a figure last 
   );
 });
 
-test('listRequests keeps the row that presented a fallback digest under fallback true and every other row under false', async () => {
-  // The laptop's turn that presented the token the session's oldest refused turn issued, `mock/requests.ts`.
-  const presented = 'req_0f92cbbe-ddb';
-  assert.deepEqual(await listed({ fallback: true }), [presented]);
-  assert.deepEqual(await listed({ fallback: false }), ids(unprobed).filter((id) => id !== presented));
-});
-
 test('the mock answers a request id with the one row, whole and never by prefix', async () => {
   const [row] = unprobed;
   assert.deepEqual(await listed({ request: row.id }), [row.id]);

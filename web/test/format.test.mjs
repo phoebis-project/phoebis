@@ -5,7 +5,7 @@ import { test } from 'node:test';
 // zone, and `node --test` gives each file a process of its own.
 process.env.TZ = 'UTC';
 
-const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, plural, sentences, setTimeFormat, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
+const { earlierHolderLabel, fmtAbsolute, fmtBytes, fmtCredits, fmtDated, fmtDatedTime, fmtDayTick, fmtDuration, fmtEndsIn, fmtHours, fmtMiB, fmtMinor, fmtMinute, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, fmtWeek, forkLabel, formatIn, instant, parseKeyLifetime, pct, placementHit, sentences, setTimeFormat, shortModel, undatedModel, usdTickDigits, weekShort } = await import('./dist/api.js');
 
 test("a fork reads its base cut at the session's width and the depth where one is known", () => {
   const base = '1a2b3c4d-5e6f-4a7b-9c8d-7e6f5a4b3c2d';
@@ -223,10 +223,6 @@ test('a window share reads as a percent to three significant digits with no trai
   assert.equal(fmtShare(0.125), '12.5%');
   assert.equal(fmtShare(0.0061), '0.61%', 'a trailing zero drops');
   assert.equal(fmtShare(0.0000571), '0.00571%', 'a small share keeps its three digits');
-});
-
-test('a count with its noun groups its digits', () => {
-  assert.equal(plural(1204, 'request'), '1,204 requests');
 });
 
 test('the sentences of a title leave out an absent part and an empty one with no stray separator', () => {

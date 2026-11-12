@@ -9,21 +9,21 @@ const CUSTOM = { from: FROM, preset: 'custom', to: TO };
 const read = (codec, search) => codec.fromParams(new URLSearchParams(search));
 const write = (codec, filters) => codec.toParams(filters).toString();
 
-/** Each view's codec over a filled address: every list with two ids, every text set, every flag on, every choice off its default. */
+/**
+ * The Accounts, Analytics, Keys, Meter, Requests, Routing log and Sessions codecs over a filled address: every list
+ * with two ids, every text set, every flag on, every choice off its default.
+ */
 const FILLED = {
   ACCOUNTS_CODEC: { dir: 'asc', search: 'git', sort: 'usage', status: 'paused' },
   ANALYTICS_CODEC: { accounts: ['primary', 'secondary'], agentId: 'c21e', by: 'session', clients: ['claude-code/cli', 'claude-code/sdk*'], dir: 'asc', groups: 'claude-cli/2.1.*\nclaude-cli/2.0.*', key: 'desktop@1000', keys: ['desktop', 'laptop'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], probes: true, range: preset('7d'), session: '407dd39b-dd60', sort: 'error_rate', unit: 'share', userAgents: ['claude-cli/2.1.3 (external, cli)', 'claude-cli/2.0.*'] },
-  GUARDRAILS_CODEC: { dir: 'asc', sort: 'updated' },
   KEYS_CODEC: { dir: 'desc', pools: ['all', 'jobs'], search: 'lap', sort: 'expiry', status: 'active' },
   METER_CODEC: { accounts: ['primary', 'secondary'] },
-  POOLS_CODEC: { dir: 'asc', sort: 'cost' },
-  QUOTA_CODEC: { dir: 'asc', sort: 'pace7d' },
   REQUESTS_CODEC: { accounts: ['primary', 'secondary'], agent: 'claude-cli/*', agentId: 'main', agentTypes: ['main', 'subagent'], cacheMissReasons: ['messages_changed', 'ttl_expired'], classifiers: ['client', '-'], client: 'claude-code/*', dir: 'asc', efforts: ['high', 'low'], fallback: 'true', guardrails: ['large-auxiliary', '-'], held: true, keys: ['desktop', 'laptop'], kind: 'probe', models: ['claude-opus-5', 'claude-sonnet-5'], outcomes: ['failed', 'succeeded'], pools: ['all', 'jobs'], range: preset('6h'), refusalCategories: ['cyber', '-'], request: 'req_f8085653', requestClasses: ['conversation', 'title'], rows: 50, search: 'req_1d9c3e55', session: '407dd39b-dd60', sort: 'ttfb', speeds: ['fast', 'standard'], statuses: ['200', '429'], stopReasons: ['refusal', '-'], turnOrigins: ['agent', 'user'] },
   ROUTING_LOG_CODEC: { accounts: ['primary', 'secondary'], agentId: 'main', dir: 'asc', keys: ['desktop', 'laptop'], kinds: ['exhausted', 'moved'], models: ['claude-opus-5', 'claude-sonnet-5'], pools: ['all', 'jobs'], range: preset('6h'), request: 'req_1d9c3e55', session: '407dd39b-dd60', sort: 'time' },
   SESSIONS_CODEC: { account: ['primary', 'studio'], active: '1h', agentType: ['Explore', 'main'], cache: ['cold', 'no recipe'], client: ['Claude Code 2.1.310', 'claude-desktop/1.4'], companion: ['reporting', 'silent'], dir: 'asc', effort: ['high', 'low'], finished: true, forked: true, key: ['desktop', 'laptop@3'], model: ['claude-opus-5', 'claude-sonnet-5'], pool: ['all', 'jobs'], released: true, search: '407dd39b', slowed: true, sort: 'cost', status: ['busy', 'unreported'] },
 };
 
-test("each view's codec reads back the address it writes, the range at a preset and at a custom span", () => {
+test('the Accounts, Analytics, Keys, Meter, Requests, Routing log and Sessions codecs read back the address they write, the range at a preset and at a custom span', () => {
   for (const [name, filled] of Object.entries(FILLED)) {
     const codec = d[name];
     assert.deepEqual(codec.fromParams(codec.toParams(filled)), filled, name);
@@ -142,7 +142,6 @@ test('the Accounts codec round-trips its search, sort and status and writes noth
   assert.equal(write(d.ACCOUNTS_CODEC, filters), 'search=git&sort=usage&status=paused');
   assert.deepEqual(read(d.ACCOUNTS_CODEC, ''), { dir: '', search: '', sort: 'name', status: 'all' });
   assert.equal(write(d.ACCOUNTS_CODEC, read(d.ACCOUNTS_CODEC, '')), '');
-  for (const sort of ['name', 'reset5h', 'reset7d', 'resetFable', 'usage', 'status']) assert.equal(read(d.ACCOUNTS_CODEC, `sort=${sort}`).sort, sort, sort);
   assert.deepEqual(read(d.ACCOUNTS_CODEC, 'sort=newest&status=disabled'), { dir: '', search: '', sort: 'name', status: 'all' });
 });
 

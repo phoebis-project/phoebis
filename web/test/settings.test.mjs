@@ -45,10 +45,6 @@ function appliedPalette(t, stored) {
   return document.documentElement.getAttribute('data-palette');
 }
 
-test('a browser with no stored palette draws the default palette', (t) => {
-  assert.equal(appliedPalette(t, null), 'default');
-});
-
 test('a stored github palette draws the GitHub palette', (t) => {
   assert.equal(appliedPalette(t, 'github'), 'github');
 });

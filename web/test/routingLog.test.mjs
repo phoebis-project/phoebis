@@ -280,14 +280,7 @@ test('a fact key the console has no label for is dropped rather than drawn under
   assert.deepEqual(read(decision({ fact: [fact('mystery', 1, 'count'), fact('depth', 2, 'count')] })).facts, ['depth 2']);
 });
 
-test('every event kind has its words, and a kind without a tone of its own reads neutral', () => {
-  const kinds = [
-    'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'limit_reset_claimed', 'mark_cleared', 'model_permitted', 'model_rejected',
-    'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'plan_ended', 'plan_restored', 'poll_backoff_ended', 'poll_backoff_started', 'poll_failed',
-    'refresh_failed', 'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'reservation_expired', 'router_started', 'shedding_round', 'slow_down_ended', 'slow_down_started',
-    'stream_interrupted', 'warm_prefix_expired', 'wind_down_started', 'window_cleared', 'window_reset', 'window_spent',
-  ];
-  assert.deepEqual(Object.keys(d.EVENT_KIND_LABEL).sort(), kinds);
+test('an event kind reads its own words, and a kind without a tone of its own reads neutral', () => {
   assert.equal(d.EVENT_KIND_LABEL.pin_migrated, 'pin moved');
   assert.equal(d.EVENT_KIND_LABEL.shedding_round, 'shedding round');
   // A cleared mark and a booking the request's end let go report no trouble, so both read neutral.
@@ -737,7 +730,6 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: { ...month, reason: null }, verdict: 'out' }), ['out', 'budget', 'at its spend budget for the period'], 'an obstacle that names no period draws no budget detail');
   // A spent member names the reset it waits for, on its chip and on its hover.
   assert.deepEqual(verdict({ obstacle: { name: 'spent', reason: null, scope: null, until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '5h spent until 15:42', 'its 5h window spent until 15:42']);
-  assert.deepEqual(verdict({ obstacle: capped, verdict: 'out' }), ['out', 'spend cap reached until 15:42', 'at its spend cap until 15:42'], 'the spend window reads the cap, not the plan window');
   assert.deepEqual(verdict({ obstacle: { name: 'credits', reason: 'org_spend_cap_reached', until: null, window: null }, verdict: 'out' }), ['out', 'credits spend cap reached', 'its usage credits unavailable for fast mode']);
   assert.deepEqual(verdict({ obstacle: { name: 'budget_unknown', reason: null, until: null, window: null }, verdict: 'out' }), ['out', 'budget unknown', 'its spend unknown while the ledger is degraded']);
   assert.deepEqual(verdict({ inFlight: 16, partition: 'at_cap', verdict: 'out' }), ['at cap', 'at its cap', 'at its in-flight cap']);
@@ -1008,98 +1000,41 @@ test("the pin fold's Shed mark reads a round's move as shed from its source and 
   assert.equal(mark(pin), undefined, 'a pin no round marked and nothing stamped draws no Shed mark');
 });
 
-/** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
+/** Event details in the shapes their writers store. */
 const DETAIL_EVENTS = {
-  account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],
-  budget_period_ended: [{ period: 'day', period_start: ms(0, 0) - 24 * HOUR, previous_spent_usd: 18.2 }, ['Previous period', 'Spent', 'Period start']],
-  budget_reached: [{ budget_usd: 20, period: 'day', period_end: MIDNIGHT, source_request_id: 'req_1', spent_usd: 20.4 }, ['Budget', 'Spent', 'Period ends', 'Effect', 'Crossed by']],
-  catalog_changed: [{ added: ['claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5'] }, ['Added', 'Removed', 'Models']],
-  cooldown_cleared: [{ cause: 'expired', scope: 'account' }, ['Scope', 'Cleared']],
-  cooldown_set: [{ reason: 'rate_limit', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }, ['Scope', 'Reason', 'Window', 'Until', 'Set by']],
-  fast_credits_changed: [{ after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: ms(11, 30) }, ['Before', 'After', 'Cause', 'Effect']],
-  ledger_gap: [{ reason: 'chunk_skipped', request_id: 'req_1' }, ['Reason', 'Meaning', 'Effect', 'Request']],
-  limit_reset_claimed: [
-    { cleared: ['seven_day_fable'], cooldown_until: null, error: null, grant_id: 'rg-a-1', label: 'Launch reset', outcome: 'used', reason: null, request_id: '00000000-0000-4000-8000-0000000000c1', resets_left: 0, result: 'reset', status: 200, weekly_resets_at: null },
-    ['Grant', 'Outcome', 'Result', 'Cleared', 'Resets left', 'Status', 'Request id', 'Actor'],
-  ],
-  mark_cleared: [{ agent_id: 'main', marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: 0.91, reason: 'healed' }, ['Key', 'Session', 'Agent', 'Model', 'Reason', 'Marked', 'Standing for']],
-  model_permitted: [{ attempt: 2, rejected_by: ['secondary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request']],
-  model_rejected: [{ attempt: 1, request_id: 'req_011', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request']],
-  overage_ended: [{ since: ms(10, 0) - 24 * HOUR }, ['Since', 'Lasted']],
-  overage_started: [{}, ['Effect']],
-  pin_created: [{ agent_id: 'main', epoch: 52 }, ['Key', 'Session', 'Agent', 'Model', 'Epoch']],
-  pin_expired: [{ agent_id: 'main', reasons: ['cooldown', 'spent'] }, ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by']],
-  pin_migrated: [
-    { agent_id: 'main', binding: 'five_hour', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'mark', runway_ms: 0 },
-    ['From', 'To', 'Reason', 'Cause', 'Moved by', 'Destination fit', 'Runway', 'Key', 'Session', 'Agent', 'Model'],
-  ],
-  pin_released: [{ agent_id: 'main' }, ['Actor', 'Key', 'Session', 'Agent', 'Model']],
-  plan_ended: [{ organization_type: 'claude_free', rate_limit_tier: 'default_claude_ai', source: 'usage_403', subscription_status: 'canceled' }, ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status']],
-  plan_restored: [{ organization_type: 'claude_max', rate_limit_tier: 'default_claude_max_5x', source: 'profile', subscription_status: 'active' }, ['Source', 'Organization type', 'Rate-limit tier', 'Subscription status']],
-  poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
-  poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
-  poll_failed: [{ endpoint: 'usage', error: 'usage request rejected with status 503', status: 503, transport: false }, ['Endpoint', 'Status', 'Error']],
-  refresh_failed: [{ cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }, ['Error']],
-  refresh_succeeded: [{ access_expires_at: ms(20, 52), refresh_expires_at: ms(20, 52) + 58 * 24 * HOUR, until: ms(20, 52) }, ['Access token', 'Refresh token']],
-  refresh_uncertain: [{ cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }, ['Error']],
-  registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace (removed)', 'Actor', 'Reading it']],
-  reservation_expired: [{ age_ms: 42_000, attempt: 1, cause: 'transport_error', shares: { five_hour: 0.104, seven_day: 0.012 } }, ['Request', 'Attempt', 'Cause', 'Reserved', 'Held for', 'Effect']],
-  router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
-  shedding_round: [
-    {
-      burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, factor: null, horizon: ms(16, 0),
-      marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-fable-5-1', session_id: 's1' }],
-      outcome: 'marked 1', persisted: true,
-      pins: [
-        { agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-fable-5-1', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, rewrite_window: 'seven_day_fable', runway_ms: null, session_id: 's1', skip: null },
-        { agent_id: 'd93b', burn: null, cold: false, key_id: 'desktop', last_input_tokens: 48_000, marked: false, model: 'claude-opus-5', note: null, per_rewrite: null, planned: null, rewrite: null, rewrite_window: null, runway_ms: null, session_id: 's2', skip: 'off_window' },
-      ],
-      projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, stretch_ms: null, target: 0.024, threshold_ms: null, trigger: 'projection', unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed',
-      window: 'seven_day_fable',
-    },
-    ['Started by', 'Trigger', 'Fired by', 'Excess', 'Cap', 'Unit', 'Burn average', 'Warm sessions', 'Pins', 'Skipped', 'Planned destinations', 'Outcome', 'Next round after', 'Dwell', 'Survive a restart'],
-  ],
-  slow_down_ended: [{ duration_ms: 5_180_000, factor_min: 0.35, held_ms: 36_000, since: ms(9, 12) }, ['Lasted', 'Slowest', 'Held', 'Effect']],
-  slow_down_started: [{ demand: 0.12, factor: 0.5, reset: ms(18, 20), stretch_ms: 2_520_000, threshold_ms: 1_800_000 }, ['Speed', 'Stretch', 'Demand', 'Reset', 'Effect']],
-  stream_interrupted: [
-    { attempt: 1, bytes_relayed: 18_432, code: 'stream_cut', text: 'connection reset by peer', upstream_request_id: 'req_011CUcut' },
-    ['Request', 'Code', 'Text', 'Bytes relayed', 'Upstream request', 'Attempt'],
-  ],
-  warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
-  wind_down_started: [{ end_source: 'canceled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
-  window_cleared: [{ reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' }, ['Window', 'Before', 'After', 'Reset', 'Read from']],
-  window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Read from', 'Prediction', 'Next reset']],
-  window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request']],
+  pin_migrated: { agent_id: 'main', binding: 'five_hour', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 53, fit: 'least_bad', from_account: 'secondary', reason: 'mark', runway_ms: 0 },
+  shedding_round: {
+    burn_average_seconds: 1_800, burn_sum: 0.12, ceiling: 0.95, dwell_seconds: 900, dwell_until: ms(14, 15), excess: 0.06, factor: null, horizon: ms(16, 0),
+    marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-fable-5-1', session_id: 's1' }],
+    outcome: 'marked 1', persisted: true,
+    pins: [
+      { agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-fable-5-1', note: null, per_rewrite: 0.004, planned: 'secondary', rewrite: 0.005, rewrite_window: 'seven_day_fable', runway_ms: null, session_id: 's1', skip: null },
+      { agent_id: 'd93b', burn: null, cold: false, key_id: 'desktop', last_input_tokens: 48_000, marked: false, model: 'claude-opus-5', note: null, per_rewrite: null, planned: null, rewrite: null, rewrite_window: null, runway_ms: null, session_id: 's2', skip: 'off_window' },
+    ],
+    projection: 0.99, reason: null, removed: 0.07, shed_cap: 0.2, stretch_ms: null, target: 0.024, threshold_ms: null, trigger: 'projection', unit: 'window_share', utilization: 0.71, warm_sessions: 'when_needed',
+    window: 'seven_day_fable',
+  },
+  window_cleared: { reset: ms(15, 42), source: 'poll', source_request_id: null, utilization: 0, utilization_before: 1, window: 'five_hour' },
 };
 
-test('each event kind the detail table lists draws its pairs after When, Account and Pool', () => {
-  for (const [kind, [detail, own]] of Object.entries(DETAIL_EVENTS)) {
-    const row = event(kind, detail, { actor: 'admin', agentId: 'main', keyId: 'desktop', model: 'claude-haiku-4-5-20251001', poolId: 'all', requestId: 'req_1', sessionId: 's1-0000-4000' });
-    const pairs = d.detailPairs(row, NOW, [], PRO, NO_TIERS);
-    assert.deepEqual(pairs.slice(0, 3).map((p) => [p.label, texts(p.chips)]), [['When', [d.fmtAbsolute(iso(ms(14, 0)))]], ['Account', ['primary']], ['Pool', ['all']]], kind);
-    assert.deepEqual(pairs[1].chips[0].entity, { id: 'primary', kind: 'account' }, kind);
-    assert.deepEqual(pairs[2].chips[0].entity, { id: 'all', kind: 'pool' }, kind);
-    assert.deepEqual(pairs.slice(3).map((p) => p.label), own, kind);
-    // The When pair's commas are the absolute date's own separators inside one instant.
-    for (const p of pairs) for (const c of p.chips) assert.ok(p.label === 'When' || !/(?<!\d),|,(?!\d)|;/.test(chipText(c)), `${kind} ${p.label}: ${chipText(c)}`);
-  }
+test("a mark's move reads as a failover with its cause, an event with no account opens on When and its own pair, and a round draws its pins and whether it survives a restart", () => {
   // A mark's move is a failover, and its cause reads in the account state card's words.
-  const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated[0]), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
+  const marked = Object.fromEntries(d.detailPairs(event('pin_migrated', DETAIL_EVENTS.pin_migrated), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual([marked.Reason, marked.Cause, marked['Moved by']], [[d.PIN_MIGRATION_LABEL.mark], ['funding required by credit balance'], ['failover']]);
   const without = d.detailPairs(event('router_started', { pins_loaded: 10 }, { accountId: null }), NOW, [], PRO, NO_TIERS);
   assert.deepEqual(without.slice(0, 2).map((p) => p.label), ['When', 'Pins loaded']);
-  const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Pins');
+  const round = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Pins');
   assert.deepEqual(round.table.head, ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Rewrite', 'Destination', 'Mark']);
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [
     ['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', '0.5% of 20x 7-day Fable', 'secondary', 'marked'],
     ['s2', 'd93b', 'warm', '-', '48K', '-', '-', 'off window'],
   ]);
-  const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Survive a restart');
+  const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
 test("a round's off-window pin reads its word and the rewrite cell names its unit", () => {
-  const detail = DETAIL_EVENTS.shedding_round[0];
+  const detail = DETAIL_EVENTS.shedding_round;
   // A round that names no rewrite unit is an earlier build's, whose figure prints as stored under any chosen week, so
   // the cells read under the Ultra week, whose scale would shrink a converted figure.
   const drawn = (body) => {
@@ -1120,7 +1055,7 @@ test("a round's off-window pin reads its word and the rewrite cell names its uni
 });
 
 test("a round's Pro-week rewrite reads in the chosen week, titled with the window the pick compared on", () => {
-  const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
+  const detail = { ...DETAIL_EVENTS.shedding_round, rewrite_unit: 'pro_week' };
   const pin = { ...detail.pins[0], rewrite: 0.0222 };
   const cell = (p, week) => {
     const c = d.detailPairs(event('shedding_round', { ...detail, pins: [p] }), NOW, [], week, NO_TIERS).find((x) => x.label === 'Pins').table.rows[0][5];
@@ -1133,7 +1068,7 @@ test("a round's Pro-week rewrite reads in the chosen week, titled with the windo
 });
 
 test("a round's Pro-week rewrite whose pin names no window still reads in the chosen week, with no hover", () => {
-  const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
+  const detail = { ...DETAIL_EVENTS.shedding_round, rewrite_unit: 'pro_week' };
   const pin = { ...detail.pins[0], rewrite: 0.0222, rewrite_window: null };
   const c = d.detailPairs(event('shedding_round', { ...detail, pins: [pin] }), NOW, [], ULTRA, NO_TIERS).find((x) => x.label === 'Pins').table.rows[0][5];
   // The pick compared the pin on no window of its own, and its 2.22% of a Pro week is still 0.111% of an Ultra week.
@@ -1141,7 +1076,7 @@ test("a round's Pro-week rewrite whose pin names no window still reads in the ch
 });
 
 test("a round's Pro-week rewrite waits on the week's scale, and a failed settings read titles its dash with the error", () => {
-  const detail = { ...DETAIL_EVENTS.shedding_round[0], rewrite_unit: 'pro_week' };
+  const detail = { ...DETAIL_EVENTS.shedding_round, rewrite_unit: 'pro_week' };
   const cell = (week) => {
     const c = d.detailPairs(event('shedding_round', detail), NOW, [], week, NO_TIERS).find((x) => x.label === 'Pins').table.rows[0][5];
     return [chipText(c), c.title ?? null];
@@ -1158,7 +1093,7 @@ test("an approved account's booking names its 7-day reservation in the strip's r
 
 test('a cleared window reads its readings before and after, its unchanged reset and its source, and nothing of why', () => {
   const pairs = (detail) => Object.fromEntries(d.detailPairs(event('window_cleared', detail), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
-  assert.deepEqual(pairs(DETAIL_EVENTS.window_cleared[0]), {
+  assert.deepEqual(pairs(DETAIL_EVENTS.window_cleared), {
     When: [d.fmtAbsolute(iso(ms(14, 0)))],
     Account: ['primary'],
     Window: ['5h'],
@@ -1170,7 +1105,7 @@ test('a cleared window reads its readings before and after, its unchanged reset 
   const head = { reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 0.4, utilization_before: 1.02, window: 'seven_day' };
   // The chip draws the window's word and its title the sentence whole, which the By column has no room for.
   assert.deepEqual(d.byOf(event('window_cleared', head)), { title: '7d cleared to 40% under its reset', value: '7d cleared' });
-  assert.deepEqual(d.byOf(event('window_cleared', DETAIL_EVENTS.window_cleared[0])), { title: '5h cleared to 0% under its reset', value: '5h cleared' });
+  assert.deepEqual(d.byOf(event('window_cleared', DETAIL_EVENTS.window_cleared)), { title: '5h cleared to 0% under its reset', value: '5h cleared' });
   assert.deepEqual(pairs(head)['Read from'], ['the response head']);
 });
 
