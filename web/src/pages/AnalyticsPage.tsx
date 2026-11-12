@@ -23,7 +23,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -515,6 +515,12 @@ export function AnalyticsPage() {
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
+  // A route sums whole hours up to the hour ceiling of the range's end, and a session view's fold of the request log
+  // stops at the end itself. The rewrites card reads its own route in a session view too. Every card takes the page's
+  // clock as its read's instant, so a read that goes out later, as its tab opens with auto reload Off, can fill the
+  // last hour while the note still calls it partial.
+  const partial = lastBucketPartial(buckets, bucketMs, span.toMs, now, sessionId === null);
+  const rewritesPartial = lastBucketPartial(buckets, bucketMs, span.toMs, now, true);
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
   const byPoolAnswer = byPool.current;
   const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, latest]);
@@ -693,7 +699,7 @@ export function AnalyticsPage() {
         {tab === 'traffic' && (
           <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
             <div className="grid-2 traffic-grid">
-              <ChartCard title="Requests by outcome" subtitle="Per bucket, stacked" loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
+              <ChartCard title="Requests by outcome" subtitle={noted('Per bucket, stacked', partial)} loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
@@ -731,7 +737,7 @@ export function AnalyticsPage() {
                 )}
               </Card>
 
-              <ChartCard title="Failovers" subtitle="Attempts that moved to another member" loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
+              <ChartCard title="Failovers" subtitle={noted('Attempts that moved to another member', partial)} loading={loading} legend={[{ color: ink.series[3], label: 'Failovers', shape: 'line', value: fmtInt(totals.failovers) }]}>
                 <LineChart data={buckets} margin={CHART_MARGIN}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
@@ -741,9 +747,9 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
-              <RewritesCard answer={rewrites.current} error={rewrites.error} axis={axis} unfiltered={unfiltered} />
+              <RewritesCard answer={rewrites.current} error={rewrites.error} axis={axis} partial={rewritesPartial} unfiltered={unfiltered} />
 
-              <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} />
+              <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} partial={partial} />
 
               <Card title="Effort levels" subtitle="Requests per effort level in range">
                 {sessionId === null && byEffort.error !== null ? (
@@ -977,7 +983,7 @@ export function AnalyticsPage() {
               <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
             </div>
             <div className="grid-2">
-              <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} reading={reading} unit={unit} />
+              <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} partial={partial} reading={reading} unit={unit} />
               {/* Native draws a ring per funding, each in its own unit. */}
               <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
                 {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}
@@ -1937,7 +1943,7 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number 
  * Native stacks the plan rows' Pro-week figure per bucket, its axis and tooltip in the chosen week, and draws the billed
  * rows' dollars on a card of their own. A group sums every account it holds, so the chart carries no hint.
  */
-function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, reading, unit }: { axis: TimeAxis; failure: WeekReading['failure']; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition }) {
+function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, partial, reading, unit }: { axis: TimeAxis; failure: WeekReading['failure']; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; partial: boolean; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition }) {
   const ink = useChartInk();
   const stack = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.costEquivalent, true, (g) => g.costEquivalent === null) : stackOf(points, (g) => g.costUsd)), [points, unit]);
   const billed = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.billedUsd, true) : null), [points, unit]);
@@ -1962,7 +1968,7 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, readi
     // A range with no plan row leaves the plan card out while the billed card draws, as the tiles leave out a side
     // with no rows. With neither side the card stays, so an empty range still reads as one.
     const planDrawn = loading || failure !== null || keys.length > 0 || !billedDrawn;
-    const subtitle = 'Share of the chosen week per bucket, stacked, the subscription requests';
+    const subtitle = noted('Share of the chosen week per bucket, stacked, the subscription requests', partial);
     const note = unpricedNote(stack.unpriced.labels, stack.unpriced.buckets);
     const { scale: weekFactor, week } = reading;
     return (
@@ -2002,14 +2008,17 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, readi
             )}
           </ChartCard>
         )}
-        {billedDrawn && dollarCard(billed, `Billed by ${GROUP_LABEL[groupBy].toLowerCase()}`, 'USD per bucket, stacked, the billed requests')}
+        {billedDrawn && dollarCard(billed, `Billed by ${GROUP_LABEL[groupBy].toLowerCase()}`, noted('USD per bucket, stacked, the billed requests', partial))}
       </>
     );
   }
-  return dollarCard(stack, title, `USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`);
+  return dollarCard(stack, title, noted(`USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`, partial));
 }
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';
+const SUMMED_PARTIAL_NOTE = "The last bucket is partial: it holds the traffic up to the range's end";
+/** A bucket chart's subtitle, with the note where its last bucket is partial. */
+const noted = (subtitle: string, partial: boolean): string => (partial ? `${subtitle}. ${SUMMED_PARTIAL_NOTE}` : subtitle);
 /** The refusals card's note: the session filter, the one filter of the page the refusal route does not read, if set. */
 function refusalsNote(session: boolean): string | null {
   return session ? 'The session filter does not apply here' : null;
@@ -2037,13 +2046,13 @@ const requestsIn = (p: AnalyticsPoint, key: string) => p.groups.find((g) => g.ke
  * Requests per bucket by the speed their answers reported, else `fast` for a request that asked for it, stacked as
  * Requests by outcome stacks its outcomes.
  */
-function SpeedCard({ axis, points, error, loading }: { axis: TimeAxis; error: string | null; loading: boolean; points: AnalyticsPoint[] }) {
+function SpeedCard({ axis, points, error, loading, partial }: { axis: TimeAxis; error: string | null; loading: boolean; partial: boolean; points: AnalyticsPoint[] }) {
   const ink = useChartInk();
   const data = useMemo(() => points.map((p): SpeedRow => ({ at: Date.parse(p.at), fast: requestsIn(p, 'fast'), standard: requestsIn(p, 'standard') })), [points]);
   return (
     <ChartCard
       title="Requests by speed"
-      subtitle="Standard and fast per bucket, stacked"
+      subtitle={noted('Standard and fast per bucket, stacked', partial)}
       failure={failed(error)}
       loading={loading}
       legend={SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(data.reduce((n, d) => n + d[s.key], 0)) }))}
@@ -2070,7 +2079,7 @@ const fitRank = (fit: string) => (MOVE_FITS.includes(fit) ? MOVE_FITS.indexOf(fi
  */
 const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.critical : ink.muted);
 
-function RewritesCard({ answer, axis, error, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; unfiltered: boolean }) {
+function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; partial: boolean; unfiltered: boolean }) {
   const ink = useChartInk();
   const loading = answer === null;
   const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
@@ -2085,7 +2094,7 @@ function RewritesCard({ answer, axis, error, unfiltered }: { answer: RewritesAns
   return (
     <ChartCard
       title="Migration rewrites"
-      subtitle={`Cache-write tokens the first request after a move wrote, per bucket${unfiltered ? UNFILTERED_NOTE : ''}`}
+      subtitle={noted(`Cache-write tokens the first request after a move wrote, per bucket${unfiltered ? UNFILTERED_NOTE : ''}`, partial)}
       failure={failed(error)}
       loading={loading}
       legend={[{ color: ink.series[1], label: 'Rewrite tokens', value: fmtCompact(total) }]}

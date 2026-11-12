@@ -124,6 +124,24 @@ test('a running bucket sets the peak and the axis only once it covers a tenth of
   assert.equal(later.lines[0].peak, later.rows[1].equivalent[0], 'seven minutes in, the running hour sets the peak');
 });
 
+test("a chart's last bucket is partial where the hours a route sums, a fold's range end or the read stop before the bucket's end", () => {
+  const hourly = [{ at: 0 }, { at: 3_600_000 }];
+  const daily = [{ at: 0 }, { at: 86_400_000 }];
+  assert.deepEqual(
+    [
+      // A past range ending at 1.5 h: the route summed the 1 h bucket up to the hour ceiling, 2 h, its own end.
+      d.lastBucketPartial(hourly, 3_600_000, 5_400_000, 86_400_000, true),
+      // A past range ending at 25.5 h: the route stopped at the hour ceiling, 26 h, short of the daily bucket's 48 h.
+      d.lastBucketPartial(daily, 86_400_000, 91_800_000, 864_000_000, true),
+      // A live read at 1.5 h: no row past the read exists, so the running hour holds half its width.
+      d.lastBucketPartial(hourly, 3_600_000, 5_400_000, 5_400_000, true),
+      // The first range folded from the request log, which the route bounds at the range's end, 1.5 h.
+      d.lastBucketPartial(hourly, 3_600_000, 5_400_000, 86_400_000, false),
+    ],
+    [false, true, true, true],
+  );
+});
+
 test('a capped axis top rises to the last of the five ticks recharts would draw over it', () => {
   // The expected tops are recharts-scale's last value of getNiceTickValues([0, top], 5) for each top.
   const tops = [[1_023, 1_200], [1_000, 1_000], [61.5, 80], [9.2, 12], [0.004, 0.004], [0.0013, 0.0014]];

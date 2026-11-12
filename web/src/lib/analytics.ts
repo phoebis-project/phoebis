@@ -753,6 +753,17 @@ export function foldBurn(
 }
 
 /**
+ * Whether a bucket chart's last bucket is partial: its covered end lies before the bucket's own end. No row past the
+ * read's instant exists yet, so the covered end is no later than `readAt`. A route sums whole hours up to the hour
+ * ceiling of the range's end, the covered end under `wholeHours`, as `foldBurn`'s `secondsOf` reads it. A fold of the
+ * request log stops at the range's end itself, the covered end without it.
+ */
+export const lastBucketPartial = (buckets: readonly { at: number }[], bucketMs: number, rangeEndMs: number, readAt: number, wholeHours: boolean): boolean => {
+  const last = buckets[buckets.length - 1];
+  return last !== undefined && Math.min(wholeHours ? hourCeil(rangeEndMs) : rangeEndMs, readAt) < last.at + bucketMs;
+};
+
+/**
  * A capped axis's top raised to the last tick recharts would draw over [0, top] with `ticks` ticks: handed [0, top] as
  * it stands, recharts closes the round ticks with `top` itself as one more, unround tick.
  */

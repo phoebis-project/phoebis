@@ -20277,7 +20277,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // answer in two units: the plan rows' figure in that week and the billed rows' dollars. The Accounts filter names
       // nightly, whose range holds priced plan rows and billed rows both, so every figure reads, and since one account
       // is named the Cost tile carries its hint. The ratios divide the totals of the page's own read, summed as the
-      // page sums them.
+      // page sums them. The default range ends at 14:30, inside its last hourly bucket, so both charts' subtitles close
+      // on the partial bucket's note.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
       const native = await mount('/analytics?accounts=nightly#cost', { now: CLOCK_ORIGIN });
@@ -20368,10 +20369,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       results.push({
         name: "/analytics under native the Cost by chart stacks each group's figure on a percent axis in the chosen week, its tooltip in that week, with a Billed by card in dollars beside it",
         ok:
-          chart.subtitle === 'Share of the chosen week per bucket, stacked, the subscription requests' && chart.legend.length > 0 && chart.legend.every(([label, title]) => label !== '' && title === null) &&
+          chart.subtitle === "Share of the chosen week per bucket, stacked, the subscription requests. The last bucket is partial: it holds the traffic up to the range's end" && chart.legend.length > 0 && chart.legend.every(([label, title]) => label !== '' && title === null) &&
           chart.ticks.length > 1 && chart.ticks.every((t) => /^\d[\d.]*%$/.test(t)) &&
           chart.tips.length > 0 && chart.tips.every((v) => inWeek(v) || v === '0%' || v === '-') && chart.tips.some(inWeek) &&
-          chart.billedSubtitle === 'USD per bucket, stacked, the billed requests' && chart.billedTicks.length > 1 && chart.billedTicks.every((t) => /^\$[\d,.]+$/.test(t)),
+          chart.billedSubtitle === "USD per bucket, stacked, the billed requests. The last bucket is partial: it holds the traffic up to the range's end" && chart.billedTicks.length > 1 && chart.billedTicks.every((t) => /^\$[\d,.]+$/.test(t)),
         missing: [JSON.stringify(chart)],
       });
       const split = cardOf('Cost split');
@@ -20582,9 +20583,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       // plan row on it with tokens. No key totals above zero, so the note names them in the order each first draws (the
       // earlier desktop holder in the range's first bucket, laptop in the second, desktop at 18:00), over 21 of the 25
       // buckets. The holder's label reads its creation minute in the viewer's zone, UTC here. The day narrowed to
-      // Sonnet 5.5, which the cost model weighs, prices a figure and carries no note.
+      // Sonnet 5.5, which the cost model weighs, prices a figure and carries no note. The day ends at 14:30, inside its
+      // last hourly bucket, so on both pages the subtitle's first line closes on the partial bucket's note.
       localStorage.removeItem('phoebis.unit');
-      const SUBTITLE = 'Share of the chosen week per bucket, stacked, the subscription requests';
+      const SUBTITLE = "Share of the chosen week per bucket, stacked, the subscription requests. The last bucket is partial: it holds the traffic up to the range's end";
       const costRead = (page) => {
         const chart = [...page.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
         const tile = page.container.querySelector('#cost .stat');
