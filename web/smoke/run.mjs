@@ -1661,13 +1661,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     ok: JSON.stringify(unbilledRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription']]) && unbilledRead.note === `${weekFull(0.001)} per hour` && unbilledRead.title === null,
     missing: [JSON.stringify(unbilledRead), weekFull(0.001)],
   });
-  // The mock's unpriced switch adds one more plan request on a model the cost model lists in no tier, so the day reads
-  // the dash under its title beside the billed dollars, and with nothing billed the dash in its note too.
-  localStorage.setItem('phoebis.mockUnpriced', '1');
-  const unpricedDay = await api.getOverview();
-  const switched = await mount('/');
-  const flagged = tileRead(switched);
-  switched.unmount();
+  // With nothing billed the tile's note reads the subscription figure per hour, and the story's day has none: its
+  // Sonnet 4.5 rows, which `secondary` serves and the cost model has no weight for, price nothing.
   api.getOverview = async () => {
     const o = await overviewOf.call(api);
     return { ...o, day24h: { ...o.day24h, billedUsd: 0 } };
@@ -1676,17 +1671,10 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const planRead = tileRead(planOnly);
   planOnly.unmount();
   delete api.getOverview;
-  localStorage.removeItem('phoebis.mockUnpriced');
   results.push({
-    name: "/ under native a day a subscription request priced nothing on reads a dash titled why on the Estimated cost, 24h tile's subscription line beside the billed dollars, and a dash per hour in the note of a day with nothing billed",
-    ok:
-      unpricedDay.day24h.equivalent === null &&
-      JSON.stringify(flagged.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(unpricedDay.day24h.billedUsd), 'billed']]) &&
-      flagged.title === UNPRICED_TITLE &&
-      JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) &&
-      planRead.note === '- per hour' &&
-      planRead.title === UNPRICED_TITLE,
-    missing: [JSON.stringify(unpricedDay.day24h.equivalent), JSON.stringify(flagged), JSON.stringify(planRead)],
+    name: "/ under native the story's day with nothing billed reads a dash titled why on the Estimated cost, 24h tile's subscription line and a dash per hour in its note",
+    ok: JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) && planRead.note === '- per hour' && planRead.title === UNPRICED_TITLE,
+    missing: [JSON.stringify(planRead)],
   });
 }
 m.unmount();
@@ -20342,14 +20330,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
     }
     {
-      // The mock's unpriced switch adds one plan request on a model the cost model lists in no tier, which prices no
-      // window, to the desktop key's story hour. The range is narrowed to that model, since the story's Sonnet 4.5
-      // requests price nothing either: with the switch the Cost tile and the meta read the dash titled why, and the
-      // Cost by chart, whose desktop stack leaves that bucket a gap, names the one group under its subtitle. Without
-      // the switch the range holds no row and the card carries no note.
+      // The story's Sonnet 4.5 rows price nothing: `secondary` serves that model (`UNPRICED_ACCOUNT` in
+      // mock/requests.ts), and the cost model has no weight for it. Over the day narrowed to it the Cost tile and the
+      // meta read the dash titled why, and the Cost by key chart leaves a gap in each hourly bucket where a key holds a
+      // plan row on it with tokens. No key totals above zero, so the note names them in the order each first draws (the
+      // earlier desktop holder in the range's first bucket, laptop in the second, desktop at 18:00), over 21 of the 25
+      // buckets. The holder's label reads its creation minute in the viewer's zone, UTC here. The day narrowed to
+      // Sonnet 5.5, which the cost model weighs, prices a figure and carries no note.
       localStorage.removeItem('phoebis.unit');
       const SUBTITLE = 'Share of the chosen week per bucket, stacked, the subscription requests';
-      const AT = '/analytics?models=claude-unlisted-1#cost';
       const costRead = (page) => {
         const chart = [...page.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
         const tile = page.container.querySelector('#cost .stat');
@@ -20362,27 +20351,27 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
           title: tile?.getAttribute('title') ?? null,
         };
       };
-      const plainPage = await mount(AT, { now: CLOCK_ORIGIN });
-      const plain = costRead(plainPage);
-      plainPage.unmount();
-      localStorage.setItem('phoebis.mockUnpriced', '1');
-      const switchedPage = await mount(AT, { now: CLOCK_ORIGIN });
-      const switched = costRead(switchedPage);
-      switchedPage.unmount();
-      localStorage.removeItem('phoebis.mockUnpriced');
+      const pricedPage = await mount('/analytics?models=claude-sonnet-5-5#cost', { now: CLOCK_ORIGIN });
+      const priced = costRead(pricedPage);
+      pricedPage.unmount();
+      const unpricedPage = await mount('/analytics?models=claude-sonnet-4-5#cost', { now: CLOCK_ORIGIN });
+      const unpriced = costRead(unpricedPage);
+      unpricedPage.unmount();
       results.push({
-        name: '/analytics under native a range holding a subscription request priced on no window reads the dash titled why on the Cost tile and the meta, and the Cost by chart names the group it draws unpriced under its subtitle',
+        name: '/analytics under native a range narrowed to a model the cost model has no weight for reads the dash titled why on the Cost tile and the meta, and the Cost by chart names the groups it draws unpriced under its subtitle, where a range narrowed to a weighted model carries no note',
         ok:
-          plain.note === null &&
-          plain.subtitle === SUBTITLE &&
-          plain.title !== UNPRICED_TITLE &&
-          JSON.stringify(switched.lines[0]) === JSON.stringify(['-', 'subscription']) &&
-          switched.title === UNPRICED_TITLE &&
-          /^- (and \$[\d,.]+ )?in range$/.test(switched.meta[0]) &&
-          switched.meta[1] === UNPRICED_TITLE &&
-          switched.note === 'desktop unpriced in 1 bucket, drawn as a gap' &&
-          switched.subtitle === `${SUBTITLE}${switched.note}`,
-        missing: [JSON.stringify(plain), JSON.stringify(switched)],
+          /^\d[\d.]*% of an Ultra week$/.test(priced.lines[0]?.[0] ?? '') &&
+          priced.lines[0]?.[1] === 'subscription' &&
+          priced.note === null &&
+          priced.subtitle === SUBTITLE &&
+          priced.title !== UNPRICED_TITLE &&
+          JSON.stringify(unpriced.lines[0]) === JSON.stringify(['-', 'subscription']) &&
+          unpriced.title === UNPRICED_TITLE &&
+          /^- (and \$[\d,.]+ )?in range$/.test(unpriced.meta[0]) &&
+          unpriced.meta[1] === UNPRICED_TITLE &&
+          unpriced.note === 'desktop (deleted, created May 19, 2026, 14:30) · laptop · desktop unpriced in 21 buckets, drawn as gaps' &&
+          unpriced.subtitle === `${SUBTITLE}${unpriced.note}`,
+        missing: [JSON.stringify(priced), JSON.stringify(unpriced)],
       });
     }
     {

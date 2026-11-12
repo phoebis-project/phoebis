@@ -694,7 +694,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(groups.map((g) => g.key).sort(), resolved, 'the model groups');
   });
 
-  test(`the story's Sonnet 4.5 rows price nothing, so every sum that holds one reads null and the attention list names the model, and its unpriced request reads alike under its switch, at ${at}`, async () => {
+  test(`the story's Sonnet 4.5 rows price nothing, so every sum that holds one reads null and the attention list names the model, at ${at}`, async () => {
     const s = await story;
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const holds = (rows) => rows.some((r) => r.canonicalModel === 'claude-sonnet-4-5' && planPaid(s, r) && requestTokens(r) > 0);
@@ -722,31 +722,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.keys.some((k) => k.lifetime.equivalent === null) && s.pools.some((p) => p.day24h.equivalent === null), 'a key and a pool that served it read null');
     const requests = s.requests.filter((r) => s.lib.undatedModel(r.canonicalModel) === 'claude-sonnet-4-5' && planPaid(s, r) && r.costEquivalent === null && requestTokens(r) > 0).length;
     assert.deepEqual(s.attention.filter((i) => i.kind === 'model_unpriced').map((i) => [i.detail, i.link, i.pools, i.subject.type]), [[{ model: 'claude-sonnet-4-5', requests }, null, [], 'model']], 'one item names the model and its plan requests');
-    // The switch lends the story one plan request on a model the cost model lists in no tier, in a row of its own.
-    globalThis.localStorage = { getItem: (key) => (key === 'phoebis.mockUnpriced' ? '1' : null) };
-    let switched;
-    try {
-      switched = {
-        all: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'all' }),
-        burn: await s.api.getAnalyticsBurn(range, 'model'),
-        models: await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' }),
-        series: await s.api.getAnalyticsSeries({ ...range, groupBy: 'model' }),
-      };
-    } finally {
-      delete globalThis.localStorage;
-    }
-    const added = switched.models.filter((g) => !models.some((p) => p.key === g.key));
-    assert.equal(added.length, 1, 'the switch adds one model group');
-    const [unlisted] = added;
-    assert.equal(s.lib.modelTierOf(s.settings.subscriptionCosts, unlisted.key), null, `${unlisted.key} sits in no tier`);
-    assert.deepEqual([unlisted.costEquivalent, unlisted.planRequests], [null, 1], 'its group prices nothing');
-    for (const g of switched.models.filter((x) => x.key !== unlisted.key)) assert.equal(g.costEquivalent, models.find((p) => p.key === g.key).costEquivalent, `${g.key} keeps its figure`);
-    assert.equal(switched.all[0].costEquivalent, null, "the whole range's group reads null, so no partial sum reads as the whole");
-    const bucket = switched.series.find((p) => p.groups.some((g) => g.key === unlisted.key));
-    assert.equal(bucket?.groups.find((g) => g.key === unlisted.key)?.costEquivalent, null, 'one bucket holds it, its group null');
-    assert.deepEqual(switched.burn.points.filter((p) => p.group === unlisted.key && p.tokens > 0).map((p) => [p.equivalent, p.unpriced]), [[null, true]], 'its burn bucket reads null, flagged');
-    // The switch reads per answer, so the story answers whole again once it is off.
-    assert.deepEqual((await s.api.getAnalyticsBreakdown({ ...range, groupBy: 'model' })).map((g) => g.key), models.map((g) => g.key));
   });
 
   test(`the live desktop key starts on the hour its earlier holder ended, inside the last day, at ${at}`, async () => {

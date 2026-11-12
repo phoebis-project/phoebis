@@ -209,15 +209,15 @@ scrolling sideways), the 7-day and Fable week remaining cards, the error state, 
 the quota rings (mock pass: both lines and the Fable ring's list drawn, each across the ring's grid from its card
 title's left edge), the recent requests' model cells and their table's fit, the recent requests' Cost cell under All in
 dollars and Billed dollars (mock pass: a subscription row's equivalent line in the size, line height and ink of the
-Tokens cell's second line, and its dash under the nothing billed title), the Estimated cost, 24h tile under the mock's
-unpriced switch (mock pass, on loads of its own: the subscription line's dash under the unpriced title, in the size,
+Tokens cell's second line, and its dash under the nothing billed title), the Estimated cost, 24h tile on the story's own
+unpriced rows (mock pass, on a load of its own: the subscription line's dash under the unpriced title, in the size,
 weight and ink of the billed figure beside it and in the weight and ink of the Tokens, 24h tile's lone figure), the
 recent requests' columns at 1280 by 800 and 1440 by 900 (Time the fill, its scroll past the card recorded in the mock
 pass), the cost-cap rows, the wasted-probe rows, the Cache warming tab's saving tiles under each unit position (Probe
 cost, Saved by probes, Net saving and Kept warm on one row at one top, the two saving tiles in the Probe cost tile's box
-and value type, and the Saved by probes chart in the box and title type of the card beside it), the Cost tab under the
-mock's unpriced switch (mock pass, on loads of its own: the Cost tile's dash under the unpriced title in the type, ink
-and top of the Cost per request tile's first figure, and the Cost by card's note on a line of its own under the
+and value type, and the Saved by probes chart in the box and title type of the card beside it), the Cost tab on the
+story's own unpriced rows (mock pass, on loads of its own: the Cost tile's dash under the unpriced title in the type,
+ink and top of the Cost per request tile's first figure, and the Cost by card's note on a line of its own under the
 subtitle's text, at its left edge, in its type and ink, its text recorded), the burn cards (Plan per hour, 5-hour per
 hour, Fable week per hour and Spend per minute against Failovers, and in the mock pass the four cards two to a row on
 two top edges at 1440 by 900, each half the row less half its gap, under the key grouping and under the Accounts filter

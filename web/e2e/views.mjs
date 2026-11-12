@@ -5608,43 +5608,35 @@ async function recentDollarCosts(theme) {
   }
 }
 
-/** The mock's switch that adds its one plan request on a model the cost model lists in no tier. */
-const UNPRICED_SWITCH = 'phoebis.mockUnpriced';
 /** The dash's title where a plan row priced nothing. The pass reads no module of the console, so it spells it here. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
 
 /**
- * The Estimated cost, 24h tile under the mock's unpriced switch, whose day holds a plan request priced on no window:
- * the subscription line reads a dash under the unpriced title, in the size, weight and ink of the billed figure beside
- * it, and in the weight and ink of the Tokens, 24h tile's figure, whose lone figure takes the larger size a pair line
- * gives up. The page loads again without the switch, so the shot and the measures after it read the story whole.
+ * The Estimated cost, 24h tile over the mock's day, whose Sonnet 4.5 plan requests price nothing, since the cost model
+ * has no weight for that model: the subscription line reads a dash under the unpriced title, in the size, weight and
+ * ink of the billed figure beside it, and in the weight and ink of the Tokens, 24h tile's figure, whose lone figure
+ * takes the larger size a pair line gives up.
  */
 async function dashboardUnpricedTile(theme) {
   const say = (what) => failures.push(`${theme} /: ${what}`);
-  try {
-    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
-    await loadAtOrigin('/', '.stat-grid');
-    const read = await page.evaluate(() => {
-      const type = (el) => {
-        if (!el) return null;
-        const s = getComputedStyle(el);
-        return { color: s.color, family: s.fontFamily, size: s.fontSize, text: el.textContent?.trim() ?? '', weight: s.fontWeight };
-      };
-      const tiles = [...document.querySelectorAll('.stat-grid .stat')];
-      const tile = (label) => tiles.find((t) => t.querySelector('.stat__label')?.textContent === label);
-      const cost = tile('Estimated cost, 24h');
-      const line = (word) => [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].find((l) => l.querySelector('.stat__pair-word')?.textContent === word)?.querySelector('.cost-figure') ?? null;
-      return { billed: type(line('billed')), dash: type(line('subscription')), neighbour: type(tile('Tokens, 24h')?.querySelector('.stat__value') ?? null), note: cost?.querySelector('.stat__note')?.textContent?.trim() ?? null, title: cost?.getAttribute('title') ?? null };
-    });
-    measurements.push(`${theme} / unpriced cost tile ${JSON.stringify(read)}`);
-    if (read.dash?.text !== '-') say(`under the unpriced switch the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(read.dash?.text ?? null)}, not a dash`);
-    if (read.title !== UNPRICED_TITLE) say(`under the unpriced switch the Estimated cost, 24h tile is titled ${JSON.stringify(read.title)}`);
-    for (const what of compare(read.dash, read.billed, ['color', 'family', 'size', 'weight'], 'the unpriced dash against the billed figure beside it')) say(what);
-    for (const what of compare(read.dash, read.neighbour, ['color', 'family', 'weight'], "the unpriced dash against the Tokens, 24h tile's figure")) say(what);
-  } finally {
-    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
-    await loadAtOrigin('/', '.stat-grid');
-  }
+  await loadAtOrigin('/', '.stat-grid');
+  const read = await page.evaluate(() => {
+    const type = (el) => {
+      if (!el) return null;
+      const s = getComputedStyle(el);
+      return { color: s.color, family: s.fontFamily, size: s.fontSize, text: el.textContent?.trim() ?? '', weight: s.fontWeight };
+    };
+    const tiles = [...document.querySelectorAll('.stat-grid .stat')];
+    const tile = (label) => tiles.find((t) => t.querySelector('.stat__label')?.textContent === label);
+    const cost = tile('Estimated cost, 24h');
+    const line = (word) => [...(cost?.querySelectorAll('.stat__pair-line') ?? [])].find((l) => l.querySelector('.stat__pair-word')?.textContent === word)?.querySelector('.cost-figure') ?? null;
+    return { billed: type(line('billed')), dash: type(line('subscription')), neighbour: type(tile('Tokens, 24h')?.querySelector('.stat__value') ?? null), note: cost?.querySelector('.stat__note')?.textContent?.trim() ?? null, title: cost?.getAttribute('title') ?? null };
+  });
+  measurements.push(`${theme} / unpriced cost tile ${JSON.stringify(read)}`);
+  if (read.dash?.text !== '-') say(`over the story's day the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(read.dash?.text ?? null)}, not a dash`);
+  if (read.title !== UNPRICED_TITLE) say(`over the story's day the Estimated cost, 24h tile is titled ${JSON.stringify(read.title)}`);
+  for (const what of compare(read.dash, read.billed, ['color', 'family', 'size', 'weight'], 'the unpriced dash against the billed figure beside it')) say(what);
+  for (const what of compare(read.dash, read.neighbour, ['color', 'family', 'weight'], "the unpriced dash against the Tokens, 24h tile's figure")) say(what);
 }
 
 /**
@@ -5792,16 +5784,16 @@ async function savingTiles(theme) {
 }
 
 /**
- * The Cost tab under the mock's unpriced switch, whose range holds a plan request priced on no window: the Cost tile's
- * subscription line reads a dash under the unpriced title in the type and ink of the Cost per request tile's first
- * figure beside it, on that tile's top, and the Cost by card's note reads on a line of its own under the subtitle's
- * text, at its left edge, in the subtitle's type and ink. The page loads again without the switch, so the measures
- * after it and the view's shot read the story whole.
+ * The Cost tab over the mock's default range, whose Sonnet 4.5 plan requests price nothing, since the cost model has
+ * no weight for that model: the Cost tile's subscription line reads a dash under the unpriced title in the type and ink
+ * of the Cost per request tile's first figure beside it, on that tile's top, and the Cost by card's note reads on a line
+ * of its own under the subtitle's text, at its left edge, in the subtitle's type and ink. The tab's click moves the
+ * page's clock, so the page loads again at the origin and the measures after it and the view's shot read the view as it
+ * first drew.
  */
 async function costUnpricedNote(theme) {
   const say = (what) => failures.push(`${theme} /analytics: ${what}`);
   try {
-    await page.evaluate((key) => localStorage.setItem(key, '1'), UNPRICED_SWITCH);
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
     if (!(await tabTo(theme, 'Cost'))) return;
     const read = await page.evaluate(() => {
@@ -5836,18 +5828,17 @@ async function costUnpricedNote(theme) {
       };
     });
     measurements.push(`${theme} /analytics unpriced cost tab ${JSON.stringify(read)}`);
-    if (read.dash.text !== '-') say(`under the unpriced switch the Cost tile's subscription line reads ${JSON.stringify(read.dash.text ?? null)}, not a dash`);
-    if (read.title !== UNPRICED_TITLE) say(`under the unpriced switch the Cost tile is titled ${JSON.stringify(read.title)}`);
+    if (read.dash.text !== '-') say(`over the story's range the Cost tile's subscription line reads ${JSON.stringify(read.dash.text ?? null)}, not a dash`);
+    if (read.title !== UNPRICED_TITLE) say(`over the story's range the Cost tile is titled ${JSON.stringify(read.title)}`);
     for (const what of compare(read.dash, read.neighbour, ['color', 'family', 'size', 'top', 'weight'], "the Cost tile's unpriced dash against the Cost per request tile's first figure")) say(what);
     if (read.note === null) {
-      say('under the unpriced switch no Cost by card draws the unpriced note');
+      say("over the story's range no Cost by card draws the unpriced note");
       return;
     }
     if (!/^(\d+ groups|[^·]+( · [^·]+){0,2}) unpriced in \d+ buckets?, drawn as (a gap|gaps)$/.test(read.note.text)) say(`the ${read.card} card's note reads ${JSON.stringify(read.note.text)}`);
     if (read.note.below !== true) say(`the ${read.card} card's note does not sit on a line under its subtitle's text`);
     for (const what of compare(read.note, read.subtitle, ['color', 'family', 'left', 'size', 'weight'], `the ${read.card} card's note against its subtitle`)) say(what);
   } finally {
-    await page.evaluate((key) => localStorage.removeItem(key), UNPRICED_SWITCH);
     await loadAtOrigin('/analytics', '.analytics-section#traffic');
   }
 }
@@ -13620,7 +13611,7 @@ try {
         await remainingCards(theme);
         await ringLinesSpan(theme);
         await planEndedLines(theme, view.path);
-        // Its loads end on the bare dashboard, so the measures after it read the view as it first drew.
+        // Its load ends on the bare dashboard, so the measures after it read the view as it first drew.
         if (mock) await dashboardUnpricedTile(theme);
       }
       if (['/', '/pools', '/accounts'].includes(view.path)) await accountLines(theme, view.path);

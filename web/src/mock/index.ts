@@ -26,7 +26,7 @@ import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, UNPRICED_REQUEST, UNPRICED_ROLLUPS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
@@ -301,29 +301,18 @@ const buildMismatch = (): boolean => switchSet(BUILD_MISMATCH_KEY);
 /** A build no bundle is made from. */
 const OTHER_BUILD = '0'.repeat(40);
 
-/**
- * Set to add the one plan request on a model the cost model lists in no tier: the dashboard's day and the analytics'
- * folds read it beside the story, so the figures it moves read a window priced nothing, while without the switch the
- * served story's figures stay as they are.
- */
-export const UNPRICED_STORY_KEY = 'phoebis.mockUnpriced';
-const unpricedStory = (): boolean => switchSet(UNPRICED_STORY_KEY);
-const DAY_ROWS_UNPRICED = [...DAY_ROWS, UNPRICED_REQUEST];
 const NO_REQUESTS = new Map<string, RequestLog>();
-const ROLLUPS_UNPRICED = [...ALL_ROLLUPS, ...UNPRICED_ROLLUPS];
 /**
- * The ledger's read sets as the routes fold them: the story's, the unpriced request's rows beside the story's under
- * its switch, and an empty form of each for a fresh installation, so a route that reads its rows here answers that
- * switch with no test of its own.
+ * The ledger's read sets as the routes fold them: the story's, and an empty form of each for a fresh installation, so
+ * a route that reads its rows here answers the empty store's switch with no test of its own.
  */
 const ledger = () => {
   const empty = emptyStore();
-  const unpriced = !empty && unpricedStory();
   return {
     accountRollups: empty ? [] : ACCOUNT_ROLLUPS,
     attention: empty ? [] : ATTENTION,
     catalog: empty ? [] : CATALOG,
-    dayRows: empty ? [] : unpriced ? DAY_ROWS_UNPRICED : DAY_ROWS,
+    dayRows: empty ? [] : DAY_ROWS,
     decisionOf: (requestId: string, seq: number): DecisionRecord | null => (empty ? null : getDecision(requestId, seq)),
     keepalive: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW,
     keepalive30d: empty ? EMPTY_KEEPALIVE_OVERVIEW : KEEPALIVE_OVERVIEW_30D,
@@ -332,7 +321,7 @@ const ledger = () => {
     recipes: empty ? [] : RECIPES,
     requestById: empty ? NO_REQUESTS : requestById,
     requests: empty ? [] : REQUESTS,
-    rollups: empty ? [] : unpriced ? ROLLUPS_UNPRICED : ALL_ROLLUPS,
+    rollups: empty ? [] : ALL_ROLLUPS,
     routingEvents: empty ? [] : ROUTING_EVENTS,
     summaries: empty ? [] : SUMMARIES,
     weeklyResets: empty ? [] : WEEKLY_RESETS,
@@ -343,16 +332,6 @@ const ledger = () => {
  * clock has not reached stays out of the request log and of the sessions' folds alike.
  */
 const writtenBy = (now: number): RequestLog[] => ledger().requests.filter((r) => landedAt(r) <= now);
-/**
- * The key the unpriced request lands on, its lifetime and its week read null under the switch, since the request
- * prices nothing and falls inside the week. The keys' fold runs once at load, so the null lands at the read, and the
- * key's other figures stay the story's.
- */
-const unpricedKey = (k: KeyRow): KeyRow => {
-  if (!unpricedStory() || k.id !== UNPRICED_REQUEST.keyId || Date.parse(k.createdAt) !== UNPRICED_REQUEST.keyGeneration) return k;
-  const nulled = <S extends Pick<ApiKey['lifetime'], 'equivalent'>>(s: S): S => ({ ...s, equivalent: null });
-  return { ...k, lifetime: nulled(k.lifetime), usage7d: nulled(k.usage7d) };
-};
 /**
  * The request's `stream_interrupted` rows, which the detail lists as its events and lifts its cut off, the newest
  * one's, as the route does.
@@ -1325,7 +1304,7 @@ export class MockApi implements Api {
   }
 
   listKeys() {
-    return latency(this.registry().keys.map((k) => this.keyView(unpricedKey(k))));
+    return latency(this.registry().keys.map((k) => this.keyView(k)));
   }
 
   listPools() {

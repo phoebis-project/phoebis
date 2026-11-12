@@ -173,8 +173,7 @@ export const LANES: Lane[] = [
 /**
  * The account that serves Sonnet 4.5 alone, whatever the lane drew: the cost model has no weight of its own for it, so
  * its rows price nothing, which the attention item names. The sessions the story moves off it carry Sonnet 4.5 to
- * primary, whose 11:00 and 14:00 buckets price nothing either. The story's other unpriced row is a plan request on a
- * model the cost model lists in no tier, `UNPRICED_REQUEST`, which the mock adds behind its unpriced switch.
+ * primary, whose 11:00 and 14:00 buckets price nothing either.
  */
 const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-4-5' : drawn);
@@ -2834,24 +2833,6 @@ function deriveFigures() {
 }
 
 deriveFigures();
-
-/** The session of the request below, one of its own. */
-const UNPRICED_SESSION_ID = '0f7c3a92-5e18-4d6b-b2a4-9c8e1d7f3a60';
-/**
- * One plan request on a model the cost model lists in no tier, so it prices no window, kept out of the story the
- * views draw: the mock's unpriced switch adds it to the dashboard's day and to the rollups the analytics fold, where
- * the flags derive from it by the rows' own rule. It copies primary's answer of the story hour on desktop, in a
- * session and a rollup row of its own, and is built after every seeded draw, so it moves none.
- */
-export const UNPRICED_REQUEST: RequestLog = (() => {
-  const template = requestById.get('req_f8085653-422');
-  if (template === undefined) throw new Error('the story lacks the request the unpriced one copies');
-  const model = 'claude-unlisted-1';
-  const usage: Usage = { ...template.usage, cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 18_400, input: 2_600, output: 940 };
-  const row: RequestLog = { ...template, canonicalModel: model, costUsd: costOf(model, usage, false, template.at), id: 'req_0d6b3f82-c47', model, sessionId: UNPRICED_SESSION_ID, usage };
-  return { ...row, ...costFiguresOf(row) };
-})();
-export const UNPRICED_ROLLUPS: HourlyRollup[] = rollups([UNPRICED_REQUEST]);
 
 // Hourly account facts: peak utilization per window, time spent ineligible, and
 // pin churn. The last seven days follow the sampled quota history; older hours
