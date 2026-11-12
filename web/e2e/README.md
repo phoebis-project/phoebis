@@ -182,7 +182,9 @@ in a 375 by 800 window (mock pass: the story's `secondary` card, whose chip row 
 trial and a Resets chip, draws every chip of that row inside the row's content box, its plan's end whole and no Resets
 chip) and the Resets chip's short form in that window (mock pass: on the story's `nightly` and `workshop` cards the long
 form drawing no box and the short form drawing one, `nightly`'s reading "1 ends in 4 days" and `workshop`'s "1 cooldown
-until 15:10"), the timeline's chips on the Quota windows section (each inside its column, a chip with a share in the
+until 15:10"), the Quota cards' extra usage flag (mock pass: its ink on its fill on nightly's card at 4.5 to 1 or more
+in each theme under each palette), the timeline's chips on the Quota windows section (each inside its column, a chip
+with a share in the
 background and ink of the card chip of the same tone, primary's used fill at the share the page computed, the now line
 at the chart's now share of primary's track within a pixel, each live bar's body and used fill its lane's color at two
 strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take, and in the mock pass the

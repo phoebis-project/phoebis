@@ -4605,6 +4605,26 @@ async function quotaChips(theme) {
 }
 
 /**
+ * The extra usage flag on the story's `nightly` card: its computed ink against its computed fill at 4.5 to 1 or
+ * more, read in every walk since a theme or a palette block could redefine either of the flag's two tokens. Mock pass
+ * alone, since the router's seed has no subscription account. Records to `measurements`.
+ */
+async function quotaFlagInk(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const read = await page.evaluate(() => {
+    const card = [...document.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
+    const flag = card?.querySelector('.chip__flag') ?? null;
+    if (flag === null) return null;
+    const style = getComputedStyle(flag);
+    return { fill: style.backgroundColor, ink: style.color, text: flag.textContent?.trim() ?? '' };
+  });
+  const ratio = read === null ? null : contrastOf(colorChannels(read.ink).rgb, colorChannels(read.fill).rgb);
+  measurements.push(`${theme} /quota nightly's extra usage flag ${JSON.stringify({ ...read, ratio })}`);
+  if (read === null) say("nightly's card draws no extra usage flag to read");
+  else if (ratio < 4.5) say(`the extra usage flag reads ${read.ink} on ${read.fill} at ${ratio}:1, under 4.5:1`);
+}
+
+/**
  * The Quota cards leave out the story's plan-ended account, sunset, which the Accounts list shows: no card names it,
  * the bar's `{n} accounts` counts the cards, and the first card stands level with its neighbor on the same row, two
  * cards a row at 1280 px, so the grid closes over the account it leaves out. The read visits the Accounts list and
@@ -13783,6 +13803,7 @@ try {
         if (mock) await quotaCards(theme);
         await quotaSortControl(theme);
         await quotaChips(theme);
+        if (mock) await quotaFlagInk(theme);
         await quotaPollLines(theme);
         await quotaCardHeights(theme);
         if (mock) await quotaResetDialog(theme);
