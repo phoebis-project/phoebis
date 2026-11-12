@@ -123,17 +123,17 @@ test('under Billed dollars a plan request reads a dash titled nothing billed', (
 });
 
 test('a_free_calls_cost_cell_reads_zero_with_the_free_title', () => {
-  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: 0, shareReason: 'client_classifier' });
+  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0, { costEquivalent: 0, shareReason: 'client_classifier' });
   const native = d.costUnitOf(free, 'native', null);
-  assert.deepEqual(native, { figure: 0, hint: null, kind: 'equivalent', reason: 'client_classifier', usd: 0.0012 });
-  assert.deepEqual(cellOf(native), { main: '0% Ultra week', sub: '', title: `${d.FREE_SHARE_TITLE}. $0.0012 equivalent` }, 'native: the zero figure reads as a figure, the title says why ahead of the dollars');
+  assert.deepEqual(native, { figure: 0, hint: null, kind: 'equivalent', reason: 'client_classifier', usd: 0 });
+  assert.deepEqual(cellOf(native), { main: '0% Ultra week', sub: '', title: `${d.FREE_SHARE_TITLE}. $0.00 equivalent` }, 'native: the zero figure reads as a figure, the title says why ahead of the dollars');
   for (const position of EQUIVALENT_DOLLAR_POSITIONS) {
     const unit = d.costUnitOf(free, position, null);
-    assert.deepEqual(unit, { figure: 0, hint: null, kind: 'equivalent_dollars', reason: 'client_classifier', usd: 0.0012 }, position);
-    assert.deepEqual(cellOf(unit), { main: '$0.0012', sub: 'equivalent', title: `${d.FREE_SHARE_TITLE}. 0%, $0.0012 equivalent` }, `${position}: the dollar equivalent reads over equivalent, the title says why its figure reads zero`);
+    assert.deepEqual(unit, { figure: 0, hint: null, kind: 'equivalent_dollars', reason: 'client_classifier', usd: 0 }, position);
+    assert.deepEqual(cellOf(unit), { main: '$0.00', sub: 'equivalent', title: `${d.FREE_SHARE_TITLE}. 0%, $0.00 equivalent` }, `${position}: the dollar equivalent reads over equivalent, the title says why its figure reads zero`);
   }
   const billed = d.costUnitOf(free, 'usd', null);
-  assert.deepEqual(billed, { kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0.0012 });
+  assert.deepEqual(billed, { kind: 'dash', title: d.NOTHING_BILLED_TITLE, usd: 0 });
   assert.deepEqual(cellOf(billed), { main: '-', sub: '', title: d.NOTHING_BILLED_TITLE }, 'usd: a plan-funded call bills nothing, so it reads the dash every subscription request reads');
 });
 
@@ -190,13 +190,13 @@ test("the Dashboard's glance cell reads an equivalent unit's figure in the chose
 
 test("the Dashboard's glance cell of a client classifier call leads its title with the free sentence, ahead of the dollars and the revisions", () => {
   const revisions = 'Priced at the API prices of Oct 08, 2026 and the cost model of Oct 05, 2026';
-  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0.0012, { costEquivalent: 0, shareReason: 'client_classifier' });
+  const free = request({ five_hour: 0, seven_day: 0 }, [PLAN], 0, { costEquivalent: 0, shareReason: 'client_classifier' });
   const unit = d.costUnitOf(free, 'native', null);
   assert.equal(unit.reason, 'client_classifier');
-  assert.deepEqual(d.glanceCellOf(unit, revisions, WEEK, SCALE), { main: '0% Ultra week', sub: '', title: `${d.FREE_SHARE_TITLE}. $0.0012 equivalent. ${revisions}` });
-  assert.deepEqual(d.glanceCellOf(unit, null, WEEK, SCALE), { main: '0% Ultra week', sub: '', title: `${d.FREE_SHARE_TITLE}. $0.0012 equivalent` }, 'no settings at hand, the sentence and the dollars');
+  assert.deepEqual(d.glanceCellOf(unit, revisions, WEEK, SCALE), { main: '0% Ultra week', sub: '', title: `${d.FREE_SHARE_TITLE}. $0.00 equivalent. ${revisions}` });
+  assert.deepEqual(d.glanceCellOf(unit, null, WEEK, SCALE), { main: '0% Ultra week', sub: '', title: `${d.FREE_SHARE_TITLE}. $0.00 equivalent` }, 'no settings at hand, the sentence and the dollars');
   const plain = d.costUnitOf({ ...free, shareReason: null }, 'native', null);
-  assert.deepEqual(d.glanceCellOf(plain, revisions, WEEK, SCALE), { main: '0% Ultra week', sub: '', title: `$0.0012 equivalent. ${revisions}` }, 'without the reason the title reads the dollars alone');
+  assert.deepEqual(d.glanceCellOf(plain, revisions, WEEK, SCALE), { main: '0% Ultra week', sub: '', title: `$0.00 equivalent. ${revisions}` }, 'without the reason the title reads the dollars alone');
 });
 
 test("the Dashboard's glance cell reads every other unit as the Requests cell does", () => {

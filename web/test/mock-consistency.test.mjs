@@ -3085,7 +3085,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([keys.get('workshop claude-fable-5-1'), keys.get('primary claude-fable-5-1')], [['seven_day', 'seven_day_fable'], ['five_hour', 'seven_day', 'seven_day_fable']], 'the approved Ultra prices no 5-hour share, the unapproved one does');
   });
 
-  test(`the story's two classifier calls of one session read zero shares with the reason and book nothing, at ${at}`, async () => {
+  test(`the story's two classifier calls of one session read zero shares and zero dollars with the reason and book nothing, at ${at}`, async () => {
     const s = await story;
     const calls = s.requests.filter((r) => r.classifier === 'client');
     assert.equal(calls.length, 2, "two rows are the client's classifier calls");
@@ -3094,8 +3094,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual([r.requestClass, r.shareReason, s.lib.fundingOf(r.attempts.at(-1))], ['auxiliary', 'client_classifier', 'plan'], r.id);
       const shares = Object.values(r.costShares ?? {});
       assert.ok(shares.length > 0 && [...shares, r.costEquivalent].every((v) => v === 0), `${r.id} reads ${JSON.stringify([r.costShares, r.costEquivalent])}`);
-      assert.ok(r.costUsd > 0, `${r.id} keeps its dollar estimate`);
+      assert.equal(r.costUsd, 0, `${r.id} reads its dollars`);
     }
+    // The router answers a zero split for a free call, so the rollup part that files the two prices nothing either.
+    const parts = s.allRollups.filter((r) => r.classifier === 'client');
+    assert.deepEqual(parts.map((r) => r.cost), [{ cacheRead: 0, cacheWrite: 0, input: 0, output: 0 }], 'the one rollup part of the client classifier calls');
     assert.deepEqual(s.requests.filter((r) => r.shareReason !== null).map((r) => r.id).sort(), calls.map((r) => r.id).sort(), 'the reason stands on the classifier calls alone');
     // A classifier selection books nothing, as a fast one does, so its walk ends at a reserve station that booked none.
     const records = (await decisionsOf(s)).filter((rec) => calls.some((r) => r.id === rec.requestId));
@@ -3134,7 +3137,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(named.map(costOf), [0.0337, 0.0554, 0.2699, 0, 0, 0]);
     // The other rows mostly draw their tokens, so each reads the cells of the entry in force at its instant.
     let priced = 0;
-    for (const r of s.requests.filter((x) => !named.includes(x.id))) {
+    // The classifier case reads the free calls' zero.
+    for (const r of s.requests.filter((x) => !named.includes(x.id) && x.shareReason === null)) {
       const entry = s.lib.revisionAt(revisions, r.at);
       const want = dollarsAt(entry, r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast');
       if (want === null) {

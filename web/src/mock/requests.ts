@@ -1176,7 +1176,7 @@ function storyRow(seed: StorySeed): RequestLog {
     clientDrift: seed.clientDrift ?? null,
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
-    costUsd: answered ? round(costOf(seed.model, usage, fast, seed.at), 4) : 0,
+    costUsd: !answered || freeCall(seed.classifier ?? null, attempts[attempts.length - 1] ?? null) ? 0 : round(costOf(seed.model, usage, fast, seed.at), 4),
     diagnosticsSource: sourceOf(attempts, seed.keyId),
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
@@ -2151,15 +2151,30 @@ function seedHolds() {
  */
 export const bandAt = (model: string, at: number): boolean | null => (weightOf(TABLES, model, 'seven_day') !== null ? inBand(TABLES, at) : null);
 
-/** The router frees only the classifier call that landed on the judged turn's account, the one it reads `client`. */
-export const freesPlanShare = (classifier: string | null): boolean => classifier === 'client';
+/**
+ * The router frees only the classifier call that landed on the judged turn's account, the one it reads `client`. A
+ * declaration, since the story's rows read it while the module loads, above this line.
+ */
+export function freesPlanShare(classifier: string | null): boolean {
+  return classifier === 'client';
+}
+
+/**
+ * The classifier call the router prices at zero in every unit, its dollars too: one it frees, on a serving attempt a
+ * subscription window paid. A `client_off` call, and a `client` call in the overage, on an API key or on a
+ * usage-based seat, keep their price. A declaration, since the story's rows read it while the module loads, above this
+ * line.
+ */
+function freeCall(classifier: string | null, serving: Parameters<typeof fundingOf>[0]): boolean {
+  return freesPlanShare(classifier) && fundingOf(serving) === 'plan';
+}
 
 /**
  * A row's Pro-week figure and its shares of its account's windows, as the request route answers them: null for a
  * request no subscription window paid, else the figure at the request's completion, null for a model without a weight
  * of its own, and a share on each window of the account's set and each week the model applies to, under the account's
  * tier, a window the cost model cannot price carried as null and an account without a tier an empty share map. A
- * classifier call `freesPlanShare` frees reads zero, on each such window the tier sizes, with the share reason, while
+ * classifier call `freeCall` frees reads zero, on each such window the tier sizes, with the share reason, while
  * any other classifier call and one billed in dollars carry no reason, as the route answers them.
  */
 function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
@@ -2168,7 +2183,7 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
-  if (freesPlanShare(r.classifier)) {
+  if (freeCall(r.classifier, serving)) {
     const zeros = (sizing: string) =>
       Object.fromEntries(
         windows.filter((w) => {
@@ -2445,7 +2460,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && servedMissReason(r) === 'none').length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
-        cost: sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
+        // The router answers a zero split for a call it frees, as it answers its dollars.
+        cost: sumSplit(partRows.filter((r) => !freeCall(r.classifier, servingAttempt(r))).map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
         // At each answer's completion, the instant its own shares price it at. A part of freed classifier calls prices
         // nothing and reads zero.
         ...hourShares(accountId, partRows[0].canonicalModel, !freesPlanShare(classifier) ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
