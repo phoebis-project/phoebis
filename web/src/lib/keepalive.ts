@@ -169,13 +169,16 @@ export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): 
   return Date.parse(s.lastRequestAt) > Date.parse(s.lastUsedAt) ? s.lastRequestAt : s.lastUsedAt;
 };
 
-type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'requests' | 'sessionId' | 'spend'>;
+/** A row's ledgered requests: its spend's count, 0 for a row with no spend. */
+export const requestCount = (session: Pick<Session, 'spend'>): number => session.spend?.requests ?? 0;
+
+type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId' | 'spend'>;
 
 const ROW_ORDER: Record<SessionsAddress['sort'], (a: OrderedSession, b: OrderedSession, dir: SortDir) => number> = {
   activity: (a, b, dir) => byInstant(lastActivity(a), lastActivity(b), dir),
   cost: (a, b, dir) => byFigure(a.spend?.usd ?? null, b.spend?.usd ?? null, dir),
   created: (a, b, dir) => byInstant(a.createdAt, b.createdAt, dir),
-  requests: (a, b, dir) => byFigure(a.requests, b.requests, dir),
+  requests: (a, b, dir) => byFigure(requestCount(a), requestCount(b), dir),
 };
 
 /**
@@ -252,19 +255,12 @@ export type StatusWord = Lifecycle | 'finished' | 'unreported';
 export const STATUS_TONE: Record<Lifecycle, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', registered: 'neutral', released: 'neutral', unknown: 'neutral' };
 
 /**
- * The word the row and main's line read for main, null where it reads `unreported`: a session no mod reports keeps
- * the engine's word off the view, except `released`, the mod's last word, which the engine keeps after the session's
- * end while the companion reads `none`.
- */
-const reportedWord = (session: Pick<Session, 'companion'>, lifecycle: Lifecycle | null): Lifecycle | null => (session.companion === 'none' && lifecycle !== 'released' ? null : lifecycle);
-
-/**
- * The row's Status word and tone: `finished` first where the row's `isFinished` holds, `unreported` where
- * `reportedWord` reads none, else the lifecycle word. `muted` is the ink `unreported` takes.
+ * The row's Status word and tone: `finished` first where the row's `isFinished` holds, `unreported` where the route
+ * answers no word, else the lifecycle word. `muted` is the ink `unreported` takes.
  */
 export function statusOf(session: Pick<Session, 'companion' | 'lifecycle'>, finished: boolean): { tone: BadgeTone | 'muted'; word: StatusWord } {
   if (finished) return { tone: 'neutral', word: 'finished' };
-  const word = reportedWord(session, session.lifecycle);
+  const word = session.lifecycle;
   if (word === null) return { tone: 'muted', word: 'unreported' };
   return { tone: STATUS_TONE[word], word };
 }
@@ -281,12 +277,10 @@ export function presenceOf(session: Pick<Session, 'companion' | 'companionSince'
 }
 
 /**
- * A line's word as the Status filter, the Agents cell's split and the Agents table read it: main's through
- * `reportedWord`, so the three agree with the row's Status, every other line's own lifecycle, and `unreported` where
- * the word is null.
+ * A line's word as the Status filter, the Agents cell's split and the Agents table read it: the line's own lifecycle
+ * word, and `unreported` where the route answers none.
  */
-export const lineWordOf = (session: Pick<Session, 'companion'>, line: Pick<SessionLine, 'agentId' | 'lifecycle'>): Exclude<StatusWord, 'finished'> =>
-  (line.agentId === MAIN_AGENT ? reportedWord(session, line.lifecycle) : line.lifecycle) ?? 'unreported';
+export const lineWordOf = (session: Pick<Session, 'companion'>, line: Pick<SessionLine, 'agentId' | 'lifecycle'>): Exclude<StatusWord, 'finished'> => line.lifecycle ?? 'unreported';
 
 /** The lines less the released ones, the Agents cell's and the Dashboard's count. */
 export const agentCount = (lines: readonly Pick<SessionLine, 'lifecycle'>[]): number => lines.filter((line) => !isReleasedLine(line)).length;
@@ -336,7 +330,7 @@ export const lineFigures = (s: Pick<Session, 'agentContexts'>, agentId: string, 
  */
 export interface SessionLine {
   agentId: string;
-  /** The agent's type from its newest ledger entry, null on an agent without one. */
+  /** The agent's type from its ledger entry, null on an agent without one. */
   agentType: string | null;
   /** The pin's word where a pin stands, the engine's record, else the recipe's, and on main's drawn line the row's. */
   lifecycle: Lifecycle | null;
@@ -346,18 +340,17 @@ export interface SessionLine {
   recipe: KeepaliveRecipe | null;
 }
 
+/** A line's account: its pin's, and its recipe's only where no pin stands. Null where neither names one. */
+export const lineAccountOf = (line: Pick<SessionLine, 'pin' | 'recipe'>): string | null => (line.pin !== null ? line.pin.accountId : (line.recipe?.accountId ?? null));
+
 /**
  * The union of a session's entries and its recipes, keyed by agent id and pin model: main's line drawn from the row
  * where no line names main, then the recipes in the order handed, then the pins no recipe claims in the route's order,
  * which `orderLines` sorts into the view's.
  */
 export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
-  // Each agent's newest entry as `agentFigures` picks it, a tie kept on the first, without summing its spend per line.
-  const newest = new Map<string, AgentRequests>();
-  for (const entry of s.agentRequests) {
-    const held = newest.get(entry.agentId);
-    if (held === undefined || byInstant(entry.lastRequestAt, held.lastRequestAt, 'desc') < 0) newest.set(entry.agentId, entry);
-  }
+  // The route answers one entry per agent, which carries its newest client request's type and model.
+  const newest = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
   const typeOf = (agentId: string) => newest.get(agentId)?.agentType ?? null;
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
@@ -367,17 +360,17 @@ export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'age
   });
   for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, agentType: typeOf(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
   if (lines.some((line) => line.agentId === MAIN_AGENT)) return lines;
-  // A row whose pin is another agent's carries that agent's model, so main's line reads main's newest ledger entry.
+  // A row whose pin is another agent's carries that agent's model, so main's line reads main's ledger entry.
   const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (newest.get(MAIN_AGENT)?.model ?? null);
   return [{ agentId: MAIN_AGENT, agentType: typeOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
 }
 
-/** An agent's entries summed, since one agent may run two models, with the newest entry's account, model and type (the
- *  entry with the latest `lastRequestAt`). */
+/** An agent's entry without its id: its sums over every model it ran, with its newest client request's account, model
+ *  and type. */
 export type AgentFigures = Omit<AgentRequests, 'agentId'>;
 
-/** Entries summed over a list of one entry or more, an agent's or an earlier line's agents', with the newest's account,
- *  model and type. */
+/** Entries summed over a list of one entry or more, the agents the earlier agents' line counts, with the newest's
+ *  account, model and type. */
 export function figuresOf(entries: readonly AgentRequests[]): AgentFigures {
   const [first, ...rest] = entries;
   const newest = rest.reduce((n, entry) => (byInstant(entry.lastRequestAt, n.lastRequestAt, 'desc') < 0 ? entry : n), first);
@@ -386,15 +379,13 @@ export function figuresOf(entries: readonly AgentRequests[]): AgentFigures {
     agentType: newest.agentType,
     lastRequestAt: newest.lastRequestAt,
     model: newest.model,
-    requests: rest.reduce((n, entry) => n + entry.requests, first.requests),
     spend: rest.reduce((sum, entry) => addSpend(sum, entry.spend), first.spend),
   };
 }
 
-/** An agent's entries summed, null for an agent with no entry. */
+/** An agent's one entry, null for an agent with none. */
 export function agentFigures(session: Pick<Session, 'agentRequests'>, agentId: string): AgentFigures | null {
-  const entries = session.agentRequests.filter((entry) => entry.agentId === agentId);
-  return entries.length === 0 ? null : figuresOf(entries);
+  return session.agentRequests.find((entry) => entry.agentId === agentId) ?? null;
 }
 
 const keysOf = (a: object, b: object): string[] => [...new Set([...Object.keys(a), ...Object.keys(b)])];
@@ -459,22 +450,19 @@ export interface MatchRow {
   session: Session;
 }
 
-/**
- * The instant the router forgets an idle session: its last use, or its last request where it holds no use, plus the
- * session expiry. Null while the expiry is unknown or the session holds neither.
- */
-export function expiryOf(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, expireAfterSeconds: number | null): number | null {
-  const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
-  return expireAfterSeconds === null || lastUsed === null ? null : Date.parse(lastUsed) + expireAfterSeconds * 1000;
-}
+/** The two settings that bound how long the route lists a row no companion reports. */
+export type ListingLimits = { expireAfterSeconds: number; nonCompanionIdleSeconds: number };
 
 /**
- * The router forgets a session once it sat idle for the session expiry, so a view forgets it then too, between its
- * reads: a session stays while its `expiryOf` lies after `now`, and every session stays while it has none.
+ * The instant the route stops listing a session, as a label. A row no companion reports leaves once the latest of its
+ * pin use, its last request and its companion's end is older than the lesser of the non-companion timeout and the
+ * session expiry. A companion row has none, since the route keeps it whether its mod reports or went silent. Null too
+ * while the settings are unknown or the row holds no instant.
  */
-export function withinExpiry(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, expireAfterSeconds: number | null, now: number): boolean {
-  const expiresAt = expiryOf(session, expireAfterSeconds);
-  return expiresAt === null || expiresAt > now;
+export function expiryOf(session: Pick<Session, 'companion' | 'companionSince' | 'lastRequestAt' | 'lastUsedAt'>, limits: ListingLimits | null): number | null {
+  if (limits === null || session.companion !== 'none') return null;
+  const instants = [session.lastUsedAt, session.lastRequestAt, session.companionSince].flatMap((at) => (at === null ? [] : [Date.parse(at)]));
+  return instants.length === 0 ? null : Math.max(...instants) + Math.min(limits.nonCompanionIdleSeconds, limits.expireAfterSeconds) * 1000;
 }
 
 /** The later of the row's last use and last request is inside `spanMs` of `now`. */
@@ -497,9 +485,8 @@ const present = (v: string | null): string[] => (v === null ? [] : [v]);
  * flag draws lines and matches none, so it stays out.
  */
 const AGENT_FILTER_WORDS = {
-  // The account the Agents table's cell shows: the recipe's, none where its request was refused before any account
-  // served it, and the pin's only where no recipe stands.
-  account: (_, line) => present(line.recipe !== null ? line.recipe.accountId : (line.pin?.accountId ?? null)),
+  // The account the Agents table's cell shows, so the filter keeps the line the cell names.
+  account: (_, line) => present(lineAccountOf(line)),
   agentType: (_, line) => present(line.agentType),
   cache: (_, line) => cacheWords(line),
   effort: (_, line) => present(line.pin?.effort ?? null),
@@ -564,9 +551,9 @@ export const matchingAgents = (drawn: Iterable<Pick<ReturnType<typeof hiddenLine
 /** Whether any Agents filter stands. */
 export const agentFiltersStand = (filters: SessionFilters): boolean => AGENT_FILTER_FIELDS.some((f) => filters[f].length > 0);
 
-/** A pin-only line's TTL: the time left to the pin's last use plus its cache TTL, null once passed or unknown. */
-export const pinTtlMs = (pin: Pick<AgentContext, 'cacheTtlMs' | 'lastUsedAt'>, now: number): number | null => {
-  if (pin.cacheTtlMs === null || pin.lastUsedAt === null) return null;
-  const left = Date.parse(pin.lastUsedAt) + pin.cacheTtlMs - now;
+/** A pin-only line's TTL: the time left to the instant its cache goes cold, null once passed or unknown. */
+export const pinTtlMs = (pin: Pick<AgentContext, 'warmUntil'>, now: number): number | null => {
+  if (pin.warmUntil === null) return null;
+  const left = Date.parse(pin.warmUntil) - now;
   return left > 0 ? left : null;
 };

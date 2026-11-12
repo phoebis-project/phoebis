@@ -1,4 +1,4 @@
-import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, RequestLog, Session, SessionDay, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, RecipeCause, RecipeState, RequestLog, Session, SessionDay, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { servedMissReason, servingAttempt } from '@/lib/dimensions';
@@ -30,6 +30,8 @@ interface WrittenFigures {
   endedSeconds?: number;
   lastInputTokens: number;
   lastRefreshMinutes: number;
+  /** A silent row's last report from its mod, in minutes. */
+  silentMinutes?: number;
 }
 
 /**
@@ -90,7 +92,7 @@ const sessionSpec: ({
   noEffort?: true;
   released?: true;
   sessionId?: string;
-  state: KeepaliveState | null;
+  state: Lifecycle | null;
   /** A held or paused subagent under a main agent that keeps probing, which is the case the state hints describe. */
   subagentHold?: RecipeCause;
   subagents?: { accountId?: string; model: string };
@@ -183,14 +185,15 @@ const sessionSpec: ({
     },
   },
   // A pin under the work pool's key on nightly, an account the pool held before, so the pool's figure counts it and
-  // no member's does.
+  // no member's does. Its mod went silent beside its idle recipe, as the engine sends such a session, at the presence
+  // age its place gives a silent row, written so the row draws nothing.
   {
     keyId: 'notebook',
     accountId: 'nightly',
     model: 'claude-sonnet-5-5',
     state: 'idle',
     agents: 1,
-    companion: 'none',
+    companion: 'silent',
     fixed: true,
     idleMinutes: 20,
     sessionId: '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61',
@@ -201,6 +204,7 @@ const sessionSpec: ({
       createdMinutes: 95,
       lastInputTokens: 10_800,
       lastRefreshMinutes: 21,
+      silentMinutes: 34,
     },
   },
   // A session the mod released whole after a probe and one more turn, both past all's ten-minute affinity window, so
@@ -241,16 +245,14 @@ export const withinNonCompanionTimeout = (at: string | null, seconds: number, no
 
 // Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
 // so the earlier holder's rows count for its own row below, never for the live session that shares their id. A refused
-// request moves the session's last request and adds to no count, as the query sums the unrefused rows alone.
+// request moves the session's last request too.
 const activityOf = (keyId: string | null, keyGeneration: number, sessionId: string) => `${keyId}|${keyGeneration}|${sessionId}`;
-const ledgered = new Map<string, { last: string; requests: number }>();
+const ledgered = new Map<string, { last: string }>();
 for (const r of REQUESTS) {
   if (r.sessionId === null || r.kind === 'probe') continue;
   const id = activityOf(r.keyId, r.keyGeneration, r.sessionId);
   const seen = ledgered.get(id);
-  const counted = r.refused ? 0 : 1;
-  if (!seen) ledgered.set(id, { last: r.at, requests: counted });
-  else ledgered.set(id, r.at > seen.last ? { last: r.at, requests: seen.requests + counted } : { ...seen, requests: seen.requests + counted });
+  if (!seen || r.at > seen.last) ledgered.set(id, { last: r.at });
 }
 /** Each agent's newest request of its session the router did not refuse, which re-armed the agent's recipe. */
 const newestRequestAt = new Map<string, string>();
@@ -339,19 +341,24 @@ function runwayOf(i: number): Pick<Session, 'runwayBounded' | 'runwayMs'> {
 const EFFORT_WORDS = ['medium', 'high', 'low', 'max'] as const;
 const effortAt = (i: number) => EFFORT_WORDS[i % EFFORT_WORDS.length];
 
-/** Whether a pin still holds its cache at the story's clock: its last use inside its cache TTL. */
-const warmAt = (lastUsedAt: string | null, cacheTtlMs: number | null): boolean => pinTtlMs({ cacheTtlMs, lastUsedAt }, NOW) !== null;
+/** A pin's first cold instant: its last refresh plus its cache TTL, null where either is unknown. */
+const warmUntilOf = (lastRefreshAt: string | null, cacheTtlMs: number | null): string | null => (lastRefreshAt === null || cacheTtlMs === null ? null : iso(Date.parse(lastRefreshAt) + cacheTtlMs));
+/** Whether a pin still holds its cache at the story's clock: before its first cold instant. */
+const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NOW) !== null;
 /**
- * A pin's line as the route answers it: warm while its last use is inside its cache TTL at the story's clock, and its
- * served burn priced on the pin's own account, in that account's unit and window, as the row's is for the display pin.
+ * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
+ * and its served burn priced on the pin's own account, in that account's unit and window, as the row's is for the
+ * display pin.
  */
 const pinLine = (
-  line: Omit<AgentContext, keyof BurnFigures | 'createdAt' | 'warm'>,
+  line: Omit<AgentContext, keyof BurnFigures | 'createdAt' | 'warm' | 'warmUntil'>,
   served: { burn: number | null },
+  lastRefreshAt: string | null,
 ): Omit<AgentContext, 'createdAt'> => {
   const unit = burnUnitOf(line.accountId);
   const burn = unit === null ? null : served.burn;
-  return { ...line, burn, ...burnReadingOf(line.accountId, burn, unit), warm: warmAt(line.lastUsedAt, line.cacheTtlMs) };
+  const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
+  return { ...line, burn, ...burnReadingOf(line.accountId, burn, unit), warm: warmAt(warmUntil), warmUntil };
 };
 /**
  * The newest use across a row's conversation pins, its display pin's and its lines', which the route answers as the
@@ -433,7 +440,6 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // Main's word, filled in from the recipes below, so a session whose main holds no recipe reads none.
     lifecycle: null,
     pinned,
-    requests: seen ? seen.requests : 0,
     burn,
     burnAt: pinned ? burnAtRoll : null,
     ...burnReadingOf(spec.accountId, burn, unit),
@@ -447,8 +453,18 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // A row's lines are written once the recipes exist, so every row starts with none.
     agentContexts: [],
     companion: spec.companion,
-    // The companion's last report, as the engine dates one that stopped: a silent one's lapse, the session's end.
-    companionSince: written?.endedSeconds !== undefined ? ago(written.endedSeconds * 1000) : spec.companion === 'silent' ? ago(rng.int(12, 150) * MINUTE) : null,
+    // The companion's last report, as the engine dates one that stopped: a silent one's lapse, the session's end. A
+    // fixed row writes its own, so it draws nothing.
+    companionSince:
+      written !== null
+        ? written.endedSeconds !== undefined
+          ? ago(written.endedSeconds * 1000)
+          : written.silentMinutes !== undefined
+            ? ago(written.silentMinutes * MINUTE)
+            : null
+        : spec.companion === 'silent'
+          ? ago(rng.int(12, 150) * MINUTE)
+          : null,
     keepalive: {
       // Filled in from the recipes below, so a row and its agents cannot disagree.
       cause: null,
@@ -485,7 +501,6 @@ SESSIONS.push({
   model: null,
   pinned: false,
   presenceAgeSeconds: 31,
-  requests: 0,
   sessionId: '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43',
   warm: null,
 });
@@ -572,7 +587,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
     // Main reads its session's lifecycle word, a subagent whose park ran out is still parked, and the others are busy.
-    const agentState: KeepaliveState = j === 0 ? mainState : cause === 'parked_limit' ? 'parked' : 'busy';
+    const agentState: Lifecycle = j === 0 ? mainState : cause === 'parked_limit' ? 'parked' : 'busy';
     // The two parked mains: one on a background command with its deadline, one on a wakeup three days out. Neither
     // time is drawn, so the rows after them keep their rolls.
     const parkKind = agentState !== 'parked' ? null : cause === 'horizon' ? 'scheduled' : 'background';
@@ -655,8 +670,8 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 // every pin the listing keeps inside the non-companion timeout, released or not, so the session the mod ended lists its
 // released agents. Every recipe the story writes stands on a pin, and a session no companion ever reported holds main's
 // alone. The subagents' pins take the companion's five-minute TTL, their place's effort word and their last request as
-// their last use. The row reads warm off main's pin, the cache its Cache cell names, before its last use moves to the
-// newest across its pins.
+// their last use and their last refresh. The row and main's line read warm off the row's last refresh, as the route
+// reads both off one pin, before the row's last use moves to the newest across its pins.
 SESSIONS.forEach((pin, i) => {
   pin.agentContexts = datedLines(
     pin.createdAt,
@@ -666,13 +681,13 @@ SESSIONS.forEach((pin, i) => {
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
-        return [pinLine(line, { burn: pin.burn })];
+        return [pinLine(line, { burn: pin.burn }, pin.lastRefreshAt)];
       }
       const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
-      return [pinLine(line, servedBeside(pin, line, pin.createdAt))];
+      return [pinLine(line, servedBeside(pin, line, pin.createdAt), line.lastUsedAt)];
     }),
   );
-  pin.warm = pin.pinned ? warmAt(pin.lastUsedAt, pin.cacheTtlMs) : null;
+  pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
   pin.lastUsedAt = newestUse(pin.lastUsedAt, pin.agentContexts);
 });
 
@@ -680,9 +695,9 @@ SESSIONS.forEach((pin, i) => {
  * A written row that names no fork, no cycle, no runway and no shed stamp: its lines priced as the route prices a
  * display pin's, the line its caller lists first at the row's burn and the others beside it, and dated from its
  * first-seen time, its figures and its burn reading off that first line, warm off it and last used at the newest of
- * its lines, its summary off its session's recipes, and its last request and count off the activity fold. The engine
- * holds no record of its main, so it reads no lifecycle word. A row passes a companion or a presence only where a mod
- * reports.
+ * its lines, each line refreshed at its last use, its summary off its session's recipes, and its last request off the
+ * activity fold. The engine holds no record of its main, so it reads no lifecycle word. A row passes a companion or a
+ * presence only where a mod reports.
  */
 const writtenRow = (
   row: Pick<Session, 'agentId' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string },
@@ -690,7 +705,7 @@ const writtenRow = (
 ): Session => {
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
-  const priced = lines.map((l, j) => pinLine(l, j === 0 ? { burn: row.burn } : servedBeside({ burn: row.burn, lastInputTokens: lines[0].lastInputTokens }, l, row.createdAt)));
+  const priced = lines.map((l, j) => pinLine(l, j === 0 ? { burn: row.burn } : servedBeside({ burn: row.burn, lastInputTokens: lines[0].lastInputTokens }, l, row.createdAt), l.lastUsedAt));
   const line = priced[0];
   const seen = ledgered.get(key);
   return {
@@ -721,7 +736,6 @@ const writtenRow = (
     model: line.model,
     pinned: true,
     presenceAgeSeconds: row.presenceAgeSeconds ?? null,
-    requests: seen?.requests ?? 0,
     runwayBounded: null,
     runwayMs: null,
     shedFrom: null,
@@ -732,10 +746,10 @@ const writtenRow = (
 };
 
 /**
- * A row the router lists off the ledger's rows alone: no pin, no recipe and no line, the activity fold's count and
- * last request its own.
+ * A row the router lists off the ledger's rows alone: no pin, no recipe and no line, the activity fold's last request
+ * its own.
  */
-const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'requests' | 'sessionId'>): Session => ({
+const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'sessionId'>): Session => ({
   ...SESSION_SAMPLE,
   agentContexts: [],
   agentId: null,
@@ -807,7 +821,6 @@ SLOWED_PINS.forEach((pin, k) => {
     cycleMs: pin.cycleMs,
     factor: studioSlowed.factor,
     lastRequestAt: rows[0].at,
-    requests: rows.length,
     runwayBounded: studioRunwayMs !== null,
     runwayMs: studioRunwayMs,
     speed: studioSlowed.speed,
@@ -873,23 +886,22 @@ const WORKSHOP_BURN = 0.0021;
 const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
 if (holderLast && insideSessionExpiry(holderLast.at, NOW)) {
-  SESSIONS.push(ledgerOnlyRow({ accountId: holderLast.accountId, historical: true, keyGeneration: DELETED_HOLDER_GENERATION, keyId: 'desktop', lastRequestAt: holderLast.at, model: holderLast.canonicalModel, requests: holderRows.length, sessionId: SESSION_IDS[0] }));
+  SESSIONS.push(ledgerOnlyRow({ accountId: holderLast.accountId, historical: true, keyGeneration: DELETED_HOLDER_GENERATION, keyId: 'desktop', lastRequestAt: holderLast.at, model: holderLast.canonicalModel, sessionId: SESSION_IDS[0] }));
 }
 
 // The desktop session whose every request the key's own guardrail refused before any account was asked. The router
 // lists it off the ledger's rows with no pin and no recipe, so a drifting or blocked client stays visible, and the
-// activity fold gives it a count of none and the newest refusal as its last request, and only while that refusal is
-// inside the router's session expiry, the non-companion timeout leaving it out of the route's list sooner. The row is
-// built at an instant since the mock's now is fixed at load, so the consistency test reads it inside the expiry and
-// past it.
+// activity fold gives it the newest refusal as its last request, and only while that refusal is inside the router's
+// session expiry, the non-companion timeout leaving it out of the route's list sooner. The row is built at an instant
+// since the mock's now is fixed at load, so the consistency test reads it inside the expiry and past it.
 const blockedGeneration = Date.parse(keyById.get('desktop')!.createdAt);
 const blocked = ledgered.get(activityOf('desktop', blockedGeneration, BLOCKED_SESSION_ID));
 const blockedLast = REQUESTS.find((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === blockedGeneration && r.sessionId === BLOCKED_SESSION_ID);
 export function refusalOnlyRows(now: number): Session[] {
   if (!blocked || !blockedLast || !insideSessionExpiry(blockedLast.at, now)) return [];
-  const row = ledgerOnlyRow({ accountId: null, historical: false, keyGeneration: blockedGeneration, keyId: 'desktop', lastRequestAt: blocked.last, model: blockedLast.canonicalModel, requests: blocked.requests, sessionId: BLOCKED_SESSION_ID });
-  // The fold over its rows, every one refused, answers what the listing answers for it, so the builder's row is the
-  // one listed.
+  const row = ledgerOnlyRow({ accountId: null, historical: false, keyGeneration: blockedGeneration, keyId: 'desktop', lastRequestAt: blocked.last, model: blockedLast.canonicalModel, sessionId: BLOCKED_SESSION_ID });
+  // The fold over its rows, every one refused, answers what the listing answers for it, its newest refusal's user agent
+  // among it, so the builder's row is the one listed.
   return [{ ...row, ...foldSessionSpend(REQUESTS, row, now) }];
 }
 SESSIONS.push(...refusalOnlyRows(NOW));
@@ -959,15 +971,21 @@ const WRITTEN_SESSIONS = [
   writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, createdAt: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
+// Each row carries its own fold of the request seed at the story's clock, the spend its count lives in among it, so a
+// read of the seed past the route's list finds what the route answers for the row.
+for (const s of SESSIONS) Object.assign(s, foldSessionSpend(REQUESTS, s, NOW));
 
 /**
- * A session's `requests`, `spend`, `day`, `agentRequests` and `userAgent` folded from the request seed's rows on it, as
- * the route folds the ledger's: a refused row passed over, a probe's figures apart in the probes, every other row a
- * client request priced as the request log prices it (`costUsd`, `costShares`, `costEquivalent`) under its serving
- * attempt's funding and one with no token priced nothing, the day the client requests of the hours from the one holding
- * `now - 24 h` by class, the agents per id and model, and the user agent the newest client request's.
+ * A session's `spend`, `day`, `agentRequests` and `userAgent` folded from the request seed's rows on it, as the route
+ * folds the ledger's: a refused row passed over, a probe's figures apart in the probes, every other row a client
+ * request priced as the request log prices it (`costUsd`, `costShares`, `costEquivalent`) under its serving attempt's
+ * funding and one with no token priced nothing, the day the client requests of the hours from the one holding
+ * `now - 24 h` by class, one entry per agent, and the user agent the newest client request's, or the newest refusal's
+ * where every request was refused. An agent's entry sums every model it ran and reads the model, the account, the type
+ * and the instant of its newest client request, or of an agent with probes alone its newest probe's model and none of
+ * the other three.
  */
-export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, now: number): Pick<Session, 'agentRequests' | 'day' | 'requests' | 'spend' | 'userAgent'> {
+export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, now: number): Pick<Session, 'agentRequests' | 'day' | 'spend' | 'userAgent'> {
   const emptyPart = (): SessionSpendPart => ({ billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 });
   // A plan-funded request adds its Pro-week figure, and one that priced none leaves the sum unknown. Any other funding
   // bills its dollars, a request that cost nothing filing none.
@@ -997,20 +1015,27 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
   // `addMoney` writes the list dollars as well, which the route's day leaves out.
   const day: SessionDay & { usd: number } = { billedUsd: {}, equivalent: 0, requests: {}, usd: 0 };
   const dayFrom = startOfHour(now - 24 * HOUR);
-  const agents = new Map<string, { agentId: string; model: string; newest: RequestLog | null; probes: SessionSpendPart; spend: SessionSpendPart }>();
-  const agentOf = (agentId: string, model: string) => {
-    const key = `${agentId}|${model}`;
-    const opened = agents.get(key) ?? { agentId, model, newest: null, probes: emptyPart(), spend: emptyPart() };
-    agents.set(key, opened);
+  const agents = new Map<string, { agentId: string; newest: RequestLog | null; newestProbe: RequestLog | null; probes: SessionSpendPart; spend: SessionSpendPart }>();
+  const agentOf = (agentId: string) => {
+    const opened = agents.get(agentId) ?? { agentId, newest: null, newestProbe: null, probes: emptyPart(), spend: emptyPart() };
+    agents.set(agentId, opened);
     return opened;
   };
   let newest: RequestLog | null = null;
+  let newestRefused: RequestLog | null = null;
   for (const r of rows) {
-    if (r.refused || r.keyId !== session.keyId || r.keyGeneration !== session.keyGeneration || r.sessionId !== session.sessionId) continue;
-    const agent = r.agentId === null ? undefined : agentOf(r.agentId, r.canonicalModel);
+    if (r.keyId !== session.keyId || r.keyGeneration !== session.keyGeneration || r.sessionId !== session.sessionId) continue;
+    if (r.refused) {
+      if (r.kind !== 'probe' && newer(r, newestRefused)) newestRefused = r;
+      continue;
+    }
+    const agent = r.agentId === null ? undefined : agentOf(r.agentId);
     if (r.kind === 'probe') {
       add(probes, r);
-      if (agent) add(agent.probes, r);
+      if (agent) {
+        add(agent.probes, r);
+        if (newer(r, agent.newestProbe)) agent.newestProbe = r;
+      }
       continue;
     }
     add(spend, r);
@@ -1026,22 +1051,21 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
     }
   }
   const agentRequests: AgentRequests[] = [...agents.values()]
-    .sort((a, b) => byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model))
+    .sort((a, b) => byteOrder(a.agentId, b.agentId))
     .map((a) => ({
       accountId: a.newest === null ? null : (servingAttempt(a.newest)?.accountId ?? null),
       agentId: a.agentId,
       agentType: a.newest?.agentType ?? null,
       lastRequestAt: a.newest?.at ?? null,
-      model: a.model,
-      requests: a.spend.requests,
+      // An entry opens on a row of the agent, so one of the two stands.
+      model: (a.newest ?? a.newestProbe)!.canonicalModel,
       spend: { ...a.spend, probes: a.probes },
     }));
   return {
     agentRequests,
     day: { billedUsd: day.billedUsd, equivalent: day.equivalent, requests: day.requests },
-    requests: spend.requests,
     spend: spend.requests > 0 || probes.requests > 0 ? { ...spend, probes } : null,
-    userAgent: newest?.userAgent ?? null,
+    userAgent: (newest ?? newestRefused)?.userAgent ?? null,
   };
 }
 
@@ -1113,10 +1137,11 @@ export const largestCohort = (keyIds: ReadonlySet<string>): number => {
 
 // Read off the ledger rows, which cover the last 24 hours, so the tile and the
 // analytics Cache section agree on what "expired between turns" counts.
-const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && servedMissReason(r) === 'none').length;
+export const EXPIRED_BETWEEN_TURNS = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && servedMissReason(r) === 'none');
 
-// The keepalive engine holds a session once the mod registered it or a request retained a recipe for it. SESSIONS
-// lists the spec's rows first, in its order, and the one written row a recipe warms is one the mod reports.
+// The mock's engine holds a session from its registration: the mod's, on every row a mod reports or went silent on,
+// the registration-only row among them, and the first request it kept a recipe for on a spec row no mod registered.
+// SESSIONS lists the spec's rows first, in its order, and the one written row a recipe warms is one the mod reports.
 const ENGINE_SESSIONS = SESSIONS.filter((s, i) => s.companion !== 'none' || (i < sessionSpec.length && sessionSpec[i].state !== null));
 
 // Router-wide, so every probe counted here belongs to a pool that keeps caches
@@ -1135,7 +1160,7 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
   // Three gaps since the start, the last two hours back, so the Dashboard's card and the bus gaps item read one story.
   busGaps: 3,
-  expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
+  expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS.length,
   lastBusGapAt: ago(2 * HOUR),
   // The caps are the bootstrap file's defaults. The retained bytes are hand-set like the probe counts, at 92 percent of
   // their cap, so the cap item holds on the retained prompts alone. Every agent record the story's engine holds carries

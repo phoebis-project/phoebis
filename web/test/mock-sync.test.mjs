@@ -146,7 +146,7 @@ const CLOSED = {
   guardrail_presets: { '[].conditions[].selector': [...d.MESSAGE_SELECTOR_VALUES, undefined] },
   guardrail_test: { '.requests[].verdict': d.TEST_VERDICT_VALUES },
   guardrails: { '[].conditions[].operator': d.CONDITION_OPERATOR_VALUES, '[].conditions[].subject': d.CONDITION_SUBJECT_VALUES, '[].mode': d.GUARDRAIL_MODE_VALUES },
-  keepalive_recipes: { '[].agentState': d.AGENT_STATE_VALUES, '[].cause': d.RECIPE_CAUSE_VALUES, '[].parkKind': [...d.PARK_KIND_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
+  keepalive_recipes: { '[].agentState': d.LIFECYCLE_VALUES, '[].cause': d.RECIPE_CAUSE_VALUES, '[].parkKind': [...d.PARK_KIND_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   pools: {
     '[].members[].eligible': d.ELIGIBILITY_VALUES,
     '[].members[].spends[].period': d.BUDGET_PERIOD_VALUES,

@@ -6,8 +6,8 @@ import { readWindows } from '@/lib/quota';
 import { WINDOW_KEY, hoursOfKey, windowEntry } from '@/lib/windows';
 import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
-import { KEEPALIVE_OVERVIEW, SETTINGS_WIRE } from './operations';
-import { KEYS, POOLS, poolById } from './pools';
+import { EXPIRED_BETWEEN_TURNS, KEEPALIVE_OVERVIEW, SETTINGS_WIRE } from './operations';
+import { KEYS, POOLS, keyById, poolById } from './pools';
 import { REQUESTS, planPaid } from './requests';
 import { RESET_BLOCKS, resetEnding, wallReset } from './resets';
 // The walls condition names its shedding round `round`, so the helper reads under another name here.
@@ -43,6 +43,13 @@ function exhaustion(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | n
 }
 
 const jobsExhausted = exhaustion('jobs');
+
+/**
+ * The day's expiries between turns a probe could have prevented, as the reader counts them for its item: those on a
+ * pool whose keepalive policy is on, under a key that holds the keepalive permission. The keepalive overview's count
+ * keeps every pool's. The rows run newest first.
+ */
+const preventable = EXPIRED_BETWEEN_TURNS.filter((r) => r.poolId !== null && poolById.get(r.poolId)?.keepalive.enabled === true && r.keyId !== null && keyById.get(r.keyId)?.companionPermissions.includes('keepalive') === true);
 
 /** The trailing day's events of a kind, oldest first, which the ledger folds the routing conditions from. */
 const lastDay = (kind: string) => ROUTING_EVENTS.filter((e) => e.kind === kind && Date.parse(e.at) >= NOW - DAY);
@@ -251,19 +258,19 @@ const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
 }).sort(byStart);
 
 /**
- * One item per kind but a failed certificate reload, the expiries between turns, which the Dashboard reads as a figure,
- * and a wall, which holds on two accounts, on the story's accounts, pools, keys, proxy listener, models and keepalive
- * engine, in the route's order: jobs exhausted from the runner's first request after its one member spent the day's
- * budget, a client build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's
- * lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the proxy
- * listener's certificate 12 days from its end, nightly's reset 4 days from its end, a priced record of the jobs pool's
- * one member parked in the ledger file, the keepalive engine's bus gaps, the backoff secondary's poll is in, Sonnet 4.5
- * priced nothing, nightly's 5-hour window charged twice the table up to its 13:11 reset, nightly's wall at 12:01 and
- * secondary's after the 11:00 round, which secondary's reset can clear, nightly spent after the least-bad move onto
- * it, the all pool's round that found no destination with runway, studio slowed in work for 2 h 8 min of the day, and
- * the engine's retained prompts at 92 percent of their cap. The meter drift reads the reconciled windows, the four
- * routing conditions the routing log's events, as the ledger folds them, the reset item and the wall's reset the
- * stored blocks, and the two keepalive items the overview's figures.
+ * One item per kind but a failed certificate reload and a wall, which holds on two accounts, on the story's accounts,
+ * pools, keys, proxy listener, models and keepalive engine, in the route's order: jobs exhausted from the runner's
+ * first request after its one member spent the day's budget, a client build refused on the laptop key, the routing
+ * state writer keeping its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding as its
+ * account reads, legacy's refreshes failing, the proxy listener's certificate 12 days from its end, nightly's reset 4
+ * days from its end, a priced record of the jobs pool's one member parked in the ledger file, the keepalive engine's
+ * bus gaps, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's 5-hour window charged twice the
+ * table up to its 13:11 reset, nightly's wall at 12:01 and secondary's after the 11:00 round, which secondary's reset
+ * can clear, nightly spent after the least-bad move onto it, the all pool's round that found no destination with
+ * runway, studio slowed in work for 2 h 8 min of the day, the engine's retained prompts at 92 percent of their cap, and
+ * the day's expiries between turns a probe could have prevented. The meter drift reads the reconciled windows, the four
+ * routing conditions the routing log's events, as the ledger folds them, the reset item and the wall's reset the stored
+ * blocks, the two keepalive items the overview's figures, and the expiries the ledger rows of the day.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -366,4 +373,15 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'keepalive_cap',
     since: ago(3 * HOUR + 15 * MINUTE),
   },
+  ...(preventable.length > 0
+    ? [
+        {
+          ...ATTENTION_ITEM_SAMPLE,
+          ...ofRouter('keepalive', 'Keepalive'),
+          detail: { expired: preventable.length },
+          kind: 'expired_between_turns' as const,
+          since: preventable[preventable.length - 1].at,
+        },
+      ]
+    : []),
 ];

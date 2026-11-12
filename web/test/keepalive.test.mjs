@@ -59,7 +59,7 @@ test('orderRows reads the newest created first, ties by session id and a row wit
 
 test('orderRows by cost puts a row with no spend last under either direction, ties by session id, and by requests reads the count', () => {
   // The creation times run in neither key's order, so a key that fell back to them reads otherwise.
-  const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, requests, sessionId, spend: usd === null ? null : { usd } } });
+  const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, sessionId, spend: { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });
   const rows = [row('a', ms(13, 0), 0.5, 2), row('b', ms(14, 0), null, 9), row('c', ms(12, 0), 0.25, 4), row('d', ms(11, 0), 0.5, 1)];
   assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'desc')), ['a', 'd', 'c', 'b']);
   assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'asc')), ['c', 'a', 'd', 'b']);
@@ -128,14 +128,12 @@ test('isFinished reads a session whose main ended with it, or whose every line t
   assert.equal(d.isFinished(session('scheduled'), []), false);
 });
 
-test('withinExpiry keeps a session whose last use lies inside the expiry of now and drops one at the bound, reads the last request where no use stands, and keeps every session while the expiry is unknown', () => {
-  const now = Date.UTC(2026, 8, 16, 14, 30);
-  const at = (msAgo) => new Date(now - msAgo).toISOString();
-  assert.equal(d.withinExpiry({ lastRequestAt: null, lastUsedAt: at(HOUR - 1) }, 3_600, now), true);
-  assert.equal(d.withinExpiry({ lastRequestAt: null, lastUsedAt: at(HOUR) }, 3_600, now), false);
-  assert.equal(d.withinExpiry({ lastRequestAt: at(HOUR), lastUsedAt: null }, 3_600, now), false);
-  assert.equal(d.withinExpiry({ lastRequestAt: at(HOUR - 1), lastUsedAt: null }, 3_600, now), true);
-  assert.equal(d.withinExpiry({ lastRequestAt: null, lastUsedAt: at(HOUR) }, null, now), true);
+test("expiryOf reads a row no companion reports as listed until the lesser limit after its latest instant, and a companion row as never dropped", () => {
+  const limits = { expireAfterSeconds: 86_400, nonCompanionIdleSeconds: 1_800 };
+  // The companion's end is the latest of the three instants, and the timeout the lesser of the two limits.
+  const row = { companion: 'none', companionSince: iso(ms(10, 20)), lastRequestAt: iso(ms(9, 30)), lastUsedAt: iso(ms(10, 0)) };
+  assert.equal(d.expiryOf(row, limits), ms(10, 50));
+  assert.equal(d.expiryOf({ ...row, companion: 'reporting' }, limits), null);
 });
 
 test('contextCell reads the tokens compact, and a dash with none or before the first turn', () => {
@@ -174,7 +172,7 @@ test("an agent line reads the route's entry for its agent on its recipe's model,
 /** A spend part with no request in it. */
 const NO_SPEND = { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 };
 /** An agent's ledger entry as the decoder answers it, with no spend unless the members hand one. */
-const ledgerEntry = (agentId, model, requests, lastRequestAt, members = {}) => ({ accountId: 'business', agentId, agentType: null, lastRequestAt: iso(lastRequestAt), model, requests, spend: { ...NO_SPEND, probes: NO_SPEND }, ...members });
+const ledgerEntry = (agentId, model, lastRequestAt, members = {}) => ({ accountId: 'business', agentId, agentType: null, lastRequestAt: iso(lastRequestAt), model, spend: { ...NO_SPEND, probes: NO_SPEND }, ...members });
 
 test("sessionLines reads the recipes first with their pins, then every pin no recipe claims in the route's order, each line its pin's word where a pin stands", () => {
   const at = ms(14, 20);
@@ -207,12 +205,12 @@ test("sessionLines reads the recipes first with their pins, then every pin no re
   );
 });
 
-test("sessionLines reads each line's type from the agent's newest ledger entry, and main's model off the ledger where the row's pin is another agent's", () => {
+test("sessionLines reads each line's type from its own agent's ledger entry, and main's model off the ledger where the row's pin is another agent's", () => {
   // Main sent auxiliary calls alone, so the row reads d41c's pin and d41c's model, which are not main's.
   const row = {
     agentContexts: [{ ...pinEntry('d41c', 'claude-sonnet-4-5', 23_400), lifecycle: 'busy' }],
     agentId: 'd41c',
-    agentRequests: [ledgerEntry('main', 'claude-haiku-4-5', 2, ms(14, 0)), ledgerEntry('d41c', 'claude-haiku-4-5', 1, ms(13, 0), { agentType: 'Plan' }), ledgerEntry('d41c', 'claude-sonnet-4-5', 1, ms(14, 10), { agentType: 'Explore' })],
+    agentRequests: [ledgerEntry('main', 'claude-haiku-4-5', ms(14, 0)), ledgerEntry('d41c', 'claude-sonnet-4-5', ms(14, 10), { agentType: 'Explore' })],
     lifecycle: 'busy',
     model: 'claude-sonnet-4-5',
   };
@@ -240,40 +238,11 @@ test("presenceOf reads a silent companion's span from when it fell silent and a 
 
 test('earlierAgents lists the agents with ledgered requests that no line names, in id order, main never among them', () => {
   // No line names main, so a list that took main's entry for an earlier agent's reads it.
-  const session = { agentRequests: [ledgerEntry('main', 'claude-sonnet-5', 4, ms(14, 0)), ledgerEntry('e9', 'claude-haiku-4-5', 1, ms(13, 0)), ledgerEntry('a1', 'claude-sonnet-5', 2, ms(14, 5)), ledgerEntry('c3', 'claude-haiku-4-5', 1, ms(13, 30))] };
+  const session = { agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('e9', 'claude-haiku-4-5', ms(13, 0)), ledgerEntry('a1', 'claude-sonnet-5', ms(14, 5)), ledgerEntry('c3', 'claude-haiku-4-5', ms(13, 30))] };
   assert.deepEqual(
     d.earlierAgents(session, [{ agentId: 'a1' }]).map((a) => a.agentId),
     ['c3', 'e9'],
   );
-});
-
-test("agentFigures sums an agent's entries across its models and reads the newest entry's model, account and type", () => {
-  const spend = (part, probes) => ({ ...part, probes });
-  const session = {
-    agentRequests: [
-      ledgerEntry('a1', 'claude-haiku-4-5', 3, ms(13, 0), {
-        agentType: 'Plan',
-        spend: spend({ billedUsd: { fast: 0.25 }, equivalent: 0.5, requests: 3, shares: { business: { five_hour: 0.125 } }, usd: 0.75 }, { billedUsd: {}, equivalent: 0.25, requests: 1, shares: { business: { five_hour: 0.0625 } }, usd: 0.5 }),
-      }),
-      ledgerEntry('a1', 'claude-sonnet-5', 2, ms(14, 0), {
-        accountId: 'studio',
-        agentType: 'Explore',
-        spend: spend({ billedUsd: { api_key: 0.5 }, equivalent: null, requests: 2, shares: { business: { five_hour: 0.25, seven_day: 0.125 } }, usd: 0.5 }, NO_SPEND),
-      }),
-      ledgerEntry('b2', 'claude-sonnet-5', 7, ms(14, 10)),
-    ],
-  };
-  const a1 = d.agentFigures(session, 'a1');
-  assert.deepEqual([a1.requests, a1.model, a1.accountId, a1.agentType, a1.lastRequestAt], [5, 'claude-sonnet-5', 'studio', 'Explore', iso(ms(14, 0))]);
-  assert.deepEqual(a1.spend, {
-    billedUsd: { api_key: 0.5, fast: 0.25 },
-    equivalent: null,
-    probes: { billedUsd: {}, equivalent: 0.25, requests: 1, shares: { business: { five_hour: 0.0625 } }, usd: 0.5 },
-    requests: 5,
-    shares: { business: { five_hour: 0.375, seven_day: 0.125 } },
-    usd: 1.25,
-  });
-  assert.equal(d.agentFigures(session, 'f00d'), null, 'an agent with no entry');
 });
 
 /** Every filter off, as the address reads with none set. */
@@ -310,30 +279,16 @@ test('matches reads Active within against the later of the last use and the last
   assert.equal(d.matches(row(iso(NOW - 2 * HOUR), iso(NOW - 2 * HOUR)), within, NOW), false, 'both older than the span');
 });
 
-test("matches reads a line's Account as the Agents table shows it: none past a refused recipe beside a pin, the pin's with no recipe", () => {
+test("matches reads a line's Account as the Agents table shows it: the pin's first, beside a recipe that names none too", () => {
   const row = (line) => ({ finished: false, lines: [line], poolId: 'all', session: matchSession });
   const onA = { ...NO_FILTERS, account: ['a'] };
-  assert.equal(d.matches(row({ ...matchLine('a1', 'claude-opus-5', 'busy'), pin: { accountId: 'a' }, recipe: { accountId: null } }), onA, NOW), false, "a refused recipe's line names no account, whatever pin stands beside it");
+  assert.equal(d.matches(row({ ...matchLine('a1', 'claude-opus-5', 'busy'), pin: { accountId: 'a' }, recipe: { accountId: null } }), onA, NOW), true, 'a pin names its account ahead of a recipe that names none');
   assert.equal(d.matches(row({ ...matchLine('a1', 'claude-opus-5', 'busy'), pin: { accountId: 'a' }, recipe: null }), onA, NOW), true, "a pin with no recipe names the pin's account");
 });
 
 test('hiddenLines counts the lines the Agents filters hide and the earlier agents', () => {
-  const session = { ...matchSession, agentRequests: [ledgerEntry('main', 'claude-sonnet-5', 4, ms(14, 0)), ledgerEntry('a1', 'claude-opus-5', 2, ms(14, 5)), ledgerEntry('b2', 'claude-sonnet-5', 1, ms(14, 6)), ledgerEntry('e9', 'claude-haiku-4-5', 1, ms(13, 0))] };
+  const session = { ...matchSession, agentRequests: [ledgerEntry('main', 'claude-sonnet-5', ms(14, 0)), ledgerEntry('a1', 'claude-opus-5', ms(14, 5)), ledgerEntry('b2', 'claude-sonnet-5', ms(14, 6)), ledgerEntry('e9', 'claude-haiku-4-5', ms(13, 0))] };
   const row = { finished: false, lines: [matchLine('main', 'claude-sonnet-5', 'busy'), matchLine('a1', 'claude-opus-5', 'busy'), matchLine('b2', 'claude-sonnet-5', 'idle')], poolId: 'all', session };
   const { hidden, shown } = d.hiddenLines(row, { ...NO_FILTERS, model: ['claude-opus-5'] });
   assert.deepEqual([hidden, shown.map((l) => l.agentId)], [3, ['a1']]);
-});
-
-test("lineWordOf reads main's line on a session no mod reports as unreported, and a main the session's end released as released", () => {
-  const session = { companion: 'none' };
-  assert.equal(d.lineWordOf(session, matchLine('main', 'claude-sonnet-5', 'idle')), 'unreported', "the engine's own word for main");
-  assert.equal(d.lineWordOf(session, matchLine('main', 'claude-sonnet-5', 'released')), 'released', 'the release the end left');
-});
-
-test("pinTtlMs reads the time left to the pin's last use plus its cache TTL, and none once that has passed or with no TTL", () => {
-  const pin = { cacheTtlMs: 5 * MINUTE, lastUsedAt: iso(NOW - 5 * MINUTE + SECOND) };
-  assert.equal(d.pinTtlMs(pin, NOW), SECOND, 'one second inside the TTL');
-  assert.equal(d.pinTtlMs({ ...pin, lastUsedAt: iso(NOW - 5 * MINUTE - SECOND) }, NOW), null, 'one second past it');
-  assert.equal(d.pinTtlMs({ ...pin, cacheTtlMs: null }, NOW), null, 'no TTL');
-  assert.equal(d.pinTtlMs({ ...pin, lastUsedAt: null }, NOW), null, 'no last use');
 });

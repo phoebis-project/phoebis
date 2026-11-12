@@ -663,6 +663,14 @@ test("a session's lifecycle word reads one of the six words and none outside the
   assert.equal(lifecycle('registered'), 'registered', "the row's own word beside the engine's five");
 });
 
+test("a line's lifecycle and a recipe's agent state read registered as the row's does", () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const [line] = row.agent_contexts;
+  const [recipe] = fixture('keepalive_recipes').recipes;
+  assert.equal(d.decodeSession({ ...row, agent_contexts: [{ ...line, lifecycle: 'registered' }] }).agentContexts[0].lifecycle, 'registered', 'a line the mod registered before its first real request');
+  assert.equal(d.decodeRecipe({ ...recipe, agent_state: 'registered' }).agentState, 'registered', "that agent's recipe");
+});
+
 test('a session decodes the word its pin was stamped by, and a row without one reads null', () => {
   const row = fixture('sessions').sessions[0];
   const read = (wire) => {
@@ -2093,6 +2101,7 @@ const agentLine = (agent_id, model, members = {}) => ({
   lifecycle: 'busy',
   model,
   warm: true,
+  warm_until: 1_791_721_300_000,
   ...members,
 });
 
@@ -2108,9 +2117,10 @@ test("a session row reads main's effort and every agent line with all its member
   assert.equal(s.effort, 'high');
   const created = new Date(1_791_717_340_000).toISOString();
   const used = new Date(1_791_721_000_000).toISOString();
+  const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', warm: false },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', warm: true },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', warm: false, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', warm: true, warmUntil },
   ]);
 });
 
@@ -2355,8 +2365,6 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.cause, 'scheduled');
   assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
-  // The route answers the count in the spend alone, and the decoder reads the member the row lost as 0.
-  assert.equal(s1.requests, 0);
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
   assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);

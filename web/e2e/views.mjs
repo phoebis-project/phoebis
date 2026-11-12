@@ -13343,7 +13343,7 @@ async function forkLink(theme) {
 }
 
 /** The finished session's line. */
-const RELEASED_LINE = 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.';
+const RELEASED_LINE = 'The mod released every agent of this session. Each record leaves the engine one cache TTL after its release, and a record that held a slot of the agent cap keeps it until then.';
 
 /**
  * A finished session, listed under the finished filter alone and found by its Status cell reading finished: its open

@@ -23,7 +23,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineTotals, lineWordOf, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES, withinExpiry } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -66,10 +66,10 @@ const runwayWord = (s: Session): string | null => (!s.pinned ? null : s.runwayMs
 /** A row's or a line's Status word with its sentence. */
 const LIFECYCLE_HINT: Record<StatusWord, string> = {
   busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
-  finished: 'The mod released every agent of this session. Their records keep their slots of the cap for one cache TTL after the release and then leave the engine.',
+  finished: 'The mod released every agent of this session. Each record leaves the engine one cache TTL after its release, and a record that held a slot of the agent cap keeps it until then.',
   idle: "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none.",
   parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
-  registered: 'The mod registered this session and no real request has reached the router from it yet',
+  registered: 'The mod registered this agent and no real request has reached the router from it yet',
   released: 'The mod released this agent, a subagent that finished or the main conversation. Its recipe is gone.',
   unknown: "The reporter could not tell this agent's state.",
   unreported: 'No companion mod reports this agent, so the router holds no lifecycle word for it.',
@@ -115,7 +115,7 @@ interface Row {
    * list.
    */
   agents: KeepaliveRecipe[];
-  /** When the router forgets the session, from `expiryOf`. */
+  /** When the route stops listing the session, from `expiryOf`. */
   expiresAt: number | null;
   /** The engine is done with the session, which draws every line it holds under the released sentence. */
   finished: boolean;
@@ -204,7 +204,7 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
  * `poolsFailed`: the pool list did not load, so a session whose pool is not found has no cause the rows can name but
  * that. `sort` and `dir`: the sort control's key and direction, which order the rows and each row's lines.
  */
-function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, sort: SessionsAddress['sort'], dir: SortDir, expireAfterSeconds: number | null): Row[] {
+function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, sort: SessionsAddress['sort'], dir: SortDir, limits: ListingLimits | null): Row[] {
   const keyById = new Map(keys.map((k) => [k.id, k]));
   // A recipe names no generation and belongs to the live key alone, so it is filed under that generation and
   // an earlier holder of the same key id reads none of them.
@@ -241,7 +241,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     return {
       agentCount: agentCount(lines),
       agents,
-      expiresAt: expiryOf(session, expireAfterSeconds),
+      expiresAt: expiryOf(session, limits),
       finished,
       idleLimit,
       lastUsed,
@@ -297,8 +297,8 @@ function daySummary(rows: readonly Row[]): { agents: number; billed: number; bus
 }
 
 /**
- * The recipe the row's Cache cell reads, as the route picks the row's `keepalive` summary: main's where one stands,
- * else the one with the newest last request, a recipe without one last and ties by agent id.
+ * The recipe the row's Cache cell reads: main's where one stands, else the one with the newest last request, a recipe
+ * without one last and ties by agent id.
  */
 function rowRecipe(agents: readonly KeepaliveRecipe[]): KeepaliveRecipe | null {
   const main = agents.find((a) => a.agentId === MAIN_AGENT);
@@ -351,9 +351,9 @@ export function SessionsPage() {
   // under a row's open menu could add or drop rows beneath it.
   const { cause: pauseCause, host } = useHoldHost();
   const reread = { paused: pauseCause !== null, refreshMs: intervalMs };
-  // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone: a
-  // session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
-  // accounts and the recipes read on the same interval, so the slow-down chips and the lines move with the rows.
+  // The view lists the rows the route answers, so a row leaves when the route's next answer drops it, and the list is
+  // read again on the interval. The accounts and the recipes read on the same interval, so the slow-down chips and the
+  // lines move with the rows.
   const accounts = useAsync(() => api.listAccounts(), [], reread);
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
@@ -378,16 +378,14 @@ export function SessionsPage() {
 
   const sessionData = sessions.data;
   const recipeData = recipes.data;
-  const expireAfterSeconds = settings.data?.sessions.expireAfterSeconds ?? null;
+  const limits = settings.data?.sessions ?? null;
   const poolsFailed = failedFirst(pools);
   // Built without the clock, so a tick only filters the rows again.
-  const built = useMemo(
-    () => (sessionData && recipeData && keys.data ? buildRows(sessionData, recipeData, keys.data, pools.data ?? [], poolsFailed, filters.sort, dir, expireAfterSeconds) : null),
-    [sessionData, recipeData, keys.data, pools.data, poolsFailed, filters.sort, dir, expireAfterSeconds],
+  const listed = useMemo(
+    () => (sessionData && recipeData && keys.data ? buildRows(sessionData, recipeData, keys.data, pools.data ?? [], poolsFailed, filters.sort, dir, limits) : null),
+    [sessionData, recipeData, keys.data, pools.data, poolsFailed, filters.sort, dir, limits],
   );
-  // The router forgets a session once it has been idle for the expiry, so this list has to as well.
-  const listed = useMemo(() => built?.filter((r) => withinExpiry(r.session, expireAfterSeconds, now)) ?? null, [built, expireAfterSeconds, now]);
-  // The expiry stays the outer bound, and the filters narrow the list inside it.
+  // The route leaves out a session once it stops listing it, so the filters narrow the rows it answered.
   const rows = useMemo(() => listed?.filter((r) => matches(r, filters, now)) ?? null, [listed, filters, now]);
   // The lines each kept row draws under the filters and how many the filters fold away, which its detail, its Next
   // probe cell and the bar's count read.
@@ -559,7 +557,7 @@ export function SessionsPage() {
               ) : rows === null ? (
                 <Skeleton height={14} />
               ) : hiddenTitle === undefined ? (
-                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the companion mod registers it, and drops off once it passes the session expiry." />
+                <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the companion mod registers it, and leaves when the router stops listing it." />
               ) : (
                 <EmptyState title="No sessions kept by the filters" body={`${hiddenTitle}.`} />
               )}
@@ -635,7 +633,7 @@ function CostCell({ accountId, burn = null, cost, spend }: { accountId: string |
             {cell.main}
             <BilledBadge usd={reading.billed} />
             {reading.accounts.length > 0 && (
-              <Badge tone="neutral" title={`Other accounts the requests spent on:\n${reading.accounts.map((id) => cost.accountById.get(id)?.label ?? id).join('\n')}`}>
+              <Badge tone="neutral" title={`Other accounts whose plan windows the requests spent on:\n${reading.accounts.map((id) => cost.accountById.get(id)?.label ?? id).join('\n')}`}>
                 +{reading.accounts.length}
               </Badge>
             )}
@@ -825,13 +823,13 @@ function SessionRows({
   const account = cost.accountById.get(session.accountId ?? '') ?? null;
   const noRecipe = noRecipeText(row, now);
   const recipes = shownLines.flatMap((l) => (l.recipe === null ? [] : [l.recipe]));
-  // A line takes its account from its pin, or from its recipe where no pin stands, and a recipe whose request was
-  // refused before any account served it names none, so that line is left out. A "+N" counts every other line the row
+  // A line takes its account from its pin, and from its recipe only where no pin stands, as the Agents table's cell
+  // and the Account filter read it, and a line that names none is left out. A "+N" counts every other line the row
   // draws on another model or account, recipe or not, whatever the Agents filters match, and its hover reads them in
   // the order the expanded row draws them. It takes the accent where its column's filter stands and one of its lines
   // matches the filters, a line `shownLines` holds.
   const placed = drawnLines.flatMap((l) => {
-    const accountId = l.pin?.accountId ?? l.recipe?.accountId ?? null;
+    const accountId = lineAccountOf(l);
     return accountId !== null && l.model !== null ? [{ accountId, agentId: l.agentId, matched: shownLines.includes(l), model: l.model }] : [];
   });
   const otherModels = placed.filter((l) => l.model !== session.model);
@@ -963,7 +961,7 @@ function SessionRows({
         )}
         {visible.has('requests') && (
           <td className="right num col-fit" title={sentences([REQUESTS_HINT, session.lastRequestAt === null ? null : `Last request ${fmtAbsolute(session.lastRequestAt)}`])}>
-            {session.requests > 0 ? fmtInt(session.requests) : <span className="muted">0</span>}
+            {requestCount(session) > 0 ? fmtInt(requestCount(session)) : <span className="muted">0</span>}
             {session.lastRequestAt !== null && <span className="sub">{fmtRelative(session.lastRequestAt, now)}</span>}
           </td>
         )}
@@ -973,7 +971,7 @@ function SessionRows({
           <td className="col-fit" title={fmtAbsolute(lastUsed)}>
             {fmtRelative(lastUsed, now)}
             {expiresAt !== null && (
-              <span className="sub" title={`Drops off this list at ${fmtAbsolute(expiresAt)}`}>
+              <span className="sub" title={`The router stops listing this session at ${fmtAbsolute(expiresAt)}`}>
                 expires {fmtRelative(expiresAt, now)}
               </span>
             )}
@@ -1215,7 +1213,7 @@ function SessionRows({
  * joins the Agents table the line controls.
  */
 function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agents: (AgentFigures & { agentId: string })[]; controls: string; cost: CostContext; onToggle: () => void; open: boolean; session: Session }) {
-  const { requests, spend } = figuresOf(agents);
+  const { spend } = figuresOf(agents);
   const reading = spendUnitOf(spend, cost.unit, session.accountId, null);
   const cell = costCellOf(reading.unit, cost.week, cost.scale);
   return (
@@ -1224,7 +1222,7 @@ function EarlierLine({ agents, controls, cost, onToggle, open, session }: { agen
       controls={controls}
       hint={
         <>
-          {`· ${plural(requests, 'request')} · ${cell?.main ?? '-'}`}
+          {`· ${plural(spend.requests, 'request')} · ${cell?.main ?? '-'}`}
           {reading.billed > 0 && (
             <>
               {' '}
@@ -1300,8 +1298,8 @@ function ForkBadge({
 
 /** A pin no recipe stands on reads its prompt cache's state by its own TTL, each word with its sentence. */
 const PIN_CACHE_HINT = {
-  cold: "The pin's prompt cache has passed its TTL, and the next request pays a cold read.",
-  warm: "The pin's prompt cache is within its TTL.",
+  cold: "The pin's prompt cache is past its TTL or has no refresh on record, and the next request pays a cold read.",
+  warm: "The pin's prompt cache is within its TTL of the last refresh.",
 };
 
 const cacheTitle = (warm: boolean, recipe: KeepaliveRecipe | null, noRecipe: string | null): string =>
@@ -1400,8 +1398,8 @@ function LineAccount({ account, id, now, row }: { account: Account | null; id: s
 
 /**
  * One row of the Agents table: a line's agent, read off its pin and its recipe, or an earlier agent, which holds no
- * line and reads its newest ledger entry, dashes for a pin's figures and `no pin`. Requests and Cost read every entry
- * of the agent summed, and the menu opens the session's views narrowed to the agent.
+ * line and reads its ledger entry, dashes for a pin's figures and `no pin`. Requests and Cost read the agent's entry,
+ * its sums over every model it ran, and the menu opens the session's views narrowed to the agent.
  */
 function AgentRow({
   agentId,
@@ -1413,7 +1411,7 @@ function AgentRow({
 }: {
   agentId: string;
   cost: CostContext;
-  /** The agent's entries summed, null for an agent the ledger holds no row of. */
+  /** The agent's entry, null for an agent the ledger holds no row of. */
   figures: AgentFigures | null;
   /** The line the agent draws, null for an earlier agent. */
   line: SessionLine | null;
@@ -1428,16 +1426,15 @@ function AgentRow({
   const lastRequestAt = figures?.lastRequestAt ?? null;
   const model = line === null ? (figures?.model ?? null) : line.model;
   const short = model === null ? null : shortModel(model);
-  // A recipe names the account its request reached, and none where the request was refused before any account served
-  // it, whatever pin stands beside it.
-  const accountId = line === null ? (figures?.accountId ?? null) : recipe !== null ? recipe.accountId : (pin?.accountId ?? null);
+  // A line's account is its pin's, and its recipe's only where no pin stands, as the row's "+N" and the Account filter
+  // read it.
+  const accountId = line === null ? (figures?.accountId ?? null) : lineAccountOf(line);
   const type = agentId === MAIN_AGENT ? null : line === null ? (figures?.agentType ?? null) : line.agentType;
   const title = joinPresent([lastRequestAt === null ? null : `Last request ${since(lastRequestAt, now)}.`, pin?.createdAt ? `Pinned since ${since(pin.createdAt, now)}.` : null], ' ');
   const tokens = pin?.lastInputTokens ?? null;
   const context = contextCell(tokens);
   const burn = burnReading(pin, cost);
-  // Main reads unreported on a session no mod reports, as its row does, whatever word the engine holds for it but the
-  // release a session's end leaves.
+  // A line reads unreported where the route answers no word for its agent, as the row's Status does for main.
   const word = line === null ? null : lineWordOf(session, line);
   const park = word === 'parked' && recipe !== null ? parkDetail(recipe, now) : '';
   const hint = LIFECYCLE_HINT[word ?? 'unreported'];
@@ -1456,7 +1453,7 @@ function AgentRow({
         <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
       </td>
       <td title={burn?.title}>{burn === null ? <span className="muted">-</span> : <span className="num">{burn.text}</span>}</td>
-      <td className="right num">{figures !== null && figures.requests > 0 ? fmtInt(figures.requests) : <span className="muted">0</span>}</td>
+      <td className="right num">{figures !== null && requestCount(figures) > 0 ? fmtInt(requestCount(figures)) : <span className="muted">0</span>}</td>
       <CostCell accountId={accountId} cost={cost} spend={figures?.spend ?? null} />
       <td>
         {line === null ? (

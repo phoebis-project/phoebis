@@ -1859,10 +1859,6 @@ export interface UnusedAllowanceAnswer {
   to: string;
 }
 
-export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked', 'released', 'unknown'] as const;
-/** The companion mod's lifecycle word for an agent. */
-export type KeepaliveState = (typeof AGENT_STATE_VALUES)[number];
-
 export const PARK_KIND_VALUES = ['background', 'both', 'scheduled'] as const;
 /** What a parked agent waits on: a background command or a subagent, a scheduled wakeup, or both. */
 export type ParkKind = (typeof PARK_KIND_VALUES)[number];
@@ -1874,9 +1870,9 @@ export const BURN_UNIT_VALUES = ['usd', 'window_share'] as const;
 /** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
 export type BurnUnit = (typeof BURN_UNIT_VALUES)[number];
 
-export const LIFECYCLE_VALUES = [...AGENT_STATE_VALUES, 'registered'] as const;
-/** A row's lifecycle word: the engine's five, or `registered` for a main the mod registered that has sent no real
- *  request yet. */
+export const LIFECYCLE_VALUES = ['busy', 'idle', 'parked', 'registered', 'released', 'unknown'] as const;
+/** The lifecycle word of a row, a line and a recipe. `registered` reads on a record the mod registered that has sent
+ *  no real request yet. */
 export type Lifecycle = (typeof LIFECYCLE_VALUES)[number];
 
 /** A pin's burn members: a row's for its display pin, a line's for its own. */
@@ -1909,10 +1905,12 @@ export interface AgentContext extends BurnFigures {
   lastInputTokens: number | null;
   lastUsedAt: string | null;
   /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
-  lifecycle: KeepaliveState | null;
+  lifecycle: Lifecycle | null;
   model: string;
-  /** The route's `now - last_used_at < cache_ttl_ms`: the State cell's warm or cold on a pin-only line. */
+  /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
   warm: boolean;
+  /** The first instant `warm` answers false for the pin, null only where an answer carries none. */
+  warmUntil: string | null;
 }
 
 /** A set of a session's requests: their count, their money and their shares per account. */
@@ -1940,7 +1938,9 @@ export interface SessionDay extends Pick<SessionSpendPart, 'billedUsd' | 'equiva
   requests: Record<string, number>;
 }
 
-/** A session's requests of one agent on one canonical model, from the ledger. */
+/** A session's requests of one agent, from the ledger: its sums over every model it ran, with the model, the
+ *  account, the type and the instant of its newest client request. An agent the ledger holds probes of alone reads
+ *  its newest probe's model, with a null account, type and instant. */
 export interface AgentRequests {
   /** The newest client request's serving account. */
   accountId: string | null;
@@ -1949,7 +1949,6 @@ export interface AgentRequests {
   agentType: string | null;
   lastRequestAt: string | null;
   model: string;
-  requests: number;
   spend: SessionSpend;
 }
 
@@ -1959,15 +1958,16 @@ export interface Session extends BurnFigures {
   agentContexts: AgentContext[];
   /** The pin's own agent: `main`, or a subagent's id, and `null` for a session with no pin. */
   agentId: string | null;
-  /** The session's requests per agent and model, main's among them, each with its type, its newest request's account
-   *  and instant and its spend. */
+  /** The session's requests per agent, main's among them, each with its type, its newest request's account and
+   *  instant and its spend. */
   agentRequests: AgentRequests[];
   /** The instant the served burn is decayed to, null with no pin or for a pin never folded. */
   burnAt: string | null;
   /** The cache TTL in force at the pin's last refresh, and `null` for a session with no pin. */
   cacheTtlMs: number | null;
   companion: CompanionState;
-  /** When the companion last reported; set only while `companion` is `silent`. */
+  /** The companion's last report while `companion` reads `silent`, and the session's end on a row no companion
+   *  reports whose mod ended it. Null otherwise. */
   companionSince: string | null;
   createdAt: string | null;
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
@@ -2011,8 +2011,6 @@ export interface Session extends BurnFigures {
   pinned: boolean;
   /** Seconds since main's last presence report, null before the first one. */
   presenceAgeSeconds: number | null;
-  /** Ledgered requests on this session; 0 means analytics has nothing to show. */
-  requests: number;
   /**
    * Null with no projection, false for an unbounded runway, true for a bounded one, whose `runwayMs` is set. Null on an
    * unpinned row.
@@ -2035,8 +2033,8 @@ export interface Session extends BurnFigures {
   spend: SessionSpend | null;
   /** The user agent of the session's newest client request, as the client sent it. */
   userAgent: string | null;
-  /** Whether the pinned account still holds the session's prompt cache, from the pin's last use and its cache TTL.
-   *  Null without a pin. */
+  /** Whether the pinned account still holds the session's prompt cache, from the pin's last refresh and its cache
+   *  TTL as the selector reads it. Null without a pin. */
   warm: boolean | null;
 }
 
@@ -2059,7 +2057,7 @@ export interface KeepaliveRecipe {
   /** The account the agent is pinned to. */
   accountId: string | null;
   agentId: string;
-  agentState: KeepaliveState;
+  agentState: Lifecycle;
   cause: RecipeCause;
   /** Requests credited as kept warm since midnight UTC. */
   creditedToday: number;

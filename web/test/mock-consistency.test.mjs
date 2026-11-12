@@ -783,7 +783,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const holders = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
     const own = holders.filter((r) => r.sessionId === held.sessionId);
     assert.ok(held.keyGeneration < created && own.length > 0, 'the row is the earlier generation, with rows of its own');
-    assert.deepEqual([held.requests, held.lastRequestAt], [own.length, own[0].at], "the row's figures are its own rows'");
+    assert.deepEqual([held.spend.requests, held.lastRequestAt], [own.length, own[0].at], "the row's figures are its own rows'");
     assert.equal(held.lastRequestAt, holders[0].at, "the holder's last request ran on this session");
     assert.ok(Date.parse(held.lastRequestAt) < created, 'before the live key');
     assert.deepEqual([held.lastUsedAt, held.pinned], [null, false], 'no pin and no activity of its own past the ledger');
@@ -806,7 +806,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.lib.insideSessionExpiry(newest.at, s.now), `the newest refusal at ${newest.at} is inside the span`);
     const listedAt = (now) => s.lib.sessionsListedAt(now).filter((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId);
     const listed = listedAt(Date.parse(newest.at) + HOUR / 2);
-    assert.deepEqual(listed.map((x) => [x.accountId, x.requests, x.spend, x.lastRequestAt]), [[null, 0, null, newest.at]], 'listed off the ledger with no count and no spend inside the hour of the newest refusal');
+    assert.ok(newest.userAgent !== null, 'the newest refusal names its client');
+    assert.deepEqual(listed.map((x) => [x.accountId, x.spend, x.userAgent, x.lastRequestAt]), [[null, null, newest.userAgent, newest.at]], "listed off the ledger with no spend and the newest refusal's user agent inside the hour of that refusal");
     assert.deepEqual(s.lib.refusalOnlyRows(s.now), listed, "the builder's row at the story's now is the one listed inside the hour");
     assert.deepEqual(listedAt(Date.parse(newest.at) + timeout * 1000 + 1_000), [], 'none past the timeout');
     assert.ok(!s.sessions.some((x) => x.keyId === 'desktop' && x.sessionId === newest.sessionId), `the route's list at the story's clock, ${Math.round((s.now - Date.parse(newest.at)) / 60_000)} min after the newest refusal, leaves it out`);
@@ -818,11 +819,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const x of s.sessions.filter((row) => !row.historical)) {
       const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === x.keyId && r.keyGeneration === x.keyGeneration && r.sessionId === x.sessionId);
       const newest = own.reduce((last, r) => (last === null || Date.parse(r.at) > Date.parse(last) ? r.at : last), null);
-      assert.deepEqual([x.requests, x.lastRequestAt], [s.asked(own).length, newest], `${x.keyId}'s ${x.sessionId}`);
+      // The route answers the count in the spend, and a row with no spend counts none.
+      assert.deepEqual([x.spend?.requests ?? 0, x.lastRequestAt], [s.asked(own).length, newest], `${x.keyId}'s ${x.sessionId}`);
     }
   });
 
-  test(`every agent entry of a session the story seeds names a line of the session or an earlier agent the seed holds, at ${at}`, async () => {
+  test(`every agent entry of a session the story seeds names a line of the session or an earlier agent the seed holds, one entry per agent read off its newest client request or its newest probe, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
@@ -843,15 +845,35 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       [desktop, s.lib.SESSION_IDS[4], '0b7f'],
       [holder, s.lib.SESSION_IDS[0], 'e4b7'],
     ];
+    // The route answers one entry per agent. An agent that ran two models reads the model, the account, the type and
+    // the instant of its newest client request, the greater id winning a tie of the instant, and an agent the ledger
+    // holds probes of alone its newest probe's model with none of the other three.
+    const newestOf = (rows) => [...rows].sort(s.lib.compareRequests)[0];
+    const read = { probesAlone: 0, twoModels: 0 };
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
       const filed = recipes.filter((r) => r.keyId === row.keyId && live.get(r.keyId) === row.keyGeneration && r.sessionId === row.sessionId);
       const lines = new Set(['main', ...row.agentContexts.map((c) => c.agentId), ...filed.map((r) => r.agentId)]);
+      const ids = row.agentRequests.map((entry) => entry.agentId);
+      assert.equal(new Set(ids).size, ids.length, `${name} answers one entry per agent: ${ids.join(', ')}`);
       for (const entry of row.agentRequests) {
         const known = lines.has(entry.agentId) || earlier.some(([generation, sessionId, agentId]) => generation === row.keyGeneration && sessionId === row.sessionId && agentId === entry.agentId);
         assert.ok(known, `${name}: ${entry.agentId} on ${entry.model} names no line of the session and no earlier agent`);
+        const own = s.requests.filter((r) => !r.refused && r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === entry.agentId);
+        const client = own.filter((r) => r.kind !== 'probe');
+        const got = [entry.model, entry.accountId, entry.agentType, entry.lastRequestAt];
+        if (client.length === 0) {
+          read.probesAlone += 1;
+          assert.deepEqual(got, [newestOf(own).canonicalModel, null, null, null], `${name}: ${entry.agentId}, with probes alone`);
+        } else if (new Set(client.map((r) => r.canonicalModel)).size > 1) {
+          read.twoModels += 1;
+          const newest = newestOf(client);
+          assert.deepEqual(got, [newest.canonicalModel, s.lib.servingAttempt(newest)?.accountId ?? null, newest.agentType, newest.at], `${name}: ${entry.agentId}, on two models`);
+        }
       }
     }
+    // The Sunday night's draws hold no agent with probes alone, so that half reads at the smoke's instant alone.
+    assert.ok(read.twoModels > 0 && (at !== '2026-09-16T14:30:00Z' || read.probesAlone > 0), `the story holds the agents both reads need: ${JSON.stringify(read)}`);
     // Story 0's desktop row under the live key, whose plan-funded client rows with tokens primary and secondary serve
     // at both instants. `req_9b6275a3-96b` is a plan-funded request on nightly with no token, which prices nothing, so
     // the fold keys no share for nightly.
@@ -1023,7 +1045,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(row.keepalive.cause, 'agent_released', "the row reads main's cause");
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
     assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
-    assert.deepEqual([row.pinned, row.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
+    assert.deepEqual([row.pinned, row.spend.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
     // Its one request is past the pool's window, so main's pin stands on the probe that followed it.
     assert.ok(s.now - Date.parse(own[0].at) > affinityOf(s, main), "the session's request is past the window");
     assert.ok(s.now - Date.parse(main.lastProbeAt) <= affinityOf(s, main), "main's last probe renewed its pin inside the window");
@@ -1101,10 +1123,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         ['7b2e', true],
       ],
     ]);
-    // The other rows' last uses are mostly draws, so their lines read warm by their own TTL at the story's clock.
-    for (const line of seeded.filter((x) => !written.includes(x.sessionId)).flatMap((x) => x.agentContexts)) {
-      const warm = line.lastUsedAt !== null && line.cacheTtlMs !== null && s.now - Date.parse(line.lastUsedAt) < line.cacheTtlMs;
-      assert.equal(line.warm, warm, `${line.agentId} on ${line.model}, last used ${line.lastUsedAt} on a ${line.cacheTtlMs} ms TTL`);
+    // The other rows' refreshes are mostly draws, so each line reads warm while the story's clock lies before its
+    // `warmUntil`, its last refresh plus its TTL: main's line on the row's pin the row's own refresh, which a probe or
+    // an auxiliary request since its last turn sets apart from its last use, and every other line its last use.
+    for (const row of seeded.filter((x) => !written.includes(x.sessionId))) {
+      for (const line of row.agentContexts) {
+        const refresh = line.agentId === row.agentId && line.model === row.model ? row.lastRefreshAt : line.lastUsedAt;
+        const until = refresh === null || line.cacheTtlMs === null ? null : Date.parse(refresh) + line.cacheTtlMs;
+        assert.deepEqual([line.warmUntil, line.warm], [until === null ? null : iso(until), until !== null && s.now < until], `${line.agentId} on ${line.model}, refreshed ${refresh} on a ${line.cacheTtlMs} ms TTL`);
+      }
     }
   });
 
