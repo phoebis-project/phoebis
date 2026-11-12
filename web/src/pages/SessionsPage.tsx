@@ -233,7 +233,6 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       if (idleLimitOnly) idleLimit = { ranOutAt: idleLimitRanOutAt(session, pool) };
       else if (causes.length === 0) causes.push('the last request left no cacheable prefix to replay');
     }
-    const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
     // The full list stays beside the lines: the causes of a session without a line read every record, and a session
     // whose lines the mod all released still holds records, so it is no session without a recipe.
     const lines = sessionLines(session, agents);
@@ -244,7 +243,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       expiresAt: expiryOf(session, limits),
       finished,
       idleLimit,
-      lastUsed,
+      lastUsed: session.lastUsedAt,
       lines: orderLines(lines, sort, dir),
       noRecipe: agents.length === 0 || idleLimitOnly ? causes : null,
       pool,

@@ -683,6 +683,14 @@ test('a session decodes the word its pin was stamped by, and a row without one r
   assert.equal(d.decodeSession(bare).shedReason, null, 'a row without the member reads null');
 });
 
+test('a session sent with no last use reads its last request as its last use', () => {
+  const row = fixture('sessions').sessions[0];
+  // The route answers no last use for a session without a pin, so its Last used cell and its idle-limit time read
+  // the last request through the decoder alone.
+  const s = d.decodeSession({ ...row, last_request_at: 1_791_721_000_000, last_used_at: null });
+  assert.equal(s.lastUsedAt, new Date(1_791_721_000_000).toISOString());
+});
+
 test('a session decodes its runway and whether it is bounded', () => {
   const row = fixture('sessions').sessions[0];
   const read = (wire) => {

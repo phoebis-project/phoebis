@@ -786,7 +786,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([held.spend.requests, held.lastRequestAt], [own.length, own[0].at], "the row's figures are its own rows'");
     assert.equal(held.lastRequestAt, holders[0].at, "the holder's last request ran on this session");
     assert.ok(Date.parse(held.lastRequestAt) < created, 'before the live key');
-    assert.deepEqual([held.lastUsedAt, held.pinned], [null, false], 'no pin and no activity of its own past the ledger');
+    assert.deepEqual([held.lastUsedAt, held.pinned], [own[0].at, false], 'no pin, so its last use is its last request, as the decoder reads a row with no pin');
     assert.ok(Date.parse(held.lastRequestAt) + s.settings.sessions.expireAfterSeconds * 1000 > s.now, 'still inside the session expiry');
     assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
   });
@@ -2806,6 +2806,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const word = w.outcome.rule === 'shed' ? 'round' : w.outcome.pinEvents.find((e) => e.kind === 'pin_migrated')?.reason;
       assert.equal(r.pin.shed.reason, word, `${r.requestId}/${r.seq} after ${w.requestId}/${w.seq}`);
     }
+  });
+
+  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the replaced pin's row its one written event, at ${at}`, async () => {
+    const s = await story;
+    const details = await Promise.all([...s.lib.UNSEEDED_IDS].map((id) => s.api.getRequest(id)));
+    const placed = details.filter((d) => d.request.attempts.some((a) => a.selection?.placement)).map((d) => d.request.id);
+    assert.deepEqual(placed, [], 'the written rows whose trace carries a placement');
+    // The story seats one event by hand on the replaced pin's row, for what its placement did to the row it found idle.
+    const listing = details.map((d) => [d.request.id, d.events.filter((e) => e.kind.startsWith('pin_')).length]).filter(([, n]) => n > 0);
+    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1]], 'the written rows that list a pin event, with their counts');
   });
 
   test(`a wall reads the newest round on its newest wall's window before it by the round's trigger, at ${at}`, async () => {

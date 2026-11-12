@@ -762,7 +762,7 @@ const writtenRow = (
 
 /**
  * A row the router lists off the ledger's rows alone: no pin, no recipe and no line, the activity fold's last request
- * its own.
+ * its own. Its last use is that request, as the decoder reads a row the route answers with no pin.
  */
 const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGeneration' | 'keyId' | 'lastRequestAt' | 'model' | 'sessionId'>): Session => ({
   ...SESSION_SAMPLE,
@@ -784,7 +784,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   keepalive: noRecipe(),
   lastInputTokens: null,
   lastRefreshAt: null,
-  lastUsedAt: null,
+  lastUsedAt: fields.lastRequestAt,
   lifecycle: null,
   ...NO_MARK,
   pinned: false,

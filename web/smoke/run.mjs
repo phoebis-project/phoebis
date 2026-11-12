@@ -17846,9 +17846,9 @@ await forView('/routing-log', async () => {
   }
   {
     // A placement beside the main conversation promised no size, so its cache read is weighed against the input. The
-    // seed seats the drawer's placement beside main on the newest subagent turn that reads a cache, the a7f3 turn of
-    // the desktop session the mod ended.
-    const { card, page, record } = await story('req_7f3d1b95-e62');
+    // seed seats the drawer's placement beside main on the newest drawn subagent turn that reads a cache, a Sonnet 4.5
+    // turn of the laptop session 7bea4514 on secondary at 08:55:21.
+    const { card, page, record } = await story('req_a0f5c94d-8f0');
     scan('with main placement', card);
     stripDrawn('with main placement', card, modelPairs(record), record);
     await popoversOpen('with main placement', page, card, record);

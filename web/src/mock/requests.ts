@@ -28,6 +28,21 @@ const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
 const upstreamIds = createRng(9_191);
 const upstreamId = (prefix: string) => `${prefix}${upstreamIds.uuid().replace(/-/g, '').slice(0, 22)}`;
+/** FNV-1a over a text: a figure taken from a row's own identity moves no seeded stream. */
+const hashOf = (text: string): number => {
+  let hash = 2_166_136_261;
+  for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 16_777_619) >>> 0;
+  return hash;
+};
+
+/**
+ * A story attempt's upstream id, drawn from a stream seeded by the seed's id and the attempt's index, so a seed added
+ * anywhere in the list moves no other row's ids. `storyRow` asks the message id first, then the request id.
+ */
+const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) => string) => {
+  const own = createRng(hashOf(`${seedId}/${attempt}`));
+  return (prefix) => `${prefix}${own.uuid().replace(/-/g, '').slice(0, 22)}`;
+};
 // The instants inside a request (the write, the first content, the stream's close) draw from a stream of their own,
 // so they move no draw of the rows and no hint.
 const phaseRng = createRng(3_571);
@@ -1109,6 +1124,7 @@ function storyRow(seed: StorySeed): RequestLog {
     const usageBased = usageBasedOf(a.accountId);
     // A headless cut read no head, so it carries none of an answer's facts, whatever status its seed's attempt names.
     const answer = a.status === 200 && !seed.headless;
+    const upstreamIdOf = storyUpstreamIds(seed.id, index);
     return {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
@@ -1128,9 +1144,9 @@ function storyRow(seed: StorySeed): RequestLog {
       serviceTier: answer && kind !== 'count_tokens' ? (seed.tier ?? 'standard') : null,
       startedAt: iso(a.at),
       tier: accountTier(a.accountId),
-      upstreamMessageId: answer ? upstreamId('msg_01') : null,
+      upstreamMessageId: answer ? upstreamIdOf('msg_01') : null,
       // The upstream's request id rides on its head.
-      upstreamRequestId: seed.headless ? null : upstreamId('req_011C'),
+      upstreamRequestId: seed.headless ? null : upstreamIdOf('req_011C'),
       upstreamStatus: seed.headless ? null : a.status,
       usageBased,
       // A head reads the windows as they stand, or the 5-hour reading the seed gives where the answer moved past it.
@@ -1514,12 +1530,11 @@ function storySeeds(): StorySeed[] {
     { agentId: 'd8f3', at: t(12, 41, 10), attempts: [{ accountId: 'primary', at: t(12, 41, 10), ms: 2_300, status: 200 }], classifier: 'client', id: 'req_63a8d2f5-b17', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_900, output: 260 } },
     ...guardrailSeeds(),
     // The router's one stop of the day cut two laptop requests as its drain window closed, before it went down at
-    // 06:11:58: a stream whose head had gone out, and a request no head had reached yet. They sit last so the upstream
-    // ids every seed above draws stay where they were.
+    // 06:11:58: a stream whose head had gone out, and a request no head had reached yet.
     { agentId: 'main', at: t(6, 11, 55), attempts: [{ accountId: 'primary', at: t(6, 11, 55), ms: 2_900, status: 200 }], errorCode: 'router_shutdown', id: 'req_7a2c4e91-d03', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 18_200, input: 900, output: 140 } },
     { agentId: 'main', at: t(6, 11, 57), attempts: [{ accountId: 'primary', at: t(6, 11, 57), ms: 400, status: 200 }], capturedBodies: false, errorCode: 'router_shutdown', headless: true, id: 'req_c58d1f3a-e67', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1' },
     // A fresh desktop session the Overflow workspace's static prefix places there, whose 429 fails it over to primary
-    // on a tie with nightly the runway breaks. Last, so every seed above keeps the upstream ids it draws.
+    // on a tie with nightly the runway breaks.
     {
       agentId: 'main',
       at: t(8, 16, 20),
@@ -1534,37 +1549,34 @@ function storySeeds(): StorySeed[] {
       session: TIED_SESSION_ID,
       usage: { cacheWrite1h: 36_200, input: 2_300, output: 980 },
     },
-    // The contract seat's batch workers on fleet, billed in dollars at API rates. Last, so every seed above keeps the
-    // upstream ids it draws. The first reads the workers' shared prefix, so no row of the seat counts as a miss
-    // between turns.
+    // The contract seat's batch workers on fleet, billed in dollars at API rates. The first reads the workers' shared
+    // prefix, so no row of the seat counts as a miss between turns.
     { agentId: 'main', at: t(14, 8, 20), attempts: [{ accountId: 'contract', at: t(14, 8, 20), ms: 7_400, status: 200 }], id: 'req_c94d1e07-b35', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 12_400, cacheWrite5m: 6_200, input: 2_900, output: 1_120 } },
     { agentId: 'main', at: t(14, 19, 30), attempts: [{ accountId: 'contract', at: t(14, 19, 30), ms: 5_900, status: 200 }], id: 'req_7b2e5d93-a16', keyId: 'fleet', model: 'claude-sonnet-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 18_600, cacheWrite5m: 1_400, input: 1_700, output: 860 } },
     { agentId: 'main', at: t(14, 25, 30), attempts: [{ accountId: 'contract', at: t(14, 25, 30), ms: 11_200, status: 200 }], id: 'req_3f6a9c21-d48', keyId: 'fleet', model: 'claude-opus-5-5', requestClass: 'main', session: FLEET_SESSION_ID, unseeded: true, usage: { cacheRead: 20_000, cacheWrite5m: 2_200, input: 2_400, output: 1_540 } },
     // The approved Ultra's session on bench, a Fable turn and a Sonnet one, priced on its 7-day window and the Fable
-    // week alone, since its poll names no 5-hour window. Last, so every seed above keeps the upstream ids it draws.
+    // week alone, since its poll names no 5-hour window.
     { agentId: 'main', at: t(14, 16, 30), attempts: [{ accountId: 'workshop', at: t(14, 16, 30), ms: 9_800, status: 200 }], id: 'req_1c7e4a9d-f52', keyId: 'bench', model: 'claude-fable-5-1', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 2_100, output: 1_380 } },
     { agentId: 'main', at: t(14, 24, 10), attempts: [{ accountId: 'workshop', at: t(14, 24, 10), ms: 6_300, status: 200 }], id: 'req_9d3b6f2a-c81', keyId: 'bench', model: 'claude-sonnet-5-5', requestClass: 'main', session: WORKSHOP_SESSION_ID, unseeded: true, usage: { cacheRead: 44_000, cacheWrite1h: 1_900, input: 1_600, output: 720 } },
     // The last turns of the desktop session the mod ended, on nightly at the minutes its written figures date main's
     // and its subagents' last requests, and the one turn of a subagent the mod never pinned there, before the others.
-    // Each reads a cached prefix, so none counts as a miss between turns. Last, so every seed above keeps the upstream
-    // ids it draws.
+    // Each reads a cached prefix, so none counts as a miss between turns.
     finishedTurn(FINISHED_AGENTS[0].agentId, FINISHED_AGENTS[0].minutes, 5_200, 'req_4c8e2a17-b39', { cacheRead: 13_400, input: 800, output: 240 }),
     finishedTurn(FINISHED_AGENTS[1].agentId, FINISHED_AGENTS[1].minutes, 3_800, 'req_7f3d1b95-e62', { cacheRead: 9_600, input: 700, output: 180 }),
     finishedTurn(FINISHED_AGENTS[2].agentId, FINISHED_AGENTS[2].minutes, 4_100, 'req_a2e9c6d4-f17', { cacheRead: 8_900, input: 600, output: 210 }),
     finishedTurn('d41e', 60, 3_300, 'req_d41e5b80-c26', { cacheRead: 7_200, input: 500, output: 160 }),
     // A turn of story 4's Explore subagent on its desktop row, a subagent its recipes never pin, so the row lists it
-    // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns. Last, so every seed above
-    // keeps the upstream ids it draws.
+    // as an earlier agent. It reads a cached prefix, so it counts as no miss between turns.
     { agentId: '0b7f', at: NOW - 40 * MINUTE, attempts: [{ accountId: 'nightly', at: NOW - 40 * MINUTE, ms: 3_600, status: 200 }], id: 'req_0b7f2c58-e43', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '89cd1c92', unseeded: true, usage: { cacheRead: 11_800, input: 600, output: 190 } },
     // A classifier call judging a tool call of the desktop turn that ended on secondary at 14:01:47, sent 53 s later,
     // after secondary's head at 14:02:11 read its 5-hour window spent: the judged account holds no allowance, so the
     // router does not direct the call there and places it as any request, on primary's plan tier, off the judged
-    // account. It prices from its usage on primary's plan. Last, so every seed above keeps the upstream ids it draws.
+    // account. It prices from its usage on primary's plan.
     { agentId: 'main', at: t(14, 2, 40), attempts: [{ accountId: 'primary', at: t(14, 2, 40), ms: 1_400, status: 200 }], classifier: 'client_off', id: 'req_7c2e9f41-d03', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: '0d588de5', unseeded: true, usage: { input: 3_600, output: 22 } },
     // The held conversation's next turn, 630 s after its turn on nightly ended at 13:11:09 and so the row's last use,
     // inside the purge's minute past all's 600 s: the placement finds the row expired, releases it for that and for
     // nightly's overage under all's preference for a plan, and lands on primary, which holds its plan tier, writing the
-    // conversation's prefix there afresh. Last, so every seed above keeps the upstream ids it draws.
+    // conversation's prefix there afresh.
     { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
   ];
 }
@@ -1639,6 +1651,11 @@ const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.f
 // routing log derives no decision for them: a block is refused before any selection.
 for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
 export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
+/**
+ * A story row written whole, a seed flagged `unseeded`: no pass draws for it, and none seats a drawn event, an owed
+ * event or a drawer branch on it.
+ */
+const handWritten = (r: Pick<RequestLog, 'id'>): boolean => UNSEEDED_IDS.has(r.id);
 
 /** A summary fork rides its subagent's pin, so each fork's one attempt renewed the pin the subagent's turns hold. */
 function traceForks() {
@@ -1774,7 +1791,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   // row keeps its draws.
   let spentOwed = true;
   for (const r of REQUESTS) {
-    if (r.sessionId === null || r.kind === 'probe' || STORY_IDS.has(r.id)) continue;
+    if (r.sessionId === null || r.kind === 'probe' || STORY_IDS.has(r.id) || handWritten(r)) continue;
     const events: RequestEvent[] = [];
     // The pin the event belongs to: the drawer shows a move only where these match the request's own.
     const pin = pinFieldsOf(r);
@@ -1932,7 +1949,7 @@ function addStoryEvents() {
     const next = owed[0];
     if (!next) break;
     const from = lane?.accountIds.find((id) => id !== r.accountId);
-    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || STORY_IDS.has(r.id) || UNSEEDED_IDS.has(r.id)) continue;
+    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || STORY_IDS.has(r.id) || handWritten(r)) continue;
     REQUEST_EVENTS.set(r.id, [next(r, from)]);
     busy.add(pinOf(r));
     owed.shift();
@@ -2040,7 +2057,7 @@ function identifyRequests() {
 function seedDrawerBranches() {
   const taken = new Set<string>();
   const seed = (want: (s: SelectionTrace, r: RequestLog) => boolean, trace: (s: SelectionTrace, r: RequestLog) => SelectionTrace) => {
-    const r = REQUESTS.find((x) => !taken.has(x.id) && x.kind === 'inference' && x.status === 200 && x.attempts.length === 1 && x.attempts[0].selection !== null && want(x.attempts[0].selection, x));
+    const r = REQUESTS.find((x) => !taken.has(x.id) && !handWritten(x) && x.kind === 'inference' && x.status === 200 && x.attempts.length === 1 && x.attempts[0].selection !== null && want(x.attempts[0].selection, x));
     if (!r) return;
     taken.add(r.id);
     r.attempts = [{ ...r.attempts[0], selection: trace(r.attempts[0].selection as SelectionTrace, r) }];
@@ -2258,9 +2275,7 @@ const HOUR_CLASSES: [string, number][] = [['auxiliary', 2], ['compaction', 1], [
 
 /** A class picked from the row's own identity rather than drawn, so no seeded stream moves. */
 function classOfHour(seed: string): string {
-  let hash = 2_166_136_261;
-  for (let i = 0; i < seed.length; i += 1) hash = Math.imul(hash ^ seed.charCodeAt(i), 16_777_619) >>> 0;
-  let roll = hash % HOUR_CLASSES.reduce((n, [, w]) => n + w, 0);
+  let roll = hashOf(seed) % HOUR_CLASSES.reduce((n, [, w]) => n + w, 0);
   for (const [name, weight] of HOUR_CLASSES) {
     if (roll < weight) return name;
     roll -= weight;
