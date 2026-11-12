@@ -2853,8 +2853,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(replaced.length > 0, 'the story holds a release beside a pin created on another account');
     for (const e of replaced) assert.ok(e.detail.reasons.includes('expired'), `event ${e.id} on ${e.accountId} lists ${e.detail.reasons.join(', ')}`);
     // An idle expiry's placement names no account it left, as a fresh session's does.
-    const named = (await decisionsOf(s)).filter((r) => r.outcome.kind === 'placed' && (r.outcome.fromAccountId !== null) !== r.outcome.pinEvents.some((e) => e.kind === 'pin_migrated'));
+    const records = await decisionsOf(s);
+    const named = records.filter((r) => r.outcome.kind === 'placed' && (r.outcome.fromAccountId !== null) !== r.outcome.pinEvents.some((e) => e.kind === 'pin_migrated'));
     assert.deepEqual(named.map((r) => `${r.requestId}/${r.seq} from ${r.outcome.fromAccountId}`), [], 'the placements whose source and pin move part');
+    // A first attempt's placement that moved a pin moved it for its account's state, as no rule did, so the router
+    // writes the new row as created (the seed `CAUSED_MOVE_ID` in `web/src/mock/requests.ts`).
+    const forced = records.filter((r) => r.outcome.kind === 'placed' && r.request.attempted.length === 0 && r.outcome.pinEvents.some((e) => e.kind === 'pin_migrated'));
+    assert.deepEqual(forced.map((r) => [`${r.requestId}/${r.seq}`, r.outcome.pinWritten?.action]), [['req_c7e41d93-a26/1', 'created']], 'the forced moves and the pin each writes');
   });
 
   test(`a wall reads the newest round on its newest wall's window before it by the round's trigger, at ${at}`, async () => {

@@ -20,7 +20,7 @@ import { keyById } from './pools';
 import { bandAt, freesPlanShare, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
-import { readingPairAt, type EventSeed } from './routingLog';
+import { ROUTING_EVENTS, readingPairAt, type EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
@@ -612,9 +612,11 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
 
 /**
  * The account rollups' moves into each account by reason and by the destination's fit, with the cache the first
- * request after each one wrote again. `moves` is each reason's sum over its fits, as the route answers it. The held
- * time per bucket folds the request rows as the ledger folds the completions, since no account rollup the console
- * reads carries it: the slow-down waits of the bucket's requests summed, and the requests that waited one.
+ * request after each one wrote again, and beside them the story's moves an account's state forced, each under its own
+ * word and fit. A cause filed under a turn would tell a lapse the story holds nowhere, so no cause joins the turns.
+ * `moves` is each reason's sum over its fits, as the route answers it. The held time per bucket folds the request rows
+ * as the ledger folds the completions, since no account rollup the console reads carries it: the slow-down waits of
+ * the bucket's requests summed, and the requests that waited one.
  */
 export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], range: Range): RewritesAnswer {
   const { slotOf, starts } = bucketsOf(range);
@@ -644,6 +646,14 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], ran
     }
     return { at: iso(at), rewriteTokens };
   });
+  const [fromMs, toMs] = [Date.parse(range.from), Date.parse(range.to)];
+  for (const e of ROUTING_EVENTS) {
+    const at = Date.parse(e.at);
+    if (e.kind !== 'pin_migrated' || !Array.isArray(e.detail.reasons) || at < fromMs || at > toMs) continue;
+    const fits = (movesByReasonAndFit[String(e.detail.reason)] ??= {});
+    const fit = typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown';
+    fits[fit] = (fits[fit] ?? 0) + 1;
+  }
   const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
   const held = starts.map((at, i): HeldPoint => ({ at: iso(at), heldMs: sumOf(slowedMs[i], (x) => x), requests: slowedMs[i].length }));
   return { held, moves, movesByReasonAndFit, points };

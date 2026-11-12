@@ -21148,6 +21148,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const moveBars = [...(card('Migration rewrites')?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => li.querySelector('.hbars__label')?.textContent?.trim() ?? '');
   results.push({ name: '/analytics the moves chart draws one bar for each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveBars.length === Object.keys(moves.moves).length && moveBars.includes('Failed over') && moveBars.includes('Shed'), missing: moveBars });
   {
+    // The story's one move an account's state forced lands at 11:31:10, inside the day the card reads, under its cause
+    // and its destination's fit (the seed `CAUSED_MOVE_ID` in `web/src/mock/requests.ts`).
+    const bar = [...(card('Migration rewrites')?.querySelectorAll('.hbars--moves li') ?? [])].find((li) => li.querySelector('.hbars__label')?.textContent?.trim() === 'Funding required');
+    const read = bar === undefined ? null : { segments: [...bar.querySelectorAll('.hbars__seg')].map((seg) => seg.getAttribute('title')), total: bar.querySelector('.hbars__value')?.textContent?.trim() ?? null };
+    results.push({
+      name: "/analytics the moves chart reads the story's move an account's state forced in its cause's words",
+      ok: JSON.stringify(read) === JSON.stringify({ segments: ['fits 1'], total: '1' }),
+      missing: [JSON.stringify(read), moveBars.join(', ')],
+    });
+  }
+  {
     // Each reason's bar stacks its moves by the fit of the destination they landed on, read against the answer the page
     // drew: a segment per fit in the gate's order, titled with the fit's words and its count, and the bar labeled with
     // the reason and the total `moves` answers for it. The story's reasons land on different fits, so two bars split

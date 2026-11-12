@@ -1589,8 +1589,8 @@ function storySeeds(): StorySeed[] {
     // A new conversation the Overflow workspace takes with the plan accounts full, while its balance still holds.
     { agentId: 'main', at: t(11, 27, 40), attempts: [{ accountId: 'overflow', at: t(11, 27, 40), ms: 9_200, status: 200 }], id: LAPSED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 36_400, input: 1_900, output: 1_100 } },
     // Its next turn 210 s on, after the balance ran out at 11:30:12 and before the workspace's funding retry falls due
-    // five minutes after it. The pin is live and its five-minute cache warm, so no rule moves it, the workspace is out
-    // of the eligible set, and the placement moves the pin to primary, writing the conversation's prefix there afresh.
+    // five minutes after it. The pin is live and younger than all's return dwell, so no rule moves it. The workspace
+    // is out of the eligible set, so the placement moves the pin to primary and writes the conversation's prefix there.
     { agentId: 'main', at: t(11, 31, 10), attempts: [{ accountId: 'primary', at: t(11, 31, 10), ms: 8_600, status: 200 }], id: CAUSED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 38_200, input: 1_600, output: 940 } },
   ];
 }

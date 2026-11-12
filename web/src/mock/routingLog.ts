@@ -1353,7 +1353,8 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
 function pinWriteOf(spec: Spec, pinning: boolean, pin: RecordPin | null, pinKey: string, stamps: { hashes: boolean; refresh: boolean }): RecordOutcome['pinWritten'] {
   const r = spec.request;
   if (!isDispatched(spec) || !pinning || (r.kind === 'count_tokens' && spec.kind !== 'renewed')) return null;
-  const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
+  // A live pin its account's state refused leaves by no rule, so the placement writes its row afresh.
+  const action = spec.kind === 'renewed' ? 'renewed' : (pin?.found === 'live' && spec.reasons === undefined) || spec.failover ? 'moved' : 'created';
   const prior = pins.get(pinKey);
   const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
   // The engine stamps the row a shed move or a failover's landing writes with its source, a renewal keeps the row's
