@@ -774,7 +774,7 @@ export interface SelectionTrace {
    * response. */
   cacheRead: number | null;
   cohortHold: CohortHold | null;
-  /** The move reason when a fail-over or a move placed the attempt, null otherwise. */
+  /** The move reason when a failover, a rule or the state of the pin's account placed the attempt, null otherwise. */
   moved: string | null;
   /** Null for a renewal or a choice the strategy made. */
   placement: Placement | null;
@@ -959,17 +959,22 @@ export interface CapturedBodies {
   responseTruncated: boolean;
 }
 
-/** The move reasons a `pin_migrated` event and a trace's `moved` carry. */
+/** The move reasons a rule or a failover writes on a `pin_migrated` event and a trace's `moved`. A move an account's
+ *  state forced carries a cause word in their place, one of `PIN_RELEASE_REASON_VALUES`, beside the event's
+ *  `reasons`. */
 export const PIN_MIGRATION_REASON_VALUES = ['cooldown', 'drain', 'fast_lane', 'mark', 'overage', 'return_to_plan', 'shed', 'spent'] as const;
 /** Why the router moved a session's pin: the reason string of a `pin_migrated` event. */
 export type PinMigrationReason = (typeof PIN_MIGRATION_REASON_VALUES)[number];
 
-/** The reasons a `pin_expired` event carries. The drawer words any other name as sent. */
+/**
+ * The reasons a `pin_expired` event carries, which are also the `reasons` of a move an account's state forced and the
+ * word for its cause. The drawer words any other name as sent.
+ */
 export const PIN_RELEASE_REASON_VALUES = [
-  'attempted', 'budget', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'fast_credits', 'fast_rate_limit', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
+  'attempted', 'budget', 'budget_unknown', 'client_error', 'cooldown', 'deleted', 'disconnected', 'expired', 'fast_credits', 'fast_rate_limit', 'funding_required', 'overage', 'paused', 'reauth_required', 'released', 'spent', 'subscription_ended', 'unpaired', 'unserved',
 ] as const;
-/** Why the router released a session's pin without a move: the `reasons` of a `pin_expired` event, in the
- * order the selection found them. */
+/** Why the router released a session's pin: the `reasons` of a `pin_expired` event, or of the `pin_migrated` event of a
+ * move an account's state forced, in the order the selection found them. */
 export type PinReleaseReason = (typeof PIN_RELEASE_REASON_VALUES)[number];
 
 /** One event of a request's window, as `GET /admin/requests/{id}` lists them beside the summary. */

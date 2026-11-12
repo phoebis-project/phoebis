@@ -182,7 +182,7 @@ const sameTier = (x, y) => x.tier.join('/') === y.tier.join('/');
 const moving = (r) => r.walk.some((w) => w.step === 'cap_filter');
 /**
  * Whether a record lands a failed-over request: a placement after an attempt that names the account the request came
- * from. A first placement names the pin it replaced the same way and walks no ladder.
+ * from.
  */
 const failedOver = (r) => r.outcome.kind === 'placed' && r.outcome.fromAccountId !== null && r.request.attempted.length > 0;
 
@@ -2839,6 +2839,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // The story seats one event by hand on the replaced pin's row, for what its placement did to the row it found idle.
     const listing = details.map((d) => [d.request.id, d.events.filter((e) => e.kind.startsWith('pin_')).length]).filter(([, n]) => n > 0);
     assert.deepEqual(listing, [['req_6f3e1b84-d29', 1]], 'the written rows that list a pin event, with their counts');
+  });
+
+  test(`a release beside a pin created on another account names the idle row, and a placement names a source where it moved a pin, at ${at}`, async () => {
+    const s = await story;
+    const events = (await logOf(s)).filter((x) => x.type === 'event');
+    // A live pin replaced on another account moves, so a release beside a pin created elsewhere is an expiry.
+    const created = (e) => events.some((c) => c.kind === 'pin_created' && c.sessionId === e.sessionId && c.agentId === e.agentId && c.at === e.at && c.accountId !== e.accountId);
+    const replaced = events.filter((e) => e.kind === 'pin_expired' && created(e));
+    assert.ok(replaced.length > 0, 'the story holds a release beside a pin created on another account');
+    for (const e of replaced) assert.ok(e.detail.reasons.includes('expired'), `event ${e.id} on ${e.accountId} lists ${e.detail.reasons.join(', ')}`);
+    // An idle expiry's placement names no account it left, as a fresh session's does.
+    const named = (await decisionsOf(s)).filter((r) => r.outcome.kind === 'placed' && (r.outcome.fromAccountId !== null) !== r.outcome.pinEvents.some((e) => e.kind === 'pin_migrated'));
+    assert.deepEqual(named.map((r) => `${r.requestId}/${r.seq} from ${r.outcome.fromAccountId}`), [], 'the placements whose source and pin move part');
   });
 
   test(`a wall reads the newest round on its newest wall's window before it by the round's trigger, at ${at}`, async () => {

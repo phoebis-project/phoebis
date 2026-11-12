@@ -1499,9 +1499,9 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     cohortHold: spec.heldBefore ?? null,
     completion,
     exhaustion,
-    // A first placement names the pin it replaced on another account, as a failover's landing names the account it
-    // left.
-    fromAccountId: spec.kind === 'moved' || spec.failover ? (spec.from ?? null) : (spec.replaced?.accountId ?? null),
+    // The router names the account a decision left on a move or a failover's landing alone, so a placement that
+    // replaced an idle row names none.
+    fromAccountId: spec.kind === 'moved' || spec.failover ? (spec.from ?? null) : null,
     hold,
     inOverage: chosen?.inOverage ?? false,
     kind: spec.kind,

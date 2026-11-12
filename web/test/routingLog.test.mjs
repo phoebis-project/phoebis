@@ -1069,6 +1069,14 @@ test("a mark's move reads as a failover with its cause, an event with no account
   assert.deepEqual(texts(restart.chips), ['persisted']);
 });
 
+test("a move an account's state forced reads its cause in the release's words, and the same word with no list reads the failover's", () => {
+  const pairs = (detail) => Object.fromEntries(d.detailPairs(event('pin_migrated', { agent_id: 'main', cause: null, epoch: 57, from_account: 'secondary', ...detail }), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
+  // The router writes the replaced pin's whole list beside the cause, the first word of its order the list holds.
+  const caused = pairs({ reason: 'cooldown', reasons: ['cooldown', 'overage'] });
+  assert.deepEqual([caused.Reason, caused.Reasons, caused['Moved by']], [['account cooled'], ['account cooled', 'in overage'], ["the account's state"]]);
+  assert.deepEqual(pairs({ reason: 'cooldown' }).Reason, ['failed over']);
+});
+
 test("a round's off-window pin reads its word and the rewrite cell names its unit", () => {
   const detail = DETAIL_EVENTS.shedding_round;
   // A round that names no rewrite unit is an earlier build's, whose figure prints as stored under any chosen week, so

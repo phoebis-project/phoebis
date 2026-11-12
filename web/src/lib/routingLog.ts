@@ -1,8 +1,8 @@
 import { iso, list, numOrNull as num, oneOf, strings, strOrNull as str } from '@/api/decode';
-import { FACT_UNIT_VALUES, PIN_RELEASE_REASON_VALUES, RESET_OUTCOME_VALUES } from '@/api/types';
-import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, ResetOutcome, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import { FACT_UNIT_VALUES, RESET_OUTCOME_VALUES } from '@/api/types';
+import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, ResetOutcome, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { accountHref, type LogFilters, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
-import { FAILOVER_MOVE_REASONS, moveLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
+import { FAILOVER_MOVE_REASONS, moveLabel, releaseLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { tierOrder } from './costs';
 import { has, lookup } from './counts';
 import type { ChipText } from './filterBar';
@@ -79,34 +79,6 @@ export interface Chip {
   mono?: boolean;
   title?: string;
   value: string;
-}
-
-/** Why the router released a pin without a move, in the order the selection found them. */
-export const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
-  attempted: 'already tried by this request',
-  budget: 'account at its budget',
-  client_error: 'client error',
-  cooldown: 'account cooled',
-  deleted: 'account deleted',
-  disconnected: 'account disconnected',
-  expired: 'pin idle past the affinity window',
-  fast_credits: 'usage credits unavailable for fast mode',
-  fast_rate_limit: 'fast lane rate limited',
-  funding_required: 'funding required',
-  overage: 'in overage',
-  paused: 'account paused',
-  reauth_required: 'needs re-auth',
-  released: 'nothing else stood against the account',
-  spent: 'window spent',
-  subscription_ended: 'subscription ended',
-  unpaired: 'account unpaired',
-  unserved: 'model no longer served here',
-};
-
-/** A reason the console has no words for reads as the router sent it. */
-export function releaseLabel(reason: string): string {
-  const known = PIN_RELEASE_REASON_VALUES.find((v) => v === reason);
-  return known === undefined ? reason : PIN_RELEASE_LABEL[known];
 }
 
 /**
@@ -498,6 +470,9 @@ function pageIndexOf(page: readonly RoutingLogRow[]): PageIndex {
   return index;
 }
 
+/** A move the state of the pin's account forced: its event carries the replaced pin's whole list of reasons. */
+const causedMove = (d: Record<string, unknown>): boolean => Array.isArray(d.reasons);
+
 function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
   const d = e.detail;
   switch (e.kind) {
@@ -542,8 +517,10 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       const first = str(list(d.reasons)[0]);
       return { value: first === null ? 'expired' : first === 'expired' ? 'idle' : releaseLabel(first) };
     }
-    case 'pin_migrated':
-      return { value: moveLabel(str(d.reason) ?? '') };
+    case 'pin_migrated': {
+      const reason = str(d.reason) ?? '';
+      return { value: causedMove(d) ? releaseLabel(reason) : moveLabel(reason) };
+    }
     case 'pin_released':
       return { value: 'by hand' };
     // A row written before the cause was a clean poll's.
@@ -668,7 +645,7 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
     case 'pin_created':
       return count('epoch', d.epoch);
     case 'pin_migrated': {
-      if (!FAILOVER_MOVES.has(str(d.reason) ?? '')) return count('epoch', d.epoch);
+      if (causedMove(d) || !FAILOVER_MOVES.has(str(d.reason) ?? '')) return count('epoch', d.epoch);
       // The epoch would stand where the answer belongs, so a failover whose failed attempt is not drawn reads nothing.
       const status = failoverAnswer(e, page);
       return status === null ? [] : [pair('answer', status, 'count', now)];
@@ -2011,15 +1988,18 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const from = movedFrom(row);
       const reason = str(d.reason) ?? '';
       const epoch = num(d.epoch);
+      // A cause shares `cooldown`, `overage` and `spent` with a rule or a failover, so the list alone tells them apart.
+      const caused = causedMove(d);
       add('From', from === null ? null : accountChip(from));
       add('To', row.accountId === null ? null : accountChip(row.accountId), epoch === null ? null : plain(fmtInt(epoch), 'epoch'));
-      add('Reason', plain(moveLabel(reason)));
+      add('Reason', plain(caused ? releaseLabel(reason) : moveLabel(reason)));
+      if (caused) add('Reasons', ...list(d.reasons).map((r) => plain(releaseLabel(String(r)))));
       // A failover's detail carries its cause as an object, a rule's move and a failover that marked nothing a null.
       if (d.cause !== null && typeof d.cause === 'object' && !Array.isArray(d.cause)) {
         const cause = rec(d.cause);
         add('Cause', plain(causeWords({ cause: str(cause.cause), reason: str(cause.reason), scope: str(cause.scope), state: str(cause.state), window: str(cause.window) })));
       }
-      add('Moved by', plain(RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
+      add('Moved by', plain(caused ? "the account's state" : RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
       // A move the gate read carries its verdict, and the detail carries a null runway where no window bounds it.
       const fit = str(d.fit);
       if (fit !== null) {

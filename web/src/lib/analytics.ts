@@ -1,5 +1,6 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
+import { PIN_RELEASE_REASON_VALUES } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
@@ -27,8 +28,46 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
 export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
 /** The moves an answer forced on a session, which the pool card's move tile names apart from its count. */
 export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown', 'fast_lane', 'mark'];
-/** A reason the console has no label for reads as the router sent it. */
-export const moveLabel = (reason: string): string => lookup(PIN_MIGRATION_LABEL, reason) ?? reason;
+
+/** Why the router released a pin, in the order the selection found them, and the cause of a move it forced. */
+export const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
+  attempted: 'already tried by this request',
+  budget: 'account at its budget',
+  budget_unknown: 'account budget unknown',
+  client_error: 'client error',
+  cooldown: 'account cooled',
+  deleted: 'account deleted',
+  disconnected: 'account disconnected',
+  expired: 'pin idle past the affinity window',
+  fast_credits: 'usage credits unavailable for fast mode',
+  fast_rate_limit: 'fast lane rate limited',
+  funding_required: 'funding required',
+  overage: 'in overage',
+  paused: 'account paused',
+  reauth_required: 'needs re-auth',
+  released: 'nothing else stood against the account',
+  spent: 'window spent',
+  subscription_ended: 'subscription ended',
+  unpaired: 'account unpaired',
+  unserved: 'model no longer served here',
+};
+
+/** A reason the console has no words for reads as the router sent it. */
+export function releaseLabel(reason: string): string {
+  const known = PIN_RELEASE_REASON_VALUES.find((v) => v === reason);
+  return known === undefined ? reason : PIN_RELEASE_LABEL[known];
+}
+
+/**
+ * The moves an account's state forced on a session: the cause words of a replaced pin's move that no rule and no
+ * failover shares. `cooldown`, `overage` and `spent` stay in their lists, since a count keyed by the word alone
+ * cannot tell a cause from the rule or the failover of the same word.
+ */
+export const CAUSE_MOVE_REASONS: readonly PinReleaseReason[] = ['attempted', 'budget', 'budget_unknown', 'deleted', 'disconnected', 'fast_credits', 'fast_rate_limit', 'funding_required', 'paused', 'reauth_required', 'released', 'subscription_ended', 'unpaired', 'unserved'];
+
+/** A move's reason in words: a rule's or a failover's label, else the cause's words as a release reads them, else
+ *  the word as the router sent it. */
+export const moveLabel = (reason: string): string => lookup(PIN_MIGRATION_LABEL, reason) ?? releaseLabel(reason);
 
 /** The held bars: one per bucket with its milliseconds and request count, and the range's sum for the legend. */
 export function heldBars(answer: RewritesAnswer): { bars: HeldPoint[]; totalMs: number; totalRequests: number } {

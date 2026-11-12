@@ -6351,9 +6351,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   page.unmount();
   {
     // The route answers `unknown` for a move that named no reason, and a later router may add one: neither is a rule
-    // move or a failover, so the title lists it apart from both.
+    // move or a failover, so the title lists it apart from both. A move an account's state forced, the paused account's
+    // here, reads under a heading of its own in the words its release reads, and the figure counts none of them.
     const { listPools } = api;
-    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, movesPerHour: { cooldown: 1, mark: 1, spent: 1, unknown: 2 } } : p));
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, movesPerHour: { cooldown: 1, mark: 1, paused: 1, spent: 1, unknown: 2 } } : p));
     const odd = await mount('/pools', { now: CLOCK_ORIGIN });
     api.listPools = listPools;
     const tile = [...odd.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all')?.querySelector('.pool__stats > div:nth-child(7) dd');
@@ -6363,12 +6364,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Failovers left out of the count',
       'failed over 1',
       'account marked 1',
+      "Moves an account's state forced, left out of the count",
+      'account paused 1',
       'Other moves left out of the count',
       'unknown 2',
       "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
     ].join('\n');
     results.push({
-      name: '/pools the moves tile lists a reason outside the rule moves and the failovers apart from both',
+      name: "/pools the moves tile lists the moves an account's state forced and a reason it does not know apart from the rule moves and the failovers",
       ok: tile?.textContent?.trim() === '1' && tile.getAttribute('title') === want,
       missing: [tile?.textContent?.trim() ?? 'no tile', tile?.getAttribute('title') ?? 'no title'],
     });
@@ -16254,6 +16257,23 @@ await forView('/routing-log', async () => {
       name: "/routing-log an account edit's Account cell links the account it edited",
       ok: edit !== undefined && edit.accountId === null && JSON.stringify(links) === JSON.stringify([`/accounts/${edit.detail.target}`]),
       missing: [edit ? `${edit.detail.target}, account ${edit.accountId}` : 'no account edit in the story', `links ${JSON.stringify(links)}`, cell(tr, 'account')?.textContent ?? 'no row'],
+    });
+    page.unmount();
+  }
+  {
+    // The held conversation's next turn finds its row on nightly idle past all's window and lands on primary (the seed
+    // `REPLACED_PIN_ID` in `web/src/mock/requests.ts`): an expiry, so its placement names no account it left.
+    const id = 'req_6f3e1b84-d29';
+    const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 25, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
+    const at = Date.parse(own[0]?.at ?? '');
+    const page = await mount(`/routing-log?request=${id}&from=${iso(at - 15 * MINUTE)}&to=${iso(at + 15 * MINUTE)}`, { now: CLOCK_ORIGIN });
+    const tr = trs(page).find((row) => row.getAttribute('data-row') === `${id}/1`);
+    // The cell draws the row's model under the accounts, as a link of its own.
+    const links = [...(cell(tr, 'account')?.querySelectorAll('a[href^="/accounts/"]') ?? [])].map((a) => a.getAttribute('href'));
+    results.push({
+      name: "/routing-log a placement after its pin's idle expiry names no account it left",
+      ok: own.length === 1 && JSON.stringify(links) === JSON.stringify(['/accounts/primary']),
+      missing: [`${own.length} decisions`, `links ${JSON.stringify(links)}`, cell(tr, 'account')?.textContent ?? 'no row'],
     });
     page.unmount();
   }

@@ -29,7 +29,7 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
-import { FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
+import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { EMPTY_FIELD, ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, typedOf, type PoolGroup, type TypedField } from '@/lib/forms';
@@ -607,15 +607,17 @@ function PoolCard({
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
   // number. The figure sums the rule moves, a keepalive probe's move included, which the log lists as moved only with
-  // probe decisions chosen. The title names the failovers apart, which the log draws as a later attempt's placement,
-  // and any reason this build does not know apart from both.
+  // probe decisions chosen. The title names under their own headings the failovers, which the log draws as a later
+  // attempt's placement, the moves an account's state forced, which it draws as a placement too, and any reason this
+  // build does not know.
   const moveCounts = Object.entries(pool.movesPerHour)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
   const among = (reasons: readonly string[]) => moveCounts.filter(([reason]) => reasons.includes(reason));
   const ruleMoves = among(RULE_MOVE_REASONS);
   const failovers = among(FAILOVER_MOVE_REASONS);
-  const known: readonly string[] = [...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS];
+  const causes = among(CAUSE_MOVE_REASONS);
+  const known: readonly string[] = [...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS, ...CAUSE_MOVE_REASONS];
   const others = moveCounts.filter(([reason]) => !known.includes(reason));
   const movesTotal = ruleMoves.reduce((s, [, count]) => s + count, 0);
   const moveLine = ([reason, count]: [string, number]) => `${moveLabel(reason)} ${fmtInt(count)}`;
@@ -623,6 +625,7 @@ function PoolCard({
     ruleMoves.length === 0 ? 'No rule moved a session in the last hour' : 'Rule moves in the last hour',
     ...ruleMoves.map(moveLine),
     ...(failovers.length === 0 ? [] : ['Failovers left out of the count', ...failovers.map(moveLine)]),
+    ...(causes.length === 0 ? [] : ["Moves an account's state forced, left out of the count", ...causes.map(moveLine)]),
     ...(others.length === 0 ? [] : ['Other moves left out of the count', ...others.map(moveLine)]),
     `Opens the Routing log on pool ${pool.id} and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen`,
   ].join('\n');

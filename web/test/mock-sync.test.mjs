@@ -156,7 +156,7 @@ const CLOSED = {
   },
   requests: {
     '.requests[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES,
-    '.requests[].attempts[].selection.moved': [...d.PIN_MIGRATION_REASON_VALUES, null],
+    '.requests[].attempts[].selection.moved': [...d.PIN_MIGRATION_REASON_VALUES, ...d.CAUSE_MOVE_REASONS, null],
     '.requests[].attempts[].selection.skipped[].obstacle': d.SKIP_OBSTACLE_VALUES,
     '.requests[].kind': d.REQUEST_KIND_VALUES,
     '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
