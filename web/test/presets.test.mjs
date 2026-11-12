@@ -127,6 +127,11 @@ test('the round refuses a mark that leaves the unmarked priced pins under a tent
   assert.deepEqual(d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }], 0.95), ['a', 'c']);
 });
 
+test('the round marks a pin whose mark leaves exactly a tenth of its burn sum on the account', () => {
+  // Of a sum of 1.0, a's mark leaves b's 0.1, the tenth itself. The sum less a's burn reads 0.09999999999999998.
+  assert.deepEqual(d.shedMarks([{ burn: 0.9, id: 'a' }, { burn: 0.1, id: 'b' }], 0.9), ['a']);
+});
+
 test('the round refuses no mark while an unpriced pin stands unmarked', () => {
   // The unpriced pin's burn is unknown rather than none, so it stays on the account and b's mark leaves it there.
   assert.deepEqual(d.shedMarks([{ burn: 0.5, id: 'a' }, { burn: 0.45, id: 'b' }, { burn: 0.05, id: 'c' }, { burn: null, id: 'unpriced' }], 0.95), ['a', 'b']);

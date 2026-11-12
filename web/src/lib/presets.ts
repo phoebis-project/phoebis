@@ -66,7 +66,9 @@ export function shedMarks(ordered: { burn: number | null; cost?: number; id: str
   const unpricedStays = ordered.some((pin) => pin.burn === null && pin.standing !== true);
   // A standing mark is a move pending, so its burn counts as removed before the walk marks anything else.
   let removed = ordered.reduce((n, pin) => n + (pin.standing === true ? (pin.burn ?? 0) : 0), 0);
-  const refused = (burn: number) => !unpricedStays && sum - removed - burn < SHED_MARK_SHARE * sum;
+  // The guard sums the pins that stay, as the router does, since the round's sum less what leaves can round under a
+  // floor those pins reach exactly.
+  const refused = (candidate: Pin) => !unpricedStays && ordered.filter((q) => q !== candidate && q.standing !== true && !marks.includes(q.id)).reduce((n, q) => n + (q.burn ?? 0), 0) < SHED_MARK_SHARE * sum;
   // An unpriced burn moves the removed sum nowhere, so marking the pin would shed a session on a guess. A pin with no
   // sibling to move to stays where it is, and its burn stays on the account.
   const open = (pin: Pin): pin is Pin & { burn: number } => pin.burn !== null && pin.skip !== true && pin.standing !== true;
@@ -79,7 +81,7 @@ export function shedMarks(ordered: { burn: number | null; cost?: number; id: str
     const pick = ordered
       .slice(index)
       .filter(open)
-      .filter((q) => q.burn >= rest && !refused(q.burn))
+      .filter((q) => q.burn >= rest && !refused(q))
       .reduce<Pin | null>((best, q) => (best !== null && (best.cost ?? 0) <= (q.cost ?? 0) ? best : q), null);
     if (pick !== null) {
       marks.push(pick.id);
@@ -88,7 +90,7 @@ export function shedMarks(ordered: { burn: number | null; cost?: number; id: str
     // A pin under the floor relieves too little of the rest to be worth its move, so it stays.
     if (pin.burn < SHED_MARK_SHARE * rest) continue;
     // The guard refuses this pin alone: a later pin's smaller mark may still leave a tenth on the account.
-    if (refused(pin.burn)) continue;
+    if (refused(pin)) continue;
     marks.push(pin.id);
     removed += pin.burn;
   }
