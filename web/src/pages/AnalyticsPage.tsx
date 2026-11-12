@@ -2738,7 +2738,7 @@ function AccountsSection({
   bucketMs: number;
   error: string | null;
   otherFilters: boolean;
-  /** The registry read's accounts, null while it runs or after it failed. */
+  /** The registry read's accounts, null until its first answer and while that first read has failed. */
   registry: Account[] | null;
   rollups: AccountRollup[] | null;
   slotOf: (id: string) => number | null;
@@ -2768,7 +2768,8 @@ function AccountsSection({
     [accounts, rollups],
   );
   // A null Fable peak reads n/a only where the registry's row holds no Fable window, so an account the registry no
-  // longer holds, and every account while the registry read is in flight or failed, reads the unsampled dash.
+  // longer holds, and every account until the registry's first answer and while that first read has failed, reads the
+  // unsampled dash.
   const fableless = useMemo(() => new Set((registry ?? []).filter((a) => a.fableWindow === null).map((a) => a.id)), [registry]);
   const data = useMemo(() => peakLines(rollups ?? [], accounts, span, bucketMs), [rollups, accounts, span, bucketMs]);
   const [window, setWindow] = useState('five_hour');

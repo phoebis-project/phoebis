@@ -1733,8 +1733,8 @@
   grid-column: 1 / -1;
 }
 
-/* The count's slot holds its longest ordinary text, "100 shown, more available", so the edge's width and the row's line
-   count stay put while the count changes. */
+/* The count's slot holds the longest text of a freshly read page, "100 shown, more available", so the edge's width and
+   the row's line count stay put while the count changes. A followed page past 999 rows outgrows the slot. */
 .requests > .filter-bar .filter-bar__count {
   min-width: 169px;
   text-align: right;
@@ -2045,6 +2045,7 @@
   min-width: 0;
 }
 
+/* The cells below beat the routing log's cell rules of equal weight by following them, and lose in components.css. */
 .decision-card .chip.decision-card__hash,
 .strip-popover .chip.decision-card__hash {
   font-size: 11.5px;
@@ -2559,6 +2560,7 @@
   }
 }
 
+/* The rules below beat the window bars' own rules of equal weight by following them, and lose in components.css. */
 /* A usage-based seat's one spend bar, across the width the triple takes. */
 .wbars--1 {
   grid-template-columns: minmax(0, 1fr);

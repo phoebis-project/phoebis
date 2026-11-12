@@ -7327,16 +7327,16 @@ const MIDNIGHT = (origin) => {
  * head. Under the mock's story the Requests row at 1280 by 800 holds two lines in every case, since the count's slot
  * keeps the width of its longest text whatever the count reads: the slots take 1284 px in the 992 px row and the edge
  * wraps alone onto the second line, the row 72 px and the bar 72 at rest, across midnight and under the sort and 106
- * with its chips. At 1440 by 900 it holds one line at rest, with its chips and under the sort (the slots 1152 px in
- * the 1152 px row), and two across midnight, whose Custom pill takes the slots to 1444 px in the 1152 px row (the row
- * and the bar 72 px). Against another story the row holds two lines where its slots run past it and one otherwise. On a
- * card view the element after the bar and the tiles stand under the bar's bottom. The row's
- * `width`, its slots' widths and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the
- * Group by select reads the Add filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row
- * run no wider than their boxes and the right edge, and the count where the view draws one, end inside the window. At
- * 400 by 800, at rest on every view, the bar and its row run no wider than their boxes and the Refresh button, and the
- * count where the view draws one, end inside the window. There with the view's chips, a chip the line folds draws no
- * box. Records to `measurements`.
+ * with its chips. At 1440 by 900 it holds one line at rest, with its chips and under the sort (the slots 1152 px in the
+ * 1152 px row), and two across midnight, whose Custom pill takes the slots to 1444 px in the 1152 px row (the row and
+ * the bar 72 px). Against another story the row holds two lines where its slots run past it and one otherwise. On a
+ * card view the element after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths
+ * and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add
+ * filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes
+ * and the right edge, and the count where the view draws one, end inside the window. At 400 by 800, at rest on every
+ * view, the bar and its row run no wider than their boxes and the Refresh button, and the count where the view draws
+ * one, end inside the window. There with the view's chips, a chip the line folds draws no box. Records to
+ * `measurements`.
  */
 async function barRow(theme, view) {
   const say = (what) => failures.push(`${theme} ${view} bar: ${what}`);

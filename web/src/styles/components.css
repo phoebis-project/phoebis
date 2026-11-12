@@ -2496,7 +2496,7 @@ textarea.input {
   color: inherit;
 }
 
-/* Attempt trail */
+/* Attempt trail: the status badge's attempt mark */
 .badge__extra {
   opacity: 0.8;
 }
@@ -2663,7 +2663,7 @@ textarea.input {
   align-items: center;
 }
 
-/* Attempt trail */
+/* Attempt trail: the count and its card */
 .trail-count {
   cursor: default;
   white-space: nowrap;
@@ -3178,7 +3178,7 @@ textarea.input {
   border-top: 1px solid var(--hairline);
 }
 
-/* Group by */
+/* Group by: the Groups popover */
 /* The Groups popover's field keeps the box's 8 px inset, as the Custom range popover's fields do. */
 .groups-popover {
   padding: 4px 8px 8px;
@@ -3377,7 +3377,7 @@ textarea.input {
   color: var(--ink-2);
 }
 
-/* Tile */
+/* Tile: the value's tones */
 .stat__value.is-critical {
   color: var(--critical-ink);
 }
@@ -3386,7 +3386,7 @@ textarea.input {
   color: var(--warning-ink);
 }
 
-/* Attempt trail */
+/* Attempt trail: the trail of badges */
 .trail {
   display: inline-flex;
   flex-wrap: wrap;
@@ -3808,7 +3808,7 @@ textarea.input {
   z-index: calc(var(--z-sticky) - 1);
 }
 
-/* Group by */
+/* Group by: the select */
 /* The page's group-by: a 160 px select after its label. */
 .groupby-select {
   width: 160px;
@@ -3824,7 +3824,7 @@ textarea.input {
   padding: 4px 8px;
 }
 
-/* Tile */
+/* Tile: the cost figure */
 /* A native Cost figure stays whole, so a narrow tile moves the funding's word under the figure rather than breaking
    the figure. The inline block leaves a break before the word. */
 .cost-figure {

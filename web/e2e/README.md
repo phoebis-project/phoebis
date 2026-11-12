@@ -184,116 +184,115 @@ chip) and the Resets chip's short form in that window (mock pass: on the story's
 form drawing no box and the short form drawing one, `nightly`'s reading "1 ends in 4 days" and `workshop`'s "1 cooldown
 until 15:10"), the Quota cards' extra usage flag (mock pass: its ink on its fill on nightly's card at 4.5 to 1 or more
 in each theme under each palette), the timeline's chips on the Quota windows section (each inside its column, a chip
-with a share in the
-background and ink of the card chip of the same tone, primary's used fill at the share the page computed, the now line
-at the chart's now share of primary's track within a pixel, each live bar's body and used fill its lane's color at two
-strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take, and in the mock pass the
-contract lane's one chip, its amount left of the limit with the estimate's sentence on hover, from primary's chips' left
-edge, of their height and at least their column's width), the timeline at 340 and 400 by 900 (each lane's head above its
-track, the now line at the chart's now share on every track and its pill in the axis row, the day grid crossing no
-lane's head and starting at the tracks' left, the chips wrapping inside the lane with none cut, a usage-based seat's one
-chip on one row, every day cell's short labels whole, no bar's label cut and nothing scrolling sideways), the timeline
-under the 12-hour setting in the 5-hour zoom at 340 and 400 by 900 and 1280 by 800 (mock pass, on loads of its own: as
-many cells as the largest divisor of twelve whose cell holds "12 AM" in the sub's face, every cell's labels whole and a
-short hour's full time on its title), the Quota cards' one height (the head's and the foot's rules at one offset on
-every card, and in a 375 by 800 window the same figures recorded and nothing compared), the reset dialog's walk (mock
-pass: on the story's `primary`, Back returns to the dialog's first page with the focus on the first row's Use reset, the
-close through Cancel leaves the focus on the card's Use reset, and so does the close of a second opening whose click
-left the focus on the card, and the walk sends no claim), the cards leaving out the plan-ended account the list shows
-(mock pass: no card naming it, their count on the bar, the first card against its neighbor on its row, and a window the
-account does not carry kept as a row, its words in the muted ink in the reset label's place, in the type size of a live
-row's label and to its right edge, beside a chip naming the window alone with the words on its title), every Quota
-card's meters at least 120 px wide, its window cells inside its padding, its chip column as wide as its widest chip and
-its reset column as wide as its widest label within its 150 px bound, a split label read by its wider part, at 1280 by
-800 with two cards in a row in the mock pass and in a window that sets two cards on the card grid's floor (an expired
-line among its cells where a listed card draws one, and one card in a row 1 px narrower), and at 375 by 800 and 390 by
-844 with no sideways scroll on the page and each card inside the window (the reset label on a row of its own there, so
-its column goes unread), the Quota cards' window rows at seven widths from 340 to 1280 px (from 900 px up each reset
-label beside a meter of 120 px or more, under 900 px on a row of its own under its meter, no label cut and nothing
-scrolling sideways), the 7-day and Fable week remaining cards, the error state, the lines and the left-out lists under
-the quota rings (mock pass: both lines and the Fable ring's list drawn, each across the ring's grid from its card
-title's left edge), the recent requests' model cells and their table's fit, the recent requests' Cost cell under All in
-dollars and Billed dollars (mock pass: a subscription row's equivalent line in the size, line height and ink of the
-Tokens cell's second line, and its dash under the nothing billed title), the Estimated cost, 24h tile on the story's own
-unpriced rows (mock pass, on a load of its own: the subscription line's dash under the unpriced title, in the size,
-weight and ink of the billed figure beside it and in the weight and ink of the Tokens, 24h tile's lone figure), the
-recent requests' columns at 1280 by 800 and 1440 by 900 (Time the fill, its scroll past the card recorded in the mock
-pass), the cost-cap rows, the wasted-probe rows, the Cache warming tab's saving tiles under each unit position (Probe
-cost, Saved by probes, Net saving and Kept warm on one row at one top, the two saving tiles in the Probe cost tile's box
-and value type, and the Saved by probes chart in the box and title type of the card beside it), the Cost tab on the
-story's own unpriced rows (mock pass, on loads of its own: the Cost tile's dash under the unpriced title in the type,
-ink and top of the Cost per request tile's first figure, and the Cost by card's note on a line of its own under the
-subtitle's text, at its left edge, in its type and ink, its text recorded), the burn cards (Plan per hour, 5-hour per
-hour, Fable week per hour and Spend per minute against Failovers, and in the mock pass the four cards two to a row on
-two top edges at 1440 by 900, each half the row less half its gap, under the key grouping and under the Accounts filter
-naming the account whose traffic prices nothing), the Errors by code card's subtitle (its text, in the type and ink of
-the Refusals by code card's subtitle), the plan legend's model unlisted entry (and no estimated entry), the placement
-and budget tables (the Burn section's cards closing on Member budgets after the charts), the Unused allowance by account
-card (mock pass: below Accounts in range, its columns under the width rule with Account the fill at 1280 by 800, and its
-Account column at 375 by 800 at least 132 px with a 132 px min-width, as wide as Accounts in range's), a week priced at
-its own tier in the Ultra week (mock pass: on the studio account's detail the allowance block's third-newest 7-day week,
-run under Pro, in the type size, weight and right edge of the second-newest week's figure and from the head figure's
-right edge, its figures and its total recorded, and on the Analytics view's Accounts tab the unused allowance card's
-studio row's 7-day four weeks' figure, the block's total, in the type size, weight and right edge of the next row's),
-the Analytics tables' columns, each read on the tab that draws it (the Traffic breakdown's group column the fill, Key on
-the misses-by-reason breakdown under its wrapped headers, Cache by model's width recorded under native with every column
-inside its wrap at 1280 by 800 and in the mock pass a cost cell's billed line drawn, Rung on the placements table, Pool
-and Account on the member budgets, whose Spent column is as wide as its meter's 140 px floor, and the Accounts in range
-card's account column at least 132 px at 375 by 800 with the table scrolling inside its wrap and the card as wide as the
-Pace card), the request table's fit (in both passes the default columns inside the card at 1280 by 800 with the Cost
-column whole, Time the one fill taking the card less the other columns, its floor the widest dated time the clock
-setting draws with the cell's padding, every id line the whole id cut by the room alone with at least twelve characters
-in view, and no Client text cut, every Time cell printing its date whatever the row's age, again under the 7-day range
-read a day and an hour on, with every Time cell on one line inside its cell, and there under the 12-hour setting, the
-table carrying its 12-hour class and, where the set runs past the card, scrolling inside its wrap with Time at its
-floor), its sizes (at 1440 by 900 inside the card with every id whole in the mock pass, and at 375 by 800 at its
-narrowest with Time at its floor, scrolling inside its wrap with the page as wide as the window), its columns (Time the
-fill, the Status, Attempts and links cells wrapping), its text at 1920 by 1080 in the mock pass (no client class or
-agent type cut, each read on its own span, and every id whole), the usage-based Cost cell (mock pass: `usage-based`
-under its dollars in the tag, size, weight and ink of a billed row's funding word, its hover `Billed in dollars:
-usage-based`), the Status cell's refusal chip against the code's badge (mock pass, on the refused answers' list: the
-`cyber` chip in the badge's font size and height from its left edge and under it at the cell's gap, its text and the
-upstream's hover recorded), the Agent filter's chip on both logs and Analytics (mock pass, on a story session's address
-with `agent_id=main`: the `agent: main` chip against the `session:` chip in height, top edge and its values' font family
-and size, its text recorded, and no `user agent:` chip), the table with Time turned off (`table--no-fill` at its content
-width at 1280 by 800 and 1920 by 1080), the Cache warming grid (an odd last card spanning its row, its title in the type
-of the card before it), the Analytics tiles rows and the Cache warming grid at 1280 by 800 and 1440 by 900 (no figure on
-the Cost and Cache warming tiles rows, the Wasted probes card's among them, wider than its tile, each row holding a
-figure in the Ultra week in the mock pass under the Accounts filter naming nightly, a Cache warming card alone on its
-row spanning the grid and a last card that shares its row on its neighbor's top edge, each figure and card recorded),
-the Traffic table grouped by model (its Error rate column, and the no model row's Error rate a dash in the muted ink and
-in the type of the rate cell beside it, which reads a percent, the row required in the mock pass alone since the
-router's seed holds no request without a model), the request pages' widths, walked on a load of their own once every
-view's shot is taken, the pagers of both logs (three buttons 32 px square on each, the request log's page-size select 32
-px, each footer one control tall with its padding and its border), the request log's range control (the group 32 px with
-its six pills 28 px at one top, the group against the split Refresh button on height and the search field on height and
-top, the Custom pill's width recorded), the speed chip, and the cache miss reason, effort and request class chips (each
-against the turn origin chip at 26 px, on an address that holds them), the Cost split's rings under native (each center
-figure inside its ring, the billed ring alone in the mock pass, whose range prices its plan rows nothing), the native
-Cost by table (its width recorded, every column inside its wrap at 1280 by 800), the filter bar of every list view at
-1280 by 800 and 1440 by 900, at rest, with the view's chips, on a ranged view with a span across midnight and on
-Requests under "Sort: Output tokens" (the row 32 px on one line with every control 32 px at one top and a segmented's
-pills 28 px, the bar 32 px at rest and 66 px with a chip line, 49 and 83 px as the Analytics sticky bar, the Requests
-row under the mock on two lines at 1280 by 800 in every case, since the count's slot keeps the width of its longest text
-whatever the count reads (the slots 1284 px in the 992 px row, so the edge wraps alone onto the second line, the row 72
-px, the bar 72 px at rest, across midnight and under the sort and 106 px with its chips), and at 1440 by 900 on one line
-at rest, with its chips and under the sort (the slots 1152 px in the 1152 px row) and on two across midnight (the Custom
-pill's span taking the slots to 1444 px in the 1152 px row, the row and the bar 72 px), under another story on two lines
-where its slots run past the row and on one line otherwise, each chip 26 px with its word in `--ink-2` and its values in
-`--ink`, the chip line on one line, the first card's head below the
-bar, on a card view the next element and the tiles below it, on Analytics the Group by select against Add filter, and on
-the routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by 800 on
-Analytics and Requests the bar's scroll width at most its client width with the count inside the window, the trailing
-slots wrapped, and at 400 by 800 on every view with a bar, at rest, the bar and the row no wider than their boxes with
-the count where the view draws one and the Refresh button inside the window), the Kinds list through Add filter on the
-routing log (Select all, the eight presets and the 45 kinds, its popover 8 px inside the window at 1280 by 800), the
-split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count beside it
-never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request landing
-below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a top row's
-cells take under the same tint, apart from the fill of an untinted row of its own stripe and in the box of the untinted
-row above it, recorded as skipped in the router pass), the fresh tint on both logs (in the mock pass, after the view's
-shot, the row the story lands a few seconds after the load, the request log's late request on a page of 50 and the
-routing log's late event, drawn on the first auto reload at 5 s with every cell in `--accent-soft` over the surface,
+with a share in the background and ink of the card chip of the same tone, primary's used fill at the share the page
+computed, the now line at the chart's now share of primary's track within a pixel, each live bar's body and used fill
+its lane's color at two strengths, and the label's ink at 4.5:1 or better over both for every color a lane can take, and
+in the mock pass the contract lane's one chip, its amount left of the limit with the estimate's sentence on hover, from
+primary's chips' left edge, of their height and at least their column's width), the timeline at 340 and 400 by 900 (each
+lane's head above its track, the now line at the chart's now share on every track and its pill in the axis row, the day
+grid crossing no lane's head and starting at the tracks' left, the chips wrapping inside the lane with none cut, a
+usage-based seat's one chip on one row, every day cell's short labels whole, no bar's label cut and nothing scrolling
+sideways), the timeline under the 12-hour setting in the 5-hour zoom at 340 and 400 by 900 and 1280 by 800 (mock pass,
+on loads of its own: as many cells as the largest divisor of twelve whose cell holds "12 AM" in the sub's face, every
+cell's labels whole and a short hour's full time on its title), the Quota cards' one height (the head's and the foot's
+rules at one offset on every card, and in a 375 by 800 window the same figures recorded and nothing compared), the reset
+dialog's walk (mock pass: on the story's `primary`, Back returns to the dialog's first page with the focus on the first
+row's Use reset, the close through Cancel leaves the focus on the card's Use reset, and so does the close of a second
+opening whose click left the focus on the card, and the walk sends no claim), the cards leaving out the plan-ended
+account the list shows (mock pass: no card naming it, their count on the bar, the first card against its neighbor on its
+row, and a window the account does not carry kept as a row, its words in the muted ink in the reset label's place, in
+the type size of a live row's label and to its right edge, beside a chip naming the window alone with the words on its
+title), every Quota card's meters at least 120 px wide, its window cells inside its padding, its chip column as wide as
+its widest chip and its reset column as wide as its widest label within its 150 px bound, a split label read by its
+wider part, at 1280 by 800 with two cards in a row in the mock pass and in a window that sets two cards on the card
+grid's floor (an expired line among its cells where a listed card draws one, and one card in a row 1 px narrower), and
+at 375 by 800 and 390 by 844 with no sideways scroll on the page and each card inside the window (the reset label on a
+row of its own there, so its column goes unread), the Quota cards' window rows at seven widths from 340 to 1280 px (from
+900 px up each reset label beside a meter of 120 px or more, under 900 px on a row of its own under its meter, no label
+cut and nothing scrolling sideways), the 7-day and Fable week remaining cards, the error state, the lines and the
+left-out lists under the quota rings (mock pass: both lines and the Fable ring's list drawn, each across the ring's grid
+from its card title's left edge), the recent requests' model cells and their table's fit, the recent requests' Cost cell
+under All in dollars and Billed dollars (mock pass: a subscription row's equivalent line in the size, line height and
+ink of the Tokens cell's second line, and its dash under the nothing billed title), the Estimated cost, 24h tile on the
+story's own unpriced rows (mock pass, on a load of its own: the subscription line's dash under the unpriced title, in
+the size, weight and ink of the billed figure beside it and in the weight and ink of the Tokens, 24h tile's lone
+figure), the recent requests' columns at 1280 by 800 and 1440 by 900 (Time the fill, its scroll past the card recorded
+in the mock pass), the cost-cap rows, the wasted-probe rows, the Cache warming tab's saving tiles under each unit
+position (Probe cost, Saved by probes, Net saving and Kept warm on one row at one top, the two saving tiles in the Probe
+cost tile's box and value type, and the Saved by probes chart in the box and title type of the card beside it), the Cost
+tab on the story's own unpriced rows (mock pass, on loads of its own: the Cost tile's dash under the unpriced title in
+the type, ink and top of the Cost per request tile's first figure, and the Cost by card's note on a line of its own
+under the subtitle's text, at its left edge, in its type and ink, its text recorded), the burn cards (Plan per hour,
+5-hour per hour, Fable week per hour and Spend per minute against Failovers, and in the mock pass the four cards two to
+a row on two top edges at 1440 by 900, each half the row less half its gap, under the key grouping and under the
+Accounts filter naming the account whose traffic prices nothing), the Errors by code card's subtitle (its text, in the
+type and ink of the Refusals by code card's subtitle), the plan legend's model unlisted entry (and no estimated entry),
+the placement and budget tables (the Burn section's cards closing on Member budgets after the charts), the Unused
+allowance by account card (mock pass: below Accounts in range, its columns under the width rule with Account the fill at
+1280 by 800, and its Account column at 375 by 800 at least 132 px with a 132 px min-width, as wide as Accounts in
+range's), a week priced at its own tier in the Ultra week (mock pass: on the studio account's detail the allowance
+block's third-newest 7-day week, run under Pro, in the type size, weight and right edge of the second-newest week's
+figure and from the head figure's right edge, its figures and its total recorded, and on the Analytics view's Accounts
+tab the unused allowance card's studio row's 7-day four weeks' figure, the block's total, in the type size, weight and
+right edge of the next row's), the Analytics tables' columns, each read on the tab that draws it (the Traffic
+breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache by model's
+width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost cell's billed
+line drawn, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is as wide as its
+meter's 140 px floor, and the Accounts in range card's account column at least 132 px at 375 by 800 with the table
+scrolling inside its wrap and the card as wide as the Pace card), the request table's fit (in both passes the default
+columns inside the card at 1280 by 800 with the Cost column whole, Time the one fill taking the card less the other
+columns, its floor the widest dated time the clock setting draws with the cell's padding, every id line the whole id cut
+by the room alone with at least twelve characters in view, and no Client text cut, every Time cell printing its date
+whatever the row's age, again under the 7-day range read a day and an hour on, with every Time cell on one line inside
+its cell, and there under the 12-hour setting, the table carrying its 12-hour class and, where the set runs past the
+card, scrolling inside its wrap with Time at its floor), its sizes (at 1440 by 900 inside the card with every id whole
+in the mock pass, and at 375 by 800 at its narrowest with Time at its floor, scrolling inside its wrap with the page as
+wide as the window), its columns (Time the fill, the Status, Attempts and links cells wrapping), its text at 1920 by
+1080 in the mock pass (no client class or agent type cut, each read on its own span, and every id whole), the
+usage-based Cost cell (mock pass: `usage-based` under its dollars in the tag, size, weight and ink of a billed row's
+funding word, its hover `Billed in dollars: usage-based`), the Status cell's refusal chip against the code's badge (mock
+pass, on the refused answers' list: the `cyber` chip in the badge's font size and height from its left edge and under it
+at the cell's gap, its text and the upstream's hover recorded), the Agent filter's chip on both logs and Analytics (mock
+pass, on a story session's address with `agent_id=main`: the `agent: main` chip against the `session:` chip in height,
+top edge and its values' font family and size, its text recorded, and no `user agent:` chip), the table with Time turned
+off (`table--no-fill` at its content width at 1280 by 800 and 1920 by 1080), the Cache warming grid (an odd last card
+spanning its row, its title in the type of the card before it), the Analytics tiles rows and the Cache warming grid at
+1280 by 800 and 1440 by 900 (no figure on the Cost and Cache warming tiles rows, the Wasted probes card's among them,
+wider than its tile, each row holding a figure in the Ultra week in the mock pass under the Accounts filter naming
+nightly, a Cache warming card alone on its row spanning the grid and a last card that shares its row on its neighbor's
+top edge, each figure and card recorded), the Traffic table grouped by model (its Error rate column, and the no model
+row's Error rate a dash in the muted ink and in the type of the rate cell beside it, which reads a percent, the row
+required in the mock pass alone since the router's seed holds no request without a model), the request pages' widths,
+walked on a load of their own once every view's shot is taken, the pagers of both logs (three buttons 32 px square on
+each, the request log's page-size select 32 px, each footer one control tall with its padding and its border), the
+request log's range control (the group 32 px with its six pills 28 px at one top, the group against the split Refresh
+button on height and the search field on height and top, the Custom pill's width recorded), the speed chip, and the
+cache miss reason, effort and request class chips (each against the turn origin chip at 26 px, on an address that holds
+them), the Cost split's rings under native (each center figure inside its ring, the billed ring alone in the mock pass,
+whose range prices its plan rows nothing), the native Cost by table (its width recorded, every column inside its wrap at
+1280 by 800), the filter bar of every list view at 1280 by 800 and 1440 by 900, at rest, with the view's chips, on a
+ranged view with a span across midnight and on Requests under "Sort: Output tokens" (the row 32 px on one line with
+every control 32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px with a chip line, 49 and
+83 px as the Analytics sticky bar, the Requests row under the mock on two lines at 1280 by 800 in every case, since the
+count's slot keeps the width of its longest text whatever the count reads (the slots 1284 px in the 992 px row, so the
+edge wraps alone onto the second line, the row 72 px, the bar 72 px at rest, across midnight and under the sort and 106
+px with its chips), and at 1440 by 900 on one line at rest, with its chips and under the sort (the slots 1152 px in the
+1152 px row) and on two across midnight (the Custom pill's span taking the slots to 1444 px in the 1152 px row, the row
+and the bar 72 px), under another story on two lines where its slots run past the row and on one line otherwise, each
+chip 26 px with its word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below
+the bar, on a card view the next element and the tiles below it, on Analytics the Group by select against Add filter,
+and on the routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by
+800 on Analytics and Requests the bar's scroll width at most its client width with the count inside the window, the
+trailing slots wrapped, and at 400 by 800 on every view with a bar, at rest, the bar and the row no wider than their
+boxes with the count where the view draws one and the Refresh button inside the window), the Kinds list through Add
+filter on the routing log (Select all, the eight presets and the 45 kinds, its popover 8 px inside the window at 1280 by
+800), the split Refresh button on the request log (one width at Off, at 5 s and paused under the drawer, so the count
+beside it never moves), a late row on the request log (in the mock pass, after the view's shot, the story's late request
+landing below the first of the rows a page of 50 shows on the first auto reload at 5 s, every cell of it in the fill a
+top row's cells take under the same tint, apart from the fill of an untinted row of its own stripe and in the box of the
+untinted row above it, recorded as skipped in the router pass), the fresh tint on both logs (in the mock pass, after the
+view's shot, the row the story lands a few seconds after the load, the request log's late request on a page of 50 and
+the routing log's late event, drawn on the first auto reload at 5 s with every cell in `--accent-soft` over the surface,
 apart from the row's resting fill and in its box, the one row in the tint, recorded as skipped in the router pass), the
 traffic cards (Errors by code against Requests by outcome, the Refusals by category card against Refusals by code,
 Failovers beside Migration rewrites and Effort levels beside Requests by speed, and each Analytics check opens the tab
@@ -395,49 +394,48 @@ control's order with Context among them and the menu's last and the page as wide
 wrap's widths recorded, and after a load that draws the defaults again, at 375 by 800 scrolling inside its wrap with
 Session at its 74 px floor and the page as wide as the window) and its columns (each fit column as wide as its content,
 the Model and Cost cells' badges wrapping under their figure and the Account cell's chips under the account's name, the
-Session column the fill), the session id's width, the
-session row menu, the agent lines of the Cache warming details (each opened on every row Expand all opens, at 1280 by
-800 and 1440 by 900: the head's, main's and the longest subagent id's cells on one left edge per column within 1 px on
-the companion session that holds that id, seven columns closing on State, every id whole on one line, each state badge
-inside its grid's scroll width at 1280 px and inside its visible box at 1440 px, where no grid scrolls, the widest
-grid's scroll and client widths recorded, the expanded table inside its wrap at both widths, the wrap's scroll and
-client widths recorded, and the first text line of the Model, Requests and Last used cells of the first row whose Status
-reads unreported on its session id's line, its top and its height), the Agents tables (on every row Expand all opens at
-1280 by 800, each earlier agents line opened: each table inside its detail panel's client width with its eleven heads
-closing on the menu's, its head cells in the type size, weight and ink of the session table's, the table whose narrowest
-layout is widest recorded with that width), the agent menu (mock pass, at 1280 by 800 on the open row of a session whose
-Agents table lists main alone: the open list's last item takes the pointer at its center, so the table's wrap clips none
-of the list), the open row's facts (the written session's row in the mock pass and the first row in the router's: the
-Session and Routing grids on one row of tops at 1280 by 800, and one above the other on one left edge at 599 by 800),
-the open row at a phone's 375 by 800 (ending on a load of the bare view: its panel as wide as the session table's wrap
-and at the wrap's left edge before and after the wrap scrolls 200 px, the Session facts above the Routing facts, and the
-Agents table scrolling in a wrap of its own under a sideways wheel that leaves the session table's wrap where it stood),
-the Sessions bar's sort control and its order (on loads of its own that end on the bare view: the Sort button in the
-height, top edge, type size and weight of the Columns control beside it, reading "Sort: Created" on the bare address and
-"Sort: Last activity" under `?sort=activity`, the first five rows' session ids recorded under each), the Sessions fold
-line (on a load of its own under `?model=claude-sonnet-5` that ends on the bare view: every row Expand all opens listing
-the lines on that model alone, a row whose other agents the filter hides reading the fold line's count, its toggle in
-the type size, weight and ink of the Cache warming line's, and the model chip's `(any agent)` suffix in the type size
-and ink of the chip's word), the fork badge's face (under the session id, in the face of the Status badges), the fork
-badges (inside their cell and whole), the row's badges (on the first row whose Status and Cache cells both draw one, the
-two in one face and height, and the Agents, Requests, Cost and Cache cells' sub lines in the type of the Status cell's),
-the badges' tones (on the bare view `busy` accent, `idle` and `warm` good, `parked`, `registered`, `cold`, `+$` and "+N"
-neutral, the `silent` sub line in `--warning-ink`, the `unreported` and `no pin` words in the ink of the bar's muted
-count, and the fork badge carrying `.srow__fork`), the session row's chevron (14 px square at the icon's 1.75 stroke),
-the Sessions read error (mock pass, on loads of its own under the mock's sessions failure switch: the notice 12 px under
-the bar naming the sessions with the read's message, and the card's error state, whose Try again the notice's matches in
-height, type size and weight), a finished session's line, found by its Status, the first line of its open detail, its
-words against the detail's type (mock pass, on a load of its own under the finished filter once the session list's shot
-is taken), the fork link, which is followed once the session list's shot is taken, the copy fallback (Copied on the
-Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created dialog's secret
-in the mock pass, on a load of its own), the login screen's palette and its Stay logged in row (on every login, the
-first one's and each one's after a Log out: the root's `data-palette` against the stored palette, since the theme script
-alone sets it on that screen, then the secret field's, the row's, its box's, its label's and its hint's edges inside the
-card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again before the view's
-shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the router pass and
-recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the Cost cell, wider
-than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The script exits non-zero with the list
-of failures when any of that does not hold.
+Session column the fill), the session id's width, the session row menu, the agent lines of the Cache warming details
+(each opened on every row Expand all opens, at 1280 by 800 and 1440 by 900: the head's, main's and the longest subagent
+id's cells on one left edge per column within 1 px on the companion session that holds that id, seven columns closing on
+State, every id whole on one line, each state badge inside its grid's scroll width at 1280 px and inside its visible box
+at 1440 px, where no grid scrolls, the widest grid's scroll and client widths recorded, the expanded table inside its
+wrap at both widths, the wrap's scroll and client widths recorded, and the first text line of the Model, Requests and
+Last used cells of the first row whose Status reads unreported on its session id's line, its top and its height), the
+Agents tables (on every row Expand all opens at 1280 by 800, each earlier agents line opened: each table inside its
+detail panel's client width with its eleven heads closing on the menu's, its head cells in the type size, weight and ink
+of the session table's, the table whose narrowest layout is widest recorded with that width), the agent menu (mock pass,
+at 1280 by 800 on the open row of a session whose Agents table lists main alone: the open list's last item takes the
+pointer at its center, so the table's wrap clips none of the list), the open row's facts (the written session's row in
+the mock pass and the first row in the router's: the Session and Routing grids on one row of tops at 1280 by 800, and
+one above the other on one left edge at 599 by 800), the open row at a phone's 375 by 800 (ending on a load of the bare
+view: its panel as wide as the session table's wrap and at the wrap's left edge before and after the wrap scrolls 200
+px, the Session facts above the Routing facts, and the Agents table scrolling in a wrap of its own under a sideways
+wheel that leaves the session table's wrap where it stood), the Sessions bar's sort control and its order (on loads of
+its own that end on the bare view: the Sort button in the height, top edge, type size and weight of the Columns control
+beside it, reading "Sort: Created" on the bare address and "Sort: Last activity" under `?sort=activity`, the first five
+rows' session ids recorded under each), the Sessions fold line (on a load of its own under `?model=claude-sonnet-5` that
+ends on the bare view: every row Expand all opens listing the lines on that model alone, a row whose other agents the
+filter hides reading the fold line's count, its toggle in the type size, weight and ink of the Cache warming line's, and
+the model chip's `(any agent)` suffix in the type size and ink of the chip's word), the fork badge's face (under the
+session id, in the face of the Status badges), the fork badges (inside their cell and whole), the row's badges (on the
+first row whose Status and Cache cells both draw one, the two in one face and height, and the Agents, Requests, Cost and
+Cache cells' sub lines in the type of the Status cell's), the badges' tones (on the bare view `busy` accent, `idle` and
+`warm` good, `parked`, `registered`, `cold`, `+$` and "+N" neutral, the `silent` sub line in `--warning-ink`, the
+`unreported` and `no pin` words in the ink of the bar's muted count, and the fork badge carrying `.srow__fork`), the
+session row's chevron (14 px square at the icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own
+under the mock's sessions failure switch: the notice 12 px under the bar naming the sessions with the read's message,
+and the card's error state, whose Try again the notice's matches in height, type size and weight), a finished session's
+line, found by its Status, the first line of its open detail, its words against the detail's type (mock pass, on a load
+of its own under the finished filter once the session list's shot is taken), the fork link, which is followed once the
+session list's shot is taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the
+Settings view's own load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login
+screen's palette and its Stay logged in row (on every login, the first one's and each one's after a Log out: the root's
+`data-palette` against the stored palette, since the theme script alone sets it on that screen, then the secret field's,
+the row's, its box's, its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens
+an editor, a dialog or a row closes it again before the view's shot, and one that turns a column on turns it off again.
+The recent requests' table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows
+read their figure in the Ultra week in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls
+inside its wrap there. The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
