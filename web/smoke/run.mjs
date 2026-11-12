@@ -13498,6 +13498,17 @@ await forView('/requests', async () => {
   });
 });
 
+/** A Requests row's id, the title of its Time cell's id line. */
+const requestRowId = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
+/**
+ * The Requests table's cells under `head`, each with its row's id. A head the table does not draw reads every text as
+ * null, so a column the Columns control failed to turn on shows in the read.
+ */
+const column = (p, head) => {
+  const at = [...p.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === head);
+  return [...p.container.querySelectorAll('.requests__table tbody tr')].map((tr) => ({ id: requestRowId(tr), text: at < 0 ? null : (tr.children[at]?.firstChild?.textContent?.trim() ?? null) }));
+};
+
 // The Requests view's Sort control. The ci key's day fits one page: its 24 rows in `web/src/mock/requests.ts`, the
 // drawn ones and the request that crossed research's budget (BUDGET_CROSSING_ID), eight of them with no TTFB. Time
 // stands descending at rest, TTFB orders the rows by the figure from its pick with the eight last, and Ascending flips
@@ -13509,11 +13520,6 @@ await forView('/requests', async () => {
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
   const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
-  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
-  const column = (p, head) => {
-    const at = [...p.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === head);
-    return [...p.container.querySelectorAll('.requests__table tbody tr')].map((tr) => ({ id: idOf(tr), text: at < 0 ? null : (tr.children[at]?.firstChild?.textContent?.trim() ?? null) }));
-  };
   const control = (p) => ({ arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow', search: p.location().search, text: button(p)?.textContent ?? null, title: button(p)?.getAttribute('title') ?? null });
   // The first and last rows with a TTFB, then the first and last of the rows after them and their count, each with
   // none.
@@ -13582,19 +13588,16 @@ await forView('/requests', async () => {
   });
 });
 
-// The two token keys on the ci key's day at ten rows a page, each picked with its column on and read across the three
-// pages its cursors reach. Nineteen of the 24 rows carry the serving attempt's counts. The other five stand last with a
-// dash, by id descending: the drawn req_b68906d8-252, whose one attempt answered 429, then the story's four rows with
-// no attempt (req_9b4f1c62-a07, req_6c3a9e27-5b1, req_51d0e2b8-7a0 and req_2d8e5b13-f40 in `web/src/mock/requests.ts`).
-// The first of the five is the twentieth row, so the third page's cursor carries no figure. Uncached input reads the
-// drawn token count req_bacc2d06-4d8's 45,588 first and req_30bc648a-338's 63 last. Output tokens reads the crossing's
-// 2,900 first (BUDGET_CROSSING_ID) and the three drawn token counts' zero output last among the figures, by id.
+// The two token keys on the ci key's inference requests at ten rows a page, each picked with its column on and read
+// across the three pages its cursors reach. The Kind filter leaves out the day's three token counts: the route stores
+// no usage for a count and files it without the figure, while the wire answers its counts, so the two orders part
+// there. Sixteen of the 21 rows carry the serving attempt's counts. The other five stand last with a dash, by id
+// descending: the drawn req_b68906d8-252, whose one attempt answered 429, then the story's four rows with no attempt
+// (req_9b4f1c62-a07, req_6c3a9e27-5b1, req_51d0e2b8-7a0 and req_2d8e5b13-f40 in `web/src/mock/requests.ts`). The
+// fourth of the five is the twentieth row, so the third page's cursor carries no figure. Uncached input reads
+// req_d6629ea6-025's 12,307 first and req_30bc648a-338's 63 last. Output tokens reads the crossing's 2,900 first
+// (BUDGET_CROSSING_ID) and req_d6629ea6-025's 140 last.
 await forView('/requests', async () => {
-  const idOf = (tr) => tr?.querySelector('.sub.mono')?.getAttribute('title') ?? null;
-  const column = (p, head) => {
-    const at = [...p.container.querySelectorAll('.requests__table thead th')].findIndex((th) => th.textContent?.trim() === head);
-    return [...p.container.querySelectorAll('.requests__table tbody tr')].map((tr) => ({ id: idOf(tr), text: at < 0 ? null : (tr.children[at]?.firstChild?.textContent?.trim() ?? null) }));
-  };
   const read = async (label) => {
     const recorded = recordedCalls('listRequests');
     const sent = () => {
@@ -13602,7 +13605,7 @@ await forView('/requests', async () => {
       return { cursor: q.cursor ?? null, dir: q.dir ?? null, order: q.order ?? null };
     };
     try {
-      const page = await mount('/requests?keys=ci&rows=10', { now: CLOCK_ORIGIN });
+      const page = await mount('/requests?keys=ci&kind=inference&rows=10', { now: CLOCK_ORIGIN });
       columnsButton(page)?.click();
       await page.settle(100);
       [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
@@ -13639,18 +13642,18 @@ await forView('/requests', async () => {
       recorded.restore();
     }
   };
-  const sentUnder = (order, cursor) => [null, cursor, ':req_b68906d8-252'].map((c) => ({ cursor: c, dir: 'desc', order }));
+  const sentUnder = (order, cursor) => [null, cursor, ':req_51d0e2b8-7a0'].map((c) => ({ cursor: c, dir: 'desc', order }));
   const without = ['req_b68906d8-252', 'req_2d8e5b13-f40', 5];
   const input = await read('Uncached input');
   results.push({
     name: '/requests a pick of Uncached input with its column on pages by the serving count descending, the rows without one last with a dash, and the read sends input_tokens',
-    ok: JSON.stringify(input) === JSON.stringify({ figured: ['req_bacc2d06-4d8', '45.6K', 'req_30bc648a-338', '63'], rest: without, search: '?keys=ci&sort=input&rows=10', sent: sentUnder('input_tokens', '5066:req_c395d225-780') }),
+    ok: JSON.stringify(input) === JSON.stringify({ figured: ['req_d6629ea6-025', '12.3K', 'req_30bc648a-338', '63'], rest: without, search: '?keys=ci&kind=inference&sort=input&rows=10', sent: sentUnder('input_tokens', '1484:req_3546fede-0e5') }),
     missing: [JSON.stringify(input)],
   });
   const output = await read('Output tokens');
   results.push({
     name: '/requests a pick of Output tokens with its column on pages by the serving count descending, the rows without one last with a dash, and the read sends output_tokens',
-    ok: JSON.stringify(output) === JSON.stringify({ figured: ['req_7c19e4a0-2f3', '2.9K', 'req_0739aa56-cac', '0'], rest: without, search: '?keys=ci&sort=output&rows=10', sent: sentUnder('output_tokens', '1033:req_52f62e67-839') }),
+    ok: JSON.stringify(output) === JSON.stringify({ figured: ['req_7c19e4a0-2f3', '2.9K', 'req_d6629ea6-025', '140'], rest: without, search: '?keys=ci&kind=inference&sort=output&rows=10', sent: sentUnder('output_tokens', '1033:req_52f62e67-839') }),
     missing: [JSON.stringify(output)],
   });
 });

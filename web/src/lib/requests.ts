@@ -14,8 +14,9 @@ import type { UnitPosition, WeekPosition } from '@/lib/unit';
 export const compareRequests = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || byteOrder(b.id, a.id);
 
 /**
- * A request's token count as the route orders by it: its serving attempt's, null where that attempt answered no 200,
- * so a row the route files as lacking the figure draws a dash and sorts last, never as the wire's zero.
+ * A request's token count: its serving attempt's where that attempt answered a 200, null otherwise, so a row with no
+ * served answer draws a dash and sorts last. A token count answered 200 parts from the route, which stores no usage
+ * for it and files it without the figure: the wire answers its counts, and this read cannot tell them from stored ones.
  */
 export const orderedTokens = (r: Pick<RequestLog, 'attempts' | 'usage'>, kind: 'input' | 'output'): number | null => (servingAttempt(r)?.upstreamStatus === 200 ? r.usage[kind] : null);
 

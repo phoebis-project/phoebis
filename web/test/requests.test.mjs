@@ -296,6 +296,15 @@ test("the poll's comparator ties by id in the chosen direction and files a row w
   assert.deepEqual([noTtfb, tiedA].sort(d.requestOrder('ttfb_ms', 'asc')).map((r) => r.id), ['req_a', 'req_c'], 'no TTFB files last under asc');
 });
 
+test("the poll's comparator orders each token word by its own count", () => {
+  // The two rows' input and output counts order opposite ways, so a word that read the other count flips its order.
+  const row = (id, input, output) => ({ at: '2026-09-16T10:00:00.000Z', attempts: [{ upstreamStatus: 200 }], id, usage: { input, output } });
+  const inputHeavy = row('req_a', 900, 40);
+  const outputHeavy = row('req_b', 100, 700);
+  assert.deepEqual([outputHeavy, inputHeavy].sort(d.requestOrder('input_tokens', 'desc')).map((r) => r.id), ['req_a', 'req_b'], 'input_tokens reads the input count');
+  assert.deepEqual([inputHeavy, outputHeavy].sort(d.requestOrder('output_tokens', 'desc')).map((r) => r.id), ['req_b', 'req_a'], 'output_tokens reads the output count');
+});
+
 test("a session spend with plan and billed requests reads the plan requests' list dollars as its equivalent and the billed ones on the badge", () => {
   const spend = { billedUsd: { api_key: 3 }, equivalent: 0.01, requests: 2, shares: { a: {} }, usd: 5 };
   const reading = d.spendUnitOf(spend, 'equivalent', null, null);
