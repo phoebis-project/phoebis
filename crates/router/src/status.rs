@@ -1167,6 +1167,7 @@ mod tests {
             [
                 "    pool_exhausted Main since 12:16",
                 "    pairing_expiring Seat since 10-10 12:16",
+                "    limit_reset_ending Reset ending since 10-09 00:00",
                 "    ledger_record_parked Main since 12:16",
                 "    model_unpriced claude-opus-99 since 12:15",
                 "    meter_drift Business since 10:16",
@@ -1850,10 +1851,16 @@ mod tests {
             false,
         );
         let lines: Vec<&str> = screen.lines().collect();
-        // Every other account of the fixture sits in a pool, so the block lists the one this case took out of its pool.
+        // The fixture's three reset accounts sit in no pool and every other account in one, so the block lists those
+        // three beside the one this case took out of its pool.
         assert_eq!(
             block(&lines, "accounts in no pool"),
-            ["  Direct  ready"],
+            [
+                "  Direct          ready",
+                "  Reset cooldown  ready",
+                "  Reset ending    ready",
+                "  Reset used      ready",
+            ],
             "{screen}"
         );
     }
