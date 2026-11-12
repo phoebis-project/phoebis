@@ -132,6 +132,11 @@ interface Spec {
   prefix?: Record<string, Partial<RecordCandidate['prefix']>>;
   /** The windows a member reads where the story's own readings are not the walk back's. */
   readings?: Record<string, AttemptWindow[]>;
+  /**
+   * The live pin's whole list of reasons where the state of its account forced the placement to move it, as the
+   * move's event carries them. The decision stays a placement that names the account it left.
+   */
+  reasons?: string[];
   refusal?: Refusal;
   /** The expired row a first placement released on another account, with the reasons its release names. */
   replaced?: { accountId: string; reasons: string[] };
@@ -1227,7 +1232,7 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, cycleMs: null, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs, shed: null };
   pins.set(pinKey, found);
   const idleMs = spec.at - found.lastUsedAt;
-  const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : [];
+  const released = spec.failover ? [spec.failover === 'fast_lane' ? 'fast_rate_limit' : 'cooldown'] : (spec.reasons ?? []);
   // A shed move's pin carries the mark the round on its account wrote.
   const mark = spec.rule === 'shed' ? markOf(found.accountId, spec.at) : null;
   const pin: RecordPin = {
@@ -1248,7 +1253,7 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
   const r = spec.request;
   const steps: WalkStep[] = [];
   let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || inPlaceOf(spec) !== null)) {
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || spec.reasons !== undefined || inPlaceOf(spec) !== null)) {
     const source = candidates.find((c) => c.accountId === pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
     const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
@@ -1501,7 +1506,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     exhaustion,
     // The router names the account a decision left on a move or a failover's landing alone, so a placement that
     // replaced an idle row names none.
-    fromAccountId: spec.kind === 'moved' || spec.failover ? (spec.from ?? null) : null,
+    fromAccountId: spec.kind === 'moved' || spec.failover || spec.reasons ? (spec.from ?? null) : null,
     hold,
     inOverage: chosen?.inOverage ?? false,
     kind: spec.kind,
@@ -1511,7 +1516,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     pinWritten,
     refusal: spec.refusal ?? null,
     reservation: booking?.reservation ?? null,
-    rule: spec.kind === 'moved' ? (spec.rule ?? null) : null,
+    rule: spec.kind === 'moved' || spec.reasons ? (spec.rule ?? null) : null,
     rung: spec.rung ?? null,
     shedMarks: spec.round ? spec.round.marks : null,
     strategy: pool.strategy,
@@ -1757,19 +1762,25 @@ function derivedSpecs(r: RequestLog): Spec[] {
     }
     seq += 1;
     const moved = s?.moved ?? null;
-    const failover = moved !== null && FAILOVER_REASONS.includes(moved) ? moved : undefined;
+    // A move the state of the pin's account forced carries the pin's list on its event, and its word can be a rule's
+    // or a failover's, so the list decides it ahead of the word: the decision stays a placement.
+    const forced = REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reasons;
+    const reasons = Array.isArray(forced) ? forced.map(String) : undefined;
+    const failover = moved !== null && reasons === undefined && FAILOVER_REASONS.includes(moved) ? moved : undefined;
     const rule = moved !== null && failover === undefined ? moved : undefined;
     // A request that can hold no pin renews none and moves none: it is placed.
-    const kind: DecisionKind = !pinning ? 'placed' : s?.renewed ? 'renewed' : rule ? 'moved' : 'placed';
-    // A first placement that released an expired pin on another account names that account, with the release's reasons.
+    const kind: DecisionKind = !pinning ? 'placed' : s?.renewed ? 'renewed' : rule && reasons === undefined ? 'moved' : 'placed';
+    // A first placement that released an expired pin on another account carries that account and the release's reasons
+    // for its Pin step.
     const expired = i === 0 && kind === 'placed' ? REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_expired' && e.accountId !== a.accountId) : undefined;
     const replacedOn = expired?.accountId ?? null;
     const replaced = replacedOn === null ? undefined : { accountId: replacedOn, reasons: releasedReasons(expired) };
     const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : undefined;
-    const live = kind === 'renewed' || kind === 'moved' || failover !== undefined;
-    // A probe and a token count leave the pin's warmth untouched.
+    const live = kind === 'renewed' || kind === 'moved' || failover !== undefined || reasons !== undefined;
+    // A probe and a token count leave the pin's warmth untouched. A written row takes no draw: its live pin is the row
+    // its session's last turn wrote, whose idle age the Pin step reads.
     const untouched = r.kind === 'probe' || r.kind === 'count_tokens';
-    const pinSpec: Spec['pin'] = live && pinning ? { cause: r.kind === 'probe' ? 'probe' : r.kind === 'count_tokens' ? 'count' : 'continues_pin', idleMs: 20_000 + inFlightRng.int(0, 280) * 1_000, warmth: untouched ? 'untouched' : 'refresh' } : noPin;
+    const pinSpec: Spec['pin'] = live && pinning ? { cause: r.kind === 'probe' ? 'probe' : r.kind === 'count_tokens' ? 'count' : 'continues_pin', idleMs: UNSEEDED_IDS.has(r.id) ? 0 : 20_000 + inFlightRng.int(0, 280) * 1_000, warmth: untouched ? 'untouched' : 'refresh' } : noPin;
     const prefix: Spec['prefix'] = {};
     const rung = s?.placement ?? null;
     if (rung && rung.rung !== 'with_main') {
@@ -1779,7 +1790,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
       prefix[a.accountId] = rung.rung === 'static' ? { static: found, staticMatch: found } : { content: found, contentMatch: found };
     }
     const heldBefore = holds.length ? { cohort: holds[holds.length - 1].cohort, heldMs: holds.reduce((n, h) => n + h.heldMs, 0), waitedOn: holds.map((h) => h.accountId), waits: holds.map((h) => ({ heldMs: h.heldMs, reason: 'cap' })) } : undefined;
-    specs.push({ ...base, accountId: a.accountId, at: start, attempt: i + 1, attempted, failover, from: from ?? pinOn ?? undefined, heldBefore: hold ? heldBefore : undefined, holds: [...holds], kind, pin: pinSpec, prefix, replaced, rule, rung, seq });
+    specs.push({ ...base, accountId: a.accountId, at: start, attempt: i + 1, attempted, failover, from: from ?? pinOn ?? undefined, heldBefore: hold ? heldBefore : undefined, holds: [...holds], kind, pin: pinSpec, prefix, reasons, replaced, rule, rung, seq });
     pinOn = a.accountId;
   });
   const last = r.attempts[r.attempts.length - 1];
@@ -2786,14 +2797,15 @@ function buildEvents(): RoutingEvent[] {
     })),
   );
   // A pin event names the epoch the record wrote, so the event and the card read one number, and a rule's move the
-  // fit, the runway and the window that binds on the destination its gate read.
+  // fit, the runway and the window that binds on the destination its gate read. A move an account's state forced reads
+  // the placement's fit there.
   for (const seed of seeds) {
     if (seed.kind !== 'pin_migrated') continue;
     const s = SUMMARIES.find((x) => x.requestId === seed.requestId || (x.sessionId === seed.sessionId && x.at === seed.at && x.accountId === seed.accountId));
     const record = s && DECISIONS.get(`${s.requestId}/${s.seq}`);
     const epoch = record?.outcome.pinWritten?.epoch;
     if (epoch !== undefined && epoch !== null) seed.detail.epoch = epoch;
-    const landed = record?.outcome.kind === 'moved' ? record.candidates.find((c) => c.accountId === record.outcome.accountId) : undefined;
+    const landed = record?.outcome.kind === 'moved' || Array.isArray(seed.detail.reasons) ? record?.candidates.find((c) => c.accountId === record.outcome.accountId) : undefined;
     if (landed?.fit) Object.assign(seed.detail, { binding: landed.binding, fit: landed.fit, runway_ms: landed.runwayMs });
     // A failover's event carries the cooldown that caused it, in the shape the router serializes, and a rule's move
     // none.

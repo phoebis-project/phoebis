@@ -135,6 +135,8 @@ const EVENTS = [
   ['pin moved by a rule', event('pin_migrated', { agent_id: 'main', epoch: 53, from_account: 'secondary', reason: 'spent' }), 'window spent', ['epoch 53']],
   ['pin moved by the shed rule', event('pin_migrated', { agent_id: 'main', epoch: 23, from_account: 'secondary', reason: 'shed' }), 'shed', ['epoch 23']],
   ['pin moved, a failover', event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason: 'cooldown' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.cooldown, ['answer 429'], failover('cooldown', 429)],
+  // On the failover's page, so a row read by the word alone would draw the failover's word and its answer.
+  ["pin moved, an account's state forced it", event('pin_migrated', { agent_id: 'main', epoch: 57, from_account: 'secondary', reason: 'cooldown', reasons: ['cooldown', 'overage'] }, { sessionId: 's-moved' }), 'account cooled', ['epoch 57'], failover('cooldown', 429)],
   ['pin moved, the fast lane', event('pin_migrated', { agent_id: 'main', epoch: 55, from_account: 'secondary', reason: 'fast_lane' }, { sessionId: 's-moved' }), 'fast lane cooling', ['answer 429'], failover('fast_lane', 429)],
   ['pin moved, a mark', event('pin_migrated', { agent_id: 'main', cause: { cause: 'funding_refused', state: 'funding_required' }, epoch: 56, from_account: 'secondary', reason: 'mark' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.mark, ['answer 400'], failover('mark', 400)],
   ['pin expired, found idle by the sweep', event('pin_expired', { agent_id: 'main', reasons: ['expired'] }), 'idle', []],

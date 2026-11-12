@@ -1637,9 +1637,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(dropped(spent(), { ...all, overagePolicy: 'prefer_plan' }), 1, 'a pool that prefers the plan funds nothing');
   });
 
-  test(`no attempt starts between nightly's spend cap raise and its overage start, so a token count's order and the records read its overage alike, at ${at}`, async () => {
+  test(`no token count starts between nightly's spend cap raise and its overage start, so a count's order and the records read its overage alike, at ${at}`, async () => {
     const s = await story;
-    // A token count's order reads nightly in overage from the raise, and the records from its first head after it.
+    // A token count's order reads nightly in overage from the raise, and the records from its first head after it. Any
+    // other request in between is placed by its record alone, which reads the head.
     const nightly = (await logOf(s)).filter((x) => x.type === 'event' && x.accountId === 'nightly');
     const raise = nightly.find((e) => e.kind === 'fast_credits_changed' && e.detail.blocked_before === 'org_spend_cap_reached' && e.detail.blocked_after === null);
     const started = nightly.find((e) => e.kind === 'overage_started');
@@ -1648,7 +1649,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const [from, until] = [s.lib.NIGHTLY_CAP_RAISED, Date.parse(started.at)];
     assert.equal(Date.parse(raise.at), from, "the log's raise sits at the instant the story fixes");
     assert.ok(from < until, `the raise at ${raise.at} precedes the overage start at ${started.at}`);
-    const between = s.requests.flatMap((r) => r.attempts.filter((a) => Date.parse(a.startedAt) >= from && Date.parse(a.startedAt) < until).map((a) => `${r.id} (${r.kind}) on ${a.accountId} at ${a.startedAt}`));
+    const between = s.requests.filter((r) => r.kind === 'count_tokens').flatMap((r) => r.attempts.filter((a) => Date.parse(a.startedAt) >= from && Date.parse(a.startedAt) < until).map((a) => `${r.id} on ${a.accountId} at ${a.startedAt}`));
     assert.deepEqual(between, []);
   });
 
@@ -2832,14 +2833,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the replaced pin's row its one written event, at ${at}`, async () => {
+  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the two rows the story writes one event on, at ${at}`, async () => {
     const s = await story;
     const details = await Promise.all([...s.lib.UNSEEDED_IDS].map((id) => s.api.getRequest(id)));
     const placed = details.filter((d) => d.request.attempts.some((a) => a.selection?.placement)).map((d) => d.request.id);
     assert.deepEqual(placed, [], 'the written rows whose trace carries a placement');
-    // The story seats one event by hand on the replaced pin's row, for what its placement did to the row it found idle.
+    // The story seats one event by hand on the replaced pin's row, for what its placement did to the row it found idle,
+    // and one on the turn whose placement moved the pin off the Overflow workspace once its balance ran out.
     const listing = details.map((d) => [d.request.id, d.events.filter((e) => e.kind.startsWith('pin_')).length]).filter(([, n]) => n > 0);
-    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1]], 'the written rows that list a pin event, with their counts');
+    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1], ['req_c7e41d93-a26', 1]], 'the written rows that list a pin event, with their counts');
   });
 
   test(`a release beside a pin created on another account names the idle row, and a placement names a source where it moved a pin, at ${at}`, async () => {

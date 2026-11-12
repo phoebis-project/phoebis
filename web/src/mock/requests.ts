@@ -413,7 +413,7 @@ const SERVED_FACTOR = 0.8;
  * The order the engine takes a token count's members in: the best tier first, then under Pace the highest score off
  * the walk back. A count takes no slot, so no cap passes a member over for it and a draw cannot stand where the
  * engine picks another. Nightly reads in overage from its spend cap's raise: `OVERAGE_FROM` is built from the attempts
- * this order places, and no attempt starts between the two instants, so both read nightly's overage alike. An API
+ * this order places, and no token count starts between the two instants, so both read nightly's overage alike. An API
  * key shares its tier with no other member here, so it keeps the pool's order, and outside Pace the drawn account
  * leads its tier.
  */
@@ -1016,7 +1016,8 @@ interface StorySeed {
    * the drawn rows read and none of the events the story seats on a drawn row, so it keeps its written class and
    * instants and every drawn figure stays where it was: the contract seat's rows on fleet, the approved Ultra's rows on
    * bench, the last turns of the desktop session the mod ended, the one turn of story 4's Explore subagent, the
-   * classifier call its judged account could not take and the turn whose placement replaced an expired row.
+   * classifier call its judged account could not take, the turn whose placement replaced an expired row and the two
+   * turns of the conversation the Overflow workspace's lapse moves.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1082,6 +1083,14 @@ const RESET_HELD_SESSION_ID = 'f19a6c2e-8b4d-4e73-a5c0-3d2b7e1f9a08';
  * The story writes it by hand, since no drawn turn's idle gap falls inside the purge's minute past its pool's window.
  */
 const REPLACED_PIN_ID = 'req_6f3e1b84-d29';
+/**
+ * The desktop conversation the Overflow workspace answers before its credit balance runs out at 11:30:12. The story
+ * writes its two turns by hand, since no drawn session holds a live pin across the lapse.
+ */
+const LAPSED_SESSION_ID = 'e8c3a6f1-2d94-4b57-9a1e-6f0d3c7b2a85';
+const LAPSED_TURN_ID = 'req_5f2a9c64-b18';
+/** That conversation's next turn, whose placement moves the pin off the workspace with its state as the cause. */
+const CAUSED_MOVE_ID = 'req_c7e41d93-a26';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
@@ -1577,6 +1586,12 @@ function storySeeds(): StorySeed[] {
     // nightly's overage under all's preference for a plan, and lands on primary, which holds its plan tier, writing the
     // conversation's prefix there afresh.
     { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
+    // A new conversation the Overflow workspace takes with the plan accounts full, while its balance still holds.
+    { agentId: 'main', at: t(11, 27, 40), attempts: [{ accountId: 'overflow', at: t(11, 27, 40), ms: 9_200, status: 200 }], id: LAPSED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 36_400, input: 1_900, output: 1_100 } },
+    // Its next turn 210 s on, after the balance ran out at 11:30:12 and before the workspace's funding retry falls due
+    // five minutes after it. The pin is live and its five-minute cache warm, so no rule moves it, the workspace is out
+    // of the eligible set, and the placement moves the pin to primary, writing the conversation's prefix there afresh.
+    { agentId: 'main', at: t(11, 31, 10), attempts: [{ accountId: 'primary', at: t(11, 31, 10), ms: 8_600, status: 200 }], id: CAUSED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 38_200, input: 1_600, output: 940 } },
   ];
 }
 const storyRequests = () => storySeeds().map(storyRow);
@@ -1866,6 +1881,9 @@ function storyEvents(): Map<string, RequestEvent[]> {
   // the router's order: the idle row, and nightly's overage under all's preference for a plan.
   const replaced = requestById.get(REPLACED_PIN_ID);
   if (replaced) out.set(replaced.id, [{ ...pinFieldsOf(replaced), accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired', 'overage'] }, kind: 'pin_expired' }]);
+  // The move the workspace's state forced, which carries the live pin's whole list and takes its word from it.
+  const caused = requestById.get(CAUSED_MOVE_ID);
+  if (caused) out.set(caused.id, [{ ...pinFieldsOf(caused), accountId: 'primary', at: caused.at, detail: { agent_id: caused.agentId, epoch: 0, from_account: 'overflow', reason: 'funding_required', reasons: ['funding_required'] }, kind: 'pin_migrated' }]);
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
     const pin = pinFieldsOf(rejected);
@@ -1980,7 +1998,13 @@ function traceRequests() {
     // The routing log's records write the story's traces, so no obstacle is drawn against what its cards show.
     if (STORY_IDS.has(r.id)) continue;
     if (UNSEEDED_IDS.has(r.id)) {
-      r.attempts = r.attempts.map((a, i, all) => ({ ...a, selection: undrawnTrace(r, a, i === all.length - 1) }));
+      // A written row's move is the one its own event records, as a drawn row's is.
+      const written = REQUEST_EVENTS.get(r.id) ?? [];
+      const movedOn = (a: Attempt) => written.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reason;
+      r.attempts = r.attempts.map((a, i, all) => {
+        const moved = movedOn(a);
+        return { ...a, selection: { ...undrawnTrace(r, a, i === all.length - 1), moved: typeof moved === 'string' ? moved : null } };
+      });
       continue;
     }
     const pool = poolById.get(r.poolId ?? '');

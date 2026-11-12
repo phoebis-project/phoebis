@@ -15670,7 +15670,7 @@ await forView('/routing-log', async () => {
   } finally {
     recorded.restore();
   }
-  const up = { arrow: 'up', first: ['event/335', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
+  const up = { arrow: 'up', first: ['event/337', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
   const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
   results.push({
     name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',
@@ -18332,6 +18332,34 @@ await forView('/routing-log', async () => {
       });
     }
     {
+      // The story's one move an account's state forced: the conversation the Overflow workspace answered at 11:27:40
+      // sends its next turn at 11:31:10, after the workspace's balance ran out at 11:30:12, and the placement moves
+      // the live pin to primary (the seeds `LAPSED_TURN_ID` and `CAUSED_MOVE_ID` in `web/src/mock/requests.ts`). The
+      // row and the panel word the cause as the release reads it, and say the account's state moved the pin.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['pin_migrated'], limit: 200, to: iso(CLOCK_ORIGIN) })).rows;
+      const forced = listed.filter((r) => Array.isArray(r.detail.reasons));
+      const e = forced[0];
+      const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
+      const page = await mount(`/routing-log?kinds=pin_migrated&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+      const row = e === undefined ? null : rowOf(page, `event/${e.id}`);
+      const read = {
+        accounts: [...(row?.querySelector('td.routing-log__account')?.querySelectorAll('a[href^="/accounts/"]') ?? [])].map((a) => a.getAttribute('href')),
+        by: row?.querySelector('td.routing-log__by')?.textContent?.trim() ?? null,
+        kind: row?.querySelector('td.routing-log__kind')?.textContent?.trim() ?? null,
+      };
+      const panel = e === undefined ? null : await openRow(page, `event/${e.id}`);
+      const pairs = Object.fromEntries(kvRows(panel?.querySelector('.event-detail > .kv')).map((p) => [p.label, ddWords(p.dd)]));
+      page.unmount();
+      results.push({
+        name: "/routing-log the story's move an account's state forced reads its cause in the release's words, the account it left, and the account's state as what moved it",
+        ok:
+          forced.length === 1 &&
+          JSON.stringify(read) === JSON.stringify({ accounts: ['/accounts/overflow', '/accounts/primary'], by: 'funding required', kind: 'pin moved' }) &&
+          JSON.stringify([pairs.Reason, pairs.Reasons, pairs['Moved by']]) === JSON.stringify([['funding required'], ['funding required'], ["the account's state"]]),
+        missing: [`${forced.length} moves with a list`, JSON.stringify(read), JSON.stringify([pairs.Reason, pairs.Reasons, pairs['Moved by']])],
+      });
+    }
+    {
       // The story's one guardrail block, the desktop key's own guardrail refusing an auxiliary fork at 12:52, reads its
       // name as a second chip on the Admission line and the Answer row, under the refused kind.
       const id = 'req_a8f3c6d0-e17';
@@ -19468,8 +19496,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, and the line's requests the tie's failover
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
   // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn, the
-  // classifier call that ran on primary, `req_7c2e9f41-d03`, and the held conversation's turn that replaced its expired
-  // row, `req_6f3e1b84-d29`, each answered.
+  // classifier call that ran on primary, `req_7c2e9f41-d03`, the held conversation's turn that replaced its expired
+  // row, `req_6f3e1b84-d29`, and the two turns of the conversation the Overflow workspace's lapse moved,
+  // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, each answered.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -19482,7 +19511,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '226 requests, 16.4% errors',
+      line === '228 requests, 16.2% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -23163,9 +23192,10 @@ await forView('/analytics', async () => {
     const low = read(page, 'Traffic by model');
     page.unmount();
     const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
+    // The day's Sonnet 4.5 rows fail 8 of 73 and its Sonnet 5.5 rows 7 of 64, so the two sit apart by a hair.
     const want = {
-      high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
-      low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
+      high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-4-5', 'claude-sonnet-5-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
+      low: shown('up', [...ZERO, 'claude-sonnet-5-5', 'claude-sonnet-4-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
     };
     results.push({ name, ok: JSON.stringify({ high, low }) === JSON.stringify(want), missing: [`high ${JSON.stringify(high)}`, `low ${JSON.stringify(low)}`] });
   }
@@ -24201,7 +24231,7 @@ await forView('/keys', async () => {
   again.unmount();
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'ci', 'fleet', 'from-pool', 'bench', 'notebook', 'desktop', 'laptop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
-  const weeks = ['224 requests, 7d', '113 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  const weeks = ['224 requests, 7d', '115 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
