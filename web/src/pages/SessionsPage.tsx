@@ -22,7 +22,7 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -247,7 +247,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
       status: statusOf(session, finished),
     };
   });
-  return orderRows(rows, sort, dir);
+  return orderSessionRows(rows, sort, dir);
 }
 
 /**
@@ -1121,7 +1121,7 @@ function SessionRows({
                     },
                     { label: 'Moved', value: moved ?? <span className="muted">none</span> },
                     { label: 'Runway', value: runwayWord(session) ?? <span className="muted">-</span> },
-                    { label: 'Speed', value: session.speed !== null && speed.factor !== null && speed.factor < 1 ? <SpeedChip {...speed} /> : 'full speed' },
+                    { label: 'Speed', value: session.speed !== null && speed.speed !== null && speed.speed < 1 ? <SpeedChip {...speed} /> : 'full speed' },
                     { label: 'Cycle', value: session.cycleMs === null ? <span className="muted">not measured yet</span> : ageWord(session.cycleMs) },
                   ]}
                 />

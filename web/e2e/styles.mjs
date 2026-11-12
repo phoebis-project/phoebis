@@ -378,6 +378,7 @@ try {
   if (write) {
     mkdirSync(dirname(baseline), { recursive: true });
     out = createWriteStream(partial);
+    out.on('error', (error) => void failed(partial, error));
   } else {
     // A list left by an earlier run would read as this run's, so it goes before the baseline's read, which can refuse.
     rmSync(differencesFile, { force: true });
@@ -395,7 +396,10 @@ const counts = [];
 async function note(key, lines) {
   if (lines.length === 0) return;
   counts.push(`${key}: ${lines.length} ${lines.length === 1 ? 'difference' : 'differences'}`);
-  list ??= createWriteStream(differencesFile);
+  if (list === null) {
+    list = createWriteStream(differencesFile);
+    list.on('error', (error) => void failed(differencesFile, error));
+  }
   for (const line of lines) {
     total += 1;
     if (first.length < PRINTED) first.push(line);
@@ -413,10 +417,19 @@ async function discard() {
   rmSync(write ? partial : differencesFile, { force: true });
 }
 
-/** A throw on the way, from the page or from a file the run writes, is a refusal and never reads as a difference. */
-async function failed(where, error) {
-  await discard();
-  await stop(2, `${where}: ${messageOf(error)}`);
+let failing = null;
+/**
+ * A throw on the way, from the page or from a file the run writes, is a refusal and never reads as a difference. It
+ * runs once: a disk error reaches its stream's listener and also rejects a pending wait on that stream, whose catch
+ * calls this a second time. That caller gets the first call's promise, which never settles before the process exits,
+ * so it cannot go on past its catch and finish the run on a stream the error destroyed.
+ */
+function failed(where, error) {
+  failing ??= (async () => {
+    await discard();
+    await stop(2, `${where}: ${messageOf(error)}`);
+  })();
+  return failing;
 }
 
 const palettes = options.palette === undefined ? PALETTES : [options.palette];

@@ -6,13 +6,13 @@ import { Badge } from './primitives';
  * the speed the holds realized, which reads 1 on a slowed account until a pin there has a cycle, and the chip draws
  * under 1 alone.
  */
-export function SpeedChip({ factor, hover }: { factor: number | null; hover: string | null }) {
-  if (factor === null || factor >= 1) return null;
+export function SpeedChip({ hover, speed }: { hover: string | null; speed: number | null }) {
+  if (speed === null || speed >= 1) return null;
   // The wrapper lets a check pick the chip out of, or leave it out of, the badges beside it.
   return (
     <span className="speed-chip">
       <Badge tone="warning" title={hover ?? undefined}>
-        {speedWord(factor)}
+        {speedWord(speed)}
       </Badge>
     </span>
   );

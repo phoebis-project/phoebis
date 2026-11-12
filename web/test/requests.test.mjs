@@ -301,3 +301,11 @@ test("a session spend with plan and billed requests reads the plan requests' lis
   const reading = d.spendUnitOf(spend, 'equivalent', null, null);
   assert.deepEqual([reading.billed, reading.unit], [3, { figure: 0.01, hint: null, kind: 'equivalent_dollars', reason: null, usd: 2 }]);
 });
+
+test('a plan spend whose list dollars come to nothing beside two billed fundings reads $0.00 in its cell and its hover', () => {
+  // 0.1 and 0.2 sum to 0.30000000000000004, so `usd` less the billed sum is -5.6e-17, which the formatter's
+  // four-decimal arm prints as -$0.0000. The hover reads the dollars in place of the week share while the scale is out.
+  const spend = { billedUsd: { fast: 0.1, overage: 0.2 }, equivalent: 0, probes: { requests: 0 }, requests: 3, shares: { a: {} }, usd: 0.3 };
+  const cell = d.costCellOf(d.spendUnitOf(spend, 'equivalent', null, null).unit, WEEK, null);
+  assert.deepEqual([cell, d.spendHover(spend, WEEK, null, null)], [{ main: '$0.00', sub: 'equivalent', title: '$0.00 equivalent' }, '3 requests. $0.00. Billed in dollars: $0.10 fast mode, $0.20 overage']);
+});

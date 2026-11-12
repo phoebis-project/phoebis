@@ -4,6 +4,7 @@ import { clientVersion } from '@/lib/client';
 import { countOf, groupInto, lookup } from '@/lib/counts';
 import { fmtCompact, fmtDuration, keyLifetime } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
+import { compareFigures, orderRows, type SortFigure } from '@/lib/sort';
 
 export const CAUSE_LABEL: Record<RecipeCause, string> = {
   affinity_too_short: 'affinity too short',
@@ -158,10 +159,7 @@ const STATE_ORDER: Record<Lifecycle, number> = { busy: 0, idle: 1, parked: 2, re
 const byInstant = (a: string | null, b: string | null, dir: SortDir): number => byFigure(a === null ? null : Date.parse(a), b === null ? null : Date.parse(b), dir);
 
 /** Two figures largest first under `desc` and smallest first under `asc`, a missing one last under either. */
-const byFigure = (a: number | null, b: number | null, dir: SortDir): number => {
-  if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
-  return dir === 'desc' ? b - a : a - b;
-};
+const byFigure = (a: number | null, b: number | null, dir: SortDir): number => compareFigures(a, b, dir);
 
 /** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
 export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
@@ -174,20 +172,21 @@ export const requestCount = (session: Pick<Session, 'spend'>): number => session
 
 type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId' | 'spend'>;
 
-const ROW_ORDER: Record<SessionsAddress['sort'], (a: OrderedSession, b: OrderedSession, dir: SortDir) => number> = {
-  activity: (a, b, dir) => byInstant(lastActivity(a), lastActivity(b), dir),
-  cost: (a, b, dir) => byFigure(a.spend?.usd ?? null, b.spend?.usd ?? null, dir),
-  created: (a, b, dir) => byInstant(a.createdAt, b.createdAt, dir),
-  requests: (a, b, dir) => byFigure(requestCount(a), requestCount(b), dir),
+const instantFigure = (at: string | null): number | null => (at === null ? null : Date.parse(at));
+/** A row's figure under each key of the Sessions view's order. */
+const ROW_FIGURE: Record<SessionsAddress['sort'], (s: OrderedSession) => SortFigure> = {
+  activity: (s) => instantFigure(lastActivity(s)),
+  cost: (s) => s.spend?.usd ?? null,
+  created: (s) => instantFigure(s.createdAt),
+  requests: (s) => requestCount(s),
 };
 
 /**
  * The rows under `created`, `activity`, `cost` (`spend.usd`, the list dollars, which add across units) or `requests`,
  * ties by session id, a row without the value last either way.
  */
-export function orderRows<T extends { session: OrderedSession }>(rows: readonly T[], sort: SessionsAddress['sort'], dir: SortDir): T[] {
-  const order = ROW_ORDER[sort];
-  return [...rows].sort((a, b) => order(a.session, b.session, dir) || a.session.sessionId.localeCompare(b.session.sessionId));
+export function orderSessionRows<T extends { session: OrderedSession }>(rows: readonly T[], sort: SessionsAddress['sort'], dir: SortDir): T[] {
+  return orderRows(rows, (row) => ROW_FIGURE[sort](row.session), dir, (row) => row.session.sessionId);
 }
 
 /** A line's group: main first, then the lines by lifecycle word, then the lines with no word, whose agent the engine

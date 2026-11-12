@@ -397,7 +397,7 @@ const ANALYTICS_SORT_KEYS: Readonly<Record<'cache' | 'cost_dollars' | 'cost_nati
   ],
 };
 /** Every key an address may name, once per id, since the tabs share columns such as Requests. */
-const ANALYTICS_KEY_IDS = [NAME_KEY, ...Object.values(ANALYTICS_SORT_KEYS).flat()].filter((k, i, all) => all.findIndex((o) => o.id === k.id) === i);
+const ANALYTICS_ADDRESS_KEYS = [NAME_KEY, ...Object.values(ANALYTICS_SORT_KEYS).flat()].filter((k, i, all) => all.findIndex((o) => o.id === k.id) === i);
 /**
  * The Sort control's keys on a tab under a unit: Name, then the tab's group table columns (the Cost tab's by the unit),
  * Name alone where the tab has no group table. A null tab names one whose group table the view leaves out.
@@ -422,7 +422,7 @@ export const ANALYTICS_CODEC = codecOf<AnalyticsAddress>({
   probes: { kind: 'flag', name: 'probes' },
   unit: text('unit'),
   userAgents: { kind: 'patterns', name: 'user_agents' },
-  ...sortSpecs(ANALYTICS_KEY_IDS, 'name'),
+  ...sortSpecs(ANALYTICS_ADDRESS_KEYS, 'name'),
   range: { default: '24h', kind: 'range' },
 });
 

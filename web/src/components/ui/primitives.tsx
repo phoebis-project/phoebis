@@ -292,11 +292,23 @@ export function ReadNotice({ className, error, name, retry }: { className: strin
   );
 }
 
-export function StateRow({ colSpan, empty, error, errorTitle, loading, retry }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean; retry?: () => void }) {
+/** A table's one row for a read that failed: the error state across the columns. */
+export function ErrorRow({ colSpan, error, errorTitle, retry }: { colSpan: number; error: string; errorTitle: string; retry?: () => void }) {
   return (
     <tr>
-      <td colSpan={colSpan} className={error ? '' : 'muted'}>
-        {error ? <ErrorState title={errorTitle} body={error} retry={retry} /> : loading ? <Skeleton height={22} /> : empty}
+      <td colSpan={colSpan}>
+        <ErrorState title={errorTitle} body={error} retry={retry} />
+      </td>
+    </tr>
+  );
+}
+
+export function StateRow({ colSpan, empty, error, errorTitle, loading, retry }: { colSpan: number; empty: string; error: string | null; errorTitle: string; loading: boolean; retry?: () => void }) {
+  if (error) return <ErrorRow colSpan={colSpan} error={error} errorTitle={errorTitle} retry={retry} />;
+  return (
+    <tr>
+      <td colSpan={colSpan} className="muted">
+        {loading ? <Skeleton height={22} /> : empty}
       </td>
     </tr>
   );

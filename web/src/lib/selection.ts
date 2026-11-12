@@ -111,8 +111,8 @@ export function speedHover(slowDown: AccountSlowDown | null, now: number): strin
 }
 
 /** The speed chip of a slow-down: the speed the holds realized with `speedHover`'s words, nothing without one. */
-export const slowDownChip = (slowDown: AccountSlowDown | null, now: number): { factor: number | null; hover: string | null } =>
-  slowDown === null ? { factor: null, hover: null } : { factor: slowDown.speed, hover: speedHover(slowDown, now) };
+export const slowDownChip = (slowDown: AccountSlowDown | null, now: number): { hover: string | null; speed: number | null } =>
+  slowDown === null ? { hover: null, speed: null } : { hover: speedHover(slowDown, now), speed: slowDown.speed };
 
 /**
  * A serving member's speed chip: its account's slow-down with the hover where the account is loaded, else the speed
@@ -120,8 +120,8 @@ export const slowDownChip = (slowDown: AccountSlowDown | null, now: number): { f
  * the member carries, where `slowedOf` reads no slow-down: none in force, a realized speed of 1, no 5-hour window at
  * all, or a 5-hour window reset since the read.
  */
-export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { factor: number | null; hover: string | null } {
-  if (account === null) return { factor: member.speed, hover: null };
+export function memberSpeed(member: Pick<PoolMember, 'speed'>, account: Account | null, now: number): { hover: string | null; speed: number | null } {
+  if (account === null) return { hover: null, speed: member.speed };
   return slowDownChip(slowedOf(account, now), now);
 }
 

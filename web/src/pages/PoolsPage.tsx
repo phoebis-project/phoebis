@@ -734,7 +734,7 @@ function PoolCard({
                         {/* The route's budget verdict says this itself. The badge stands for a member the route names
                             an earlier obstacle for. */}
                         {!isNext && m && m.budgetUntil !== null && m.eligible !== 'budget' && <AtBudget periodEnd={m.budgetUntil} />}
-                        <SpeedChip factor={speed.factor} hover={speed.hover} />
+                        <SpeedChip hover={speed.hover} speed={speed.speed} />
                       </span>
                       <span id={whyId} className="sr-only">
                         {why}
@@ -755,7 +755,7 @@ function PoolCard({
                   <td className="serving__standing col-fit" aria-describedby={whyId}>
                     <span className="chips">
                       <Eligibility verdict={m.eligible} account={undefined} now={now} periodEnd={m.budgetUntil} />
-                      <SpeedChip factor={speed.factor} hover={speed.hover} />
+                      <SpeedChip hover={speed.hover} speed={speed.speed} />
                     </span>
                     <span id={whyId} className="sr-only">
                       {`${m.accountId}: not a known account`}

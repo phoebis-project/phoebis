@@ -41,15 +41,15 @@ const recipe = (agentId, agentState, lastRequestAt) => ({
 const orderRow = (sessionId, createdAt, lastUsedAt, lastRequestAt) => ({ session: { createdAt: createdAt && iso(createdAt), lastRequestAt: lastRequestAt && iso(lastRequestAt), lastUsedAt: lastUsedAt && iso(lastUsedAt), sessionId } });
 const sessionIds = (rows) => rows.map((r) => r.session.sessionId);
 
-test('orderRows reads the newest created first, ties by session id and a row with no creation time last under either direction', () => {
+test('orderSessionRows reads the newest created first, ties by session id and a row with no creation time last under either direction', () => {
   // a1 and a2 share an instant an hour after b, and n has no creation time. Each row's later time is a different one of
   // its two, so a key that read either alone would order the activity reads otherwise.
   const rows = [orderRow('n', null, null, null), orderRow('b', ms(13, 0), ms(14, 25), null), orderRow('a2', ms(14, 0), ms(14, 2), ms(14, 20)), orderRow('a1', ms(14, 0), ms(14, 10), ms(14, 5))];
   const before = sessionIds(rows);
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'created', 'desc')), ['a1', 'a2', 'b', 'n']);
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'created', 'asc')), ['b', 'a1', 'a2', 'n']);
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'activity', 'desc')), ['b', 'a2', 'a1', 'n'], 'the later of the last use and the last request decides');
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'activity', 'asc')), ['a1', 'a2', 'b', 'n'], 'a row with neither time stays last');
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'created', 'desc')), ['a1', 'a2', 'b', 'n']);
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'created', 'asc')), ['b', 'a1', 'a2', 'n']);
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'activity', 'desc')), ['b', 'a2', 'a1', 'n'], 'the later of the last use and the last request decides');
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'activity', 'asc')), ['a1', 'a2', 'b', 'n'], 'a row with neither time stays last');
   assert.deepEqual(sessionIds(rows), before, 'the list handed in is left as it is');
   assert.deepEqual(
     rows.map((r) => d.lastActivity(r.session)),
@@ -57,14 +57,14 @@ test('orderRows reads the newest created first, ties by session id and a row wit
   );
 });
 
-test('orderRows by cost puts a row with no spend last under either direction, ties by session id, and by requests reads the count', () => {
+test('orderSessionRows by cost puts a row with no spend last under either direction, ties by session id, and by requests reads the count', () => {
   // The creation times run in neither key's order, so a key that fell back to them reads otherwise.
   // A row with no spend carries a null one, as the route answers it, so it counts no request.
   const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, sessionId, spend: usd === null ? null : { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });
   const rows = [row('a', ms(13, 0), 0.5, 2), row('b', ms(14, 0), null, 0), row('c', ms(12, 0), 0.25, 4), row('d', ms(11, 0), 0.5, 1)];
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'desc')), ['a', 'd', 'c', 'b']);
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'asc')), ['c', 'a', 'd', 'b']);
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'requests', 'desc')), ['c', 'a', 'd', 'b']);
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'cost', 'desc')), ['a', 'd', 'c', 'b']);
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'cost', 'asc')), ['c', 'a', 'd', 'b']);
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'requests', 'desc')), ['c', 'a', 'd', 'b']);
 });
 
 /** A line as `sessionLines` answers it: a recipe with its pin or none, or a pin with no recipe, with its lifecycle

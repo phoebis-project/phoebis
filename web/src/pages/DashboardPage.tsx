@@ -11,7 +11,7 @@ import { StatusBadge } from '@/components/ui/AttemptTrail';
 import { AttentionLine } from '@/components/ui/AttentionLine';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { CostTd } from '@/components/ui/CostTd';
-import { Badge, Card, EmptyState, ErrorState, ReadNotice, Skeleton, SkeletonRows, StateRow } from '@/components/ui/primitives';
+import { Badge, Card, EmptyState, ErrorRow, ErrorState, ReadNotice, Skeleton, SkeletonRows } from '@/components/ui/primitives';
 import { ProbeBar } from '@/components/ui/ProbeBar';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
@@ -370,7 +370,7 @@ function RecentTable({ accounts, rows, error, reading, settings }: { accounts: A
         <tbody>
           {rows === null
             ? error
-              ? <StateRow colSpan={8} empty="" error={error} errorTitle="Could not load the recent requests" loading={false} />
+              ? <ErrorRow colSpan={8} error={error} errorTitle="Could not load the recent requests" />
               : <SkeletonRows count={6} colSpan={8} />
             : rows.map((r) => {
                 const shown = shortModel(r.model);

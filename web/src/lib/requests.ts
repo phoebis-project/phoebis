@@ -194,6 +194,13 @@ function largestFunding(billedUsd: Record<string, number>): Exclude<Funding, 'pl
   return named.length === 0 ? null : named[0][0];
 }
 
+/** A spend's plan requests' list dollars: every served request's less the billed ones'. The two sums are floats, so
+ *  a difference under 1e-9 in size is their residue and reads zero. */
+const planUsdOf = (spend: Pick<SessionSpendPart, 'usd'>, billed: number): number => {
+  const plan = spend.usd - billed;
+  return Math.abs(plan) < 1e-9 ? 0 : plan;
+};
+
 /**
  * A spend read through `costUnitOf`'s arms as one request: plan-funded where `shares` names an account, since every
  * plan-funded request writes its serving account's key there (a free one with no share), and billed under the largest
@@ -210,9 +217,7 @@ export function spendUnitOf(spend: SessionSpendPart, unit: UnitPosition, account
   const billed = billedSum(spend);
   const figures = { dollars: billed, figure: spend.equivalent, hint, reason: null, usd: spend.usd };
   if (planFunded(spend)) {
-    // The plan requests' list dollars: `usd` sums every served request's, and `billedUsd` holds the billed ones' by
-    // funding, which the `+$` badge carries.
-    const plan = { ...figures, usd: spend.usd - billed };
+    const plan = { ...figures, usd: planUsdOf(spend, billed) };
     if (unit !== 'usd') return { accounts, billed, unit: fundedUnit('plan', unit, plan) };
     const funding = largestFunding(spend.billedUsd);
     return { accounts, billed: 0, unit: funding === null ? fundedUnit('plan', unit, plan) : { funding, kind: 'dollars', usd: billed } };
@@ -268,7 +273,7 @@ function spendFigure(part: SessionSpendPart, week: WeekPosition, scale: number |
   const plan = planFunded(part);
   if (plan && part.equivalent !== null && scale !== null) return fmtWeek(part.equivalent * scale, week);
   const billed = billedSum(part);
-  return fmtUsd(plan ? part.usd - billed : billed === 0 ? part.usd : billed);
+  return fmtUsd(plan ? planUsdOf(part, billed) : billed === 0 ? part.usd : billed);
 }
 
 /**

@@ -10,7 +10,7 @@ import { SortControl } from '@/components/SortControl';
 import { OptionList, type Option, walkFocus } from '@/components/ui/OptionList';
 import { Popover, PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { IconChevron, IconInfo, IconPlus } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StampSub, StateRow, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorRow, Field, GroupedDialog, Input, Menu, PageLink, Refusal, Segmented, Select, Skeleton, StaleRefusal, StampSub, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { GUARDRAIL_SORT_KEYS, GUARDRAILS_CODEC, poolKeysHref, requestHref, sortDirOf, type GuardrailsAddress } from '@/lib/address';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { groupInto } from '@/lib/counts';
@@ -155,7 +155,7 @@ export function GuardrailsPage(): JSX.Element {
   );
   const body = !list
     ? guardrails.error
-      ? <StateRow colSpan={7} empty="" error={guardrails.error} errorTitle="Could not load the guardrails" loading={false} retry={guardrails.reload} />
+      ? <ErrorRow colSpan={7} error={guardrails.error} errorTitle="Could not load the guardrails" retry={guardrails.reload} />
       : [0, 1].map((i) => row(<Skeleton />, i))
     : list.length === 0
       ? row(
