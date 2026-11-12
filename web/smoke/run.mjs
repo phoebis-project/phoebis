@@ -19294,16 +19294,23 @@ await forView('/analytics', async () => {
   localStorage.removeItem('phoebis.unit');
   page.unmount();
   // A range whose subscription traffic carries no API list price, in the case's own answer, since every model the
-  // story's plan traffic runs on has one: one hour of plan rows on a model neither the cost model nor the price list
-  // holds, so its bucket prices no share, reads flagged and adds no plan dollars.
-  const at = new Date(CLOCK_ORIGIN - 3_600_000).toISOString();
-  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, group: 'claude-unlisted', tokens: 1_000, uncachedTokens: 1_000, unpriced: true })] });
+  // story's plan traffic runs on has one: the 13:00 hour of plan rows on a model neither the cost model nor the price
+  // list holds, so its bucket prices no share, reads flagged and adds no plan dollars, and its Fable figure reads the
+  // zero the route adds for a model off the Fable week.
+  const at = new Date(Date.UTC(2026, 8, 16, 13)).toISOString();
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [burnPoint({ at, fableEquivalent: 0, group: 'claude-unlisted', tokens: 1_000, uncachedTokens: 1_000, unpriced: true })] });
+  const planSentence = (p) => [...p.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelector('p.muted')?.textContent?.trim() ?? null;
   localStorage.setItem('phoebis.unit', 'all');
   const unlisted = await mount('/analytics?by=model#burn', { now: CLOCK_ORIGIN });
-  const unlistedPlan = [...unlisted.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelector('p.muted')?.textContent?.trim() ?? null;
+  const unlistedPlan = planSentence(unlisted);
   unlisted.unmount();
-  localStorage.removeItem('phoebis.unit');
   delete api.getAnalyticsBurn;
+  // Billed traffic alone: the Accounts filter on the story's overflow, an API-key account whose requests bill dollars
+  // and pay no plan.
+  const billedOnly = await mount('/analytics?accounts=overflow&by=model#burn', { now: CLOCK_ORIGIN });
+  const billedPlan = planSentence(billedOnly);
+  billedOnly.unmount();
+  localStorage.removeItem('phoebis.unit');
   window.HTMLElement.prototype.getBoundingClientRect = measure;
   const entry = (read, label) => read.legend.find(([l]) => l === label)?.[1] ?? null;
   const all = reads.all.plan;
@@ -19350,6 +19357,11 @@ await forView('/analytics', async () => {
     name: '/analytics under All in dollars Plan per hour says a range whose subscription traffic prices at no dollars carries no API list price',
     ok: unlistedPlan === 'No subscription traffic in this range carries an API list price.',
     missing: [String(unlistedPlan)],
+  });
+  results.push({
+    name: '/analytics under All in dollars Plan per hour says a range of billed traffic alone holds no subscription traffic',
+    ok: billedPlan === 'No subscription traffic in this range.',
+    missing: [String(billedPlan)],
   });
 });
 
