@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '@/api';
 import { oneOf } from '@/api/decode';
-import type { ApiKey, CompanionPermission, CreatedApiKey, FundedSum, ModelRulesMode, Pool } from '@/api/types';
+import type { ApiKey, CompanionPermission, CreatedApiKey, FundedSum, ModelRulesMode } from '@/api/types';
 import { COMPANION_PERMISSION_VALUES } from '@/api/types';
 import { useRun, useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
@@ -28,7 +28,7 @@ import type { UnitPosition } from '@/lib/unit';
 
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
 /** The capture line whole, its inherited mark included, for the title of a line the fill column cuts. */
-const captureLine = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null) => `${captureLabel(effectiveCaptureHours(key, pool))}${key.bodyCaptureHours === null ? ' inherited' : ''}`;
+const captureLine = (hours: number, inherited: boolean) => `${captureLabel(hours)}${inherited ? ' inherited' : ''}`;
 const CAPTURE_INHERIT_HINT = 'This key sets no capture of its own, so it follows its pool.';
 /** The Models summary of a key without rules of its own. */
 const NO_RULES: Record<ModelRulesMode, string> = { extend: 'Pool rules', replace: 'No rules' };
@@ -275,100 +275,103 @@ export function KeysPage() {
                           </tr>
                         )
                       : <SkeletonRows count={3} colSpan={8} />
-                    : ordered.map((k) => (
-                        <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
-                          <td className="col-fill" title={k.name}>
-                            <b>{k.name}</b>
-                            {/* A fill column cuts a line with the ellipsis, so each line carries its whole text on its title. */}
-                            <span className="sub" title={captureLine(k, poolById.get(k.poolId) ?? null)}>
-                              {captureLabel(effectiveCaptureHours(k, poolById.get(k.poolId) ?? null))}
-                              {k.bodyCaptureHours === null && (
-                                <span className="muted" title={CAPTURE_INHERIT_HINT}>
-                                  {' '}
-                                  inherited
+                    : ordered.map((k) => {
+                        const captureHours = effectiveCaptureHours(k, poolById.get(k.poolId) ?? null);
+                        return (
+                          <tr key={k.id} id={k.id} tabIndex={-1} className="key-row">
+                            <td className="col-fill" title={k.name}>
+                              <b>{k.name}</b>
+                              {/* A fill column cuts a line with the ellipsis, so each line carries its whole text on its title. */}
+                              <span className="sub" title={captureLine(captureHours, k.bodyCaptureHours === null)}>
+                                {captureLabel(captureHours)}
+                                {k.bodyCaptureHours === null && (
+                                  <span className="muted" title={CAPTURE_INHERIT_HINT}>
+                                    {' '}
+                                    inherited
+                                  </span>
+                                )}
+                              </span>
+                              {COMPANION_PERMISSION_VALUES.filter((p) => !k.companionPermissions.includes(p)).map((p) => (
+                                <span key={p} className="sub" title={PERMISSION_OFF[p]}>
+                                  {PERMISSION_OFF[p]}
+                                </span>
+                              ))}
+                              {/* No column draws the creation date or the week's requests, so the order's figure sits
+                                  under the name while picked. */}
+                              {filters.sort === 'created' && <StampSub at={k.createdAt} word="created" />}
+                              {filters.sort === 'requests' && (
+                                <span className="sub" title={weekRequests(k)}>
+                                  {weekRequests(k)}
                                 </span>
                               )}
-                            </span>
-                            {COMPANION_PERMISSION_VALUES.filter((p) => !k.companionPermissions.includes(p)).map((p) => (
-                              <span key={p} className="sub" title={PERMISSION_OFF[p]}>
-                                {PERMISSION_OFF[p]}
-                              </span>
-                            ))}
-                            {/* No column draws the creation date or the week's requests, so the order's figure sits
-                                under the name while picked. */}
-                            {filters.sort === 'created' && <StampSub at={k.createdAt} word="created" />}
-                            {filters.sort === 'requests' && (
-                              <span className="sub" title={weekRequests(k)}>
-                                {weekRequests(k)}
-                              </span>
-                            )}
-                          </td>
-                          <td className="mono col-fit">{k.prefix}…</td>
-                          <td className="mono col-fit">{k.poolId}</td>
-                          <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{plural(k.modelRules.length, 'rule')}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
-                          <td className="right num col-fit">
-                            {fmtCompact(k.usage7d.tokens)} tok
-                            <WeekLine reading={reading} unit={unit} usage={k.usage7d} />
-                          </td>
-                          <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
-                          <td className="col-fill">
-                            <Badge tone={KEY_STATUS_TONE[k.status]} dot title={k.status} describe={false}>
-                              <span className="key-row__badge-label ellipsis">{k.status}</span>
-                            </Badge>
-                            {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
-                            {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
-                            {k.sessionsOnRetiredSecret > 0 && (
-                              <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>
-                                {retiredNote(k.sessionsOnRetiredSecret)}
-                              </span>
-                            )}
-                          </td>
-                          <td className="right col-fit">
-                            <Menu
-                              items={[
-                                { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
-                                {
-                                  label: 'Rotate',
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Rotate ${k.name}`,
-                                      body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
-                                      label: 'Rotate',
-                                      onConfirm: () =>
-                                        void run(async () => {
-                                          setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
-                                        }),
-                                    }),
-                                },
-                                {
-                                  label: 'Revoke',
-                                  disabled: k.status !== 'active',
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Revoke ${k.name}`,
-                                      body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
-                                      label: 'Revoke',
-                                      danger: true,
-                                      onConfirm: () => void run(() => api.revokeKey(k.id), 'Key revoked'),
-                                    }),
-                                },
-                                {
-                                  label: 'Delete',
-                                  danger: true,
-                                  onClick: () =>
-                                    setConfirm({
-                                      title: `Delete ${k.name}`,
-                                      body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
-                                      label: 'Delete',
-                                      danger: true,
-                                      onConfirm: () => void run(() => api.deleteKey(k.id), 'Key deleted'),
-                                    }),
-                                },
-                              ]}
-                            />
-                          </td>
-                        </tr>
-                      ))}
+                            </td>
+                            <td className="mono col-fit">{k.prefix}…</td>
+                            <td className="mono col-fit">{k.poolId}</td>
+                            <td className="col-fill">{k.modelRules.length ? <span className="mono" title={k.modelRules.map((r) => (r.not ? `NOT ${r.pattern}` : r.pattern)).join(', ')}>{plural(k.modelRules.length, 'rule')}{k.modelRulesMode === 'replace' && ' (replace)'}</span> : <span className="muted" title={NO_RULES[k.modelRulesMode]}>{NO_RULES[k.modelRulesMode]}</span>}</td>
+                            <td className="right num col-fit">
+                              {fmtCompact(k.usage7d.tokens)} tok
+                              <WeekLine reading={reading} unit={unit} usage={k.usage7d} />
+                            </td>
+                            <td className="col-fit" title={k.expiresAt ? fmtAbsolute(k.expiresAt) : undefined}>{k.expiresAt ? fmtDate(k.expiresAt) : <span className="muted">Never</span>}</td>
+                            <td className="col-fill">
+                              <Badge tone={KEY_STATUS_TONE[k.status]} dot title={k.status} describe={false}>
+                                <span className="key-row__badge-label ellipsis">{k.status}</span>
+                              </Badge>
+                              {k.lastUsedAt && <span className="sub" title={`used ${fmtRelative(k.lastUsedAt, now)}`}>used {fmtRelative(k.lastUsedAt, now)}</span>}
+                              {/* The route answers 0 once the rotation grace has passed, so the page needs no clock of its own. */}
+                              {k.sessionsOnRetiredSecret > 0 && (
+                                <span className="sub" title={`${retiredNote(k.sessionsOnRetiredSecret)}. ${k.retiredSecretLastUsedAt ? `${RETIRED_SECRET_HINT} Previous secret last used ${fmtRelative(k.retiredSecretLastUsedAt, now)}.` : RETIRED_SECRET_HINT}`}>
+                                  {retiredNote(k.sessionsOnRetiredSecret)}
+                                </span>
+                              )}
+                            </td>
+                            <td className="right col-fit">
+                              <Menu
+                                items={[
+                                  { label: 'Edit', onClick: () => setDialog({ initialGroup: null, key: k }) },
+                                  {
+                                    label: 'Rotate',
+                                    onClick: () =>
+                                      setConfirm({
+                                        title: `Rotate ${k.name}`,
+                                        body: 'A new secret is issued and shown once. The old secret keeps working for 15 minutes so running sessions can switch.',
+                                        label: 'Rotate',
+                                        onConfirm: () =>
+                                          void run(async () => {
+                                            setCreated({ key: await api.rotateKey(k.id), title: 'Key rotated' });
+                                          }),
+                                      }),
+                                  },
+                                  {
+                                    label: 'Revoke',
+                                    disabled: k.status !== 'active',
+                                    onClick: () =>
+                                      setConfirm({
+                                        title: `Revoke ${k.name}`,
+                                        body: 'Requests with this key are rejected immediately. Its history stays in the ledger.',
+                                        label: 'Revoke',
+                                        danger: true,
+                                        onConfirm: () => void run(() => api.revokeKey(k.id), 'Key revoked'),
+                                      }),
+                                  },
+                                  {
+                                    label: 'Delete',
+                                    danger: true,
+                                    onClick: () =>
+                                      setConfirm({
+                                        title: `Delete ${k.name}`,
+                                        body: 'Removes the key and detaches its request history from the key name. This cannot be undone.',
+                                        label: 'Delete',
+                                        danger: true,
+                                        onConfirm: () => void run(() => api.deleteKey(k.id), 'Key deleted'),
+                                      }),
+                                  },
+                                ]}
+                              />
+                            </td>
+                          </tr>
+                        );
+                      })}
                   {keys.data?.length === 0 && (
                     // A filter that matches no key keeps the table bare. Only a registry with no key at all says so.
                     <tr>
