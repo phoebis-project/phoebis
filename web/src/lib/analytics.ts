@@ -29,7 +29,7 @@ export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overa
 export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown', 'fast_lane', 'mark'];
 
 /** Why the router released a pin, in the order the selection found them, and the cause of a move it forced. */
-export const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
+const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
   attempted: 'already tried by this request',
   budget: 'account at its budget',
   budget_unknown: 'account budget unknown',

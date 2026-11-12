@@ -57,7 +57,7 @@ test('orderSessionRows reads the newest created first, ties by session id and a 
   );
 });
 
-test('orderSessionRows by cost puts a row with no spend last under either direction, ties by session id, and by requests reads the count', () => {
+test('orderSessionRows by cost puts a row with no spend last under either direction, and by requests reads the count', () => {
   // The creation times run in neither key's order, so a key that fell back to them reads otherwise.
   // A row with no spend carries a null one, as the route answers it, so it counts no request.
   const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, sessionId, spend: usd === null ? null : { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });

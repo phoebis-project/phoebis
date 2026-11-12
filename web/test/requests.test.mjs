@@ -126,7 +126,7 @@ test('a plan rate reads its Pro-week figure under native, its list dollars under
   const plan = { equivalent: 0.0009, side: 'plan', usd: 0.42 };
   assert.deepEqual(d.rateUnder('native', plan), { figure: 0.0009, kind: 'equivalent' });
   assert.deepEqual(d.rateUnder('all', plan), { kind: 'dollars', usd: 0.42 }, 'all: the dollars, never the week share');
-  assert.deepEqual(d.rateUnder('usd', plan), { kind: 'dash', title: d.RATE_NOTHING_BILLED_TITLE });
+  assert.deepEqual(d.rateUnder('usd', plan), { kind: 'dash', title: 'Nothing billed: the plan pays this traffic' });
   assert.deepEqual(d.rateUnder('equivalent', plan), { kind: 'dollars', usd: 0.42 }, 'equivalent: the dollars, never the week share');
   const billed = { equivalent: null, side: 'billed', usd: 0.12 };
   for (const position of ['native', 'all', 'usd']) assert.deepEqual(d.rateUnder(position, billed), { kind: 'dollars', usd: 0.12 }, position);

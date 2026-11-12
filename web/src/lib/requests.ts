@@ -144,7 +144,7 @@ function fundedUnit(funding: Funding, unit: UnitPosition, p: { dollars: number; 
 }
 
 /** The dash's title of a plan-funded rate under Billed dollars. */
-export const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this traffic';
+const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this traffic';
 
 /** A rate under a Unit position: its figure, a dash with why, or null where the route answered no figure for it. */
 type RateReading = { kind: 'dash'; title: string } | { kind: 'dollars'; usd: number } | { figure: number; kind: 'equivalent' } | null;

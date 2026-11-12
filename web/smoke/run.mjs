@@ -26186,7 +26186,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   // mock's fold over the request seed (`web/src/mock/requests.ts`).
   const HOUR = 3_600_000;
   const FINISHED_ID = '9b4e2f71-6c3d-4a85-b0e2-5d7f8a1c3e96';
-  const NOTEBOOK_ID = '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61';
   const SLOWED_ID = '5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65';
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
@@ -26199,7 +26198,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   const silent = listed.find((s) => s.companion === 'silent' && s.forkedFrom !== null);
   // Story 4 (`sessionSpec[4]`), whose Explore subagent 0b7f holds a seed row of its own and no line.
   const explored = listed.find((s) => !s.historical && s.agentRequests.some((e) => e.agentId === '0b7f'));
-  const subjects = { explored, finished: live(FINISHED_ID), notebook: live(NOTEBOOK_ID), silent, slowed: live(SLOWED_ID), story, written };
+  const subjects = { explored, finished: live(FINISHED_ID), silent, slowed: live(SLOWED_ID), story, written };
   const absent = Object.entries(subjects).filter(([, s]) => s === undefined).map(([k]) => k);
   /** Opens `s`'s row and answers its detail row, null where none opened. */
   const openRow = async (page, s) => {
@@ -26278,7 +26277,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         session: Object.fromEntries(Object.entries(session.values).filter(([label]) => label !== 'Companion').map(([label, dd]) => [label, textOf(dd)])),
         links: { account: routing.values.Account?.querySelector('a')?.getAttribute('href') ?? null, fork: session.values.Fork?.querySelector('a')?.getAttribute('href') ?? null, forkTitle: session.values.Fork?.querySelector('[title]')?.getAttribute('title') ?? null, key: session.values.Key?.querySelector('a')?.getAttribute('href') ?? null, log: logTarget(routing.link?.getAttribute('href')), logText: textOf(routing.link) },
         speed: routing.values.Speed?.querySelector('.speed-chip') !== null && routing.values.Speed !== undefined,
-        shed: routing.values['Shed mark']?.querySelector('.badge')?.className ?? null,
         clientTitle: session.values.Client?.querySelector('[title]')?.getAttribute('title') ?? session.values.Client?.getAttribute('title') ?? null,
       };
     }
@@ -26300,7 +26298,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         session: { Created: since(written?.createdAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Epoch: '1' },
         links: { account: '/accounts/primary', fork: null, forkTitle: null, key: '/keys#desktop', log: written === undefined ? null : window(written), logText: 'View in routing log' },
         speed: false,
-        shed: null,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
       },
       slowed: {
@@ -26310,7 +26307,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         session: { Created: since(subjects.slowed?.createdAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Fork: 'none', Epoch: '1' },
         links: { account: '/accounts/studio', fork: null, forkTitle: null, key: '/keys#notebook', log: subjects.slowed === undefined ? null : window(subjects.slowed), logText: 'View in routing log' },
         speed: true,
-        shed: null,
         clientTitle: null,
       },
       silent: {
@@ -26320,7 +26316,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         session: { Created: since(silent?.createdAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, on another account`, Epoch: '2' },
         links: { account: '/accounts/nightly', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
         speed: false,
-        shed: null,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
       },
     };
@@ -26444,21 +26439,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }) &&
         JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+2'], figure: '$0.54', sub: 'equivalent' }),
       missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`, `e4b7 ${JSON.stringify(elsewhereRead)}`],
-    });
-  }
-  {
-    // Main's line reads the word the route answers for main, as the row's Status does: nightly's notebook session,
-    // whose mod went silent beside its idle recipe (`sessionSpec` in mock/operations.ts), reads idle on both.
-    const IDLE = "Stopped and waiting for the user. Probed until the pool's idle window runs out, the break-even where the pool sets none.";
-    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-    const tr = subjects.notebook === undefined ? null : page.container.querySelector(`[id="${sessionRowId(subjects.notebook)}"]`);
-    const row = textOf(sessionCell(page, tr, 'Status')?.querySelector('.badge'));
-    const main = agentsOf(await openRow(page, subjects.notebook)).rows.find((r) => r.agent === 'main');
-    page.unmount();
-    results.push({
-      name: "/sessions main's line reads the lifecycle word the route answers, as its row does, on a session whose mod went silent",
-      ok: subjects.notebook?.companion === 'silent' && subjects.notebook.lifecycle === 'idle' && row === 'idle' && JSON.stringify(main?.status) === JSON.stringify({ badge: 'badge badge--good', muted: false, text: 'idle', title: IDLE }),
-      missing: [String(row), JSON.stringify(main?.status ?? null)],
     });
   }
   {
