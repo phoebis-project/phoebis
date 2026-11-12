@@ -1907,6 +1907,8 @@ export interface AgentContext extends BurnFigures {
   /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
   lifecycle: Lifecycle | null;
   model: string;
+  /** The instant the pin was written on the account it stands on. `createdAt` keeps the agent's first-seen time. */
+  pinnedAt: string | null;
   /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
   warm: boolean;
   /** The first instant `warm` answers false for the pin, null only where an answer carries none. */
@@ -2006,9 +2008,18 @@ export interface Session extends BurnFigures {
   /** Main's lifecycle word from the keepalive engine's record, whether or not a recipe stands, null where no mod
    *  reports the session. */
   lifecycle: Lifecycle | null;
+  /** When the round set the mark, null with no mark. */
+  markedAt: string | null;
+  /** The account the pin's open shedding mark stands on, null where the pin holds none and on a row with no pin. */
+  markedOn: string | null;
+  /** The window whose trigger set the mark, null with no mark. */
+  markedWindow: string | null;
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
+  /** The instant the pin was written on the account it stands on, null on a row with no pin. `createdAt` keeps the
+   *  first placement. */
+  pinnedAt: string | null;
   /** Seconds since main's last presence report, null before the first one. */
   presenceAgeSeconds: number | null;
   /**
@@ -2019,12 +2030,14 @@ export interface Session extends BurnFigures {
   /** Until the pin's account's projection reaches the ceiling on the window that binds, null unless `runwayBounded`. */
   runwayMs: number | null;
   sessionId: string;
-  /** The account a shed round marked this pin's session to leave, kept off until the session moves, and `null` off a
-   *  pin never marked, or with no pin. */
+  /** The instant of the pin's no-return stamp, null with no stamp. */
+  shedAt: string | null;
+  /** Where a shedding round's move or a failover's landing took the pin from, which keeps the pin off that account
+   *  for the dwell. It is no mark. Null off a pin never stamped, or with no pin. */
   shedFrom: string | null;
-  /** Why the pin was stamped from `shedFrom`: `round` for a shedding round's move, the failover's word (`cooldown`,
-   *  `fast_lane`, `mark`) for its landing. Null with no stamp and on a pin stamped before it carried one, which reads
-   *  as shed. */
+  /** Why the move that wrote the stamp took the pin off `shedFrom`: `round` for a shedding round's move, the
+   *  failover's word (`cooldown`, `fast_lane`, `mark`) for its landing. The stamp records a move that happened. Null
+   *  with no stamp and on a pin stamped before it carried a reason, which reads as a round's move. */
   shedReason: string | null;
   /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
   speed: number | null;

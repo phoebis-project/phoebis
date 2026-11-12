@@ -136,6 +136,13 @@ test("expiryOf reads a row no companion reports as listed until the lesser limit
   assert.equal(d.expiryOf({ ...row, companion: 'reporting' }, limits), null);
 });
 
+test("openMark reads a mark that stands on the row's own account, and none off a no-return stamp alone", () => {
+  const moved = { accountId: 'overflow', markedAt: null, markedOn: null, markedWindow: null, shedAt: iso(ms(14, 2)), shedFrom: 'primary', shedReason: 'cooldown' };
+  assert.equal(d.openMark(moved), null, 'a pin a failover moved off primary onto overflow');
+  const marked = { accountId: 'studio', markedAt: iso(ms(14, 5)), markedOn: 'studio', markedWindow: 'five_hour', shedAt: null, shedFrom: null, shedReason: null };
+  assert.deepEqual(d.openMark(marked), { at: iso(ms(14, 5)), on: 'studio', window: 'five_hour' });
+});
+
 test('contextCell reads the tokens compact, and a dash with none or before the first turn', () => {
   assert.deepEqual([d.contextCell(184_000), d.contextCell(18_400)], ['184K', '18.4K']);
   assert.deepEqual([d.contextCell(null), d.contextCell(0)], ['-', '-'], 'a session with no pin or no figure, and a pin before its first turn');

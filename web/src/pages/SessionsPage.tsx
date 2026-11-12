@@ -23,11 +23,11 @@ import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, orderLines, orderRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
-import { ageWord, aroundSubject, logHref } from '@/lib/routingLog';
+import { ageWord, aroundSubject, logHref, windowTagWord } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
 import { windowHint } from '@/lib/windows';
@@ -688,16 +688,32 @@ function RowAccount({ accent, account, others, session, speed }: { accent: boole
   );
 }
 
-/** The warning badge `leaving` on a session a shedding round or a failover marked to leave its account. */
-function ShedBadge({ session }: { session: Pick<Session, 'shedFrom' | 'shedReason'> }) {
-  if (session.shedFrom === null) return null;
-  // A pin stamped before the mark carried its reason reads as shed.
+/** The window a mark's trigger read, as the routing log's Pin fold words it, and nothing where the mark names none. */
+const triggerWords = (window: string | null): string => (window === null ? '' : ` by the ${windowTagWord(window)} trigger`);
+
+/**
+ * The warning badge `leaving` while a shedding round's mark stands on the session's pin, the mark's account, window and
+ * instant on hover.
+ */
+function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'markedAt' | 'markedOn' | 'markedWindow'> }) {
+  const mark = openMark(session);
+  if (mark === null) return null;
   return (
-    <Badge tone="warning" title={`Marked to leave ${session.shedFrom}: ${session.shedReason ?? 'shed'}. The next request moves the session`}>
+    <Badge tone="warning" title={`Marked to leave ${mark.on}${triggerWords(mark.window)}${mark.at === null ? '' : ` at ${fmtAbsolute(mark.at)}`}. The next request moves the session`}>
       leaving
     </Badge>
   );
 }
+
+/**
+ * The pin's no-return stamp as the move that wrote it, in the Pin fold's words, or null with no stamp. A stamp written
+ * before the pin carried a reason reads as a round's move, as the route documents it.
+ */
+const movedWord = (session: Pick<Session, 'shedAt' | 'shedFrom' | 'shedReason'>): string | null => {
+  if (session.shedFrom === null) return null;
+  const origin = session.shedReason === null || session.shedReason === 'round' ? 'shed from' : 'failed over from';
+  return `${origin} ${session.shedFrom}${session.shedAt === null ? '' : ` at ${fmtAbsolute(session.shedAt)}`}`;
+};
 
 /** The mod's state for a session: `reporting` with `seen {ago}`, `silent` with how long, or `none` muted. */
 function CompanionChip({ now, session }: { now: number; session: Session }) {
@@ -866,7 +882,9 @@ function SessionRows({
   const tableId = useId();
   const warmingId = useId();
   const navigate = useNavigate();
-  const pinnedSince = open ? (row.lines.find((l) => l.agentId === MAIN_AGENT)?.pin?.createdAt ?? session.createdAt) : null;
+  const pinnedSince = open ? (row.lines.find((l) => l.agentId === MAIN_AGENT)?.pin?.pinnedAt ?? session.pinnedAt) : null;
+  const mark = openMark(session);
+  const moved = movedWord(session);
   const speed = memberSpeed(session, account, now);
   const agentRow = (agentId: string, line: SessionLine | null, figures: AgentFigures | null) => (
     <AgentRow
@@ -1120,15 +1138,16 @@ function SessionRows({
                     { label: 'Pinned since', value: pinnedSince === null ? <span className="muted">-</span> : since(pinnedSince, now) },
                     {
                       label: 'Shed mark',
-                      value: session.shedFrom === null ? (
+                      value: mark === null ? (
                         <span className="muted">none</span>
                       ) : (
                         <>
                           <ShedBadge session={session} />
-                          {` ${session.shedFrom} (${session.shedReason ?? 'shed'})`}
+                          {` on ${mark.on}${triggerWords(mark.window)}`}
                         </>
                       ),
                     },
+                    { label: 'Moved', value: moved ?? <span className="muted">none</span> },
                     { label: 'Runway', value: runwayWord(session) ?? <span className="muted">-</span> },
                     { label: 'Speed', value: session.speed !== null && speed.factor !== null && speed.factor < 1 ? <SpeedChip {...speed} /> : 'full speed' },
                     { label: 'Cycle', value: session.cycleMs === null ? <span className="muted">not measured yet</span> : ageWord(session.cycleMs) },
@@ -1430,7 +1449,7 @@ function AgentRow({
   // read it.
   const accountId = line === null ? (figures?.accountId ?? null) : lineAccountOf(line);
   const type = agentId === MAIN_AGENT ? null : line === null ? (figures?.agentType ?? null) : line.agentType;
-  const title = joinPresent([lastRequestAt === null ? null : `Last request ${since(lastRequestAt, now)}.`, pin?.createdAt ? `Pinned since ${since(pin.createdAt, now)}.` : null], ' ');
+  const title = joinPresent([lastRequestAt === null ? null : `Last request ${since(lastRequestAt, now)}.`, pin?.pinnedAt ? `Pinned since ${since(pin.pinnedAt, now)}.` : null], ' ');
   const tokens = pin?.lastInputTokens ?? null;
   const context = contextCell(tokens);
   const burn = burnReading(pin, cost);

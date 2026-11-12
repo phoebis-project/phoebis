@@ -12,7 +12,7 @@ import { keyById, poolById, servedFigures } from './pools';
 import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, WORKSHOP_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
-import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
+import { HOUR, MINUTE, NOW, ago, ahead, clock, iso, startOfHour } from './time';
 
 const rng = createRng(2_024);
 
@@ -345,16 +345,18 @@ const effortAt = (i: number) => EFFORT_WORDS[i % EFFORT_WORDS.length];
 const warmUntilOf = (lastRefreshAt: string | null, cacheTtlMs: number | null): string | null => (lastRefreshAt === null || cacheTtlMs === null ? null : iso(Date.parse(lastRefreshAt) + cacheTtlMs));
 /** Whether a pin still holds its cache at the story's clock: before its first cold instant. */
 const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NOW) !== null;
+/** A line before `datedLines` dates it, with its pin's own instant where its caller writes one. */
+type UndatedLine = Omit<AgentContext, 'createdAt' | 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
  * and its served burn priced on the pin's own account, in that account's unit and window, as the row's is for the
  * display pin.
  */
 const pinLine = (
-  line: Omit<AgentContext, keyof BurnFigures | 'createdAt' | 'warm' | 'warmUntil'>,
+  line: Omit<UndatedLine, keyof BurnFigures | 'warm' | 'warmUntil'>,
   served: { burn: number | null },
   lastRefreshAt: string | null,
-): Omit<AgentContext, 'createdAt'> => {
+): UndatedLine => {
   const unit = burnUnitOf(line.accountId);
   const burn = unit === null ? null : served.burn;
   const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
@@ -374,20 +376,25 @@ const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentCont
  * earliest placing request (`firstRequestAt`) of the session's current life in the requests seed. A subagent no placing
  * request of that life names reads the session's time plus a minute per place among the row's subagents, a stand-in for
  * a first sighting the story does not write, and an agent pinned on two models takes one place, since it holds one
- * first-seen time.
+ * first-seen time. A line's pin was written at that first sighting unless its caller dates the pin itself.
  */
-const datedLines = (createdAt: string | null, session: string, lines: readonly Omit<AgentContext, 'createdAt'>[]): AgentContext[] => {
+const datedLines = (createdAt: string | null, session: string, lines: readonly UndatedLine[]): AgentContext[] => {
   const places = new Map<string, number>();
+  const dated = (line: UndatedLine, seen: string | null): AgentContext => ({ ...line, createdAt: seen, pinnedAt: line.pinnedAt ?? seen });
   return [...lines].sort(lineOrder).map((line) => {
-    if (line.agentId === 'main') return { ...line, createdAt };
+    if (line.agentId === 'main') return dated(line, createdAt);
     if (!places.has(line.agentId)) places.set(line.agentId, places.size + 1);
     const place = places.get(line.agentId)!;
     const first = firstRequestAt(`${session}|${line.agentId}`, createdAt);
-    return { ...line, createdAt: first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)) };
+    return dated(line, first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)));
   });
 };
 /** The summary of a row main holds no recipe for. */
 const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
+/** A pin no round marked, and a row with no pin. */
+const NO_MARK: Pick<Session, 'markedAt' | 'markedOn' | 'markedWindow'> = { markedAt: null, markedOn: null, markedWindow: null };
+/** A pin with no no-return stamp, and a row with no pin. The story's stamping moves land on no pinned row it lists. */
+const NO_STAMP: Pick<Session, 'shedAt' | 'shedFrom' | 'shedReason'> = { shedAt: null, shedFrom: null, shedReason: null };
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -421,6 +428,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
+  // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none. No
+  // move took a drawn row's pin, so the pin was written at that first sighting.
+  const createdAt = pinned ? ago(createdAgo) : null;
   return {
     ...SESSION_SAMPLE,
     sessionId,
@@ -432,9 +442,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     epoch: i < 3 ? 2 : 1,
     historical: false,
     keyGeneration,
-    // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none, and
-    // its last use is what its own rows read.
-    createdAt: pinned ? ago(createdAgo) : null,
+    createdAt,
+    pinnedAt: createdAt,
+    // An unpinned session's last use is what its own rows read.
     lastUsedAt: !pinned ? (seen ? seen.last : null) : lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
     // Main's word, filled in from the recipes below, so a session whose main holds no recipe reads none.
@@ -447,8 +457,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
-    shedFrom: null,
-    shedReason: null,
+    ...NO_MARK,
+    ...NO_STAMP,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
     // A row's lines are written once the recipes exist, so every row starts with none.
     agentContexts: [],
@@ -498,10 +508,13 @@ SESSIONS.push({
   lastRequestAt: null,
   lastUsedAt: null,
   lifecycle: 'registered',
+  ...NO_MARK,
   model: null,
   pinned: false,
+  pinnedAt: null,
   presenceAgeSeconds: 31,
   sessionId: '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43',
+  ...NO_STAMP,
   warm: null,
 });
 
@@ -692,12 +705,12 @@ SESSIONS.forEach((pin, i) => {
 });
 
 /**
- * A written row that names no fork, no cycle, no runway and no shed stamp: its lines priced as the route prices a
- * display pin's, the line its caller lists first at the row's burn and the others beside it, and dated from its
- * first-seen time, its figures and its burn reading off that first line, warm off it and last used at the newest of
- * its lines, each line refreshed at its last use, its summary off its session's recipes, and its last request off the
- * activity fold. The engine holds no record of its main, so it reads no lifecycle word. A row passes a companion or a
- * presence only where a mod reports.
+ * A written row that names no fork, no cycle, no runway, no mark and no shed stamp: its lines priced as the route
+ * prices a display pin's, the line its caller lists first at the row's burn and the others beside it, and dated from
+ * its first-seen time, its figures, its burn reading and its pin's instant off that first line, warm off it and last
+ * used at the newest of its lines, each line refreshed at its last use, its summary off its session's recipes, and its
+ * last request off the activity fold. The engine holds no record of its main, so it reads no lifecycle word. A row
+ * passes a companion or a presence only where a mod reports.
  */
 const writtenRow = (
   row: Pick<Session, 'agentId' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string },
@@ -707,11 +720,12 @@ const writtenRow = (
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
   const priced = lines.map((l, j) => pinLine(l, j === 0 ? { burn: row.burn } : servedBeside({ burn: row.burn, lastInputTokens: lines[0].lastInputTokens }, l, row.createdAt), l.lastUsedAt));
   const line = priced[0];
+  const agentContexts = datedLines(row.createdAt, key, priced);
   const seen = ledgered.get(key);
   return {
     ...SESSION_SAMPLE,
     ...row,
-    agentContexts: datedLines(row.createdAt, key, priced),
+    agentContexts,
     burnAt: line.lastUsedAt,
     burnEquivalent: line.burnEquivalent,
     burnUnit: line.burnUnit,
@@ -733,13 +747,14 @@ const writtenRow = (
     lastRequestAt: seen?.last ?? null,
     lastUsedAt: newestUse(null, priced),
     lifecycle: null,
+    ...NO_MARK,
     model: line.model,
     pinned: true,
+    pinnedAt: agentContexts.find((l) => l.agentId === line.agentId && l.model === line.model)!.pinnedAt,
     presenceAgeSeconds: row.presenceAgeSeconds ?? null,
     runwayBounded: null,
     runwayMs: null,
-    shedFrom: null,
-    shedReason: null,
+    ...NO_STAMP,
     speed: null,
     warm: line.warm,
   };
@@ -771,10 +786,11 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   lastRefreshAt: null,
   lastUsedAt: null,
   lifecycle: null,
+  ...NO_MARK,
   pinned: false,
+  pinnedAt: null,
   presenceAgeSeconds: null,
-  shedFrom: null,
-  shedReason: null,
+  ...NO_STAMP,
   warm: null,
   ...fields,
 });
@@ -795,6 +811,12 @@ const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number;
 const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');
 const studioRunwayMs = studioFive?.burn ? Math.round(((poolById.get('work')!.windowCeiling - studioFive.utilization) / studioFive.burn) * HOUR) : null;
 const studioSlowed = servedFigures('studio', NOW, poolById.get('work')!.slowDown);
+/**
+ * The mark studio's stretch round set on the two sessions it marked, the round of 14:05 that the 5-hour window fired
+ * (`STRETCH_ROUND` in mock/routingLog.ts, which reads these rows, so its instant is written here). Neither session sent
+ * a request since, so the mark stands.
+ */
+const STRETCH_MARK: Pick<Session, 'markedAt' | 'markedOn' | 'markedWindow'> = { markedAt: iso(clock(14, 5)), markedOn: 'studio', markedWindow: 'five_hour' };
 SLOWED_PINS.forEach((pin, k) => {
   // The rows run newest first, and the main agent's newest turn is the pin's last use.
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
@@ -824,6 +846,7 @@ SLOWED_PINS.forEach((pin, k) => {
     runwayBounded: studioRunwayMs !== null,
     runwayMs: studioRunwayMs,
     speed: studioSlowed.speed,
+    ...(MARKED_SESSION_IDS.some((id) => id === pin.sessionId) ? STRETCH_MARK : {}),
   });
 });
 
@@ -847,17 +870,23 @@ const FLEET_BURN = 0.36;
 if (FLEET_PINS.length > 0) {
   const last = FLEET_PINS[0];
   const lastAttempt = servingAttempt(last)!;
-  // The session is first seen at the oldest turn of its last unbroken run: a turn that came once the pin before it had
-  // passed the affinity window found the session holding no pin, so the router dated the session again from it.
-  let firstSeen = fleetRows[0];
-  for (const r of fleetRows.slice(1)) {
-    if (Date.parse(firstSeen.at) - Date.parse(servingAttempt(r)!.startedAt) > fleetTtlMs) break;
-    firstSeen = r;
-  }
+  // The oldest turn of the last unbroken run of turns, newest first: a turn that came once the pin before it had passed
+  // the affinity window found no pin, so the router wrote one again from it.
+  const runStart = (turns: readonly RequestLog[]): RequestLog => {
+    let first = turns[0];
+    for (const r of turns.slice(1)) {
+      if (Date.parse(first.at) - Date.parse(servingAttempt(r)!.startedAt) > fleetTtlMs) break;
+      first = r;
+    }
+    return first;
+  };
+  // The session is first seen at its run's oldest turn on any model, and each model's pin was written at that model's.
+  const firstSeen = runStart(fleetRows);
   // One line per standing pin, each read off its model's last turn as the row reads the newest one.
   const lines = FLEET_PINS.map((pin, j) => {
     const attempt = servingAttempt(pin)!;
-    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel };
+    const pinnedAt = runStart(fleetRows.filter((r) => r.canonicalModel === pin.canonicalModel)).at;
+    return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
   });
   SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
@@ -874,7 +903,9 @@ const WORKSHOP_BURN = 0.0021;
 {
   const lastAttempt = servingAttempt(WORKSHOP_PIN)!;
   const createdAt = workshopRows[workshopRows.length - 1].at;
-  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel };
+  // A pin holds one model, so the line's pin was written at the session's oldest turn on that model.
+  const pinnedAt = workshopRows.filter((r) => r.canonicalModel === WORKSHOP_PIN.canonicalModel).at(-1)!.at;
+  const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
   SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 

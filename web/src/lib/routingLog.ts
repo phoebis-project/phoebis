@@ -232,7 +232,7 @@ export function verdictTone(verdict: string, stepId?: string): VerdictTone {
 export const words = (name: string) => name.replace(/_/g, ' ');
 export const wordOf = (map: Record<string, string>, name: string) => lookup(map, name) ?? words(name);
 /** A window's tag, or the key's words where the console does not know the window. */
-const windowTagWord = (key: string): string => windowTagOf(key) ?? words(key);
+export const windowTagWord = (key: string): string => windowTagOf(key) ?? words(key);
 
 const msOf = (value: number | string) => (typeof value === 'number' ? value : Date.parse(value));
 

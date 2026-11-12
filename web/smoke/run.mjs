@@ -25658,21 +25658,24 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // No story row carries a shed mark or the engine's unknown word, so two reads hand them: the written session marked
-    // to leave overflow by a shedding round, and the story's first session, whose mod reports it, with main's word
-    // unknown.
+    // The notebook session studio's stretch round marked (`MARKED_SESSION_IDS[0]` and `STRETCH_MARK` in
+    // mock/operations.ts) reads the `leaving` badge with the mark's account, its 5-hour window and its instant on
+    // hover. No story row carries the engine's unknown word, so a read hands it to the story's first session, whose
+    // mod reports it.
+    const MARKED_ID = '9c2d7e4a-3b81-4f59-a6e0-1d8c5b7a2e93';
+    const markedRow = live(MARKED_ID);
     const { listSessions } = api;
     const at = (s) => (s === undefined ? () => false : (x) => x.keyId === s.keyId && x.sessionId === s.sessionId && !x.historical);
-    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(subjects.written)(s) ? { ...s, shedFrom: 'overflow', shedReason: 'round' } : at(subjects.story)(s) ? { ...s, lifecycle: 'unknown' } : s));
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(subjects.story)(s) ? { ...s, lifecycle: 'unknown' } : s));
     const marked = await mount('/sessions', { now: CLOCK_ORIGIN });
-    const leaving = [...(sessionCell(marked, marked.container.querySelector(`[id="${subjects.written === undefined ? '' : sessionRowId(subjects.written)}"]`), 'Account')?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'leaving');
+    const leaving = [...(sessionCell(marked, marked.container.querySelector(`[id="${markedRow === undefined ? '' : sessionRowId(markedRow)}"]`), 'Account')?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'leaving');
     const unknown = sessionCell(marked, marked.container.querySelector(`[id="${subjects.story === undefined ? '' : sessionRowId(subjects.story)}"]`), 'Status')?.querySelector('.badge');
     marked.unmount();
     api.listSessions = listSessions;
     results.push({
-      name: "/sessions a row marked to leave its account reads the warning badge leaving with its reason on hover",
-      ok: badgeOf(leaving) !== null && JSON.stringify(badgeOf(leaving)) === JSON.stringify({ cls: 'badge badge--warning', dot: false, text: 'leaving', title: 'Marked to leave overflow: round. The next request moves the session' }),
-      missing: [JSON.stringify(badgeOf(leaving))],
+      name: "/sessions a row whose shedding mark stands on its account reads the warning badge leaving with the mark's account, window and instant on hover",
+      ok: markedRow !== undefined && JSON.stringify(badgeOf(leaving)) === JSON.stringify({ cls: 'badge badge--warning', dot: false, text: 'leaving', title: `Marked to leave studio by the 5h trigger at ${fmtAbsolute(markedRow.markedAt)}. The next request moves the session` }),
+      missing: [JSON.stringify(badgeOf(leaving)), `marked at ${markedRow?.markedAt}`],
     });
     results.push({
       name: "/sessions a reported row whose main the engine cannot tell reads unknown with its sentence",
@@ -25809,14 +25812,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // The Session and Routing facts read the row they open on: the written session for the plain words, studio's
     // slowed notebook session (`SLOWED_PINS`) for the speed chip and the measured cycle, and the silent session for the
-    // fork, whose base the list holds on another account. No story row carries a shed mark, so the written session is
-    // handed one from a shedding round. The mock dates main's pin at its session's creation (`datedLines`), so the
-    // written session's main pin moves to ten minutes after the row's, which sets Pinned since apart from Created. Each
-    // Companion fact draws the chip the Companion column draws.
-    const { listSessions } = api;
-    const mainPinned = written === undefined || written.createdAt === null ? null : isoAt(Date.parse(written.createdAt) + 10 * 60_000);
-    const pinnedLater = (c) => (c.agentId === 'main' ? { ...c, createdAt: mainPinned } : c);
-    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? { ...s, agentContexts: s.agentContexts.map(pinnedLater), shedFrom: 'overflow', shedReason: 'round' } : s));
+    // fork, whose base the list holds on another account. Each Companion fact draws the chip the Companion
+    // column draws.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     await showColumn(page, 'Companion');
     const chipOf = (el) => (el === null || el === undefined ? null : { badge: el.querySelector('.badge')?.className ?? null, text: textOf(el), title: (el.querySelector('.badge') ?? el.querySelector('.muted'))?.getAttribute('title') ?? null });
@@ -25839,7 +25836,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       };
     }
     page.unmount();
-    api.listSessions = listSessions;
     const since = (iso) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, CLOCK_ORIGIN)}`;
     const window = (s) => {
       const last = Math.max(...[s.lastUsedAt, s.lastRequestAt].filter((t) => t !== null).map((t) => Date.parse(t)));
@@ -25847,23 +25843,23 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     };
     const LABELS = [
       ['Created', 'Key', 'Client', 'Fork', 'Epoch', 'Companion'],
-      ['Account', 'Pinned since', 'Shed mark', 'Runway', 'Speed', 'Cycle'],
+      ['Account', 'Pinned since', 'Shed mark', 'Moved', 'Runway', 'Speed', 'Cycle'],
     ];
     const want = {
       written: {
         companion: true,
         labels: LABELS,
-        routing: { Account: 'primary subscription', 'Pinned since': since(mainPinned), 'Shed mark': 'leaving overflow (round)', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
+        routing: { Account: 'primary subscription', 'Pinned since': since(written?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
         session: { Created: since(written?.createdAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Epoch: '1' },
         links: { account: '/accounts/primary', fork: null, forkTitle: null, key: '/keys#desktop', log: written === undefined ? null : window(written), logText: 'View in routing log' },
         speed: false,
-        shed: 'badge badge--warning',
+        shed: null,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
       },
       slowed: {
         companion: true,
         labels: LABELS,
-        routing: { Account: 'studio subscription', 'Pinned since': since(subjects.slowed?.createdAt ?? null), 'Shed mark': 'none', Runway: minuteSpan(subjects.slowed?.runwayMs ?? 0), Speed: '0.5x', Cycle: '42 s' },
+        routing: { Account: 'studio subscription', 'Pinned since': since(subjects.slowed?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: minuteSpan(subjects.slowed?.runwayMs ?? 0), Speed: '0.5x', Cycle: '42 s' },
         session: { Created: since(subjects.slowed?.createdAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Fork: 'none', Epoch: '1' },
         links: { account: '/accounts/studio', fork: null, forkTitle: null, key: '/keys#notebook', log: subjects.slowed === undefined ? null : window(subjects.slowed), logText: 'View in routing log' },
         speed: true,
@@ -25873,7 +25869,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       silent: {
         companion: true,
         labels: LABELS,
-        routing: { Account: 'nightly subscription', 'Pinned since': since(silent?.createdAt ?? null), 'Shed mark': 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
+        routing: { Account: 'nightly subscription', 'Pinned since': since(silent?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
         session: { Created: since(silent?.createdAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, on another account`, Epoch: '2' },
         links: { account: '/accounts/nightly', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
         speed: false,
@@ -25883,9 +25879,56 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     };
     const off = Object.keys(want).filter((k) => JSON.stringify(read[k]) !== JSON.stringify(want[k]));
     results.push({
-      name: "/sessions an open row's Session and Routing facts read its creation, key and pool, client, fork, epoch and Companion chip, then its account, pin, shed mark, runway, speed and cycle with the routing log's link",
+      name: "/sessions an open row's Session and Routing facts read its creation, key and pool, client, fork, epoch and Companion chip, then its account, pin, shed mark, move, runway, speed and cycle with the routing log's link",
       ok: absent.length === 0 && off.length === 0,
       missing: [`absent ${absent.join(',')}`, ...off.flatMap((k) => [`${k} ${JSON.stringify(read[k])}`, `want ${JSON.stringify(want[k])}`])],
+    });
+  }
+  {
+    // A no-return stamp records a move that happened, where a mark stands until the next request moves the session. No
+    // pinned row of the story carries a stamp, so the written session is handed one: a failover's landing took its pin
+    // off secondary for a cooldown ten minutes after its first placement and wrote it on primary then, on the row and
+    // on main's line alike. It reads no `leaving` badge in its Account cell or on main's line, Shed mark none, Moved
+    // with the account it left and the instant, and Pinned since and main's hover at the landing, where Created keeps
+    // the first placement. The notebook session studio's stretch round marked (`MARKED_SESSION_IDS[0]` and
+    // `STRETCH_MARK` in mock/operations.ts) reads the badge with the mark's account and window in Shed mark and on
+    // main's line, which sits on the row's account, and Moved none. Pinned since and the hover pick the instant apart,
+    // so the case reads both.
+    const marked = live('9c2d7e4a-3b81-4f59-a6e0-1d8c5b7a2e93');
+    const landed = written === undefined || written.createdAt === null ? null : isoAt(Date.parse(written.createdAt) + 10 * 60_000);
+    const stamp = (s) => ({ ...s, agentContexts: s.agentContexts.map((c) => (c.agentId === 'main' ? { ...c, pinnedAt: landed } : c)), pinnedAt: landed, shedAt: landed, shedFrom: 'secondary', shedReason: 'cooldown' });
+    const { listSessions } = api;
+    api.listSessions = async () => (await listSessions.call(api)).map((s) => (at(written)(s) ? stamp(s) : s));
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    const leavingIn = (cell) => [...(cell?.querySelectorAll('.badge') ?? [])].some((b) => b.textContent?.trim() === 'leaving');
+    const readOf = async (s) => {
+      const row = leavingIn(sessionCell(page, page.container.querySelector(`[id="${s === undefined ? '' : sessionRowId(s)}"]`), 'Account'));
+      const detail = await openRow(page, s);
+      const routing = factsOf(detail, 'Routing');
+      const { heads, rows } = agentsOf(detail);
+      const main = rows.find((r) => r.agent === 'main');
+      return {
+        created: textOf(factsOf(detail, 'Session').values.Created),
+        hover: main?.agentTitle?.split('. ').at(-1) ?? null,
+        line: leavingIn(main?.tr.children[heads.indexOf('Account')]),
+        moved: textOf(routing.values.Moved),
+        pinnedSince: textOf(routing.values['Pinned since']),
+        row,
+        shedMark: textOf(routing.values['Shed mark']),
+      };
+    };
+    const read = { marked: await readOf(marked), stamped: await readOf(written) };
+    page.unmount();
+    api.listSessions = listSessions;
+    const since = (iso) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, CLOCK_ORIGIN)}`;
+    const want = {
+      marked: { created: since(marked?.createdAt ?? null), hover: `Pinned since ${since(marked?.pinnedAt ?? null)}.`, line: true, moved: 'none', pinnedSince: since(marked?.pinnedAt ?? null), row: true, shedMark: 'leaving on studio by the 5h trigger' },
+      stamped: { created: since(written?.createdAt ?? null), hover: `Pinned since ${since(landed)}.`, line: false, moved: `failed over from secondary at ${fmtAbsolute(landed)}`, pinnedSince: since(landed), row: false, shedMark: 'none' },
+    };
+    results.push({
+      name: "/sessions a standing mark draws leaving and a no-return stamp none: the stamped row reads Moved with the account it left and the instant, and Pinned since and main's hover at the move",
+      ok: marked !== undefined && written !== undefined && JSON.stringify(read) === JSON.stringify(want),
+      missing: [JSON.stringify(read), `want ${JSON.stringify(want)}`],
     });
   }
   {
@@ -25913,7 +25956,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       main: {
         account: 'primary',
         agent: 'main',
-        agentTitle: titleOf(newest('main'), mainPin?.createdAt ?? null),
+        agentTitle: titleOf(newest('main'), mainPin?.pinnedAt ?? null),
         burn: `${weekCell(mainPin?.burnEquivalent ?? 0)}/h`,
         cache: { badge: 'cold', muted: null, sub: 'retained' },
         context: '16.2K',
@@ -25928,7 +25971,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       busy: {
         account: 'primary',
         agent: '4d1a',
-        agentTitle: titleOf(newest('4d1a'), busyPin?.createdAt ?? null),
+        agentTitle: titleOf(newest('4d1a'), busyPin?.pinnedAt ?? null),
         burn: `${weekCell(busyPin?.burnEquivalent ?? 0)}/h`,
         cache: { badge: 'cold', muted: null, sub: 'held' },
         context: '22K',

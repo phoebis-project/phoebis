@@ -277,6 +277,13 @@ export function presenceOf(session: Pick<Session, 'companion' | 'companionSince'
 }
 
 /**
+ * The pin's open shedding mark, which the `leaving` badge draws: a mark stands where the route names the row's own
+ * account as marked. A no-return stamp alone is no mark, since it records a move that already happened.
+ */
+export const openMark = (session: Pick<Session, 'accountId' | 'markedAt' | 'markedOn' | 'markedWindow'>): { at: string | null; on: string; window: string | null } | null =>
+  session.markedOn !== null && session.markedOn === session.accountId ? { at: session.markedAt, on: session.markedOn, window: session.markedWindow } : null;
+
+/**
  * A line's word as the Status filter, the Agents cell's split and the Agents table read it: the line's own lifecycle
  * word, and `unreported` where the route answers none.
  */
