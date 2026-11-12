@@ -1123,8 +1123,8 @@ export class MockApi implements Api {
   }
 
   getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
-    const { accountRollups, requests } = ledger();
-    return latency(rewritesOf(accountRollups, requests, range));
+    const { accountRollups, requests, routingEvents } = ledger();
+    return latency(rewritesOf(accountRollups, requests, routingEvents, range));
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {

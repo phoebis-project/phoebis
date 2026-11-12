@@ -1,7 +1,7 @@
 import { agentTokenOf, plus } from '@/api/fold';
 import type {
   Account, AccountRollup, AllowanceReset, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, HeldPoint, LatencyHistograms, PinMigrationReason, PlacementRow, QuotaHistory, Reconciliation, ReconciliationsAnswer,
-  RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, UnusedAllowanceAnswer, WastedProbeReason,
+  RefusalCategoriesAnswer, RefusalCategoryRow, RequestKind, RequestLog, RewritePoint, RewritesAnswer, RoutingEvent, UnusedAllowanceAnswer, WastedProbeReason,
 } from '@/api/types';
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
@@ -20,7 +20,7 @@ import { keyById } from './pools';
 import { bandAt, freesPlanShare, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_EVENTS, readingPairAt, type EventSeed } from './routingLog';
+import { readingPairAt, type EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
@@ -617,13 +617,13 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
 
 /**
  * The account rollups' moves into each account by reason and by the destination's fit, with the cache the first
- * request after each one wrote again, and beside them the story's moves an account's state forced, each under its own
- * word and fit. A cause filed under a turn would tell a lapse the story holds nowhere, so no cause joins the turns.
- * `moves` is each reason's sum over its fits, as the route answers it. The held time per bucket folds the request rows
- * as the ledger folds the completions, since no account rollup the console reads carries it: the slow-down waits of
- * the bucket's requests summed, and the requests that waited one.
+ * request after each one wrote again, and beside them the moves an account's state forced among the ledger's `events`,
+ * each under its own word and fit in its hour's bucket. A cause filed under a turn would tell a lapse the story holds
+ * nowhere, so no cause joins the turns. `moves` is each reason's sum over its fits, as the route answers it. The held
+ * time per bucket folds the request rows as the ledger folds the completions, since no account rollup the console
+ * reads carries it: the slow-down waits of the bucket's requests summed, and the requests that waited one.
  */
-export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], range: Range): RewritesAnswer {
+export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], events: readonly RoutingEvent[], range: Range): RewritesAnswer {
   const { slotOf, starts } = bucketsOf(range);
   // Placed in their buckets in one pass, as the series places its rows: the rollups that moved a pin in, each with its
   // parsed hour, and the requests that waited on a slow-down, each with its summed wait.
@@ -651,11 +651,10 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], ran
     }
     return { at: iso(at), rewriteTokens };
   });
-  const [fromMs, toMs] = [Date.parse(range.from), Date.parse(range.to)];
-  for (const e of ROUTING_EVENTS) {
-    const at = Date.parse(e.at);
-    if (e.kind !== 'pin_migrated' || !Array.isArray(e.detail.reasons) || at < fromMs || at > toMs) continue;
-    const fits = (movesByReasonAndFit[String(e.detail.reason)] ??= {});
+  // The ledger files a move in its hour's row, so the range keeps it wherever it keeps that hour's synthetic moves.
+  for (const e of events) {
+    if (e.kind !== 'pin_migrated' || !Array.isArray(e.detail.reasons) || starts[slotOf(startOfHour(Date.parse(e.at)))] === undefined) continue;
+    const fits = (movesByReasonAndFit[typeof e.detail.reason === 'string' ? e.detail.reason : 'unknown'] ??= {});
     const fit = typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown';
     fits[fit] = (fits[fit] ?? 0) + 1;
   }

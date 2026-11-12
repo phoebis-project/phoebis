@@ -2430,6 +2430,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(shapes.size > 1, `the reasons read ${[...shapes].join(', ')}`);
   });
 
+  test(`the story's move an account's state forced counts in a range that starts after it inside its hour, at ${at}`, async () => {
+    const s = await story;
+    // The move lands 2 h 58 min 50 s before the clock (11:31:10 at 14:30, the seed `CAUSED_MOVE_ID` in
+    // `web/src/mock/requests.ts`), so a range from 2 h 50 min back starts after it inside its hour, which the route
+    // reads whole as the range's first bucket.
+    const { moves, movesByReasonAndFit } = await s.api.getAnalyticsRewrites({ from: iso(s.now - 170 * 60_000), to: iso(s.now) });
+    assert.deepEqual([moves.funding_required, movesByReasonAndFit.funding_required], [1, { fits: 1 }]);
+  });
+
   test(`a fired rule's destinations are its gate's answer in the set's order, the shed rule's fitting set whole for the strategy to rank with the runway breaking its tie, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);

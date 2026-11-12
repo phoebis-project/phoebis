@@ -28689,6 +28689,9 @@ await forView(['/', '/accounts', '/analytics', '/guardrails', '/keys', '/pools',
   const pairLines = (c) => [...c.querySelectorAll('.stat-grid .stat__pair-line')].map((l) => `${l.querySelector('.cost-figure')?.textContent} ${l.querySelector('.stat__pair-word')?.textContent}`);
   // A closed dialog reaches nobody, so a placeholder inside one is no wait.
   const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
+  // The rewrites card folds the story's own moves beside the rollups, so it says none only where the ledger reads none.
+  const movesCard = (c) => [...c.querySelectorAll('.card')].find((card) => card.querySelector('.card__title')?.textContent?.trim() === 'Migration rewrites');
+  const movesLegend = (c) => [...(movesCard(c)?.querySelectorAll('ul[aria-label="Moves by destination fit"] li') ?? [])].map((li) => li.textContent?.trim()).join(' ');
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
     ['/quota', (c, t) => t.includes('No accounts to list') && t.includes('The view lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended.') && c.querySelector('.qcard') === null, 'No accounts to list with its sentence, no account card'],
@@ -28698,7 +28701,11 @@ await forView(['/', '/accounts', '/analytics', '/guardrails', '/keys', '/pools',
     ['/keys', (c, t) => t.includes('No keys yet'), 'No keys yet'],
     ['/guardrails', (c) => c.querySelector('.guardrails__table .empty__title')?.textContent === 'No guardrails yet', 'No guardrails yet inside the table'],
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
-    ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
+    [
+      '/analytics',
+      (c, t) => t.includes('No traffic in this range.') && movesLegend(c) === 'Moves none in range' && movesCard(c)?.querySelector('.hbars--moves') === null,
+      'No traffic in this range., and Migration rewrites reading Moves none in range with no bar',
+    ],
     ['/sessions', (c, t) => t.includes('No live sessions'), 'No live sessions'],
     ['/settings', (c, t) => t.includes('API prices path'), 'API prices path'],
   ];
