@@ -32,9 +32,9 @@ test('a stored time format outside the union reads 24h', (t) => {
   assert.equal(getTimeFormat(), '24h');
 });
 
-/** The palette the provider puts on the root, with `stored` under its key before the render, or the key unset. */
+/** The palette the provider puts on the root, with `stored` under its key before the render. */
 function appliedPalette(t, stored) {
-  if (stored !== null) window.localStorage.setItem('phoebis.palette', stored);
+  window.localStorage.setItem('phoebis.palette', stored);
   const root = createRoot(document.body.appendChild(document.createElement('div')));
   t.after(() => {
     act(() => root.unmount());

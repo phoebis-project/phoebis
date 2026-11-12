@@ -5832,7 +5832,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const links = ['all', 'jobs', 'work'].map((name) => keyLink(name)?.getAttribute('href'));
   const wanted = ['all', 'jobs', 'work'].map((id) => `/keys?pools=${id}`);
   results.push({
-    name: '/pools each card links its key count to the Keys page filtered to the pool',
+    name: '/pools the all, jobs and work cards link to the Keys page filtered to their pool',
     ok: JSON.stringify(links) === JSON.stringify(wanted),
     missing: [...links.map(String), ...wanted],
   });
@@ -19324,7 +19324,10 @@ await forView('/analytics', async () => {
   } finally {
     gate.restore();
   }
-  const primary = ranked(refused.filter((r) => r.accountId === 'primary'));
+  // The landed counts tell a route that reads the Accounts filter from one that ignores it only while primary serves
+  // some of the story's refused answers and not all of them.
+  const onPrimary = refused.filter((r) => r.accountId === 'primary');
+  const primary = ranked(onPrimary);
   results.push({
     name: heldCheck,
     ok:
@@ -19336,8 +19339,9 @@ await forView('/analytics', async () => {
       seen.waiting.line !== unfiltered &&
       gate.calls.length > 0 &&
       primary.length > 0 &&
+      onPrimary.length < refused.length &&
       JSON.stringify(seen.landed) === JSON.stringify(primary),
-    missing: [`unfiltered ${unfiltered}`, JSON.stringify(seen.waiting), `${gate.calls.length} held calls`, JSON.stringify(seen.landed), JSON.stringify(primary)],
+    missing: [`unfiltered ${unfiltered}`, JSON.stringify(seen.waiting), `${gate.calls.length} held calls`, JSON.stringify(seen.landed), JSON.stringify(primary), `${onPrimary.length} of ${refused.length} refused answers on primary`],
   });
   held.unmount();
 
