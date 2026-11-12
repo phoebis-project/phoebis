@@ -2720,22 +2720,23 @@ test("a key group's label is built from the holder's id and creation instant, in
   assert.equal(model.keyCreatedAt, null);
 });
 
-test("a table's effective date reads as the calendar date the file names in every zone, and free text as sent", () => {
+test("a table's effective date reads as the calendar date the file names in every zone, an instant with its time in the viewer's zone, and free text as sent", () => {
   // A date-only effective parses to midnight UTC, which a zone west of UTC reads as the evening before; the case sets
   // such a zone itself, so it holds on a host in any zone.
   const zone = process.env.TZ;
   process.env.TZ = 'America/Los_Angeles';
   try {
     assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
-    assert.equal(d.effectiveLabel('2026-10-01T23:00'), 'Oct 01, 2026', "a date with a time reads in the browser's zone");
+    assert.equal(d.effectiveLabel('2026-11-09T18:30:00Z'), 'Nov 09, 2026, 10:30', "an instant reads its date and its time to the minute in the viewer's zone, eight hours west of UTC");
     assert.equal(d.effectiveLabel('v3'), 'v3');
-    // A dated revision is its UTC midnight and one with a time its instant, so the label reads the calendar date the
-    // file names here too.
+    // Each captured revision parses to the instant it names, and a date entry's label reads the calendar date the file
+    // names here too. An instant's label is read above on the case's own input, since a read keyed to a captured entry
+    // would assert a figure of the shipped price list.
     const { apiPrices, subscriptionCosts } = d.decodeSettings(fixture('settings'));
     for (const r of [...apiPrices.revisions, ...subscriptionCosts.revisions]) {
       const instant = r.effective.length === 10 ? `${r.effective}T00:00:00.000Z` : `${r.effective.slice(0, 19)}.000Z`;
       assert.equal(r.effectiveDate, instant, `${r.effective} parses to the instant it names`);
-      assert.equal(d.effectiveLabel(r.effective), new Date(r.effectiveDate).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }), `${r.effective} reads its calendar date`);
+      if (r.effective.length === 10) assert.equal(d.effectiveLabel(r.effective), new Date(r.effectiveDate).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }), `${r.effective} reads its calendar date`);
     }
   } finally {
     if (zone === undefined) delete process.env.TZ;

@@ -12,7 +12,7 @@ import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFIN
 import type { GuardrailInput, GuardrailTestInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
-import { earlierHolderLabel, fmtDate, formatIn } from '@/lib/format';
+import { earlierHolderLabel, fmtMinute, formatIn } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { accountStatusOf, planWordLabel } from '@/lib/quota';
 import { inWindowOrder, periodHoursOf, windowKeyId, windowLabelOf } from '@/lib/windows';
@@ -933,23 +933,25 @@ const price = (model: string, m: Rec): ModelPrice => ({
   model,
 });
 /**
- * The instant a table's free-text `effective` date parses to, or null. A text that is not a date is kept as sent rather
- * than throwing, which would fail the whole settings answer and every page that reads it. Only text opening with an
- * ISO date counts, since `Date.parse` reads some free text as a date ("version 3" as March 2001).
+ * The instant a table's `effective` parses to, or null. The route answers two forms: a date `YYYY-MM-DD`, in force
+ * from 00:00 UTC of that day, and an instant `YYYY-MM-DDTHH:MM:SSZ`, in force from that second. A text that is
+ * neither is kept as sent rather than throwing, which would fail the whole settings answer and every page that reads
+ * it. Only text opening with an ISO date counts, since `Date.parse` reads some free text as a date ("version 3" as
+ * March 2001).
  */
 export const effectiveDateOf = (effective: string): string | null => {
   const parsed = /^\d{4}-\d{2}-\d{2}/.test(effective) ? Date.parse(effective) : Number.NaN;
   return Number.isNaN(parsed) ? null : iso(parsed);
 };
 /**
- * A table's date as the router sent it, free text as sent. A date-only `effective` reads in UTC, the zone it parses
- * in: it is midnight UTC, which the browser's own zone would show as the day before west of UTC. A date with a time
- * names an instant, which reads in the browser's zone through `fmtDate` like every other instant.
+ * A table's `effective` as a label, free text as sent. A date-only entry reads its date in UTC, the zone it parses
+ * in: it is midnight UTC, which the browser's own zone would show as the day before west of UTC. An entry that
+ * carries an instant reads its date and its time to the minute in the browser's zone, like every other instant.
  */
 export const effectiveLabel = (effective: string): string => {
   const at = effectiveDateOf(effective);
   if (at === null) return effective;
-  return /^\d{4}-\d{2}-\d{2}$/.test(effective) ? formatIn({ day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }, at) : fmtDate(at);
+  return /^\d{4}-\d{2}-\d{2}$/.test(effective) ? formatIn({ day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }, at) : fmtMinute(at);
 };
 const pricedModels = (content: Rec): ModelPrice[] => Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row)));
 /** One dated entry of the price table, read as leniently as the entry in force. */

@@ -28201,7 +28201,7 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
 
   // A pending price entry dated 2099, one model short of the entry in force so the tab tells the two apart: the select
   // lists it first, marked next and unselected, beside the story's own held entry of 2026-10-09, and the dialog opens on
-  // the entry in force.
+  // the entry in force. The held entry carries an instant, whose time reads in the viewer's zone, UTC under the smoke.
   {
     const { getSettings } = api;
     const pendingDate = '2099-01-01';
@@ -28232,7 +28232,7 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
         options[0]?.value === pendingDate &&
         options[0].text === `${effectiveLabel(pendingDate)} (next)` &&
         !options[0].selected &&
-        JSON.stringify(options.filter((o) => o.text.endsWith(' (next)')).map((o) => o.value)) === JSON.stringify([pendingDate, '2026-10-09']) &&
+        JSON.stringify(options.filter((o) => o.text.endsWith(' (next)')).map((o) => [o.value, o.text])) === JSON.stringify([[pendingDate, `${effectiveLabel(pendingDate)} (next)`], ['2026-10-09T18:30:00Z', 'Oct 09, 2026, 18:30 (next)']]) &&
         listed === prices.length &&
         chip === `API prices, effective ${effectiveLabel(pricesAt.effective)}, ${wired.apiPrices.source}`,
       missing: [select?.value ?? 'no select', JSON.stringify(options), `${listed} rows against ${prices.length}`, String(chip)],
@@ -28588,7 +28588,8 @@ await forView('/settings', async () => {
 
 await forView('/settings', async () => {
   // A pending entry: the row names the date in force, the count with the pending entry among it, and the next date, the
-  // earliest held entry's, so the story's own entry of 2026-10-09 ahead of the added one of 2099.
+  // earliest held entry's, so the story's own entry of 2026-10-09 ahead of the added one of 2099. That entry carries an
+  // instant, whose time reads in the viewer's zone, UTC under the smoke.
   const { getSettings } = api;
   const wired = decodeSettings(SETTINGS_WIRE);
   const pending = { effective: '2099-01-01', effectiveDate: new Date(Date.parse('2099-01-01')).toISOString(), models: [] };
@@ -28596,7 +28597,7 @@ await forView('/settings', async () => {
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
-  const want = `${SETTINGS_WIRE.storage.api_prices_path}, effective ${effectiveLabel(revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).effective)}, ${wired.apiPrices.revisions.length + 1} revisions, next Oct 09, 2026`;
+  const want = `${SETTINGS_WIRE.storage.api_prices_path}, effective ${effectiveLabel(revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).effective)}, ${wired.apiPrices.revisions.length + 1} revisions, next Oct 09, 2026, 18:30`;
   results.push({ name: '/settings a pending price entry reads on its About row after the date in force and the revision count as the next date', ok: row === want, missing: [row || 'no API prices path row', want] });
   api.getSettings = getSettings;
   page.unmount();
@@ -28649,13 +28650,13 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
-  // page's own label, and the price file's row the date of the entry it holds next, the story's 2026-10-09. The three
-  // keepalive limits read on the Sessions page beside their counts, so About carries none of them. The two session
-  // lines read the mock's `SETTINGS_WIRE.sessions`, 86400 s and 3600 s, and the reset warning line the mock's
-  // `SETTINGS_WIRE.usage`, 5 days.
+  // page's own label, and the price file's row the date and time of the entry it holds next, the story's instant
+  // 2026-10-09T18:30:00Z, whose time reads in the viewer's zone, UTC under the smoke. The three keepalive limits read
+  // on the Sessions page beside their counts, so About carries none of them. The two session lines read the mock's
+  // `SETTINGS_WIRE.sessions`, 86400 s and 3600 s, and the reset warning line the mock's `SETTINGS_WIRE.usage`, 5 days.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
-  const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026`;
+  const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
   results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Session expiry=1d (86400 s)', 'Non-companion timeout=1h (3600 s)', 'Reset warning=5 days before a reset ends', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);

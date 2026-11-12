@@ -27,8 +27,9 @@ interface EnvelopeWire extends EntryWire {
 /** The dates the story gives the shipped revisions, in their order: the story runs the month before its clock, so a
  *  shipped date would put every request before the first revision. The last price date lies after the clock, since the
  *  captured fixture holds that entry as the next one (the capture's clock sits before its shipped date), so the mock
- *  holds it as the next one too. */
-const STORY_PRICE_DATES = ['2026-09-01', '2026-09-08', '2026-10-09'];
+ *  holds it as the next one too. That entry carries an instant, as the captured one does, so the story draws both
+ *  forms of `effective`. */
+const STORY_PRICE_DATES = ['2026-09-01', '2026-09-08', '2026-10-09T18:30:00Z'];
 const STORY_COST_DATES = ['2026-09-01'];
 
 /** The envelope with each revision's date, and the entry in force's, moved to the story's own, the tables untouched.
