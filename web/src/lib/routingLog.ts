@@ -473,6 +473,14 @@ function pageIndexOf(page: readonly RoutingLogRow[]): PageIndex {
 /** A move the state of the pin's account forced: its event carries the replaced pin's whole list of reasons. */
 const causedMove = (d: Record<string, unknown>): boolean => Array.isArray(d.reasons);
 
+// A cause shares `cooldown`, `overage` and `spent` with a rule or a failover, so the list alone tells them apart.
+const movedLabel = (d: Record<string, unknown>): string => {
+  const reason = str(d.reason) ?? '';
+  return causedMove(d) ? releaseLabel(reason) : moveLabel(reason);
+};
+
+const reasonChips = (d: Record<string, unknown>): Chip[] => list(d.reasons).map((r) => plain(releaseLabel(String(r))));
+
 function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
   const d = e.detail;
   switch (e.kind) {
@@ -517,10 +525,8 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       const first = str(list(d.reasons)[0]);
       return { value: first === null ? 'expired' : first === 'expired' ? 'idle' : releaseLabel(first) };
     }
-    case 'pin_migrated': {
-      const reason = str(d.reason) ?? '';
-      return { value: causedMove(d) ? releaseLabel(reason) : moveLabel(reason) };
-    }
+    case 'pin_migrated':
+      return { value: movedLabel(d) };
     case 'pin_released':
       return { value: 'by hand' };
     // A row written before the cause was a clean poll's.
@@ -1368,31 +1374,26 @@ function operatorWords(c: RecordCandidate): { title: string | undefined; value: 
   return { title, value: wordOf(MEMBER_STATE_WORD, c.state) };
 }
 
-function obstacleWords(c: RecordCandidate, now: number): string {
-  const o = c.obstacle;
-  if (o === null) return '';
-  switch (o.name) {
-    case 'budget': {
-      const b = reachedBudget(c);
-      return b && b.spentUsd !== null ? `budget ${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}` : 'budget';
-    }
-    case 'cooldown':
-      return cooldownWords(o, now);
-    case 'credits':
-      return `credits ${o.reason === null ? 'unavailable' : wordOf(CREDITS_WORD, o.reason)}`;
-    case 'operator':
-      return operatorWords(c).value;
-    case 'spent':
-      return spentChip(o, now).value;
-    default:
-      return lookup(PARTITION_WORD, o.name) ?? wordOf(OBSTACLE_WORD, o.name);
-  }
-}
-
 /** A candidate row's obstacle as its chip: the operator's own words, a spent window's chip, else the obstacle's
  *  words with its hint. The candidate table and an exhausted line both draw it. */
 function rowObstacleChip(c: RecordCandidate, obstacle: NonNullable<RecordCandidate['obstacle']>, now: number): Chip {
-  return obstacle.name === 'operator' ? operatorWords(c) : obstacle.name === 'spent' ? spentChip(obstacle, now) : { title: hintOf(obstacle.name), value: obstacleWords(c, now) };
+  const hinted = (value: string): Chip => ({ title: hintOf(obstacle.name), value });
+  switch (obstacle.name) {
+    case 'budget': {
+      const b = reachedBudget(c);
+      return hinted(b && b.spentUsd !== null ? `budget ${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}` : 'budget');
+    }
+    case 'cooldown':
+      return hinted(cooldownWords(obstacle, now));
+    case 'credits':
+      return hinted(`credits ${obstacle.reason === null ? 'unavailable' : wordOf(CREDITS_WORD, obstacle.reason)}`);
+    case 'operator':
+      return operatorWords(c);
+    case 'spent':
+      return spentChip(obstacle, now);
+    default:
+      return hinted(lookup(PARTITION_WORD, obstacle.name) ?? wordOf(OBSTACLE_WORD, obstacle.name));
+  }
 }
 
 /** The chip of a destination the gate read and found short: rewrite only and least bad warn, an ending account is neutral. */
@@ -1815,6 +1816,8 @@ const SOURCE_WORD: Record<string, string> = { clock: 'the clock walk', head: 'th
  * whichever table the round's order read.
  */
 const hourlyShare = (perHour: number) => `${(perHour * 100).toFixed(1)} %/h`;
+// The router records the wall as a line of 1, the window's whole share.
+const lineWords = (limit: number): string => (limit >= 1 ? 'the wall' : `the ceiling ${fmtPct(limit)}`);
 /** A move's destination fit as the gate worded it. */
 const FIT_WORD: Record<string, string> = { fits: 'fits', least_bad: 'least bad', rewrite_only: 'rewrite only' };
 /**
@@ -1988,19 +1991,18 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       break;
     case 'pin_expired':
       pin();
-      add('Reasons', ...list(d.reasons).map((r) => plain(releaseLabel(String(r)))));
+      add('Reasons', ...reasonChips(d));
       add('Found by', request ?? plain('the sweep'));
       break;
     case 'pin_migrated': {
       const from = movedFrom(row);
       const reason = str(d.reason) ?? '';
       const epoch = num(d.epoch);
-      // A cause shares `cooldown`, `overage` and `spent` with a rule or a failover, so the list alone tells them apart.
       const caused = causedMove(d);
       add('From', from === null ? null : accountChip(from));
       add('To', row.accountId === null ? null : accountChip(row.accountId), epoch === null ? null : plain(fmtInt(epoch), 'epoch'));
-      add('Reason', plain(caused ? releaseLabel(reason) : moveLabel(reason)));
-      if (caused) add('Reasons', ...list(d.reasons).map((r) => plain(releaseLabel(String(r)))));
+      add('Reason', plain(movedLabel(d)));
+      if (caused) add('Reasons', ...reasonChips(d));
       // A failover's detail carries its cause as an object, a rule's move and a failover that marked nothing a null.
       if (d.cause !== null && typeof d.cause === 'object' && !Array.isArray(d.cause)) {
         const cause = rec(d.cause);
@@ -2150,7 +2152,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
         add('Demand', demand === null ? null : plain(`${hourlyShare(demand)}${horizon === null ? '' : ` to the reset at ${formatFact(horizon + threshold, 'time', now)}`}`));
       } else {
         // A round that tested the wall records a ceiling of 1, the window's whole share.
-        add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over ${ceiling === 1 ? 'the wall' : `the ceiling ${fmtPct(ceiling)}`}`));
+        add('Trigger', projection === null || ceiling === null ? null : plain(`${w} projection ${fmtPct(projection)}${when} over ${lineWords(ceiling)}`));
       }
       add('Fired by', trigger === null ? null : plain(`the ${wordOf(LABELS, trigger)}`));
       add('Excess', rate(d.excess));
@@ -2207,8 +2209,8 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       const stretch = num(d.stretch_ms);
       const threshold = num(d.threshold_ms);
       const limit = num(d.limit);
-      // A stored event carries no limit and keeps the words it read. A limit of 1 is the wall, any other the ceiling.
-      const under = limit === null ? 'under the ceiling' : limit >= 1 ? 'under the wall' : `under the ceiling ${fmtPct(limit)}`;
+      // A stored event carries no limit and keeps the words it read.
+      const under = limit === null ? 'under the ceiling' : `under ${lineWords(limit)}`;
       pin();
       // A mark heals when the account's projection reads under its line again on the window that fired, or under the
       // slow-down when its stretch reads under the threshold. The threshold is the detail's own, since the pool's
@@ -2346,8 +2348,8 @@ export function requestRows(record: DecisionRecord, row: DecisionSummary): CardR
  * The account a walk fact names: its value where the step wrote it about that same account, as the pin step writes a
  * credit's issuer and a judged turn's account, else null.
  */
-function namedAccount(f: WalkFact | undefined): string | null {
-  return f !== undefined && typeof f.value === 'string' && f.accountId === f.value ? f.value : null;
+function namedAccount(f: WalkFact): string | null {
+  return typeof f.value === 'string' && f.accountId === f.value ? f.value : null;
 }
 
 /**

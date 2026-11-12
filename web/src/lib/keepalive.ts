@@ -152,14 +152,13 @@ export const MAIN_AGENT = 'main';
  * `parked`, and `released` closes the lines with a word wherever a released record is still listed. */
 const STATE_ORDER: Record<Lifecycle, number> = { busy: 0, idle: 1, parked: 2, registered: 0, released: 3, unknown: 2 };
 
+const instantFigure = (at: string | null): number | null => (at === null ? null : Date.parse(at));
+
 /**
  * Two instants newest first under `desc` and oldest first under `asc`, an instant missing last under either, so the
  * direction flips the dated entries alone.
  */
-const byInstant = (a: string | null, b: string | null, dir: SortDir): number => byFigure(a === null ? null : Date.parse(a), b === null ? null : Date.parse(b), dir);
-
-/** Two figures largest first under `desc` and smallest first under `asc`, a missing one last under either. */
-const byFigure = (a: number | null, b: number | null, dir: SortDir): number => compareFigures(a, b, dir);
+const byInstant = (a: string | null, b: string | null, dir: SortDir): number => compareFigures(instantFigure(a), instantFigure(b), dir);
 
 /** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
 export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
@@ -172,13 +171,12 @@ export const requestCount = (session: Pick<Session, 'spend'>): number => session
 
 type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId' | 'spend'>;
 
-const instantFigure = (at: string | null): number | null => (at === null ? null : Date.parse(at));
 /** A row's figure under each key of the Sessions view's order. */
 const ROW_FIGURE: Record<SessionsAddress['sort'], (s: OrderedSession) => SortFigure> = {
   activity: (s) => instantFigure(lastActivity(s)),
   cost: (s) => s.spend?.usd ?? null,
   created: (s) => instantFigure(s.createdAt),
-  requests: (s) => requestCount(s),
+  requests: requestCount,
 };
 
 /**

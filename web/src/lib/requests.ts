@@ -2,7 +2,7 @@ import { effectiveLabel } from '@/api/decode';
 import type { Account, CohortHold, RequestLog, SessionSpend, SessionSpendPart, Settings } from '@/api/types';
 import type { RequestOrderWord, SortDir } from '@/lib/address';
 import { heldSpan, hintPlan, ownShareHint, sentences, shareHint } from '@/lib/analytics';
-import { type Funding, fundingOf, inBand, revisionAt } from '@/lib/costs';
+import { type Funding, fundingOf, inBand, revisionAt, tableAt } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
 import { servingAttempt } from '@/lib/dimensions';
 import { byteOrder, fmtUsd, fmtWeek, plural, weekShort } from '@/lib/format';
@@ -126,7 +126,7 @@ export function requestHintArgs(r: Pick<RequestLog, 'accountId' | 'at' | 'costSh
   const completion = Date.parse(r.at) + (r.durationMs ?? 0);
   // The ledger prices a row on the revision in force at its receipt and reads that revision's band at its completion,
   // and the loaded table's band can differ from it after a revision.
-  const table = costs === null ? null : (revisionAt(costs.revisions, Date.parse(r.at))?.content ?? costs);
+  const table = costs === null ? null : tableAt(costs, Date.parse(r.at));
   return [plan, r.costShares, r.tier, table === null ? null : inBand(table, completion)];
 }
 

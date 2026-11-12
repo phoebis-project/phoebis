@@ -6,6 +6,7 @@ import { DECISION_KIND_VALUES } from '@/api/types';
 import { shareIn, weightOf } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { placementHit } from '@/lib/format';
+import { SHED_MARK_SHARE } from '@/lib/presets';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
@@ -942,9 +943,6 @@ function triggerOf(source: RecordCandidate, windows: string[], at: number, pool:
 
 /** The skip words of a pin that leaves the round before the walk. */
 const LEFT_OUT_SKIPS = ['ended', 'fast_lane', 'no_burn', 'off_window'];
-
-/** The share of the rest under which the fallback branch leaves a pin warm as a sliver, the engine's tenth. */
-const SHED_MARK_SHARE = 0.1;
 
 /**
  * A round's figures off its pins: the burn it could remove, its target under the cap, what its marks removed, the

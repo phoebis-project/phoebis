@@ -43,7 +43,7 @@ export function failoverPresetOf(p: Pick<Pool, 'inFlightCap' | 'retryInPlaceSeco
 }
 
 /** The share of a round's burn sum that its marks leave on the account's unmarked priced pins, as the router's. */
-const SHED_MARK_SHARE = 0.1;
+export const SHED_MARK_SHARE = 0.1;
 
 /**
  * The round's marking rule, the mirror of the router's walk: pins in the round's order with their burns on the round's

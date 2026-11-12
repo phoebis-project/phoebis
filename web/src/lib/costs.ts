@@ -199,12 +199,13 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
  *  completing inside the band or outside it. Null where the model has no weight on the window. */
 export const equivalentIn = (costs: SubscriptionCosts, model: string, usage: Usage, inside: boolean): number | null => shareIn(costs, 'seven_day', anchorTier(costs), model, usage, inside);
 
-/** The anchor tier's capacity on `window` over the chosen tier's on the same window times `divisor`, null where either
- *  capacity is null: the 7-day ratio for a Pro-week figure, the 5-hour one for the Pro 5-hour figure. */
-const capacityRatio = (costs: SubscriptionCosts, week: WeekPosition, window: CostWindow, divisor = 1): number | null => {
-  const anchor = tierCapacity(costs, anchorTier(costs), window);
-  const chosen = tierCapacity(costs, WEEK_TIER[week], window);
-  return anchor === null || chosen === null ? null : anchor / (chosen * divisor);
+/** The anchor tier's capacity on `window` in `anchorTable` over the chosen tier's on the same window in `chosenTable`
+ *  times `divisor`, null where either capacity or the divisor is null: the 7-day ratio for a Pro-week figure, the
+ *  5-hour one for the Pro 5-hour figure. */
+const capacityRatio = (anchorTable: SubscriptionCosts, chosenTable: SubscriptionCosts, week: WeekPosition, window: CostWindow, divisor: number | null = 1): number | null => {
+  const anchor = tierCapacity(anchorTable, anchorTier(anchorTable), window);
+  const chosen = tierCapacity(chosenTable, WEEK_TIER[week], window);
+  return anchor === null || chosen === null || divisor === null ? null : anchor / (chosen * divisor);
 };
 
 /** The Fable week's capacity factor, its share of the 7-day window, null where the table holds no Fable week. */
@@ -218,15 +219,7 @@ const fableDivisor = (costs: SubscriptionCosts): number | null => {
  *  revision `costs` is (the one in force at the read), 1 under Pro with no table, null where either side is null. */
 export const weekScale = (costs: SubscriptionCosts | null, week: WeekPosition): number | null => {
   if (costs === null) return week === 'pro' ? 1 : null;
-  return capacityRatio(costs, week, 'seven_day');
-};
-
-/** The chosen tier's Fable-week share per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's,
- *  scaled by the Fable week's capacity factor (half the window in the shipped model). Null where either capacity is
- *  null or the model holds no Fable week. */
-const fableWeekScale = (costs: SubscriptionCosts, week: WeekPosition): number | null => {
-  const divisor = fableDivisor(costs);
-  return divisor === null ? null : capacityRatio(costs, week, 'seven_day', divisor);
+  return capacityRatio(costs, costs, week, 'seven_day');
 };
 
 const unpricedFor = (what: string, week: WeekPosition): string => `Unpriced: the cost model holds no ${what} for the ${planLabel(WEEK_TIER[week])} week`;
@@ -262,10 +255,13 @@ const tableReading = (costs: SubscriptionCosts | null, error: string | null, wee
 /** The 5-hour card's reading, as `weekReadingOf` reads the week's. Its `scale` is the anchor tier's 5-hour capacity
  *  over the chosen tier's, the capacities alone, since the route's figure carries each row's band. A table that sizes
  *  no 5-hour window for the chosen tier reads unpriced, since a later read changes nothing. */
-export const fiveHourReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => capacityRatio(c, week, 'five_hour'), '5-hour capacity');
+export const fiveHourReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => capacityRatio(c, c, week, 'five_hour'), '5-hour capacity');
 
-/** The Fable week card's reading, as `weekReadingOf` reads the week's, its `scale` `fableWeekScale`'s. */
-export const fableWeekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => fableWeekScale(c, week), 'Fable week');
+/** The Fable week card's reading, as `weekReadingOf` reads the week's. Its `scale` is the chosen tier's Fable-week
+ *  share per Pro-week figure: the anchor tier's 7-day capacity over the chosen tier's, scaled by the Fable week's
+ *  capacity factor (half the window in the shipped model). Null where either capacity is null or the model holds no
+ *  Fable week. */
+export const fableWeekReadingOf = (costs: SubscriptionCosts | null, error: string | null, week: WeekPosition): WeekReading => tableReading(costs, error, week, (c) => capacityRatio(c, c, week, 'seven_day', fableDivisor(c)), 'Fable week');
 
 /** The account tiers a model week applies to: the cost model sizes the Fable week for every tier, and Pro has no
  *  Fable access, so the hint and the cost reference draw the week for these tiers alone. Each tier is listed in both
@@ -289,7 +285,7 @@ export const revisionAt = <T extends { effective: string; effectiveDate: string 
  *  chosen tier, which draws the bucket as a gap. */
 export type ScaleAt = (at: number) => number | null;
 /** The cost table in force at `at`: the revision's content, and the loaded table where the list holds no entry. */
-const tableAt = (costs: Settings['subscriptionCosts'], at: number): SubscriptionCosts => revisionAt(costs.revisions, at)?.content ?? costs;
+export const tableAt = <C extends Pick<Settings['subscriptionCosts'], 'revisions'>>(costs: C, at: number): SubscriptionCosts | C => revisionAt(costs.revisions, at)?.content ?? costs;
 /**
  * A plan card's scale by instant on `window`, as the router divides the figures it answers: the anchor tier's capacity
  * on the window in the revision in force at `readAt`, the read's instant, over the chosen tier's capacity there times
@@ -300,13 +296,10 @@ const tableAt = (costs: Settings['subscriptionCosts'], at: number): Subscription
  */
 const scaleAt = (costs: Settings['subscriptionCosts'], week: WeekPosition, readAt: number, window: CostWindow, divisorOf: (bucket: SubscriptionCosts) => number | null = () => 1): ScaleAt | null => {
   const read = tableAt(costs, readAt);
-  const anchor = tierCapacity(read, anchorTier(read), window);
-  if (anchor === null) return null;
+  if (tierCapacity(read, anchorTier(read), window) === null) return null;
   return (at) => {
     const bucket = tableAt(costs, at);
-    const chosen = tierCapacity(bucket, WEEK_TIER[week], window);
-    const divisor = divisorOf(bucket);
-    return chosen === null || divisor === null ? null : anchor / (chosen * divisor);
+    return capacityRatio(read, bucket, week, window, divisorOf(bucket));
   };
 };
 /** The week card's scale by instant, on the 7-day window. */

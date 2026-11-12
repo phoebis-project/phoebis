@@ -1,5 +1,4 @@
 import type { Api } from '@/api/client';
-import { PIN_RELEASE_REASON_VALUES } from '@/api/types';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
@@ -53,10 +52,7 @@ export const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
 };
 
 /** A reason the console has no words for reads as the router sent it. */
-export function releaseLabel(reason: string): string {
-  const known = PIN_RELEASE_REASON_VALUES.find((v) => v === reason);
-  return known === undefined ? reason : PIN_RELEASE_LABEL[known];
-}
+export const releaseLabel = (reason: string): string => lookup(PIN_RELEASE_LABEL, reason) ?? reason;
 
 /**
  * The moves an account's state forced on a session: the cause words of a replaced pin's move that no rule and no
@@ -611,7 +607,7 @@ export const scalePoints = (points: BurnPoint[], scaleAt: (at: number) => number
     if (!scales.has(at)) scales.set(at, scaleAt(at));
     const scale = scales.get(at) ?? null;
     const value = p[figure];
-    const unpriced = (figure === 'equivalent' ? p.unpriced : value === null && p.tokens > 0) || (scale === null && value !== null && value !== 0 && p.tokens > 0);
+    const unpriced = (figure === 'equivalent' ? p.unpriced : slotUnpriced(value, p.tokens)) || (scale === null && value !== null && value !== 0 && p.tokens > 0);
     return { ...p, equivalent: value === null || scale === null ? null : value * scale, unpriced };
   });
 };
@@ -631,6 +627,8 @@ export const figuredGroups = (points: BurnPoint[], figure: BurnFigure): BurnPoin
  * each fold's lines less its rests, so a group one card draws while another folds it into its rest keeps a color.
  */
 export const burnColorOrder = (folds: readonly { lines: readonly BurnLine[] }[]): string[] => [...new Set(folds.flatMap((f) => f.lines.filter((l) => !l.other).map((l) => l.key)))].sort();
+
+const coveredEnd = (rangeEndMs: number, readAt: number, wholeHours: boolean): number => Math.min(wholeHours ? hourCeil(rangeEndMs) : rangeEndMs, readAt);
 
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and
@@ -694,7 +692,7 @@ export function foldBurn(
   }
   const secondsOf = (at: number) => {
     if (rangeEndMs === undefined) return bucketSeconds;
-    const covered = Math.min(at + bucketSeconds * 1_000, hourCeil(rangeEndMs), nowMs ?? rangeEndMs);
+    const covered = Math.min(at + bucketSeconds * 1_000, coveredEnd(rangeEndMs, nowMs ?? rangeEndMs, true));
     return Math.max(1, (covered - at) / 1_000);
   };
   const perHour = (f: FigureFold, hours: number) => (f.unpriced || f.sum === null ? null : f.sum / hours);
@@ -722,6 +720,7 @@ export function foldBurn(
   const weightOf = (r: BurnRow) => r.seconds / bucketSeconds;
 
   const mean = (read: (r: BurnRow) => number) => (rows.length ? weighedMean(rows.map((r) => ({ value: read(r), weight: weightOf(r) }))) : 0);
+  const scaleRows = rows.filter((r) => r.setsScale);
   const lines = Array.from({ length: slots }, (_, i): BurnLine => {
     const rest = i >= kept.length ? rests[i - kept.length] : null;
     // A line that never priced traffic stays null in every slot, idle ones included, so its legend reads a dash. One
@@ -735,8 +734,8 @@ export function foldBurn(
       if (idle(r, k)) r.equivalent[i] = priced ? 0 : null;
     });
     const figures = rows.flatMap((r) => (r.equivalent[i] === null ? [] : [{ value: r.equivalent[i] as number, weight: weightOf(r) }]));
-    const peaks = rows.filter((r) => r.setsScale).map((r) => r.equivalent[i]).filter((v): v is number => v !== null);
-    const planPeaks = rows.filter((r) => r.setsScale).map((r) => r.planUsd[i]);
+    const peaks = scaleRows.map((r) => r.equivalent[i]).filter((v): v is number => v !== null);
+    const planPeaks = scaleRows.map((r) => r.planUsd[i]);
     const figuresOf = {
       peak: peaks.length ? Math.max(...peaks) : null,
       perHour: priced ? weighedMean(figures) : null,
@@ -760,7 +759,7 @@ export function foldBurn(
  */
 export const lastBucketPartial = (buckets: readonly { at: number }[], bucketMs: number, rangeEndMs: number, readAt: number, wholeHours: boolean): boolean => {
   const last = buckets[buckets.length - 1];
-  return last !== undefined && Math.min(wholeHours ? hourCeil(rangeEndMs) : rangeEndMs, readAt) < last.at + bucketMs;
+  return last !== undefined && coveredEnd(rangeEndMs, readAt, wholeHours) < last.at + bucketMs;
 };
 
 /**
