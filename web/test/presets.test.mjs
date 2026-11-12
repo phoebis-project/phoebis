@@ -433,6 +433,15 @@ test('the round marks cold pins first, then warm ones by burn over the prompt th
   assert.deepEqual(read('never'), [1, 0], 'cold-a alone, short of the cap, and no warm pin');
 });
 
+test("the round marks the covering pin whose rewrite costs the least, though another stands before it in the order", () => {
+  // A cap of a quarter puts the target at 1.75 of the 7 points an hour the two warm pins burn, and each covers it.
+  // warm-x leads the order by burn over prompt, 4 over 1,000 tokens against warm-y's 3 over 800, and warm-y's rewrite
+  // of 800 tokens is the cheaper move, so the round marks warm-y and removes its 3 points.
+  const pins = [pin('hot', 'warm-x', 0.04, true), pin('hot', 'warm-y', 0.03, true, { lastInputTokens: 800 })];
+  const preview = d.shedPreview(pool([hot, cool], { shedCap: 0.25 }), [hot, cool], pins, NOW);
+  assert.deepEqual([preview.sessions, preview.warm, preview.covered], [1, 1, 0.03]);
+});
+
 test("the round decays each pin's served burn from the instant it was served to the preview's own, and never marks an unpriced pin", () => {
   // Served half an hour, one burn average, before the preview's instant, cold-a's 3 points an hour read 3/e there,
   // under cold-b's 1.2, so cold-b leads the order and alone reaches the cap's half of their 2.3. The unpriced pin

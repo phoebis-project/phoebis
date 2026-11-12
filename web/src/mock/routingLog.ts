@@ -2092,8 +2092,8 @@ function storySpecs(): Spec[] {
     // A fresh placement that books its rewrite on primary until the answer's usage replaces it.
     at('req_7a3f0c26-d81', 1, 1, t(13, 41, 15), 'placed', 'primary'),
     // Primary projects past the wall at its 5-hour reset, so this renewal runs a round, which finds no sibling with
-    // runway. The account's reading burns that window at 0.19 an hour, the draw of the cold Sonnet 4.5 pin among it,
-    // which the round's burn sum cannot price, so the sum is the priced pin's alone.
+    // runway. Its 5-hour burn of 0.19 an hour is written for this round's record alone, so the projection reads over
+    // the wall as the round's rule asks. No request of the story accounts for it.
     at('req_6e1f3b98-a24', 1, 1, t(14, 12, 30), 'renewed', 'primary', { burns: { primary: { ...ACCOUNT_BURNS.get('primary'), five_hour: 0.19 } }, pin: live('continues_pin', 46_000), round: roundOfPins(NO_RUNWAY_PINS) }),
     // A session placed on secondary before its spent edge. Its next turn finds the spent rule's one destination full,
     // so it renews on secondary, whose 429 on the spent 5-hour window fails it over to primary once a slot frees.
