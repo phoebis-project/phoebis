@@ -364,6 +364,24 @@ test("on a live range whose list holds no next cursor a poll lands a row below t
   assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.map(byId), ['row_026']], 'the second poll lands row 26 below row 25, tinted');
 });
 
+test('under a token order a poll lands a row below a last row shown of count 0, and leaves one below a count of 1 to Next', async () => {
+  // The wire answers 0 for a count the route never stored and files last, so req_z's 0 may stand for such a count, and
+  // the route then pages req_a's stored 0 above req_z, where the list's next cursor never brings it.
+  const clock = frozen();
+  const served = (id, input) => ({ at: at(1), attempts: [{ upstreamStatus: 200 }], id, usage: { input, output: 0 } });
+  const order = { cannotPlace: d.cannotPlaceUnder('input_tokens'), compare: d.requestOrder('input_tokens', 'desc') };
+  const read = async () => ({ landedThrough: 6, nextCursor: null, rows: [served('req_a', 0)] });
+  const zero = follow({ ...order, list: { landedThrough: 5, nextCursor: 'c2', rows: [served('req_z', 0)] }, read });
+  const one = follow({ ...order, list: { landedThrough: 5, nextCursor: 'c2', rows: [served('req_z', 1)] }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(
+    { one: one.last().rows.map(byId), zero: zero.last().rows.map(byId) },
+    { one: ['req_z'], zero: ['req_z', 'req_a'] },
+    'below a count of 0 the polled row lands, and below a count of 1 a polled row of count 0 stays for Next',
+  );
+});
+
 test("a custom range's poll over a stale list with no next cursor leaves a late row below the last row shown to Next", async () => {
   // After the first poll the list answers another query, one with no next cursor, while this query's own list holds
   // one. That cursor is the other query's, so it hands the poll no landing.

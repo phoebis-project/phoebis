@@ -19,6 +19,11 @@ import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, u
  */
 export function useFollow<R>(input: {
   address: string;
+  /**
+   * Whether `compare` cannot place a polled row against the last row shown, so the poll lands every row it reads, as
+   * under a list with no next cursor. Without one, `compare` places every row.
+   */
+  cannotPlace?: (last: R) => boolean;
   compare: (a: R, b: R) => number;
   cursor: string | undefined;
   error: string | null;
@@ -39,7 +44,7 @@ export function useFollow<R>(input: {
   stack: (string | undefined)[];
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
-  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, pagedTo, paused, read, setPaging, stack, stale } = input;
+  const { address, cannotPlace, compare, cursor, error, fixedEnd, identity, intervalMs, list, pagedTo, paused, read, setPaging, stack, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
   // and with auto reload off no poll follows to take it away.
@@ -61,7 +66,7 @@ export function useFollow<R>(input: {
   const overrun = following?.overrun ?? null;
   const standIn = following?.standIn ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
-  const latest = useLatest({ address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
+  const latest = useLatest({ address, cannotPlace, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
   const streak = useRef<Streak>({ failing: false, paths: new Set() });
   // When the last poll answered, null until one has, so a wait that ends reads at once only after a full interval.
   const lastAnswered = useRef<number | null>(null);
@@ -85,7 +90,7 @@ export function useFollow<R>(input: {
     // within milliseconds and bring nothing, and that tick's answer keeps their tint beside its own rows.
     let kept: { for: string; rows: Set<string> } | null = null;
     const poll = (returned = false) => {
-      const { address: polled, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start, standIn: standing } = latest.current;
+      const { address: polled, cannotPlace, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start, standIn: standing } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
       // instant still dates the poll's overrun and stand-in.
@@ -95,8 +100,10 @@ export function useFollow<R>(input: {
       // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those
       // shown. A stale list hands none, since its cursor is another query's.
       const tail = standing === null ? list?.nextCursor : standing.cursor;
-      // The list answered no next cursor, so every polled row is the list's whatever the range's end.
-      const lands = tail === null;
+      // The list answered no next cursor, so every polled row is the list's whatever the range's end. Where `compare`
+      // cannot place a row against the last row shown, a row it files below may stand above the route's cursor, and a
+      // row drawn twice is a smaller harm than one hidden.
+      const lands = tail === null || (last !== undefined && cannotPlace?.(last) === true);
       // On a custom range each page the poll reads notes a row it withholds below the rows shown while the ref holds no
       // list (a stale or a failed read) and no stand-in, since such a poll lands nothing below and the stamp must not
       // pass the row.
