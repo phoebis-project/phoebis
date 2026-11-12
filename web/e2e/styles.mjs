@@ -374,6 +374,8 @@ const partial = `${baseline}.partial`;
 let out = null;
 let index = null;
 let fd = null;
+let list = null;
+let failing = null;
 try {
   if (write) {
     mkdirSync(dirname(baseline), { recursive: true });
@@ -389,7 +391,6 @@ try {
   await stop(2, `${baseline}: ${messageOf(error)}`);
 }
 
-let list = null;
 let total = 0;
 const first = [];
 const counts = [];
@@ -417,7 +418,6 @@ async function discard() {
   rmSync(write ? partial : differencesFile, { force: true });
 }
 
-let failing = null;
 /**
  * A throw on the way, from the page or from a file the run writes, is a refusal and never reads as a difference. It
  * runs once: a disk error reaches its stream's listener and also rejects a pending wait on that stream, whose catch
