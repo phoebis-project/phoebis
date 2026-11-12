@@ -1564,6 +1564,8 @@ test('the burn series decodes each point with its instant, both token sides, and
     at: new Date(wire.at).toISOString(),
     cachedTokens: wire.cached_tokens,
     equivalent: wire.equivalent,
+    fableEquivalent: wire.fable_equivalent,
+    fiveHourEquivalent: wire.five_hour_equivalent,
     fiveHourShare: wire.five_hour_share,
     group: 'business',
     modelWeekShare: wire.model_week_share,

@@ -6,7 +6,7 @@ import type {
 import { bucketShare, keptWarmTokens } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
-import { equivalentIn, modelWeeks, pricedWindow, tierCapacity, type Usage } from '@/lib/costs';
+import { anchorTier, equivalentIn, modelWeeks, pricedWindow, shareIn, tierCapacity, type Usage } from '@/lib/costs';
 import { countOf, emptyCounts, groupInto } from '@/lib/counts';
 import { servingResponse } from '@/lib/dimensions';
 import { byteOrder, earlierHolderLabel, placementHit } from '@/lib/format';
@@ -467,19 +467,33 @@ function bucketsOf(range: Range): { bucketMs: number; slotOf: (ms: number) => nu
 
 const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
 
+/**
+ * A plan row's Pro 5-hour figure, which a rollup row does not store: the share of the anchor tier's 5-hour window its
+ * usage spends under the band at its hour, as the route bands a rollup row, on the table's base rows as the stored
+ * Pro-week figure is. A freed classifier part reads zero, and a model without a weight null.
+ */
+const fiveHourEquivalentOf = (r: HourlyRollup): number | null => {
+  if (freesPlanShare(r.classifier) && r.funding === 'plan') return 0;
+  const inside = bandAt(r.model, Date.parse(r.hour));
+  return inside === null ? null : shareIn(TABLES, 'five_hour', anchorTier(TABLES), r.model, usageOf(r), inside);
+};
+
 /** A bucket's sums, each window's shares and the figures kept per row so one unpriced row nulls the window, as the
- *  route reads it. The model week's list holds the rows on a model with a week of its own alone. */
+ *  route reads it. The model week's list holds the rows on a model with a week of its own alone, and the Fable figure's
+ *  list a zero for every row on another model. */
 interface BurnSum {
   cached: number;
   equivalent: (number | null)[];
+  fableEquivalent: (number | null)[];
   fiveHour: (number | null)[];
+  fiveHourEquivalent: (number | null)[];
   sevenDay: (number | null)[];
   tokens: number;
   uncached: number;
   usd: number;
   week: (number | null)[];
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, equivalent: [], fiveHour: [], sevenDay: [], tokens: 0, uncached: 0, usd: 0, week: [] });
+const emptyBurn = (): BurnSum => ({ cached: 0, equivalent: [], fableEquivalent: [], fiveHour: [], fiveHourEquivalent: [], sevenDay: [], tokens: 0, uncached: 0, usd: 0, week: [] });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -529,6 +543,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
       // The zero share rests on the tier alone, as the route reads a dollar-billed row, and an API key account has no
       // window to share.
       s.equivalent.push(0);
+      s.fableEquivalent.push(0);
+      s.fiveHourEquivalent.push(0);
       const sized = (window: 'five_hour' | 'seven_day') => tier !== undefined && tierCapacity(TABLES, tier, window) !== null;
       if (sized('five_hour')) s.fiveHour.push(0);
       if (sized('seven_day')) s.sevenDay.push(0);
@@ -542,6 +558,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     s.fiveHour.push(tier === undefined ? null : (r.shares.five_hour ?? null));
     s.sevenDay.push(tier === undefined ? null : (r.shares.seven_day ?? null));
     s.equivalent.push(r.equivalent);
+    s.fableEquivalent.push(week === 'seven_day_fable' ? r.equivalent : 0);
+    s.fiveHourEquivalent.push(fiveHourEquivalentOf(r));
     if (week !== undefined) s.week.push(tier === undefined ? null : (r.shares[week] ?? null));
   }
   const tokensOf = (group: string) => [...(sums.get(group)?.values() ?? [])].reduce((n, s) => n + s.cached + s.uncached, 0);
@@ -565,6 +583,8 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
         at: iso(at),
         cachedTokens: Math.round(s.cached),
         equivalent: bucketShare(s.equivalent),
+        fableEquivalent: bucketShare(s.fableEquivalent),
+        fiveHourEquivalent: bucketShare(s.fiveHourEquivalent),
         fiveHourShare: lacks('five_hour') ? null : share(s.fiveHour),
         group,
         modelWeekShare: share(s.week),

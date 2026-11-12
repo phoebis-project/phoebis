@@ -586,17 +586,43 @@ const SCALE_FLOOR = 0.1;
 
 const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
 
-/** The points with each bucket's plan figure scaled by `scaleAt` at the bucket's instant, null where the scale is. */
-export const scalePoints = (points: BurnPoint[], scaleAt: (at: number) => number | null): BurnPoint[] => {
+/** The figure a plan card charts off a burn point. */
+export type BurnFigure = 'equivalent' | 'fableEquivalent' | 'fiveHourEquivalent';
+
+/**
+ * The points with a card's figure in the plan slots `foldBurn` reads: `equivalent` holds `figure` scaled by `scaleAt`
+ * at the bucket's instant, null where the figure or the scale is, and `unpriced` the card's flag. The week card keeps
+ * the route's flag. The 5-hour and the Fable week figures carry none, so a null figure beside tokens is their unpriced
+ * bucket, and so is a bucket with a figure whose revision sizes no window for the chosen tier.
+ */
+export const scalePoints = (points: BurnPoint[], scaleAt: (at: number) => number | null, figure: BurnFigure = 'equivalent'): BurnPoint[] => {
   // Every group's point of a bucket shares the bucket's instant, so the scale is read once per instant.
   const scales = new Map<number, number | null>();
   return points.map((p) => {
     const at = Date.parse(p.at);
     if (!scales.has(at)) scales.set(at, scaleAt(at));
     const scale = scales.get(at) ?? null;
-    return { ...p, equivalent: p.equivalent === null || scale === null ? null : p.equivalent * scale };
+    const value = p[figure];
+    const unpriced = (figure === 'equivalent' ? p.unpriced : value === null && p.tokens > 0) || (scale === null && value !== null && p.tokens > 0);
+    return { ...p, equivalent: value === null || scale === null ? null : value * scale, unpriced };
   });
 };
+
+/**
+ * The points less every group that holds traffic and whose `figure` reads 0 in each bucket that has any, so a card
+ * draws no line and no legend entry for it. A group with no traffic in the range stays and folds as an idle group does.
+ */
+export const figuredGroups = (points: BurnPoint[], figure: BurnFigure): BurnPoint[] => {
+  const busy = new Set(points.filter((p) => p.tokens > 0).map((p) => p.group));
+  const drawn = new Set(points.filter((p) => p.tokens > 0 && p[figure] !== 0).map((p) => p.group));
+  return points.filter((p) => drawn.has(p.group) || !busy.has(p.group));
+};
+
+/**
+ * The named groups the Burn tab's plan cards draw, in the one order every card's colors read: the sorted union of
+ * each fold's lines less its rests, so a group one card draws while another folds it into its rest keeps a color.
+ */
+export const burnColorOrder = (folds: readonly { lines: readonly BurnLine[] }[]): string[] => [...new Set(folds.flatMap((f) => f.lines.filter((l) => !l.other).map((l) => l.key)))].sort();
 
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and

@@ -1731,6 +1731,14 @@ export interface BurnPoint {
   /** The bucket's plan rows as the Pro-week figure, under every grouping. A billed row adds a zero, so a bucket with
    *  tokens and no plan row reads 0. Null for an idle bucket and for one holding a row the cost model cannot price. */
   equivalent: number | null;
+  /** The Pro-week figure of the bucket's plan rows whose model draws the Fable week, under every grouping. A bucket
+   *  with traffic and no such row reads 0. Null for an idle bucket and for one holding a Fable-week row the cost model
+   *  cannot price. It carries no flag of its own: null beside `tokens` above 0 is the unpriced case. */
+  fableEquivalent: number | null;
+  /** The bucket's plan rows as the Pro 5-hour figure, the share of the anchor tier's 5-hour window, each row priced
+   *  under its own regime and the band of its hour, under every grouping and bucket size. A billed row adds a zero.
+   *  Null where `equivalent` is and where the cost model sizes no 5-hour window for a row of the bucket. */
+  fiveHourEquivalent: number | null;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in, and
    *  `null` for an API-key account, one whose tier is unknown, one whose window set lacks the window, a bucket with no
    *  row the cost model prices (an idle hour among them) or one holding a row the cost model cannot price, and wherever

@@ -14,11 +14,8 @@ const costs = d.decodeSubscriptionCosts(tables.subscription_costs.content, table
 
 const MAX_20X = 'default_claude_max_20x';
 const OPUS = 'claude-opus-5-5';
-// Wednesday 16 September 2026 at 08:00 in Los Angeles, inside the band, and at 13:00, outside it.
+// Wednesday 16 September 2026 at 08:00 in Los Angeles, inside the band.
 const IN = Date.UTC(2026, 8, 16, 15, 0);
-const OUT = Date.UTC(2026, 8, 16, 20, 0);
-// Saturday 19 September 2026 at 08:00 in Los Angeles: the band's hours on a day it does not cover.
-const WEEKEND = Date.UTC(2026, 8, 19, 15, 0);
 const usage = (over) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0, ...over });
 const close = (actual, expected, what) => assert.ok(actual !== null && Math.abs(actual - expected) <= Math.abs(expected) * 1e-12, `${what}: ${actual} against ${expected}`);
 
@@ -79,19 +76,18 @@ test("the chosen week's scale is the anchor tier's 7-day capacity over the chose
   close(d.weekScale(halved, 'ultra'), 50 / 500, 'the 7-day window, not the 5-hour one');
 });
 
-test("the 5-hour reading's scale is the anchor's 7-day capacity over the chosen tier's 5-hour one, and the Fable week's over its share of the chosen tier's week", () => {
+test("the 5-hour reading's scale is the anchor's 5-hour capacity over the chosen tier's 5-hour one, and the Fable week's over its share of the chosen tier's week", () => {
   // The fixture's anchor (Pro) and Fable week (0.5 of the 7-day window) over three rows, Pro 5 and 50, Max 5x 25 and
   // 250 and Ultra 100 and 1000.
   const table = { ...costs, capacity: { default_claude_ai: { fiveHour: 5, sevenDay: 50 }, default_claude_max_5x: { fiveHour: 25, sevenDay: 250 }, [MAX_20X]: { fiveHour: 100, sevenDay: 1000 } } };
-  close(d.fiveHourReadingOf(table, null, 'ultra').scale, 50 / 100, "Pro's week over Ultra's 5-hour window");
+  close(d.fiveHourReadingOf(table, null, 'ultra').scale, 5 / 100, "Pro's 5-hour window over Ultra's");
   close(d.fableWeekReadingOf(table, null, 'max').scale, 50 / 125, "Pro's week over half Max 5x's week");
 });
 
-test("a loaded table that sizes no window for the chosen tier, or whose band zone this browser cannot read, reads unpriced, and with no table the reading waits or carries the read's failure", () => {
+test("a loaded table that sizes no window for the chosen tier reads unpriced, and with no table the reading waits or carries the read's failure", () => {
   // Max 5x's week unsized while Pro's stays, so the Max week has no scale over a table that did load.
   const maxless = { ...costs, capacity: { ...costs.capacity, default_claude_max_5x: { fiveHour: 25, sevenDay: null } } };
   assert.deepEqual(d.weekReadingOf(maxless, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no 7-day capacity for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a loaded table never reads pending');
-  assert.deepEqual(d.fiveHourReadingOf({ ...costs, peak: { ...costs.peak, zone: 'Nowhere/Nowhere' } }, null, 'max'), { failure: { text: "Unpriced: this browser does not know the peak band's zone Nowhere/Nowhere", unpriced: true }, scale: null, week: 'max' }, 'a band zone this browser cannot read');
   assert.deepEqual(d.fableWeekReadingOf({ ...costs, modelWindows: {} }, null, 'max'), { failure: { text: 'Unpriced: the cost model holds no Fable week for the Max week', unpriced: true }, scale: null, week: 'max' }, 'a model with no Fable week');
   assert.deepEqual(d.weekReadingOf(null, null, 'max'), { failure: null, scale: null, week: 'max' }, 'the read still out');
   assert.deepEqual(d.weekReadingOf(null, 'HTTP 503', 'max'), { failure: { text: 'HTTP 503', unpriced: false }, scale: null, week: 'max' }, "the read's failure");
@@ -102,13 +98,6 @@ test("a tier's capacity is read as stored, then with the default_ prefix taken o
   assert.equal(d.tierCapacity(costs, 'default_claude_team', 'seven_day'), null);
   assert.equal(d.tierCapacity(costs, 'claude_enterprise', 'five_hour'), null);
   assert.equal(d.anchorTier(costs), 'default_claude_ai', "the anchor is the envelope's unit tier");
-});
-
-test("the band factor is the reciprocal of the priced window's capacity factor inside the band, and 1 outside it", () => {
-  assert.equal(d.bandFactor(costs, 'five_hour', IN), 2);
-  assert.equal(d.bandFactor(costs, 'seven_day', IN), 1);
-  assert.equal(d.bandFactor(costs, 'five_hour', OUT), 1);
-  assert.equal(d.bandFactor(costs, 'five_hour', WEEKEND), 1);
 });
 
 test('a week the file does not list prices as the 7-day share once', () => {
@@ -382,8 +371,6 @@ test('every reader prices through the overlay', () => {
   close(d.ratesOf(costs, 'five_hour', MAX_20X, OPUS)?.input, 20_000, 'input at the base, 2 x 1 / 100 x 1e6');
   close(d.shareIn(over, 'five_hour', MAX_20X, OPUS, u, true), d.shareIn(over, 'five_hour', MAX_20X, OPUS, u, false), 'the regime holds the window whole inside the band');
   close(d.shareIn(costs, 'five_hour', MAX_20X, OPUS, u, true), 2 * d.shareIn(costs, 'five_hour', MAX_20X, OPUS, u, false), "the base's inside share doubles");
-  assert.equal(d.bandFactor(over, 'five_hour', IN), 1);
-  assert.equal(d.bandFactor(costs, 'five_hour', IN), 2);
   close(d.fullWindowsAWeek(over, MAX_20X, false), 6.25, 'Ultra under the regime, 1250 / 200');
   close(d.fullWindowsAWeek(costs, MAX_20X, false), 10, 'Ultra at the base, 1000 / 100');
   assert.equal(d.smallestTier(over, 'five_hour'), 'default_claude_ai');

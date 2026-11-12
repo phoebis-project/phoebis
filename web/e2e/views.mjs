@@ -5966,8 +5966,9 @@ const BURN_UNPRICED_ACCOUNT = 'secondary';
 const burnGridPair = (theme) => burnGridOf(theme, 'under the key grouping', '');
 /**
  * The four cards under the Accounts filter naming the story account whose traffic prices nothing
- * (BURN_UNPRICED_ACCOUNT, the seed named in its comment), so the plan cards keep their places beside Spend per minute
- * with their gaps alone. The mock pass's alone.
+ * (BURN_UNPRICED_ACCOUNT, the seed named in its comment), so Plan per hour and the 5-hour card keep their places beside
+ * Spend per minute with their gaps alone, and the Fable week card with its empty sentence, since that traffic drew no
+ * Fable week. The mock pass's alone.
  */
 const burnGridNamed = (theme) => burnGridOf(theme, `under ${BURN_UNPRICED_ACCOUNT}`, `?accounts=${BURN_UNPRICED_ACCOUNT}`);
 

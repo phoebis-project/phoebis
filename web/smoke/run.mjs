@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandFactor, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
+const { ALL_KINDS, anchorTier, api, AttemptCount, AttemptTrail, ATTENTION_REFRESH_MS, attentionDetail, AttentionRows, bandSentence, burnWords, CACHE_MISS_LABEL, CACHE_MISS_REASONS, call, costUnitOf, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, earlierHolderLabel, effectiveLabel, Expert, failCalls, failNextCall, Field, fmtAbsolute, fmtCompact, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtShare, fmtUsd, fmtWeek, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, GuardrailDialog, inBand, Input, keyWord, leafName, MAX_BURN_LINES, minuteSpan, mismatchBuild, missLabel, missShort, MOCK_VERSION, mount, mountNode, NATIVE_SUBSET, nextLocalChange, PageLink, PeakBand, Pill, planLabel, PlanRates, projectionWords, React, recordedCalls, regimeNames, regimeTitle, regimeWord, remainingTimeShare, requestEvents, requests, requestsWiden, revisionAt, ringFigures, rollups, ROW_PX, SessionNotKept, SETTINGS_WIRE, shareHint, shareIn, shortModel, smallestTier, spanText, stationModel, stationName, STEP_NAME, sumGroups, SwitchedNumber, terminusName, tick, tierCapacity, tierGroups, tierOrder, undatedModel, UNIT_LABEL, UNIT_LEGEND, UNIT_LEGEND_NOTE, weightOf, weekShort, WINDOW_ROWS, windowMultiple, WindowsByTier, withRegime, words } = await import('./dist/entry.js');
 
 /** The dash's title where a plan row priced nothing, the words a tile and its hover carry. */
 const UNPRICED_TITLE = 'No subscription request priced: its model has no weight in the cost model';
@@ -543,7 +543,7 @@ const pageGroupBy = (page) => {
  * A burn point as the route answers it, idle and priced nothing unless `over` says otherwise: an API-key bucket with
  * tokens reads a zero Pro-week figure, and a subscription one its figure and its shares.
  */
-const burnPoint = (over) => ({ cachedTokens: 0, equivalent: null, fiveHourShare: null, modelWeekShare: null, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
+const burnPoint = (over) => ({ cachedTokens: 0, equivalent: null, fableEquivalent: null, fiveHourEquivalent: null, fiveHourShare: null, modelWeekShare: null, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -21515,14 +21515,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('account');
   }
   {
-    // The two cards beside the plan card scale each bucket's figure to their own window. The 5-hour card reads the
-    // anchor's 7-day capacity over the Ultra tier's 5-hour one, divided by the band's 5-hour capacity factor inside the
-    // band, and the Fable week card the anchor's 7-day capacity over the Ultra tier's times the Fable week's capacity
-    // factor, each read off the served cost model's capacity rows, its peak row and its seven_day_fable row. `primary`
-    // burns at 04:00 in Los Angeles, outside the band, and at 06:00, inside it, two hours the clock's origin has
-    // closed.
+    // The two cards beside the plan card scale each bucket's own figure to their window, each figure apart from the
+    // Pro-week one. The 5-hour card reads the route's 5-hour figure by the anchor's 5-hour capacity over the Ultra
+    // tier's, with no band of its own, and the Fable week card the route's Fable figure by the anchor's 7-day capacity
+    // over the Ultra tier's times the Fable week's capacity factor, each read off the served cost model's capacity rows
+    // and its seven_day_fable row. `primary` burns at 04:00 in Los Angeles, outside the band, and at 06:00, inside it,
+    // two hours the clock's origin has closed, which read alike since the route's figure carries the band.
     const hours = [Date.UTC(2026, 8, 16, 11), Date.UTC(2026, 8, 16, 13)];
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), equivalent: 0.002, fiveHourShare: 0.01, group: 'primary', modelWeekShare: 0.004, sevenDayShare: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at) => burnPoint({ at: new Date(at).toISOString(), equivalent: 0.002, fableEquivalent: 0.001, fiveHourEquivalent: 0.01, fiveHourShare: 0.01, group: 'primary', modelWeekShare: 0.004, sevenDayShare: 0.002, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share' })) });
     await burnGroup('key');
     await burnGroup('account');
     const primaryIn = (t) => {
@@ -21533,15 +21533,40 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     delete api.getAnalyticsBurn;
     await burnGroup('key');
     await burnGroup('account');
-    const anchor = tierCapacity(SERVED_COSTS, anchorTier(SERVED_COSTS), 'seven_day');
-    const outside = anchor / tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'five_hour');
-    const inside = outside / SERVED_COSTS.peak.capacityFactor.fiveHour;
-    const fable = anchor / (tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'seven_day') * SERVED_COSTS.modelWindows.seven_day_fable.capacityFactor);
-    const want = { fable: `${fmtShare(0.002 * fable)} Ultra Fable week`, fiveHour: `${fmtShare((0.002 * outside + 0.002 * inside) / 2)} Ultra 5-hour` };
+    const anchor = anchorTier(SERVED_COSTS);
+    const fiveHour = tierCapacity(SERVED_COSTS, anchor, 'five_hour') / tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'five_hour');
+    const fable = tierCapacity(SERVED_COSTS, anchor, 'seven_day') / (tierCapacity(SERVED_COSTS, WEEK_TIERS.ultra, 'seven_day') * SERVED_COSTS.modelWindows.seven_day_fable.capacityFactor);
+    const want = { fable: `${fmtShare(0.001 * fable)} Ultra Fable week`, fiveHour: `${fmtShare(0.01 * fiveHour)} Ultra 5-hour` };
     results.push({
-      name: "/analytics the 5-hour card scales each hour's figure by the band's factor at that hour and the Fable week card by the Fable week's share, each legend figure in its card's short form",
+      name: "/analytics the 5-hour card scales each hour's 5-hour figure by the capacities alone and the Fable week card the Fable figure by the Fable week's share, each legend figure in its card's short form",
       ok: JSON.stringify(read) === JSON.stringify(want),
       missing: [`read ${JSON.stringify(read)}`, `want ${JSON.stringify(want)}`],
+    });
+  }
+  {
+    // Under the model grouping the Fable week card draws the plan traffic on the story's one Fable model,
+    // claude-fable-5-1, while Plan per hour draws the Opus, Sonnet and Haiku traffic beside it. Under the Accounts
+    // filter on secondary, whose plan traffic ran on Sonnet 4.5 alone, the Fable week card draws no line and says that
+    // traffic drew no Fable week. Each read mounts a page of its own.
+    const cardOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+    const linesOf = (page, title) => [...(cardOf(page, title)?.querySelectorAll('.legend li') ?? [])].filter((li) => !MUTED.includes(labelOf(li)) && valueOf(li) !== 'tier unknown').map(labelOf);
+    const FABLE = 'Fable week per hour';
+    const byModel = await mount('/analytics?by=model#burn');
+    const read = { fable: linesOf(byModel, FABLE), plan: linesOf(byModel, PLAN) };
+    byModel.unmount();
+    const secondary = await mount('/analytics?accounts=secondary&by=model#burn');
+    const emptied = { lines: linesOf(secondary, FABLE), plan: linesOf(secondary, PLAN), text: cardOf(secondary, FABLE)?.querySelector('p.muted')?.textContent?.trim() ?? '' };
+    secondary.unmount();
+    const families = ['opus', 'sonnet', 'haiku'].filter((family) => read.plan.some((l) => l.startsWith(`claude-${family}-`)));
+    results.push({
+      name: "/analytics under the model grouping the Fable week card's legend holds the Fable model alone while Plan per hour lists the Opus, Sonnet and Haiku models, and on an account with no Fable traffic the card says none drew the week",
+      ok:
+        JSON.stringify(read.fable) === JSON.stringify(['claude-fable-5-1']) &&
+        JSON.stringify(families) === JSON.stringify(['opus', 'sonnet', 'haiku']) &&
+        emptied.lines.length === 0 &&
+        emptied.plan.length > 0 &&
+        emptied.text === 'No subscription traffic drew the Fable week in this range.',
+      missing: [`Fable week ${read.fable.join(',')}`, `Plan per hour ${read.plan.join(',')}`, `secondary: Fable week ${emptied.lines.join(',')}, Plan per hour ${emptied.plan.join(',')}, ${emptied.text}`],
     });
   }
 
@@ -27600,15 +27625,9 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
   [...(rates()?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();
   await page.settle(200);
   {
-    const factor = bandFactor(costs, 'five_hour', CLOCK_ORIGIN);
-    const scaled = models.filter((model) => {
-      const cells = cellsOf(rowOf(model));
-      const five = TYPES.map((t) => {
-        const share = shareIn(costs, 'five_hour', anchor, model, usage(t, 10_000_000), inBand(costs, OUT));
-        return shareText(share === null ? null : share * factor);
-      });
-      return JSON.stringify(cells.slice(0, 5)) !== JSON.stringify(five);
-    });
+    // The cells read at the pinned clock price inside the band, which weighs the 5-hour window only where the base's
+    // 5-hour capacity factor is below 1.
+    const banded = inBand(costs, CLOCK_ORIGIN) === true && costs.peak.capacityFactor.fiveHour < 1;
     // Every row shows with the fold open, so the tinted cells and the shares past a full window count the same rows.
     const full = rates()?.querySelectorAll('td.is-full').length ?? 0;
     // A model week's cells count too, priced on the week its sub-row draws.
@@ -27616,8 +27635,8 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
     const over = models.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareIn(costs, w, anchor, model, usage(t, 10_000_000), inBand(costs, CLOCK_ORIGIN))))).filter((s) => s !== null && s >= 1).length;
     results.push({
       name: '/sessions plan rates inside the band weigh the 5-hour cells by the band factor, name the band in the caption, and tint every cell past a full window',
-      ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN, costs).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens under ${HEADLESS_TITLE}, a request completing inside the peak band` && full === over && over > 0,
-      missing: [...scaled, caption(), `${full} tinted against ${over}`],
+      ok: banded && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN, costs).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens under ${HEADLESS_TITLE}, a request completing inside the peak band` && full === over && over > 0,
+      missing: [`banded ${banded}`, ...wrongCells(anchor, 10_000_000, CLOCK_ORIGIN, costs), caption(), `${full} tinted against ${over}`],
     });
   }
   const pro = tiers.find((tier) => planLabel(tier) === 'Pro');

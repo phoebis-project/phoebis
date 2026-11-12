@@ -655,6 +655,59 @@ test('the idle slots of the plan card zero-fill against the flag, and an unprice
   assert.equal(lines[0].unpriced, true, 'the legend reads the flag');
 });
 
+test("a plan card scales a bucket by the anchor's capacity at the read over the chosen tier's at the bucket, on the card's window", () => {
+  // Under the Max week Pro, the anchor, reads 100 on the 7-day window and 10 on the 5-hour one in the first revision
+  // and 200 and 40 in the second, which is in force at the read. Max 5x reads 200 and 20 in both, and the Fable week
+  // is 0.5 of the 7-day window and then 0.25. The bucket falls in the first revision.
+  const table = (pro, fable) => ({ ...EMPTY, capacity: { default_claude_ai: pro, default_claude_max_5x: { fiveHour: 20, sevenDay: 200 } }, modelWindows: { seven_day_fable: { capacityFactor: fable, of: 'seven_day' } } });
+  const [first, second] = [table({ fiveHour: 10, sevenDay: 100 }, 0.5), table({ fiveHour: 40, sevenDay: 200 }, 0.25)];
+  const costs = { ...second, revisions: [{ content: first, effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00.000Z' }, { content: second, effective: '2026-09-10', effectiveDate: '2026-09-10T00:00:00.000Z' }] };
+  const readAt = Date.parse('2026-09-16T12:00:00Z');
+  const points = [point(Date.parse('2026-09-05T12:00:00Z'), 'a', { equivalent: 0.1, fableEquivalent: 0.1, fiveHourEquivalent: 0.1, uncachedTokens: 100 })];
+  assert.deepEqual(
+    [
+      d.scalePoints(points, d.weekScaleAt(costs, 'max', readAt))[0].equivalent,
+      d.scalePoints(points, d.fiveHourScaleAt(costs, 'max', readAt), 'fiveHourEquivalent')[0].equivalent,
+      d.scalePoints(points, d.fableWeekScaleAt(costs, 'max', readAt), 'fableEquivalent')[0].equivalent,
+    ],
+    [0.1, 0.2, 0.2],
+    'the week 200 over 200, the 5-hour window 40 over 20, the Fable week 200 over half of 200',
+  );
+  const unsized = { ...EMPTY, revisions: [] };
+  assert.deepEqual([d.weekScaleAt(unsized, 'max', readAt), d.fiveHourScaleAt(unsized, 'max', readAt), d.fableWeekScaleAt(unsized, 'max', readAt)], [null, null, null], 'a cost model with no anchor capacity scales no card');
+});
+
+test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as gaps", () => {
+  // Under the Max week Max 5x reads 200 on the 7-day window beside Pro's 100 in the first revision and nothing in the
+  // second, which takes effect between the two hours and is in force at the read.
+  const table = (max) => ({ ...EMPTY, capacity: { default_claude_ai: { fiveHour: null, sevenDay: 100 }, default_claude_max_5x: { fiveHour: null, sevenDay: max } } });
+  const start = Date.parse('2026-09-10T00:00:00Z');
+  const costs = { ...table(null), revisions: [{ content: table(200), effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00.000Z' }, { content: table(null), effective: '2026-09-10', effectiveDate: '2026-09-10T00:00:00.000Z' }] };
+  const points = [point(start - HOUR, 'a', { equivalent: 0.2, uncachedTokens: 100 }), point(start, 'a', { equivalent: 0.2, uncachedTokens: 100 })];
+  const { lines, rows } = d.foldBurn(d.scalePoints(points, d.weekScaleAt(costs, 'max', start + HOUR)), 'model', 3_600, NONE);
+  assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null], "the first hour at Pro's 100 over Max 5x's 200, the second a gap");
+  assert.equal(lines[0].unpriced, true, 'the gap reads unpriced rather than idle');
+});
+
+test("the plan cards' colors read one order, every fold's named lines, so a group one card draws and another folds into its rest keeps a color", () => {
+  const week = { lines: [{ key: 'opus', other: false }, { key: 'sonnet', other: false }, { key: 'other', other: true }] };
+  const fable = { lines: [{ key: 'fable', other: false }] };
+  assert.deepEqual(d.burnColorOrder([week, fable]), ['fable', 'opus', 'sonnet']);
+});
+
+test('the Fable week card folds the Fable figure, a null beside tokens its gap, and draws no line for a group whose figure reads 0 wherever it has traffic', () => {
+  const points = [
+    point(0, 'a', { fableEquivalent: 0.02, uncachedTokens: 100 }),
+    point(HOUR, 'a', { fableEquivalent: null, uncachedTokens: 100 }),
+    point(0, 'b', { equivalent: 0.05, fableEquivalent: 0, uncachedTokens: 100 }),
+    point(HOUR, 'b', { equivalent: 0.05, fableEquivalent: 0, uncachedTokens: 100 }),
+  ];
+  const { lines, rows } = d.foldBurn(d.scalePoints(d.figuredGroups(points, 'fableEquivalent'), () => 1, 'fableEquivalent'), 'model', 3_600, NONE);
+  assert.deepEqual(lines.map((l) => l.key), ['a'], 'b ran on no Fable model');
+  assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.02, null]);
+  assert.equal(lines[0].unpriced, true, 'the null beside tokens reads unpriced');
+});
+
 test("the Cost by card's note names the groups unpriced in range up to three, counts them past three, and counts their buckets, singular at one", () => {
   assert.equal(d.unpricedNote([], 0), null, 'nothing unpriced reads no note');
   assert.equal(d.unpricedNote(['research'], 1), 'research unpriced in 1 bucket, drawn as a gap');
