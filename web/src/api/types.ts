@@ -1749,6 +1749,10 @@ export interface BurnPoint {
   /** The same spend as a fraction of the account's model week, null where `fiveHourShare` is for any reason but the
    *  window set and where no row of the bucket is on a model with a week of its own. */
   modelWeekShare: number | null;
+  /** The list dollars of the bucket's plan-funded rows at the API price revision in force at each row, 0 for a bucket
+   *  with no plan row. `usd` keeps the billed rows alone. A plan row the revision lists no rate for adds nothing, so a
+   *  zero does not tell a bucket with no plan row from one whose plan rows have no list price. */
+  planUsd: number;
   /** The same spend as a fraction of the account's 7-day window, unbanded, null where `fiveHourShare` is for any
    *  reason but the window set and where the account's window set lacks the 7-day window. */
   sevenDayShare: number | null;
@@ -1762,7 +1766,7 @@ export interface BurnPoint {
   /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
    *  dollars. Null where the shares are, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
-  /** An API-key account's estimated cost. */
+  /** The estimated cost of every row of the bucket a plan did not pay. */
   usd: number;
 }
 
@@ -1901,6 +1905,12 @@ export interface BurnFigures {
   burnEquivalent: number | null;
   /** Null on a row with no pin, or for a pin whose account left the registry: no kind is left to pick a unit from. */
   burnUnit: BurnUnit | null;
+  /** The pin's plan copy per hour in dollars at the API price list in force, priced when read. Null where `burnUnit`
+   *  is not `window_share`, on a row with no pin, where the dollar table lists no row for the pin's model and where a
+   *  token type the pin burns has no rate in it. It reads a figure where `burn` reads null for a tier the cost model
+   *  does not size or a model it does not weigh, since the dollar table reads neither. A billed pin keeps its dollars
+   *  in `burn`. */
+  burnUsd: number | null;
   /** The window `burn` is read on: `five_hour` where the account's shared window set has it, `seven_day` otherwise,
    *  null where `burnUnit` is not `window_share`. */
   burnWindow: string | null;

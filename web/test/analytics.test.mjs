@@ -7,7 +7,7 @@ const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.js
 
 const HOUR = 3_600_000;
 const point = (at, group, over = {}) => {
-  const p = { at: new Date(at).toISOString(), cachedTokens: 0, equivalent: null, fiveHourShare: null, group, sevenDayShare: null, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over };
+  const p = { at: new Date(at).toISOString(), cachedTokens: 0, equivalent: null, fiveHourShare: null, group, planUsd: 0, sevenDayShare: null, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over };
   return { tokens: p.cachedTokens + p.uncachedTokens, ...p };
 };
 const NONE = new Set();

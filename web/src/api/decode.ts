@@ -754,6 +754,7 @@ export const decodeBurnPoint = (v: unknown): BurnPoint => {
     fiveHourShare: numOrNull(p.five_hour_share),
     group: str(p.group),
     modelWeekShare: numOrNull(p.model_week_share),
+    planUsd: num(p.plan_usd),
     sevenDayShare: numOrNull(p.seven_day_share),
     tokens: num(p.tokens),
     uncachedTokens: num(p.uncached_tokens),
@@ -851,7 +852,7 @@ const lifecycle = (v: unknown): Lifecycle | null => oneOf(LIFECYCLE_VALUES, v);
 const guardVerdict = (v: unknown): GuardVerdict | null => oneOf(GUARD_VERDICT_VALUES, v);
 
 const burnUnit = (v: unknown): BurnUnit | null => oneOf(BURN_UNIT_VALUES, v);
-const burnFigures = (r: Rec): BurnFigures => ({ burn: numOrNull(r.burn), burnEquivalent: numOrNull(r.burn_equivalent), burnUnit: burnUnit(r.burn_unit), burnWindow: strOrNull(r.burn_window) });
+const burnFigures = (r: Rec): BurnFigures => ({ burn: numOrNull(r.burn), burnEquivalent: numOrNull(r.burn_equivalent), burnUnit: burnUnit(r.burn_unit), burnUsd: numOrNull(r.burn_usd), burnWindow: strOrNull(r.burn_window) });
 
 function decodeAgentContext(v: unknown): AgentContext {
   const c = rec(v);

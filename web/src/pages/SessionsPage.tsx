@@ -25,7 +25,7 @@ import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare,
 import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
-import { costCellOf, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
+import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
 import { ageWord, aroundSubject, logHref, windowTagWord } from '@/lib/routingLog';
 import { memberSpeed } from '@/lib/selection';
 import type { UnitPosition } from '@/lib/unit';
@@ -549,22 +549,31 @@ export function SessionsPage() {
 }
 
 /**
- * A pin's burn per hour: the share of the chosen week on a plan pin, the dollars on a pin billed in dollars, and the
- * share of the pin's own window as its title. Null with no pin, no figure, or while the week's scale is out.
+ * A pin's burn per hour under the Unit position, by the rate rule: a plan pin's share of the chosen week or its list
+ * dollars, a billed pin's dollars, a dash with why where the position holds no figure for the pin's side, and the
+ * share of the pin's own window as a plan figure's title. A plan pin's dollars read `burnUsd` whatever `burn` reads,
+ * since the route answers a dollar figure beside a null `burn` for a model the cost model does not weigh, and they
+ * draw with no title there. Null with no pin, a pin with no unit, no figure for the position, or under Native while
+ * the week's scale is out.
  */
-function burnReading(pin: BurnFigures | null, cost: CostContext): { text: string; title: string | undefined } | null {
-  if (pin === null || pin.burn === null) return null;
-  if (pin.burnUnit === 'usd') return { text: `${fmtUsd(pin.burn)}/h`, title: undefined };
-  if (pin.burnUnit !== 'window_share' || pin.burnEquivalent === null || cost.scale === null) return null;
-  const window = pin.burnWindow === null ? null : windowHint(pin.burnWindow);
-  return { text: `${weekShort(pin.burnEquivalent * cost.scale, cost.week)}/h`, title: window === null ? undefined : `${fmtShare(pin.burn)} of ${window}` };
+function burnReading(pin: BurnFigures | null, cost: CostContext): { dash: boolean; text: string; title: string | undefined } | null {
+  if (pin === null || pin.burnUnit === null) return null;
+  const billed = pin.burnUnit === 'usd';
+  if (pin.burn === null && (billed || cost.unit === 'native')) return null;
+  const reading = rateUnder(cost.unit, { billedUsd: billed ? pin.burn : null, equivalent: billed ? null : pin.burnEquivalent, planUsd: billed ? null : pin.burnUsd, side: billed ? 'billed' : 'plan' });
+  if (reading === null) return null;
+  if (reading.kind === 'dash') return { dash: true, text: '-', title: reading.title };
+  const title = billed || pin.burn === null || pin.burnWindow === null ? undefined : `${fmtShare(pin.burn)} of ${windowHint(pin.burnWindow)}`;
+  if (reading.kind === 'dollars') return { dash: false, text: `${fmtUsd(reading.usd)}/h`, title };
+  return cost.scale === null ? null : { dash: false, text: `${weekShort(reading.figure * cost.scale, cost.week)}/h`, title };
 }
 
-/** The pin's burn per hour under the Cost figure, none on an unpinned row or a pin with no figure. */
+/** The pin's burn per hour under the Cost figure, a dash with why in the muted ink, and none where `burnReading` reads
+ *  none. */
 function BurnLine({ cost, session }: { cost: CostContext; session: Session }) {
   const burn = burnReading(session.pinned ? session : null, cost);
   return burn === null ? null : (
-    <span className="sub" title={burn.title}>
+    <span className={burn.dash ? 'sub muted' : 'sub'} title={burn.title}>
       {burn.text}
     </span>
   );
@@ -1434,7 +1443,7 @@ function AgentRow({
       <td title={tokens ? `${fmtInt(tokens)} tokens` : undefined}>
         <span className={context === '-' ? 'muted' : 'num'}>{context}</span>
       </td>
-      <td title={burn?.title}>{burn === null ? <span className="muted">-</span> : <span className="num">{burn.text}</span>}</td>
+      <td title={burn?.title}>{burn === null || burn.dash ? <span className="muted">-</span> : <span className="num">{burn.text}</span>}</td>
       <td className="right num">{figures !== null && requestCount(figures) > 0 ? fmtInt(requestCount(figures)) : <span className="muted">0</span>}</td>
       <CostCell accountId={accountId} cost={cost} spend={figures?.spend ?? null} />
       <td>

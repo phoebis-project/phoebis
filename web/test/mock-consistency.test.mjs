@@ -3328,7 +3328,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.overview.hourly.some((h) => h.equivalent === null) && s.overview.hourly.some((h) => typeof h.equivalent === 'number' && h.equivalent > 0), 'an hour of Sonnet 4.5 reads null and a priced one its figure');
   });
 
-  test(`every pinned plan session reads its burn on the window its account's set names, with the burn and its Pro-week figure null on a model without a weight of its own, at ${at}`, async () => {
+  test(`every pinned plan session reads its burn on the window its account's set names, and a pin on a model without a weight of its own prices no share, its burn and its Pro-week figure null, at ${at}`, async () => {
     const s = await story;
     // The cost model weighs every model the story's plan pins run on but Sonnet 4.5, which prices nothing.
     const pricedOn = { 'claude-fable-5-1': true, 'claude-haiku-4-5-20251001': true, 'claude-opus-5': true, 'claude-opus-5-5': true, 'claude-sonnet-4-5': false, 'claude-sonnet-5': true, 'claude-sonnet-5-5': true };
@@ -3339,13 +3339,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const windows = s.accounts.find((a) => a.id === x.accountId)?.windows.map((w) => w.id) ?? [];
       assert.equal(x.burnWindow, windows.includes('5h') || !windows.includes('7d') ? 'five_hour' : 'seven_day', `${x.sessionId} on ${x.accountId}`);
       if (!pricedOn[x.model]) {
-        assert.deepEqual([x.burn, x.burnEquivalent], [null, null], `${x.sessionId} on ${x.model} burns nothing`);
+        assert.deepEqual([x.burn, x.burnEquivalent], [null, null], `${x.sessionId} on ${x.model} prices no share`);
         unpriced += 1;
         continue;
       }
       assert.ok(typeof x.burn === 'number', `${x.sessionId} on ${x.model} burns ${x.burn}`);
     }
-    assert.ok(unpriced > 0, "a pin on the story's Sonnet 4.5 burns nothing");
+    assert.ok(unpriced > 0, "a pin on the story's Sonnet 4.5 prices no share");
     assert.deepEqual(pinned.filter((x) => x.accountId === 'workshop').map((x) => x.burnWindow), ['seven_day'], "the approved Ultra's pin burns its 7-day window");
     assert.ok(s.sessions.filter((x) => x.burnUnit !== 'window_share').every((x) => x.burnWindow === null), 'a session off plan quota names no window');
   });

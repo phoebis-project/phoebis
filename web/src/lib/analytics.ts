@@ -111,6 +111,10 @@ export interface BurnLine {
   peak: number | null;
   /** The range's figure per hour over the buckets that read one, null for a line that never priced traffic. */
   perHour: number | null;
+  /** The highest plan dollars per hour a bucket that sets the scale reached, null for a line with no such bucket. */
+  planUsdPeak: number | null;
+  /** The range's mean of the plan side's list dollars per hour. */
+  planUsdPerHour: number;
   tokensPerMinute: number;
   /**
    * The unit the line is charted in: under the account grouping a subscription account burns plan share and an
@@ -136,6 +140,8 @@ export interface BurnRow {
   equivalent: (number | null)[];
   /** The bucket covers less than its width, so its rate rests on that part alone. */
   partial: boolean;
+  /** The plan side's list dollars per hour of the time the bucket covers, indexed like the lines. */
+  planUsd: number[];
   /**
    * The seconds the bucket's rollups cover: the bucket's width up to the hour ceiling of the range's end, no later than
    * the read's instant; the full width without an end.
@@ -165,6 +171,7 @@ interface FigureFold {
 interface Sum {
   cached: number;
   equivalent: FigureFold;
+  planUsd: number;
   tokens: number;
   uncached: number;
   usd: number;
@@ -626,12 +633,13 @@ export const burnColorOrder = (folds: readonly { lines: readonly BurnLine[] }[])
 
 /**
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries, and
- * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no plan line, so
- * its plan figure stays empty. Under the account grouping the rest folds once per unit, since a subscription account's
- * plan share and an API-key account's dollars chart on different axes. Where each group holds one account's rows (that
- * grouping, or `account`, the one account the Accounts filter names) a line's unit is its account's. `sized` names the
- * accounts whose plan the router prices on a tier the cost model sizes (`pricedTier`, so a free plan and a usage-based
- * seat are out). Each slot carries the Pro-week figure per hour, which adds across accounts and tiers.
+ * every other grouping keeps the groups with the most tokens and sums the rest as other, which draws no line of the
+ * week's share, so its Pro-week figure stays empty while its dollars and plan dollars sum. Under the account grouping
+ * the rest folds once per unit, since a subscription account's plan share and an API-key account's dollars chart on
+ * different axes. Where each group holds one account's rows (that grouping, or `account`, the one account the Accounts
+ * filter names) a line's unit is its account's. `sized` names the accounts whose plan the router prices on a tier the
+ * cost model sizes (`pricedTier`, so a free plan and a usage-based seat are out). Each slot carries the Pro-week figure
+ * per hour, which adds across accounts and tiers, and the plan side's list dollars per hour.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
@@ -670,11 +678,12 @@ export function foldBurn(
   const byAt = new Map<number, Sum[]>();
   for (const p of points) {
     const at = Date.parse(p.at);
-    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, equivalent: { sum: null, unpriced: false }, tokens: 0, uncached: 0, usd: 0 }));
+    const sums = byAt.get(at) ?? Array.from({ length: slots }, (): Sum => ({ cached: 0, equivalent: { sum: null, unpriced: false }, planUsd: 0, tokens: 0, uncached: 0, usd: 0 }));
     byAt.set(at, sums);
     const slot = slotOf(p.group);
     const s = sums[slot];
     s.cached += p.cachedTokens;
+    s.planUsd += p.planUsd;
     s.tokens += p.tokens;
     s.uncached += p.uncachedTokens;
     s.usd += p.usd;
@@ -699,6 +708,7 @@ export function foldBurn(
         cached: sums.map((s) => s.cached / minutes),
         equivalent: sums.map((s) => perHour(s.equivalent, hours)),
         partial: seconds < bucketSeconds,
+        planUsd: sums.map((s) => s.planUsd / hours),
         seconds,
         setsScale: seconds >= bucketSeconds * SCALE_FLOOR,
         tokens: sums.map((s) => s.tokens),
@@ -725,9 +735,12 @@ export function foldBurn(
     });
     const figures = rows.flatMap((r) => (r.equivalent[i] === null ? [] : [{ value: r.equivalent[i] as number, weight: weightOf(r) }]));
     const peaks = rows.filter((r) => r.setsScale).map((r) => r.equivalent[i]).filter((v): v is number => v !== null);
+    const planPeaks = rows.filter((r) => r.setsScale).map((r) => r.planUsd[i]);
     const figuresOf = {
       peak: peaks.length ? Math.max(...peaks) : null,
       perHour: priced ? weighedMean(figures) : null,
+      planUsdPeak: planPeaks.length ? Math.max(...planPeaks) : null,
+      planUsdPerHour: mean((r) => r.planUsd[i]),
       tokensPerMinute: mean((r) => r.cached[i] + r.uncached[i]),
       unpriced: rest === null && rows.some((_, k) => flagged(k)),
       usdPerMinute: mean((r) => r.usd[i]),

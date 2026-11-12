@@ -534,6 +534,8 @@ const COST_HEADER_TITLE = {
 };
 const NOTHING_BILLED_TITLE = 'Nothing billed: a subscription request';
 const NO_EQUIVALENT_TITLE = 'Billed in dollars, no subscription equivalent';
+/** The dash's title of a plan-funded rate under Billed dollars, and the sentence of a rate card with no figure there. */
+const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this traffic';
 /** The Analytics filter bar's Group by select, the one the Burn section follows, told by its Burn-only option. */
 const pageGroupBy = (page) => {
   const select = groupBySelect(page);
@@ -543,7 +545,7 @@ const pageGroupBy = (page) => {
  * A burn point as the route answers it, idle and priced nothing unless `over` says otherwise: an API-key bucket with
  * tokens reads a zero Pro-week figure, and a subscription one its figure and its shares.
  */
-const burnPoint = (over) => ({ cachedTokens: 0, equivalent: null, fableEquivalent: null, fiveHourEquivalent: null, fiveHourShare: null, modelWeekShare: null, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
+const burnPoint = (over) => ({ cachedTokens: 0, equivalent: null, fableEquivalent: null, fiveHourEquivalent: null, fiveHourShare: null, modelWeekShare: null, planUsd: 0, sevenDayShare: null, tokens: 0, uncachedTokens: 0, unit: null, unpriced: false, usd: 0, ...over });
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -1680,6 +1682,25 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     name: "/ under native the story's day with nothing billed reads a dash titled why on the Estimated cost, 24h tile's subscription line and a dash per hour in its note",
     ok: JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) && planRead.note === '- per hour' && planRead.title === UNPRICED_TITLE,
     missing: [JSON.stringify(planRead)],
+  });
+  // Under Dollar equivalent the note reads its rate as the two other dollar positions do. The day handed to the page
+  // costs $14.40 at the API price list, $7.20 of it billed, so its subscription requests' $7.20 over 24 hours reads
+  // $0.30 per hour.
+  api.getOverview = async () => {
+    const o = await overviewOf.call(api);
+    return { ...o, day24h: { ...o.day24h, billedUsd: 7.2, cost: 14.4 } };
+  };
+  const equivalentPage = await mount('/');
+  await chooseUnit(equivalentPage, 'equivalent');
+  const equivalentRead = { ...tileRead(equivalentPage), unit: shellUnit(equivalentPage)?.value ?? null };
+  await chooseUnit(equivalentPage, 'native');
+  localStorage.removeItem('phoebis.unit');
+  equivalentPage.unmount();
+  delete api.getOverview;
+  results.push({
+    name: "/ under Dollar equivalent the Estimated cost, 24h tile's note reads the subscription requests' dollars per hour",
+    ok: equivalentRead.unit === 'equivalent' && equivalentRead.note === '$0.30 per hour',
+    missing: [JSON.stringify(equivalentRead)],
   });
 }
 m.unmount();
@@ -19243,6 +19264,63 @@ await forView('/analytics', async () => {
   window.HTMLElement.prototype.getBoundingClientRect = measure;
 });
 
+// The Burn tab's two rate cards follow the Unit setting, each position switched on the top bar under the model
+// grouping, where the story's Sonnet 4.5 plan rows, which the cost model has no weight for, make a group of their own:
+// under Native it reads a dash with no point beside the model unlisted entry, and under All in dollars its plan dollars.
+// The 5-hour and the Fable week card keep the share of the chosen tier's window under every position. jsdom lays
+// nothing out, so the chart containers read a browser's size here and the cards draw their axes.
+await forView('/analytics', async () => {
+  const measure = window.HTMLElement.prototype.getBoundingClientRect;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+  };
+  const SONNET_45 = 'claude-sonnet-4-5';
+  const page = await mount('/analytics?by=model#burn', { now: CLOCK_ORIGIN });
+  const cardRead = (title) => {
+    const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+    return {
+      legend: [...(card?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']),
+      sentence: card?.querySelector('p.muted')?.textContent?.trim() ?? null,
+      ticks: [...(card?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? ''),
+    };
+  };
+  const reads = {};
+  for (const position of ['native', 'all', 'usd', 'equivalent']) {
+    await chooseUnit(page, position);
+    reads[position] = { fable: cardRead('Fable week per hour'), fiveHour: cardRead('5-hour per hour'), plan: cardRead('Plan per hour'), spend: cardRead('Spend per minute'), unit: shellUnit(page)?.value ?? null };
+  }
+  await chooseUnit(page, 'native');
+  localStorage.removeItem('phoebis.unit');
+  page.unmount();
+  window.HTMLElement.prototype.getBoundingClientRect = measure;
+  const entry = (read, label) => read.legend.find(([l]) => l === label)?.[1] ?? null;
+  const all = reads.all.plan;
+  const native = reads.native.plan;
+  results.push({
+    name: "/analytics under All in dollars Plan per hour charts on a dollar axis, the Sonnet 4.5 group's legend reads dollars where Native reads a dash, and no model unlisted entry stands",
+    ok:
+      reads.all.unit === 'all' &&
+      entry(native, SONNET_45) === '-' &&
+      entry(native, 'model unlisted') !== null &&
+      all.ticks.length > 1 &&
+      all.ticks.every((t) => /^\$[\d.]+$/.test(t)) &&
+      /^\$[\d.]+$/.test(entry(all, SONNET_45) ?? '') &&
+      entry(all, 'model unlisted') === null,
+    missing: [JSON.stringify(native), JSON.stringify(all)],
+  });
+  results.push({
+    name: '/analytics Plan per hour draws its sentence under Billed dollars and Spend per minute its own under Dollar equivalent',
+    ok: reads.usd.unit === 'usd' && reads.usd.plan.sentence === `${RATE_NOTHING_BILLED_TITLE}.` && reads.equivalent.unit === 'equivalent' && reads.equivalent.spend.sentence === `${NO_EQUIVALENT_TITLE}.`,
+    missing: [JSON.stringify(reads.usd.plan), JSON.stringify(reads.equivalent.spend)],
+  });
+  const moved = ['all', 'usd', 'equivalent'].filter((p) => JSON.stringify([reads[p].fiveHour, reads[p].fable]) !== JSON.stringify([reads.native.fiveHour, reads.native.fable]));
+  results.push({
+    name: '/analytics the 5-hour and the Fable week card read the same under all four positions',
+    ok: reads.native.fiveHour.legend.length > 0 && reads.native.fable.legend.length > 0 && moved.length === 0,
+    missing: [JSON.stringify([reads.native.fiveHour, reads.native.fable]), ...moved.map((p) => `${p}: ${JSON.stringify([reads[p].fiveHour, reads[p].fable])}`)],
+  });
+});
+
 await forView('/analytics', async () => {
   // The route's answer with three refusals in its first group's map and its counts as they were: the Traffic line
   // reads as it did, the Refused column and the Refusals by code card read the three, and Errors by code holds none.
@@ -25697,6 +25775,45 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         /\/h$/.test(native.slowed.sub.at(-1) ?? '') &&
         native.slowed.subTitles.at(-1) === '1.25% of the 5-hour window',
       missing: [JSON.stringify(dollars), JSON.stringify(native)],
+    });
+  }
+  {
+    // The burn line under the Cost figure reads the pin's rate in the Unit setting's unit, each position switched on
+    // the top bar. Studio's slowed notebook session is a plan pin (`SLOWED_PINS`' first entry, its share 0.0125 and its
+    // dollars 0.31 an hour): its Pro-week figure in the Ultra week, its dollars, a dash and its dollars under Native,
+    // All in dollars, Billed dollars and Dollar equivalent, with its share of the 5-hour window on hover wherever a
+    // figure draws. The fleet session's usage-based seat is a billed pin (`FLEET_BURN`, 0.36 an hour): its dollars
+    // three times and a dash under Dollar equivalent. The laptop session on primary (`CLIENT_SESSION_ID`) runs Sonnet
+    // 4.5, which the cost model has no weight for, so its pin answers no share beside the dollars its row drew, which
+    // the line reads with no hover under the two equivalent positions. Under Native it draws no line, so the Cost
+    // cell's own line stands last there and its read is left out.
+    const lineOf = (s) => {
+      const line = [...(cellOf(s, 'Cost')?.querySelectorAll(':scope > .sub') ?? [])].at(-1);
+      return line === undefined ? null : { text: line.textContent?.trim() ?? '', title: line.getAttribute('title') };
+    };
+    const read = {};
+    for (const position of ['native', 'all', 'usd', 'equivalent']) {
+      await chooseUnit(page, position);
+      read[position] = { client: lineOf(subjects.client), fleet: lineOf(subjects.fleet), slowed: lineOf(subjects.slowed), unit: shellUnit(page)?.value ?? null };
+    }
+    await chooseUnit(page, 'native');
+    localStorage.removeItem('phoebis.unit');
+    const client = subjects.client;
+    const share = '1.25% of the 5-hour window';
+    const sonnet45 = client?.model === 'claude-sonnet-4-5' && client.burnUnit === 'window_share' && client.burn === null && client.burnUsd > 0;
+    const clientDollars = sonnet45 ? { text: `${fmtUsd(client.burnUsd)}/h`, title: null } : 'a Sonnet 4.5 plan pin with dollars and no share';
+    const want = {
+      native: { fleet: { text: '$0.36/h', title: null }, slowed: { text: `${weekCell(subjects.slowed?.burnEquivalent ?? null)}/h`, title: share }, unit: 'native' },
+      all: { client: clientDollars, fleet: { text: '$0.36/h', title: null }, slowed: { text: '$0.31/h', title: share }, unit: 'all' },
+      usd: { client: { text: '-', title: RATE_NOTHING_BILLED_TITLE }, fleet: { text: '$0.36/h', title: null }, slowed: { text: '-', title: RATE_NOTHING_BILLED_TITLE }, unit: 'usd' },
+      equivalent: { client: clientDollars, fleet: { text: '-', title: NO_EQUIVALENT_TITLE }, slowed: { text: '$0.31/h', title: share }, unit: 'equivalent' },
+    };
+    const { client: _, ...native } = read.native;
+    const drawn = { ...read, native };
+    results.push({
+      name: "/sessions the burn line reads a plan pin's week share, dollars, a dash and dollars, a billed pin's dollars three times and a dash, and a Sonnet 4.5 plan pin's dollars under the two equivalent positions",
+      ok: absent.length === 0 && JSON.stringify(drawn) === JSON.stringify(want),
+      missing: [JSON.stringify(read), JSON.stringify(want)],
     });
   }
   {

@@ -34,7 +34,7 @@ import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, plural, shortId, shortModel, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useHashSection, useQueryFilters, useRangeTakenAt, useResizeObserver, useWeekReading, type Loaded } from '@/lib/hooks';
-import { REFUSED_TITLE } from '@/lib/requests';
+import { NO_EQUIVALENT_TITLE, RATE_NOTHING_BILLED_TITLE, REFUSED_TITLE } from '@/lib/requests';
 import { CLIENT_PATTERNS_PLAIN, linkedKeyIds, refusalLink, requestsLink, type RequestsLinkInput, type RequestsLinkTarget } from '@/lib/requestsLink';
 import { words } from '@/lib/routingLog';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -788,8 +788,8 @@ export function AnalyticsPage() {
           <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
             {/* Each plan card's figure waits on its own scale, read off the cost model's revisions at the burn read's
                 instant, and takes its failure from `burnReadings`. Where the lines are one account's, the week card's
-                reading waits on the tiers that pick their category too. Spend per minute sizes nothing, so it draws
-                while the settings read is out. */}
+                reading waits on the tiers that pick their category too. Spend per minute sizes nothing, and neither
+                does Plan per hour under a dollar position, so each draws while the settings read is out. */}
             <BurnCharts
               account={burnAccount}
               answer={burn.current?.answer ?? null}
@@ -802,6 +802,7 @@ export function AnalyticsPage() {
               readAt={burn.data?.readAt}
               sized={sized}
               slotOf={slotOf}
+              unit={unit}
             />
             <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
           </Section>
@@ -2225,6 +2226,7 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}. Overhead is ${OVERHEAD_HINT}`;
 
+const SPEND_TITLE = 'Spend per minute';
 const SPEND_NOTE = "Dollars per minute: API-key traffic, a usage-based seat's whole spend, and a subscription account's fast-mode and overage answers. Its plan quota is charted beside it as a share of the chosen week";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
@@ -2239,6 +2241,8 @@ const NO_REQUESTS: RequestLog[] = [];
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 const PLAN_TITLE = 'Plan per hour';
 const PLAN_SUBTITLE = 'The subscription traffic per hour as a share of the chosen week';
+/** Plan per hour's subtitle under a dollar position. */
+const PLAN_USD_SUBTITLE = 'The subscription traffic per hour in dollars at the API price list';
 const FIVE_HOUR_TITLE = '5-hour per hour';
 const FIVE_HOUR_SUBTITLE = "The subscription traffic per hour as a share of the chosen tier's 5-hour window, the peak band's factor applied by the hour";
 const FIVE_HOUR_ULTRA_NOTE = "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window.";
@@ -2271,7 +2275,8 @@ const isolatedDot = (values: (number | null)[], color: string) => {
  * 5-hour window and its Fable week. A line's color follows its group within the answer rather than its rank, so a range
  * that reorders the groups does not repaint them, and the account grouping keeps each account's page-wide color.
  * `account` is the one account the Accounts filter names, and `accounts` the accounts read beside the answer, which
- * give a tooltip's hint its plan and tier.
+ * give a tooltip's hint its plan and tier. `unit` is the page's Unit position, which "Plan per hour" and "Spend per
+ * minute" follow by the rate rule.
  */
 function BurnCharts({
   account,
@@ -2285,6 +2290,7 @@ function BurnCharts({
   readings,
   sized,
   slotOf,
+  unit,
 }: {
   account: string | null;
   accounts: Account[] | null;
@@ -2297,6 +2303,7 @@ function BurnCharts({
   readings: { fable: WeekReading; fiveHour: WeekReading; week: WeekReading };
   sized: ReadonlySet<string> | null;
   slotOf: (id: string) => number | null;
+  unit: UnitPosition;
 }) {
   const ink = useChartInk();
   const loading = answer === null;
@@ -2316,7 +2323,8 @@ function BurnCharts({
     return { fable: fableWeekScaleAt(costs, week, readAt), fiveHour: fiveHourScaleAt(costs, week, readAt), week: weekScaleAt(costs, week, readAt) };
   }, [costs, readAt, week, weekFactor]);
   // Spend per minute and the colors read this fold's lines, and a line's unit follows the route's own figures, so while
-  // the week's scale is out the points fold as answered. The plan card draws its skeleton then and reads none of it.
+  // the week's scale is out the points fold as answered. The plan card draws its skeleton then under Native, and under
+  // a dollar position it reads the plan dollars, which no scale touches.
   const weekFold = useMemo(() => fold(scales.week), [fold, scales.week]);
   const fiveHourFold = useMemo(() => (scales.fiveHour === null ? EMPTY_FOLD : fold(scales.fiveHour, 'fiveHourEquivalent')), [fold, scales.fiveHour]);
   const fableWeekFold = useMemo(
@@ -2377,6 +2385,12 @@ function BurnCharts({
   // The Fable week fold keeps the groups with Fable traffic alone, so where Plan per hour draws subscription traffic
   // the Fable week card with no line says that traffic drew no Fable week.
   const fableNoLine = plannedOf(lines).length > 0 || unknownOf(lines).length > 0 ? NO_FABLE_TRAFFIC : NO_PLAN_TRAFFIC;
+  const headOf = (subtitle: string, note: string | null) => (
+    <>
+      {subtitle}.{partial ? ` ${PARTIAL_NOTE}.` : ''}
+      {note === null ? '' : ` ${note}`} <CostReferenceLink tab="tiers" />
+    </>
+  );
   const planCard = ({
     fold: { lines: cardLines, rows: cardRows },
     hint,
@@ -2400,12 +2414,7 @@ function BurnCharts({
     title: string;
     words: FigureWords;
   }) => {
-    const head = (
-      <>
-        {subtitle}.{partial ? ` ${PARTIAL_NOTE}.` : ''}
-        {note === null ? '' : ` ${note}`} <CostReferenceLink tab="tiers" />
-      </>
-    );
+    const head = headOf(subtitle, note);
     // The figure waits on the card's scale, so the card draws its skeleton while the settings or the burn read are out,
     // the burn read's failure, or once that read answered its reading's failure: the settings read's or the unpriced
     // sentence.
@@ -2480,29 +2489,80 @@ function BurnCharts({
       </ChartCard>
     );
   };
-  return (
-    <div className="grid-2 burn-grid">
-      {planCard({ fold: weekFold, hint: hintOf, noLine: NO_PLAN_TRAFFIC, note: null, reading: readings.week, scale: scales.week, subtitle: PLAN_SUBTITLE, title: PLAN_TITLE, words: weekWords })}
-      {planCard({ fold: fiveHourFold, hint: null, noLine: NO_PLAN_TRAFFIC, note: week === 'ultra' ? FIVE_HOUR_ULTRA_NOTE : null, reading: readings.fiveHour, scale: scales.fiveHour, subtitle: FIVE_HOUR_SUBTITLE, title: FIVE_HOUR_TITLE, words: fiveHourWords })}
-      {planCard({ fold: fableWeekFold, hint: null, noLine: fableNoLine, note: null, reading: readings.fable, scale: scales.fable, subtitle: FABLE_WEEK_SUBTITLE, title: FABLE_WEEK_TITLE, words: fableWeekWords })}
+  // Under All in dollars and Dollar equivalent the plan side charts its list dollars, which read no cost table, so the
+  // card waits on no scale. A dollar figure reads neither a weight nor a tier, so a line draws wherever its group's
+  // plan dollars are above zero, with no model unlisted entry, no tier unknown entry and no share hint.
+  const planDollarCard = () => {
+    const planned = lines.map((l, i) => ({ i, l })).filter(({ l }) => l.planUsdPerHour > 0);
+    const valuesOf = (from: BurnRow[]) => from.flatMap((r) => planned.map(({ i }) => r.planUsd[i]));
+    const planScale = scaleTo(rows.length, settingRows.length, valuesOf(settingRows));
+    return (
       <ChartCard
-        title="Spend per minute"
-        subtitle={`${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
+        key={PLAN_TITLE}
+        title={PLAN_TITLE}
+        subtitle={headOf(PLAN_USD_SUBTITLE, null)}
         failure={failed(error)}
         loading={loading}
-        empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
-        legend={spent.map(({ l }) => ({ color: colorOf(l), label: spendNameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
+        empty={empty ?? (planned.length > 0 ? undefined : NO_PLAN_TRAFFIC)}
+        legend={planned.map(({ l }) => ({ color: colorOf(l), label: nameOf(l), shape: 'line' as const, title: sentences([titleOf(l) ?? null, l.planUsdPeak === null ? null : `Highest hour ${fmtUsd(l.planUsdPeak)}`]) || undefined, value: fmtUsd(l.planUsdPerHour) }))}
       >
         <LineChart data={rows} margin={CHART_MARGIN}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
-          <XAxis {...axis} />
-          <YAxis {...spentAxis} tickLine={false} axisLine={false} {...spentScale} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
-          {spent.map(({ i, l }) => (
-            <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
+          <XAxis type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} />
+          <YAxis {...usdAxis(valuesOf('domain' in planScale ? settingRows : rows))} tickLine={false} axisLine={false} {...planScale} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => planned.map(({ i, l }) => ({ color: colorOf(l), label: nameOf(l), value: fmtUsd(r.planUsd[i]) })))} />
+          {planned.map(({ i, l }) => (
+            <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.planUsd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
           ))}
         </LineChart>
       </ChartCard>
+    );
+  };
+  /** A card whose side has no figure under the position keeps its place in the grid with the sentence of why, and its
+   *  subtitle leaves out the partial bucket's note, since no bucket draws. */
+  const sentenceCard = (title: string, subtitle: ReactNode, sentence: string) => (
+    <ChartCard key={title} title={title} subtitle={subtitle} loading={false} empty={`${sentence}.`}>
+      {null}
+    </ChartCard>
+  );
+  const spendNote = `${byAccount ? SPEND_NOTE : `${SPEND_NOTE} when grouped by account`}${groupBy === 'request_class' ? `. ${upperFirst(CLASS_NOTE)}` : ''}`;
+  return (
+    <div className="grid-2 burn-grid">
+      {unit === 'native'
+        ? planCard({ fold: weekFold, hint: hintOf, noLine: NO_PLAN_TRAFFIC, note: null, reading: readings.week, scale: scales.week, subtitle: PLAN_SUBTITLE, title: PLAN_TITLE, words: weekWords })
+        : unit === 'usd'
+          ? sentenceCard(
+              PLAN_TITLE,
+              <>
+                {PLAN_USD_SUBTITLE}. <CostReferenceLink tab="tiers" />
+              </>,
+              RATE_NOTHING_BILLED_TITLE,
+            )
+          : planDollarCard()}
+      {planCard({ fold: fiveHourFold, hint: null, noLine: NO_PLAN_TRAFFIC, note: week === 'ultra' ? FIVE_HOUR_ULTRA_NOTE : null, reading: readings.fiveHour, scale: scales.fiveHour, subtitle: FIVE_HOUR_SUBTITLE, title: FIVE_HOUR_TITLE, words: fiveHourWords })}
+      {planCard({ fold: fableWeekFold, hint: null, noLine: fableNoLine, note: null, reading: readings.fable, scale: scales.fable, subtitle: FABLE_WEEK_SUBTITLE, title: FABLE_WEEK_TITLE, words: fableWeekWords })}
+      {unit === 'equivalent' ? (
+        sentenceCard(SPEND_TITLE, spendNote, NO_EQUIVALENT_TITLE)
+      ) : (
+        <ChartCard
+          title={SPEND_TITLE}
+          subtitle={`${spendNote}${partial ? `. ${PARTIAL_NOTE}` : ''}`}
+          failure={failed(error)}
+          loading={loading}
+          empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}
+          legend={spent.map(({ l }) => ({ color: colorOf(l), label: spendNameOf(l), shape: 'line' as const, title: titleOf(l), value: fmtUsd(l.usdPerMinute) }))}
+        >
+          <LineChart data={rows} margin={CHART_MARGIN}>
+            <CartesianGrid vertical={false} stroke={ink.grid} />
+            <XAxis {...axis} />
+            <YAxis {...spentAxis} tickLine={false} axisLine={false} {...spentScale} />
+            <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
+            {spent.map(({ i, l }) => (
+              <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />
+            ))}
+          </LineChart>
+        </ChartCard>
+      )}
     </div>
   );
 }

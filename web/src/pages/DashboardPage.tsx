@@ -57,7 +57,7 @@ interface CostTile {
  * each unit. A day a plan row priced nothing on reads the dash under `UNPRICED_TITLE`, its note a dash too while no
  * request was billed, and its spark leaves an unpriced hour a gap. The figure waits on the scale, so native draws the
  * skeleton while the cost model is out, and the reading's failure as a dash titled with it, noted unpriced where the
- * cost model sizes no chosen week. The dollar positions read their dollars.
+ * cost model sizes no chosen week. The dollar positions read their dollars, each with its rate per hour as its note.
  */
 function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
   const day = o.day24h;
@@ -66,7 +66,7 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
     const dollars = dollarsUnder(unit, day);
     return {
       ...tile,
-      note: unit === 'equivalent' ? 'at the API price list, the subscription requests' : `${fmtUsd(dollars / 24)} per hour`,
+      note: `${fmtUsd(dollars / 24)} per hour`,
       spark: o.hourly.map((h) => dollarsUnder(unit, { billedUsd: h.billed, cost: h.cost, equivalent: h.equivalent })),
     };
   }

@@ -6,7 +6,7 @@ import { byteOrder, tokensTotal } from '@/lib/format';
 import { lastActivity, pinTtlMs } from '@/lib/keepalive';
 import { compareRequests } from '@/lib/requests';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
-import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, promptOf } from './catalog';
+import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
 import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, WORKSHOP_SESSION_ID } from './requests';
@@ -25,6 +25,8 @@ interface WrittenFigures {
   agents: { agentId: string; lastProbeMinutes?: number; lastRequestMinutes: number; nextProbeSeconds: number | null }[];
   burn: number;
   burnAtMinutes: number;
+  /** The pin's dollar burn per hour, which a plan pin answers beside its share and a billed pin as its burn. */
+  burnUsd: number;
   createdMinutes: number;
   /** A finished row's end in seconds, the mod's last report, after every agent's last probe. */
   endedSeconds?: number;
@@ -162,6 +164,7 @@ const sessionSpec: ({
       agents: FINISHED_AGENTS.map(({ agentId, minutes }) => ({ agentId, lastRequestMinutes: minutes, nextProbeSeconds: null })),
       burn: 0.18,
       burnAtMinutes: 22,
+      burnUsd: 0.47,
       createdMinutes: 140,
       endedSeconds: 30,
       lastInputTokens: 14_200,
@@ -185,6 +188,7 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastRequestMinutes: 120, nextProbeSeconds: null }],
       burn: 0.09,
       burnAtMinutes: 121,
+      burnUsd: 0.21,
       createdMinutes: 310,
       lastInputTokens: 6_400,
       lastRefreshMinutes: 121,
@@ -207,6 +211,7 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastRequestMinutes: 20, nextProbeSeconds: 240 }],
       burn: 0.04,
       burnAtMinutes: 21,
+      burnUsd: 0.11,
       createdMinutes: 95,
       lastInputTokens: 10_800,
       lastRefreshMinutes: 21,
@@ -231,6 +236,7 @@ const sessionSpec: ({
       agents: [{ agentId: 'main', lastProbeMinutes: 31, lastRequestMinutes: 25, nextProbeSeconds: null }],
       burn: 0.05,
       burnAtMinutes: 26,
+      burnUsd: 0.14,
       createdMinutes: 90,
       lastInputTokens: 9_400,
       lastRefreshMinutes: 26,
@@ -306,21 +312,30 @@ const burnReadingOf = (accountId: string, burn: number | null, unit: BurnUnit | 
   return { burnEquivalent: window === null ? null : burnEquivalentOf(burn, accountId, window), burnUnit: unit, burnWindow: window };
 };
 /**
+ * A pin's plan copy in dollars per hour: the dollar burn its row drew, or wrote, beside its share, answered on a plan
+ * pin where the story's price table in force at the clock lists a row for the pin's model. Null on a billed pin, which
+ * answers its dollars as `burn`, on a row with no pin and for a model the table lists no row for. No subscription
+ * weight is read, so a pin on a model the cost model does not weigh answers its dollars beside a null share.
+ */
+const burnUsdOf = (dollars: number | null, unit: BurnUnit | null, model: string): number | null => (unit !== 'window_share' || dollars === null || priceFor(model, NOW) === null ? null : dollars);
+/** A built row's dollar burn per hour, which its lines scale: a billed pin's `burn`, a plan pin's `burnUsd`. */
+const dollarBurnOf = (pin: BurnFigures): number | null => (pin.burnUnit === 'usd' ? pin.burn : pin.burnUsd);
+/**
  * The served burn of a line beside its row's display pin, set from the row's figures rather than drawn, so the rows
  * after it keep their rolls: the display pin's burn scaled by the line's last prompt over the display pin's, none where
- * the display pin burns none or where a window share has no weight for the line's model to price it at. A pin whose
- * last use is its session's first sighting was never renewed with usage, so it burns 0. The display pin's own line
- * reads the row's figures instead.
+ * the display pin burns none or where a window share has no weight for the line's model to price it at. Its dollar
+ * burn scales the display pin's dollars the same way and reads no weight. A pin whose last use is its session's first
+ * sighting was never renewed with usage, so it burns 0. The display pin's own line reads the row's figures instead.
  */
 const servedBeside = (
-  display: Pick<Session, 'burn' | 'lastInputTokens'>,
+  display: Pick<Session, 'burn' | 'lastInputTokens'> & { dollars: number | null },
   line: Pick<AgentContext, 'accountId' | 'lastInputTokens' | 'lastUsedAt' | 'model'>,
   sessionCreatedAt: string | null,
-): { burn: number | null } => {
-  if (line.lastUsedAt !== null && line.lastUsedAt === sessionCreatedAt) return { burn: 0 };
+): { burn: number | null; dollars: number | null } => {
+  if (line.lastUsedAt !== null && line.lastUsedAt === sessionCreatedAt) return { burn: 0, dollars: 0 };
   const priced = burnUnitOf(line.accountId) !== 'window_share' || weightOf(TABLES, line.model, 'seven_day') !== null;
-  const burn = !priced || display.burn === null || display.lastInputTokens === null || line.lastInputTokens === null ? null : (display.burn * line.lastInputTokens) / display.lastInputTokens;
-  return { burn };
+  const scaled = (figure: number | null) => (figure === null || display.lastInputTokens === null || line.lastInputTokens === null ? null : (figure * line.lastInputTokens) / display.lastInputTokens);
+  return { burn: priced ? scaled(display.burn) : null, dollars: scaled(display.dollars) };
 };
 
 /**
@@ -355,18 +370,18 @@ const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NO
 type UndatedLine = Omit<AgentContext, 'createdAt' | 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
- * and its served burn priced on the pin's own account, in that account's unit and window, as the row's is for the
- * display pin.
+ * and its served burn and dollars priced on the pin's own account and model, in that account's unit and window, as the
+ * row's are for the display pin.
  */
 const pinLine = (
   line: Omit<UndatedLine, keyof BurnFigures | 'warm' | 'warmUntil'>,
-  served: { burn: number | null },
+  served: { burn: number | null; dollars: number | null },
   lastRefreshAt: string | null,
 ): UndatedLine => {
   const unit = burnUnitOf(line.accountId);
   const burn = unit === null ? null : served.burn;
   const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
-  return { ...line, burn, ...burnReadingOf(line.accountId, burn, unit), warm: warmAt(warmUntil), warmUntil };
+  return { ...line, burn, ...burnReadingOf(line.accountId, burn, unit), burnUsd: burnUsdOf(served.dollars, unit, line.model), warm: warmAt(warmUntil), warmUntil };
 };
 /**
  * The newest use across a row's conversation pins, its display pin's and its lines', which the route answers as the
@@ -423,9 +438,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const unit = pinned ? burnUnitOf(spec.accountId) : null;
   // Drawn whatever the spec says, except on a fixed row, so pinning or the account's kind never shifts the stream the
   // rows after this one read. A row's burn is the per-hour figure the wire answers for its unit: dollars on the usd
-  // roll, a share of the account's 5-hour window on the other.
+  // roll, a share of the account's 5-hour window on the other. A plan pin answers the usd roll as its dollar burn.
   const burnRoll = written ? written.burn : rng.float(0.01, 0.9);
-  const burnUsdRoll = written ? written.burn : rng.float(0.01, 0.5);
+  const burnUsdRoll = written ? written.burnUsd : rng.float(0.01, 0.5);
   const burnAtRoll = ago((written ? written.burnAtMinutes : rng.int(2, 40)) * MINUTE);
   const lastInputRoll = written ? written.lastInputTokens : rng.int(500, 20_000);
   const lastRefreshRoll = ago((written ? written.lastRefreshMinutes : rng.int(2, 40)) * MINUTE);
@@ -459,6 +474,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     burn,
     burnAt: pinned ? burnAtRoll : null,
     ...burnReadingOf(spec.accountId, burn, unit),
+    burnUsd: burnUsdOf(burnUsdRoll, unit, spec.model),
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
@@ -500,6 +516,7 @@ SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
   agentContexts: [],
+  burnUsd: null,
   companion: 'reporting',
   companionSince: null,
   createdAt: null,
@@ -692,6 +709,7 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 // their last use and their last refresh. The row and main's line read warm off the row's last refresh, as the route
 // reads both off one pin, before the row's last use moves to the newest across its pins.
 SESSIONS.forEach((pin, i) => {
+  const display = { burn: pin.burn, dollars: dollarBurnOf(pin), lastInputTokens: pin.lastInputTokens };
   pin.agentContexts = datedLines(
     pin.createdAt,
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
@@ -700,11 +718,11 @@ SESSIONS.forEach((pin, i) => {
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
-        return [pinLine(line, { burn: pin.burn }, pin.lastRefreshAt)];
+        return [pinLine(line, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && sessionSpec[i].writtenSubagents?.[j - 2] === ENDED_SUBAGENT;
       const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
-      return [pinLine(line, servedBeside(pin, line, pin.createdAt), line.lastUsedAt)];
+      return [pinLine(line, servedBeside(display, line, pin.createdAt), line.lastUsedAt)];
     }),
   );
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
@@ -713,19 +731,20 @@ SESSIONS.forEach((pin, i) => {
 
 /**
  * A written row that names no fork, no cycle, no runway, no mark and no shed stamp: its lines priced as the route
- * prices a display pin's, the line its caller lists first at the row's burn and the others beside it, and dated from
- * its first-seen time, its figures, its burn reading and its pin's instant off that first line, warm off it and last
- * used at the newest of its lines, each line refreshed at its last use, its summary off its session's recipes, and its
- * last request off the activity fold. The engine holds no record of its main, so it reads no lifecycle word. A row
- * passes a companion or a presence only where a mod reports.
+ * prices a display pin's, the line its caller lists first at the row's burn and `dollars`, its dollar burn per hour,
+ * and the others beside it, and dated from its first-seen time, its figures, its burn reading and its pin's instant
+ * off that first line, warm off it and last used at the newest of its lines, each line refreshed at its last use, its
+ * summary off its session's recipes, and its last request off the activity fold. The engine holds no record of its
+ * main, so it reads no lifecycle word. A row passes a companion or a presence only where a mod reports.
  */
 const writtenRow = (
-  row: Pick<Session, 'agentId' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string },
+  { dollars, ...row }: Pick<Session, 'agentId' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string; dollars: number },
   lines: Parameters<typeof pinLine>[0][],
 ): Session => {
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
-  const priced = lines.map((l, j) => pinLine(l, j === 0 ? { burn: row.burn } : servedBeside({ burn: row.burn, lastInputTokens: lines[0].lastInputTokens }, l, row.createdAt), l.lastUsedAt));
+  const display = { burn: row.burn, dollars, lastInputTokens: lines[0].lastInputTokens };
+  const priced = lines.map((l, j) => pinLine(l, j === 0 ? display : servedBeside(display, l, row.createdAt), l.lastUsedAt));
   const line = priced[0];
   const agentContexts = datedLines(row.createdAt, key, priced);
   const seen = ledgered.get(key);
@@ -736,6 +755,7 @@ const writtenRow = (
     burnAt: line.lastUsedAt,
     burnEquivalent: line.burnEquivalent,
     burnUnit: line.burnUnit,
+    burnUsd: line.burnUsd,
     burnWindow: line.burnWindow,
     cacheTtlMs: line.cacheTtlMs,
     companion: row.companion ?? 'none',
@@ -779,6 +799,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   burnAt: null,
   burnEquivalent: null,
   burnUnit: null,
+  burnUsd: null,
   burnWindow: null,
   cacheTtlMs: null,
   companion: 'none',
@@ -805,14 +826,15 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
 /**
  * Studio's notebook sessions in work, pinned there while the slow-down holds it: the slowed one with its subagent, whose
  * main pin has the cycle its turns since the placement give, the two the round marked and the one whose turn opened the
- * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed. No recipe warms them.
- * They are written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls.
+ * span, whose pins have none yet. Each burn is the main pin's demand at the account's half speed, and each `burnUsd`
+ * that pin's dollars an hour. No recipe warms them. They are written after the recipes rather than rolled, so every
+ * drawn row and recipe keeps its rolls.
  */
-const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number; cycleMs: number | null; sessionId: string }[] = [
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.0125, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0135, cycleMs: null, sessionId: MARKED_SESSION_IDS[0] },
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.014, cycleMs: null, sessionId: MARKED_SESSION_IDS[1] },
-  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0113, cycleMs: null, sessionId: OPENING_SESSION_IDS[1] },
+const SLOWED_PINS: { agents: { agentId: string; model: string }[]; burn: number; burnUsd: number; cycleMs: number | null; sessionId: string }[] = [
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }, { agentId: '7b2e', model: HAIKU }], burn: 0.0125, burnUsd: 0.31, cycleMs: 42_000, sessionId: SLOWED_SESSION_ID },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0135, burnUsd: 0.33, cycleMs: null, sessionId: MARKED_SESSION_IDS[0] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.014, burnUsd: 0.35, cycleMs: null, sessionId: MARKED_SESSION_IDS[1] },
+  { agents: [{ agentId: 'main', model: 'claude-sonnet-5-5' }], burn: 0.0113, burnUsd: 0.28, cycleMs: null, sessionId: OPENING_SESSION_IDS[1] },
 ];
 // Every pin of the account reads the window's runway: until its burn carries the utilization to the pool's ceiling.
 const studioFive = accountById.get('studio')?.windows.find((w) => w.id === '5h');
@@ -847,7 +869,7 @@ SLOWED_PINS.forEach((pin, k) => {
     };
   });
   SESSIONS.push({
-    ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, keyId: 'notebook', sessionId: pin.sessionId }, lines),
+    ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, dollars: pin.burnUsd, keyId: 'notebook', sessionId: pin.sessionId }, lines),
     cycleMs: pin.cycleMs,
     factor: studioSlowed.factor,
     lastRequestAt: rows[0].at,
@@ -896,25 +918,26 @@ if (FLEET_PINS.length > 0) {
     const pinnedAt = runStart(fleetRows.filter((r) => r.canonicalModel === pin.canonicalModel)).at;
     return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
   });
-  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
+  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, dollars: FLEET_BURN, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
 
 /**
  * The approved Ultra's session on bench, pinned on its newest turn, a Sonnet one inside the pool's affinity window:
  * its poll names no 5-hour window, so its burn is a share of the 7-day window. The workshop pool keeps no cache warm,
  * so no recipe warms it. Written after the recipes rather than rolled, so every drawn row and recipe keeps its rolls,
- * the burn a figure of its own.
+ * the burn and its dollars figures of their own.
  */
 const workshopRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'bench' && r.sessionId === WORKSHOP_SESSION_ID);
 const WORKSHOP_PIN = workshopRows[0];
 const WORKSHOP_BURN = 0.0021;
+const WORKSHOP_BURN_USD = 0.19;
 {
   const lastAttempt = servingAttempt(WORKSHOP_PIN)!;
   const createdAt = workshopRows[workshopRows.length - 1].at;
   // A pin holds one model, so the line's pin was written at the session's oldest turn on that model.
   const pinnedAt = workshopRows.filter((r) => r.canonicalModel === WORKSHOP_PIN.canonicalModel).at(-1)!.at;
   const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
-  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
+  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, dollars: WORKSHOP_BURN_USD, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
@@ -1002,13 +1025,14 @@ const WRITTEN_SESSIONS = [
       burn: AUXILIARY_ONLY_BURN,
       companion: 'reporting',
       createdAt: AUXILIARY_ONLY_CREATED_AT,
+      dollars: AUXILIARY_ONLY_BURN,
       keyId: 'laptop',
       presenceAgeSeconds: 9,
       sessionId: AUXILIARY_ONLY_SESSION_ID,
     },
     [auxiliaryOnlyLine],
   ),
-  writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, createdAt: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
+  writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, createdAt: NO_MOD_CREATED_AT, dollars: NO_MOD_BURN, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
 // Each row carries its own fold of the request seed at the story's clock, the spend its count lives in among it, so a

@@ -487,13 +487,14 @@ interface BurnSum {
   fableEquivalent: (number | null)[];
   fiveHour: (number | null)[];
   fiveHourEquivalent: (number | null)[];
+  planUsd: number;
   sevenDay: (number | null)[];
   tokens: number;
   uncached: number;
   usd: number;
   week: (number | null)[];
 }
-const emptyBurn = (): BurnSum => ({ cached: 0, equivalent: [], fableEquivalent: [], fiveHour: [], fiveHourEquivalent: [], sevenDay: [], tokens: 0, uncached: 0, usd: 0, week: [] });
+const emptyBurn = (): BurnSum => ({ cached: 0, equivalent: [], fableEquivalent: [], fiveHour: [], fiveHourEquivalent: [], planUsd: 0, sevenDay: [], tokens: 0, uncached: 0, usd: 0, week: [] });
 
 /** How many sessions the session grouping keeps, the route's cut. */
 const BURN_SESSIONS = 20;
@@ -532,7 +533,10 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
     s.cached += r.tokens.cacheRead;
     s.tokens += tokens;
     s.uncached += r.tokens.uncachedInput;
-    s.usd += oauth && !billed ? 0 : r.costUsd;
+    // The route splits a row's dollars by its funding: a plan row's list dollars, priced at the revision in force at
+    // it, to the plan side, and every other row's to the billed side. A free classifier call adds the zero it stored.
+    if (oauth && !billed) s.planUsd += r.costUsd;
+    else s.usd += r.costUsd;
     // A row with no token has nothing to price, as the route reads it: a failed request on a model the cost model has
     // no weight for never nulls a priced bucket.
     if (tokens === 0) continue;
@@ -588,6 +592,7 @@ export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, f
         fiveHourShare: lacks('five_hour') ? null : share(s.fiveHour),
         group,
         modelWeekShare: share(s.week),
+        planUsd: s.planUsd,
         sevenDayShare: lacks('seven_day') ? null : share(s.sevenDay),
         tokens: Math.round(s.tokens),
         uncachedTokens: Math.round(s.uncached),

@@ -132,6 +132,29 @@ function fundedUnit(funding: Funding, unit: UnitPosition, p: { dollars: number; 
   return { figure: p.figure, hint: p.hint, kind: unit === 'native' ? 'equivalent' : 'equivalent_dollars', reason: p.reason, usd };
 }
 
+/** The dash's title of a plan-funded rate under Billed dollars. */
+export const RATE_NOTHING_BILLED_TITLE = 'Nothing billed: the plan pays this traffic';
+
+/** A rate under a Unit position: its figure, a dash with why, or null where the route answered no figure for it. */
+export type RateReading = { kind: 'dash'; title: string } | { kind: 'dollars'; usd: number } | { figure: number; kind: 'equivalent' } | null;
+
+/**
+ * A rate under a Unit position, by `fundedUnit`'s rule. `side` is who pays the traffic the rate measures, `equivalent`
+ * the plan side's Pro-week figure per time, `planUsd` its list dollars per time and `billedUsd` the billed side's
+ * dollars per time, the time base the caller's own. A plan rate reads the Pro-week figure under Native, its list
+ * dollars under All in dollars and Dollar equivalent, and a dash under Billed dollars. A billed rate reads its
+ * dollars under Native, All in dollars and Billed dollars, and a dash under Dollar equivalent.
+ */
+export function rateUnder(unit: UnitPosition, rate: { billedUsd: number | null; equivalent: number | null; planUsd: number | null; side: 'billed' | 'plan' }): RateReading {
+  if (rate.side === 'billed') {
+    if (unit === 'equivalent') return { kind: 'dash', title: NO_EQUIVALENT_TITLE };
+    return rate.billedUsd === null ? null : { kind: 'dollars', usd: rate.billedUsd };
+  }
+  if (unit === 'usd') return { kind: 'dash', title: RATE_NOTHING_BILLED_TITLE };
+  if (unit === 'native') return rate.equivalent === null ? null : { figure: rate.equivalent, kind: 'equivalent' };
+  return rate.planUsd === null ? null : { kind: 'dollars', usd: rate.planUsd };
+}
+
 /** `hint` is `shareHint` over the row, composed by the surface that holds the account and the cost model. */
 export function costUnitOf(r: Pick<RequestLog, 'attempts' | 'costEquivalent' | 'costShares' | 'costUsd' | 'shareReason' | 'tier'>, unit: UnitPosition, hint: string | null): CostUnit {
   const { costUsd: usd } = r;
