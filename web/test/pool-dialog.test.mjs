@@ -259,6 +259,51 @@ test('text the browser cannot parse in Max idle holds the save under its sentenc
   assert.equal(statusOf(container), 'Save is held: Max idle (s) is a whole number from 0 to 31,536,000.');
 });
 
+test('text the browser cannot parse in a Daily budget holds the save, where an emptied budget saves as none', async () => {
+  // The pool all's member primary opens with no daily budget (`web/src/mock/pools.ts`).
+  const pool = pools.find((p) => p.id === 'all');
+  assert.ok(pool, 'the mock holds the pool all');
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  const daily = container.querySelector('dialog[open] input[aria-label="Daily budget for primary, USD"]');
+  type(daily, '12');
+  type(daily, '');
+  assert.equal(statusOf(container), 'Every group saves together.', 'an emptied budget is none');
+  Object.defineProperty(daily, 'validity', { configurable: true, value: { badInput: true } });
+  type(daily, '');
+  assert.equal(statusOf(container), 'Save is held: A budget is a dollar amount above 0. Leave it empty for no budget.');
+});
+
+test('an emptied Hold (s) leaves the slow-down preview on the hold the dialog opened with, while the field holds the save', async () => {
+  // The pool work slows its member studio to half speed and stores a hold of 120 s (`web/src/mock/pools.ts`).
+  const pool = pools.find((p) => p.id === 'work');
+  assert.ok(pool?.slowDown, 'the mock holds the pool work with its slow-down on');
+  const { container, draw } = mount();
+  // Every field of the Slow-down group is expert, so opening on it turns the expert view on.
+  await draw(poolDialog({ accounts: accountsRead(accounts), initialGroup: 'slowDown', pool }));
+  const preview = () => container.querySelector('dialog[open] .slow-down-preview')?.textContent ?? '';
+  const opened = preview();
+  assert.ok(opened.endsWith('up to 120 s.'), `the preview names the stored hold: ${opened}`);
+  type(fieldIn(container, 'Hold (s)')?.querySelector('input'), '');
+  assert.equal(statusOf(container), 'Save is held: Hold (s) is a whole number from 1 to 300.');
+  assert.equal(preview(), opened, 'the preview keeps the stored hold');
+});
+
+test("a ticked member's emptied Priority stands last among the members and above every account that is not one", async () => {
+  // The pool all holds nightly, primary and secondary at 0 and Overflow workspace at 1, and contract is the first
+  // account by label outside it (`web/src/mock/pools.ts`).
+  const pool = pools.find((p) => p.id === 'all');
+  assert.ok(pool, 'the mock holds the pool all');
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  const priority = container.querySelector('dialog[open] input[aria-label="Priority for primary"]');
+  act(() => priority?.focus());
+  type(priority, '');
+  act(() => priority?.blur());
+  const rows = [...container.querySelectorAll('dialog[open] .members-table tbody tr')].slice(0, 5).map((tr) => [tr.querySelector('.members-table__name')?.textContent, tr.querySelector('input[type="checkbox"]')?.checked ?? false]);
+  assert.deepEqual(rows, [['nightly', true], ['secondary', true], ['Overflow workspace', true], ['primary', true], ['contract', false]]);
+});
+
 test('a new pool opens with the switch to keep prompt caches warm off, and free to turn on', async () => {
   const { container, draw } = mount();
   await draw(poolDialog({ accounts: accountsRead(accounts), pool: null }));

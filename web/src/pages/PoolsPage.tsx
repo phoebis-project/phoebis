@@ -53,6 +53,8 @@ const percentField = (share: number | null) => (share === null ? null : percentO
 const shareField = (percent: number | null) => (percent === null ? null : percent / 100);
 /** A required number as the save reads it: an emptied field is NaN, which `poolRefusals` holds under its sentence. */
 const held = (value: number | null) => value ?? Number.NaN;
+/** A field's figure where it reads a number, and null for an emptied entry or unparsable text. */
+const finiteOrNull = (value: number | null) => (value !== null && Number.isFinite(value) ? value : null);
 /** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
 const CEILING_PERCENT = { max: 100, min: 50 } as const;
 const CAP_PERCENT = { max: 100, min: 10 } as const;
@@ -149,8 +151,12 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
   { value: 'never', title: 'Never', body: 'treat an account in extra usage as unavailable until its window resets' },
 ];
-/** Members first, lowest priority number first, then alphabetically. Non-members trail alphabetically. */
-const orderedAccountIds = (accounts: Account[], members: Record<string, number | null>): string[] => orderRows(accounts, (a) => members[a.id] ?? null, 'asc', (a) => a.label).map((a) => a.id);
+/**
+ * Members first, lowest priority number first, then alphabetically. A member whose priority field reads no number
+ * follows the members that have one, so it stays among the members. Non-members trail alphabetically.
+ */
+const orderedAccountIds = (accounts: Account[], members: Record<string, number | null>): string[] =>
+  orderRows(accounts, (a) => (!(a.id in members) ? null : (finiteOrNull(members[a.id]) ?? Number.POSITIVE_INFINITY)), 'asc', (a) => a.label).map((a) => a.id);
 const AFFINITY_HINT = 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.';
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
 const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
@@ -1010,23 +1016,35 @@ function WordedBadge({ badge, tone }: { badge: StandingBadge; tone: 'serious' | 
   );
 }
 
+type EngineNumberKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
 /** The engine's settings as the dialog holds them, each number as its field reports it. */
 type EngineForm = { [K in keyof PoolEngineFields]: PoolEngineFields[K] extends number ? number | null : PoolEngineFields[K] };
 
-/** The engine's settings as the save and the presets read them. */
-const engineInput = (e: EngineForm): PoolEngineFields => ({
+/** The engine's settings, each number through `numberOf`, by default as the save reads it, an emptied entry as NaN. */
+const engineInput = (e: EngineForm, numberOf: (key: EngineNumberKey) => number = (key) => held(e[key])): PoolEngineFields => ({
   ...e,
-  burnAverageSeconds: held(e.burnAverageSeconds),
-  inFlightCap: held(e.inFlightCap),
-  overageMoveGraceMinutes: held(e.overageMoveGraceMinutes),
-  retryInPlaceSeconds: held(e.retryInPlaceSeconds),
-  returnToPlanDwellSeconds: held(e.returnToPlanDwellSeconds),
-  shedCap: held(e.shedCap),
-  shedDwellSeconds: held(e.shedDwellSeconds),
-  slowDownHoldSeconds: held(e.slowDownHoldSeconds),
-  slowDownStretchSeconds: held(e.slowDownStretchSeconds),
-  windDownMinutes: held(e.windDownMinutes),
-  windowCeiling: held(e.windowCeiling),
+  burnAverageSeconds: numberOf('burnAverageSeconds'),
+  inFlightCap: numberOf('inFlightCap'),
+  overageMoveGraceMinutes: numberOf('overageMoveGraceMinutes'),
+  retryInPlaceSeconds: numberOf('retryInPlaceSeconds'),
+  returnToPlanDwellSeconds: numberOf('returnToPlanDwellSeconds'),
+  shedCap: numberOf('shedCap'),
+  shedDwellSeconds: numberOf('shedDwellSeconds'),
+  slowDownHoldSeconds: numberOf('slowDownHoldSeconds'),
+  slowDownStretchSeconds: numberOf('slowDownStretchSeconds'),
+  windDownMinutes: numberOf('windDownMinutes'),
+  windowCeiling: numberOf('windowCeiling'),
+});
+
+/**
+ * The input as the previews read it. A preview shows what the engine does, and the engine keeps its figure while an
+ * entry cannot be saved, so a held entry reads the figure the dialog opened with: the pool's saved one, or a new
+ * pool's default. A member ticked since the opening reads the priority a tick writes, 0.
+ */
+const previewInput = (input: CreatePoolInput, form: PoolForm, opened: PoolForm): CreatePoolInput => ({
+  ...input,
+  ...engineInput(form.engine, (key) => finiteOrNull(form.engine[key]) ?? held(opened.engine[key])),
+  members: input.members.map((m) => ({ ...m, priority: finiteOrNull(form.members[m.accountId]) ?? opened.members[m.accountId] ?? 0 })),
 });
 
 /**
@@ -1324,7 +1342,8 @@ export function PoolDialog({
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? NO_BUDGET;
-  // The one reading of the form the save, the refusals, the presets and the previews take.
+  // The one reading of the form the save, the refusals and the presets take. The previews read it through
+  // `previewInput`.
   const input: CreatePoolInput = {
     ...engineInput(form.engine),
     affinityMode: form.affinityMode,
@@ -1473,10 +1492,11 @@ export function PoolDialog({
     });
     // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
     const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
-    const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
+    const previewed = previewInput(input, form, opened);
+    const preview = shedPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now);
     // The route's factor per stored member, which a member whose account did not load is read by.
     const factorOf = new Map((pool?.members ?? []).map((m) => [m.accountId, m.factor]));
-    const slowPreview = slowDownPreview({ ...input, members: input.members.map((m) => ({ ...m, factor: factorOf.get(m.accountId) ?? null })) }, accounts);
+    const slowPreview = slowDownPreview({ ...previewed, members: previewed.members.map((m) => ({ ...m, factor: factorOf.get(m.accountId) ?? null })) }, accounts);
     return {
       identity: (
         <div className="cells">
@@ -1631,13 +1651,13 @@ export function PoolDialog({
                         </label>
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={form.members[id] ?? ''} disabled aria-label={`Priority for ${id}`} />
+                        <Input type="number" value={finiteOrNull(form.members[id]) ?? ''} disabled aria-label={`Priority for ${id}`} />
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={budgetOf(id).daily ?? ''} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
+                        <Input type="number" value={finiteOrNull(budgetOf(id).daily) ?? ''} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={budgetOf(id).monthly ?? ''} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
+                        <Input type="number" value={finiteOrNull(budgetOf(id).monthly) ?? ''} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
                       </td>
                     </tr>
                   ))}

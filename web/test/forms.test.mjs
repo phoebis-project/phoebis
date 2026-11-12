@@ -167,6 +167,11 @@ test('a number field reads empty as none and a field the browser could not parse
   assert.equal(d.typedNumber({ bad: false, text: ' 512 ' }), 512);
 });
 
+test('the discard question reads unparsable text apart from an empty field, and two unparsable entries alike', () => {
+  assert.equal(d.sameValues({ daily: Number.NaN }, { daily: null }), false, 'a budget opened as none that holds unparsable text is a change');
+  assert.equal(d.sameValues({ daily: Number.NaN }, { daily: Number.NaN }), true);
+});
+
 const key = d.decodeKey(fixture('keys').keys[0]);
 const NOW = Date.parse('2026-09-16T14:30:00Z');
 
