@@ -180,14 +180,17 @@ const fillTitles = (name, table) => {
   results.push({ name, ok: cells.length > 0 && off.length === 0, missing: [`${cells.length} fill cells`, ...off.slice(0, 5)] });
 };
 /**
- * The declarations `pages.css` gives `selector` in its top-level rules whose selector list names it, a later rule's
- * value over an earlier one's. The smoke bundle drops the CSS and jsdom lays nothing out, so a layout rule is read
- * off the stylesheet's text. A rule under an at-rule is left out, since it holds only where its condition does, unless
- * `media` names that at-rule's head as written (`@media (min-width: 1344px)`), when the rules directly under it are
- * read in place of the top-level ones.
+ * The declarations `components.css` and `pages.css` give `selector` in their top-level rules whose selector list names
+ * it, read in the order `main.tsx` loads the two sheets, so a later rule's value wins over an earlier one's. The smoke
+ * bundle drops the CSS and jsdom lays nothing out, so a layout rule is read off the stylesheets' text. A rule under an
+ * at-rule is left out, since it holds only where its condition does, unless `media` names that at-rule's head as
+ * written (`@media (min-width: 1344px)`), when the rules directly under it are read in place of the top-level ones.
  */
 const declarationsOf = (selector, media = null) => {
-  const css = readFileSync(new URL('../src/styles/pages.css', import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const css = ['components', 'pages']
+    .map((sheet) => readFileSync(new URL(`../src/styles/${sheet}.css`, import.meta.url), 'utf8'))
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
   const read = {};
   const heads = [];
   let from = 0;
@@ -13001,8 +13004,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
 }
 {
   // The rows sit at ROW_PX offsets while the stylesheet sizes each at --body-row, so the two figures must agree.
-  const css = readFileSync(new URL('../src/styles/pages.css', import.meta.url), 'utf8');
-  const token = /--body-row:\s*(\d+(?:\.\d+)?)px/.exec(css)?.[1];
+  const token = /^(\d+(?:\.\d+)?)px$/.exec(declarationsOf('.body-block__pre')['--body-row'] ?? '')?.[1];
   results.push({ name: "/requests the row height token and the viewer's constant agree", ok: token !== undefined && Number(token) === ROW_PX, missing: [`--body-row ${token ?? 'absent'}, ROW_PX ${ROW_PX}`] });
 }
 {

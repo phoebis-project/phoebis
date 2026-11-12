@@ -2,7 +2,7 @@ import { Fragment, memo, type ReactNode, useCallback, useEffect, useLayoutEffect
 import { findOffsets, highlightJson, type Token } from '@/lib/bodies';
 import { useLatest, useResizeObserver } from '@/lib/hooks';
 
-/** One row of the mono font's line height, 12 px at 1.5. `--body-row` in pages.css carries the same figure. */
+/** One row of the mono font's line height, 12 px at 1.5. `--body-row` in components.css carries the same figure. */
 export const ROW_PX = 18;
 /** The rows drawn beyond the viewport on each side, so a scroll of a few rows meets drawn rows. */
 export const WINDOW_ROWS = 20;
