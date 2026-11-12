@@ -31,7 +31,7 @@ import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, cursorInteger, getDecision, listRoutingLog } from './routingLog';
+import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, cursorInteger, getDecision, listRoutingLog, routingCursorOf } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
@@ -589,7 +589,7 @@ export class MockApi implements Api {
   private resetBlocks: Record<string, MockBlock> = { ...RESET_BLOCKS };
   private secretRng = createRng(MOCK_SEED);
   private session: SessionInfo | null = null;
-  private sessions: Session[] = [...SESSIONS];
+  private sessions: Session[] = SESSIONS;
   // The settings name the bundle's own commit as a router built from it would. The banner reads the build off an
   // answer's header through `call` alone, which the mock never goes through, so it draws none whatever this holds.
   private settings: Settings = decodeSettings({ ...SETTINGS_WIRE, about: { ...SETTINGS_WIRE.about, build: __PHOEBIS_BUILD__ } });
@@ -888,11 +888,12 @@ export class MockApi implements Api {
     // The router's confirm clears a plan-ended flag and records the plan found again only where the confirmed profile
     // reports a plan. The mock's profile is the stored document, so a document that names a free organization keeps
     // the flag, and a confirm that keeps it starts no first poll, since the poll's schedule reads no flagged account.
-    const kept = held !== undefined && held.planEndedAt !== null && !reportsPlan(held);
-    if (held !== undefined && held.planEndedAt !== null && reportsPlan(held)) {
-      this.putAccount({ ...held, planEndedAt: null });
-      const detail = { organization_type: held.subscription?.organizationType ?? null, rate_limit_tier: held.subscription?.rateLimitTier ?? null, source: 'pairing', subscription_status: 'active' };
-      this.writeEvent('plan_restored', held.id, null, mockClock.now(), detail);
+    const flagged = held !== undefined && held.planEndedAt !== null ? held : null;
+    const kept = flagged !== null && !reportsPlan(flagged);
+    if (flagged !== null && !kept) {
+      this.putAccount({ ...flagged, planEndedAt: null });
+      const detail = { organization_type: flagged.subscription?.organizationType ?? null, rate_limit_tier: flagged.subscription?.rateLimitTier ?? null, source: 'pairing', subscription_status: 'active' };
+      this.writeEvent('plan_restored', flagged.id, null, mockClock.now(), detail);
     }
     if (!kept) this.firstPolls.set(pairing.accountId, mockClock.now());
     return latency({ accountId: pairing.accountId, firstPollInFlight: !kept, status: 'confirmed' }, 250);
@@ -1359,11 +1360,11 @@ export class MockApi implements Api {
     const unknown = query.kinds?.find((k) => !ROUTING_LOG_KINDS.includes(k));
     if (unknown !== undefined) return Promise.reject(new ApiError(400, `unknown kind ${unknown}`, null));
     if (query.limit !== undefined && !(Number.isInteger(query.limit) && query.limit >= 1 && query.limit <= 200)) return Promise.reject(new ApiError(400, 'limit is 1 to 200', null));
+    const cursor = query.cursor === undefined ? undefined : routingCursorOf(query.cursor);
+    if (cursor === null) return Promise.reject(new ApiError(400, 'cursor is <at>:<rank>:<id>', null));
     const { routingEvents, summaries } = ledger();
     // The writes' rows are the ledger's too, so a fresh installation lists none of them.
-    const page = listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: emptyStore() ? [] : this.written });
-    if (page === null) return Promise.reject(new ApiError(400, 'cursor is <at>:<rank>:<id>', null));
-    return latency(page);
+    return latency(listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: emptyStore() ? [] : this.written }, cursor));
   }
 
   listSessions() {

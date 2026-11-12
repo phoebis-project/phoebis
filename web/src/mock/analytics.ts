@@ -17,10 +17,10 @@ import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { earliest } from './lead';
 import { keyById } from './pools';
-import { bandAt, freesPlanShare, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
+import { bandAt, freedPart, requestsIn, sumEach, sumOf, sumSplit, tokensIn } from './requests';
 import { createRng } from './rng';
 import { round } from './round';
-import { readingPairAt, type EventSeed } from './routingLog';
+import { forcedReasons, readingPairAt, type EventSeed } from './routingLog';
 import { TABLES } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
@@ -206,6 +206,7 @@ const TOKEN_KINDS: Record<keyof CostSplit, (u: Usage) => Usage> = {
 /** The rows' figures, priced once: neither a row nor the cost model changes after load, and a hand-built row is a key
  *  of its own. */
 const pricedRows = new WeakMap<HourlyRollup, Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null>>();
+const fiveHourRows = new WeakMap<HourlyRollup, number | null>();
 
 /**
  * A row's Pro-week figures at the row's hour: its four token kinds, and the kept-warm credit's cache read and cache
@@ -213,7 +214,7 @@ const pricedRows = new WeakMap<HourlyRollup, Record<keyof CostSplit | 'keptRead'
  * band's reading is missing. A row of freed classifier calls reads zero on each figure, as the route answers it.
  */
 function figuresOf(r: HourlyRollup): Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null> {
-  if (freesPlanShare(r.classifier)) return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
+  if (freedPart(r)) return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
   const known = pricedRows.get(r);
   if (known) return known;
   const inside = bandAt(r.model, Date.parse(r.hour));
@@ -473,9 +474,12 @@ const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, ca
  * Pro-week figure is. A freed classifier part reads zero, and a model without a weight null.
  */
 const fiveHourEquivalentOf = (r: HourlyRollup): number | null => {
-  if (freesPlanShare(r.classifier) && r.funding === 'plan') return 0;
+  if (freedPart(r)) return 0;
+  if (fiveHourRows.has(r)) return fiveHourRows.get(r) ?? null;
   const inside = bandAt(r.model, Date.parse(r.hour));
-  return inside === null ? null : shareIn(TABLES, 'five_hour', anchorTier(TABLES), r.model, usageOf(r), inside);
+  const figure = inside === null ? null : shareIn(TABLES, 'five_hour', anchorTier(TABLES), r.model, usageOf(r), inside);
+  fiveHourRows.set(r, figure);
+  return figure;
 };
 
 /** A bucket's sums, each window's shares and the figures kept per row so one unpriced row nulls the window, as the
@@ -640,6 +644,10 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
     if (slowed.length > 0) slowedMs[slotOf(Date.parse(r.at))]?.push(sumOf(slowed, (w) => w.heldMs));
   }
   const movesByReasonAndFit: Record<string, Record<string, number>> = {};
+  const addMove = (reason: string, fit: string, n: number) => {
+    const fits = (movesByReasonAndFit[reason] ??= {});
+    fits[fit] = (fits[fit] ?? 0) + n;
+  };
   const points = starts.map((at, i): RewritePoint => {
     let rewriteTokens = 0;
     for (const { hour, r } of moved[i]) {
@@ -647,17 +655,14 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
       rewriteTokens += r.pins.migratedIn * (18_000 + (turn % 5) * 9_000);
       const reason = MOVE_TURNS[turn % MOVE_TURNS.length];
       const fit = FIT_TURNS[turn % FIT_TURNS.length];
-      const fits = (movesByReasonAndFit[reason] ??= {});
-      fits[fit] = (fits[fit] ?? 0) + r.pins.migratedIn;
+      addMove(reason, fit, r.pins.migratedIn);
     }
     return { at: iso(at), rewriteTokens };
   });
   // The ledger files a move in its hour's row, so the range keeps it wherever it keeps that hour's synthetic moves.
   for (const e of events) {
-    if (e.kind !== 'pin_migrated' || !Array.isArray(e.detail.reasons) || starts[slotOf(startOfHour(Date.parse(e.at)))] === undefined) continue;
-    const fits = (movesByReasonAndFit[typeof e.detail.reason === 'string' ? e.detail.reason : 'unknown'] ??= {});
-    const fit = typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown';
-    fits[fit] = (fits[fit] ?? 0) + 1;
+    if (forcedReasons(e) === null || starts[slotOf(startOfHour(Date.parse(e.at)))] === undefined) continue;
+    addMove(typeof e.detail.reason === 'string' ? e.detail.reason : 'unknown', typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown', 1);
   }
   const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
   const held = starts.map((at, i): HeldPoint => ({ at: iso(at), heldMs: sumOf(slowedMs[i], (x) => x), requests: slowedMs[i].length }));
@@ -871,13 +876,11 @@ export function termEndOf(a: Account, at: number): number | null {
  * with the pair each event carries and, for an account whose term ended in range, one `term_ended` reset per weekly
  * window at the end, its share the last reading of the window's quota history strictly before the end, as the ledger
  * reads `observed_at < end`. Its pair is the one the router's stored reading of the window carries, for which the
- * window's newest sample of the history stands in: the pair the story stores for a reading at that sample's instant
- * where the account carries no plan-ended flag or the sample lies strictly before the flag, and null for both where it
- * lies at or after the flag or the history holds no sample, since the stored profile names the plan up to the flag.
- * A reset at or after an end the read has reached is left out, an end before the range's start included, as the ledger
- * drops the resets at or after every end it lists, so the week the end cut short counts once. The `term_ended` rows
- * build for an end inside the range alone. The term is read at the range's end capped at the story's now, and the
- * windows run in key order, the 7-day window first.
+ * window's newest sample of the history stands in: the pair the story stores for a reading at that sample's instant,
+ * and null for both where the history holds no sample. A reset at or after an end the read has reached is left out, an
+ * end before the range's start included, as the ledger drops the resets at or after every end it lists, so the week
+ * the end cut short counts once. The `term_ended` rows build for an end inside the range alone. The term is read at the
+ * range's end capped at the story's now, and the windows run in key order, the 7-day window first.
  */
 export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], history: QuotaHistory[], span: Range, filters: Pick<AnalyticsQuery, 'accountIds'> = {}): UnusedAllowanceAnswer {
   const fromMs = Date.parse(span.from);
@@ -901,14 +904,13 @@ export function unusedAllowanceOf(events: EventSeed[], accounts: Account[], hist
         add(d.window, { observedAt: e.at, plan: d.plan, resetAt: iso(d.reset_at), shareLeft: Math.min(1, Math.max(0, 1 - d.utilization_before)), source: d.observed, tier: d.tier });
       }
       if (ended !== null) {
-        const flagged = a.planEndedAt === null ? null : Date.parse(a.planEndedAt);
         for (const h of history) {
           const window = WINDOW_KEY[h.windowId] ?? h.windowId;
           if (h.accountId !== a.id || !isWeekly(window)) continue;
           const before = h.samples.filter((x) => Date.parse(x.at) < ended);
           const last = before[before.length - 1];
           const stored = h.samples.length === 0 ? null : Date.parse(h.samples[h.samples.length - 1].at);
-          const { plan, tier } = stored !== null && (flagged === null || stored < flagged) ? readingPairAt(a.id, stored) : { plan: null, tier: null };
+          const { plan, tier } = stored === null ? { plan: null, tier: null } : readingPairAt(a.id, stored);
           if (last) add(window, { observedAt: last.at, plan, resetAt: iso(ended), shareLeft: Math.min(1, Math.max(0, 1 - last.utilization)), source: 'term_ended', tier });
         }
       }

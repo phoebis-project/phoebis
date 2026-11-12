@@ -16,7 +16,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
@@ -248,6 +248,9 @@ const inPlaceOf = (spec: Spec): 'reset' | 'rewrite' | 'slow_down' | null => {
   const place = spec.hold?.place;
   return spec.kind === 'held' && (place === 'reset' || place === 'rewrite' || place === 'slow_down') ? place : null;
 };
+
+/** Whether the decision left a live pin: a rule's move, or a placement the pin's account state forced. */
+const leftPin = (spec: Spec) => spec.kind === 'moved' || spec.reasons !== undefined;
 
 /**
  * The windows a decision read on a member: the attempt's own reading on the account it went to, so the card and the
@@ -1132,10 +1135,12 @@ const recordShedOf = (shed: PinState['shed']): RecordPin['shed'] => (shed === nu
 /** The pin step's facts on the row it read, which follow its `found` fact. */
 const pinFacts = (state: PinState, idleMs: number, refreshAgeMs: number) => [fact('account_id', state.accountId, null, state.accountId), fact('epoch', state.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', refreshAgeMs, 'ms')];
 /** The reasons a `pin_expired` event's release names, none where the event carries no list. */
-const releasedReasons = (e: RequestEvent | undefined): string[] => {
+const releasedReasons = (e: Pick<RequestEvent, 'detail'> | undefined): string[] => {
   const reasons = e?.detail?.reasons;
   return Array.isArray(reasons) ? reasons.map(String) : [];
 };
+/** The pin's list a `pin_migrated` event carries where the state of the pin's account forced the move, else null. */
+export const forcedReasons = (e: Pick<RequestEvent, 'detail' | 'kind'>): string[] | null => (e.kind === 'pin_migrated' && Array.isArray(e.detail?.reasons) ? releasedReasons(e) : null);
 const laneOf = (r: RequestLog) => `${r.canonicalModel}|${r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard'}|${r.shape.thinkingType ?? 'none'}|${r.shape.effort ?? '-'}`;
 
 /**
@@ -1251,7 +1256,7 @@ function moveWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, p
   const r = spec.request;
   const steps: WalkStep[] = [];
   let movedAmong: string[] | undefined;
-  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || spec.kind === 'moved' || spec.reasons !== undefined || inPlaceOf(spec) !== null)) {
+  if (pin?.found === 'live' && portable && !spec.failover && (spec.kind === 'renewed' || leftPin(spec) || inPlaceOf(spec) !== null)) {
     const source = candidates.find((c) => c.accountId === pin.accountId);
     const endsAt = source?.term?.endsAt ? Date.parse(source.term.endsAt) : null;
     const skip = r.kind === 'count_tokens' ? 'count' : endsAt !== null && endsAt <= spec.at ? 'subscription_ended' : null;
@@ -1505,7 +1510,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     exhaustion,
     // The router names the account a decision left on a move or a failover's landing alone, so a placement that
     // replaced an idle row names none.
-    fromAccountId: spec.kind === 'moved' || spec.failover || spec.reasons ? (spec.from ?? null) : null,
+    fromAccountId: leftPin(spec) || spec.failover ? (spec.from ?? null) : null,
     hold,
     inOverage: chosen?.inOverage ?? false,
     kind: spec.kind,
@@ -1515,7 +1520,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
     pinWritten,
     refusal: spec.refusal ?? null,
     reservation: booking?.reservation ?? null,
-    rule: spec.kind === 'moved' || spec.reasons ? (spec.rule ?? null) : null,
+    rule: leftPin(spec) ? (spec.rule ?? null) : null,
     rung: spec.rung ?? null,
     shedMarks: spec.round ? spec.round.marks : null,
     strategy: pool.strategy,
@@ -1606,7 +1611,7 @@ function pinEventsOf(spec: Spec, pinning: boolean): RecordOutcome['pinEvents'] {
   const r = spec.request;
   const events = REQUEST_EVENTS.get(r.id) ?? [];
   const attempt = r.attempts[spec.attempt - 1];
-  const moved = attempt && events.find((e) => e.kind === 'pin_migrated' && e.at === attempt.startedAt && e.accountId === attempt.accountId);
+  const moved = attempt && migrationAt(r, attempt);
   if (moved && pinning && (spec.kind === 'placed' || spec.kind === 'moved')) return [{ kind: 'pin_migrated', reason: String(moved.detail?.reason ?? '') }];
   const expired = spec.seq === 1 ? events.find((e) => e.kind === 'pin_expired') : undefined;
   const reasons = releasedReasons(expired);
@@ -1763,8 +1768,8 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const moved = s?.moved ?? null;
     // A move the state of the pin's account forced carries the pin's list on its event, and its word can be a rule's
     // or a failover's, so the list decides it ahead of the word: the decision stays a placement.
-    const forced = REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reasons;
-    const reasons = Array.isArray(forced) ? forced.map(String) : undefined;
+    const migration = migrationAt(r, a);
+    const reasons = (migration && forcedReasons(migration)) ?? undefined;
     const failover = moved !== null && reasons === undefined && FAILOVER_REASONS.includes(moved) ? moved : undefined;
     const rule = moved !== null && failover === undefined ? moved : undefined;
     // A request that can hold no pin renews none and moves none: it is placed.
@@ -2681,11 +2686,14 @@ const EARLIER_PAIRS = new Map<string, EarlierPair>([
 ]);
 
 /**
- * The pair the story stores for a reading of the account taken at `at`: the account's earlier pair for an instant at
- * or before its `through`, else its current one. A term's end reads it beside the weekly resets, since its pair is the
- * one the window's stored reading carries.
+ * The pair the story stores for a reading of the account taken at `at`: null for both at or after a plan-ended flag,
+ * since the stored profile names the plan up to the flag, else the account's earlier pair for an instant at or before
+ * its `through`, else its current one. A term's end reads it beside the weekly resets, since its pair is the one the
+ * window's stored reading carries.
  */
 export function readingPairAt(accountId: string, at: number): ReadingPair {
+  const flagged = accountById.get(accountId)?.planEndedAt ?? null;
+  if (flagged !== null && at >= Date.parse(flagged)) return { plan: null, tier: null };
   const earlier = EARLIER_PAIRS.get(accountId);
   return earlier !== undefined && at <= earlier.through ? earlier.pair : currentPair(accountId);
 }
@@ -2804,7 +2812,7 @@ function buildEvents(): RoutingEvent[] {
     const record = s && DECISIONS.get(`${s.requestId}/${s.seq}`);
     const epoch = record?.outcome.pinWritten?.epoch;
     if (epoch !== undefined && epoch !== null) seed.detail.epoch = epoch;
-    const landed = record?.outcome.kind === 'moved' || Array.isArray(seed.detail.reasons) ? record?.candidates.find((c) => c.accountId === record.outcome.accountId) : undefined;
+    const landed = record?.outcome.kind === 'moved' || forcedReasons(seed) !== null ? record?.candidates.find((c) => c.accountId === record.outcome.accountId) : undefined;
     if (landed?.fit) Object.assign(seed.detail, { binding: landed.binding, fit: landed.fit, runway_ms: landed.runwayMs });
     // A failover's event carries the cooldown that caused it, in the shape the router serializes, and a rule's move
     // none.
@@ -2955,7 +2963,7 @@ export const cursorInteger = (text: string): number | null => (/^[+-]?\d+$/.test
  * request id may hold a `/` or a `:` of its own, so the sequence, the route's 32-bit unsigned figure, is read off the
  * last `/`.
  */
-const cursorKeyOf = (cursor: string) => {
+export const routingCursorOf = (cursor: string) => {
   const first = cursor.indexOf(':');
   const second = first < 0 ? -1 : cursor.indexOf(':', first + 1);
   if (second < 0) return null;
@@ -2982,11 +2990,9 @@ const cursorKeyOf = (cursor: string) => {
  * exactly what it lists, `probe` for a probe's decision of any kind. `accounts` matches a decision's source too.
  * `limit + 1` rows are read so a cursor is offered only when a next page exists, and the counts come under a request
  * filter. The rows are the ledger's as the caller reads them: its decision summaries, its events, and the rows a mock's
- * writes recorded since, which `written` holds. A cursor the route refuses answers null, so the caller answers its 400.
+ * writes recorded since, which `written` holds.
  */
-export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { events: readonly RoutingEvent[]; summaries: readonly DecisionSummary[]; written: readonly RoutingEvent[] }): RoutingLogPage | null {
-  const cursor = query.cursor === undefined ? undefined : cursorKeyOf(query.cursor);
-  if (cursor === null) return null;
+export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { events: readonly RoutingEvent[]; summaries: readonly DecisionSummary[]; written: readonly RoutingEvent[] }, cursor: NonNullable<ReturnType<typeof routingCursorOf>> | undefined): RoutingLogPage {
   const from = query.from ? Date.parse(query.from) : now - HOUR;
   const to = query.to ? Date.parse(query.to) : now;
   // An empty list is no filter, as the client omits it from the query.

@@ -8,7 +8,7 @@ import { ACCOUNTS, accountById } from './accounts';
 import { RECONCILIATIONS } from './analytics';
 import { EXPIRED_BETWEEN_TURNS, KEEPALIVE_OVERVIEW, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS, keyById, poolById } from './pools';
-import { REQUESTS, planPaid } from './requests';
+import { REQUESTS, planPaid, warmsCaches } from './requests';
 import { RESET_BLOCKS, resetEnding, wallReset } from './resets';
 // The walls condition names its shedding round `round`, so the helper reads under another name here.
 import { round as roundTo } from './round';
@@ -31,6 +31,9 @@ const secondaryPoll = accountById.get('secondary')?.usage?.poll ?? null;
 /** The reader's lead before a refresh token's fixed end, in days. */
 const PAIRING_WARNING_DAYS = 3;
 
+/** The route's order inside a kind: by when each item began, then by subject. */
+const bySinceThenSubject = (x: AttentionItem, y: AttentionItem) => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id);
+
 /**
  * The refresh tokens near their end as the reader holds them: an item for every OAuth account whose stored end lies no
  * more than three days ahead of the story's clock or behind it, dated from three days before the end. The route holds
@@ -41,9 +44,11 @@ const PAIRING_WARNING_DAYS = 3;
  */
 const PAIRING_EXPIRING: AttentionItem[] = ACCOUNTS.flatMap((a) => {
   const end = a.kind === 'oauth' ? ms(a.credential.refreshTokenExpiresAt) : null;
-  if (end === null || NOW < end - PAIRING_WARNING_DAYS * DAY) return [];
-  return [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), detail: { account: a.id, days_left: Math.floor((end - NOW) / DAY), expires: end, label: a.label }, kind: 'pairing_expiring' as const, since: iso(end - PAIRING_WARNING_DAYS * DAY) }];
-}).sort((x, y) => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
+  if (end === null) return [];
+  const since = end - PAIRING_WARNING_DAYS * DAY;
+  if (NOW < since) return [];
+  return [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), detail: { account: a.id, days_left: Math.floor((end - NOW) / DAY), expires: end, label: a.label }, kind: 'pairing_expiring' as const, since: iso(since) }];
+}).sort(bySinceThenSubject);
 
 /**
  * A pool's exhaustion as the reader dates it from the rows: the first exhausted answer after the pool's last success,
@@ -66,7 +71,7 @@ const jobsExhausted = exhaustion('jobs');
  * pool whose keepalive policy is on, under a key that holds the keepalive permission. The keepalive overview's count
  * keeps every pool's. The rows run newest first.
  */
-const preventable = EXPIRED_BETWEEN_TURNS.filter((r) => r.poolId !== null && poolById.get(r.poolId)?.keepalive.enabled === true && r.keyId !== null && keyById.get(r.keyId)?.companionPermissions.includes('keepalive') === true);
+const preventable = EXPIRED_BETWEEN_TURNS.filter((r) => r.poolId !== null && r.keyId !== null && keyById.has(r.keyId) && warmsCaches(r.keyId, r.poolId));
 
 /** The trailing day's events of a kind, oldest first, which the ledger folds the routing conditions from. */
 const lastDay = (kind: string) => ROUTING_EVENTS.filter((e) => e.kind === kind && Date.parse(e.at) >= NOW - DAY);
@@ -236,8 +241,6 @@ function drift(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
 
 const CONDITION_ORDER: AttentionItem['kind'][] = ['meter_drift', 'wall_reached', 'destination_spent', 'shed_no_runway', 'slowed_long'];
 
-const byStart = (x: AttentionItem, y: AttentionItem): number => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id);
-
 /** The conditions the ledger folds per subscription account, each kind beside its fold. */
 const ACCOUNT_CONDITIONS: [AttentionItem['kind'], (accountId: string) => Pick<AttentionItem, 'detail' | 'since'> | null][] = [
   ['meter_drift', drift],
@@ -263,7 +266,7 @@ const CONDITIONS: AttentionItem[] = [
     const held = roundsWithoutRunway(p.id);
     return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...held, kind: 'shed_no_runway' as const, link: { id: p.id, page: 'pools' as const }, pools: [p.id], subject: { id: p.id, label: p.name, type: 'pool' as const } }] : [];
   }),
-].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || byStart(x, y));
+].sort((x, y) => CONDITION_ORDER.indexOf(x.kind) - CONDITION_ORDER.indexOf(y.kind) || bySinceThenSubject(x, y));
 
 /**
  * One item per account whose stored block holds an unused reset that ends within the settings' days, read from the
@@ -272,7 +275,7 @@ const CONDITIONS: AttentionItem[] = [
 const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
   const held = resetEnding(a.id, lookup(RESET_BLOCKS, a.id), NOW, SETTINGS_WIRE.usage.limit_reset_warning_days);
   return held ? [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), ...held, kind: 'limit_reset_ending' as const }] : [];
-}).sort(byStart);
+}).sort(bySinceThenSubject);
 
 /**
  * One item per kind but a failed certificate reload, a refresh token near its end, which holds on two accounts, and a

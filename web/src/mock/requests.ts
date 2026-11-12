@@ -27,7 +27,8 @@ import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLO
 const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
 const upstreamIds = createRng(9_191);
-const upstreamId = (prefix: string) => `${prefix}${upstreamIds.uuid().replace(/-/g, '').slice(0, 22)}`;
+const upstreamIdFrom = (stream: Rng) => (prefix: string) => `${prefix}${stream.uuid().replace(/-/g, '').slice(0, 22)}`;
+const upstreamId = upstreamIdFrom(upstreamIds);
 /** FNV-1a over a text: a figure taken from a row's own identity moves no seeded stream. */
 const hashOf = (text: string): number => {
   let hash = 2_166_136_261;
@@ -39,10 +40,7 @@ const hashOf = (text: string): number => {
  * A story attempt's upstream id, drawn from a stream seeded by the seed's id and the attempt's index, so a seed added
  * anywhere in the list moves no other row's ids. `storyRow` asks the message id first, then the request id.
  */
-const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) => string) => {
-  const own = createRng(hashOf(`${seedId}/${attempt}`));
-  return (prefix) => `${prefix}${own.uuid().replace(/-/g, '').slice(0, 22)}`;
-};
+const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) => string) => upstreamIdFrom(createRng(hashOf(`${seedId}/${attempt}`)));
 // The instants inside a request (the write, the first content, the stream's close) draw from a stream of their own,
 // so they move no draw of the rows and no hint.
 const phaseRng = createRng(3_571);
@@ -1666,10 +1664,9 @@ const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.f
 for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
 export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
 /**
- * A story row written whole, a seed flagged `unseeded`: no pass draws for it, and none seats a drawn event, an owed
- * event or a drawer branch on it.
+ * A row the seeded passes may draw for or seat a story fact on: neither a routing-log story row nor one written whole.
  */
-const handWritten = (r: Pick<RequestLog, 'id'>): boolean => UNSEEDED_IDS.has(r.id);
+const drawnRow = (r: Pick<RequestLog, 'id'>): boolean => !STORY_IDS.has(r.id) && !UNSEEDED_IDS.has(r.id);
 
 /** A summary fork rides its subagent's pin, so each fork's one attempt renewed the pin the subagent's turns hold. */
 function traceForks() {
@@ -1805,7 +1802,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   // row keeps its draws.
   let spentOwed = true;
   for (const r of REQUESTS) {
-    if (r.sessionId === null || r.kind === 'probe' || STORY_IDS.has(r.id) || handWritten(r)) continue;
+    if (r.sessionId === null || r.kind === 'probe' || !drawnRow(r)) continue;
     const events: RequestEvent[] = [];
     // The pin the event belongs to: the drawer shows a move only where these match the request's own.
     const pin = pinFieldsOf(r);
@@ -1902,6 +1899,10 @@ function storyEvents(): Map<string, RequestEvent[]> {
  */
 export const REQUEST_EVENTS: Map<string, RequestEvent[]> = buildRequestEvents();
 
+/** The pin move a request's events record for an attempt: the one that lands on its account as the attempt starts. */
+export const migrationAt = (r: Pick<RequestLog, 'id'>, a: Pick<Attempt, 'accountId' | 'startedAt'>): RequestEvent | undefined =>
+  REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId);
+
 /**
  * The obstacles a fresh placement's passed-over members are drawn from. Being ranked behind another is the usual one.
  */
@@ -1966,7 +1967,7 @@ function addStoryEvents() {
     const next = owed[0];
     if (!next) break;
     const from = lane?.accountIds.find((id) => id !== r.accountId);
-    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || STORY_IDS.has(r.id) || handWritten(r)) continue;
+    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || !drawnRow(r)) continue;
     REQUEST_EVENTS.set(r.id, [next(r, from)]);
     busy.add(pinOf(r));
     owed.shift();
@@ -1999,21 +2000,18 @@ function traceRequests() {
     if (STORY_IDS.has(r.id)) continue;
     if (UNSEEDED_IDS.has(r.id)) {
       // A written row's move is the one its own event records, as a drawn row's is.
-      const written = REQUEST_EVENTS.get(r.id) ?? [];
-      const movedOn = (a: Attempt) => written.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reason;
       r.attempts = r.attempts.map((a, i, all) => {
-        const moved = movedOn(a);
+        const moved = migrationAt(r, a)?.detail?.reason;
         return { ...a, selection: { ...undrawnTrace(r, a, i === all.length - 1), moved: typeof moved === 'string' ? moved : null } };
       });
       continue;
     }
     const pool = poolById.get(r.poolId ?? '');
     const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
-    const events = REQUEST_EVENTS.get(r.id) ?? [];
     const drawnClass = r.compaction ? 'compaction' : r.agentId !== 'main' && r.kind !== 'probe' ? 'subagent' : h.weighted([{ value: 'auxiliary', weight: 3 }, { value: 'main', weight: 16 }, { value: 'workflow', weight: 1 }]);
     r.requestClass = drawnClass;
     r.attempts = r.attempts.map((a, i, all): Attempt => {
-      const moved = events.find((e) => e.kind === 'pin_migrated' && e.at === a.startedAt && e.accountId === a.accountId)?.detail?.reason;
+      const moved = migrationAt(r, a)?.detail?.reason;
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
       const strategy = pool?.strategy ?? 'pace';
@@ -2080,7 +2078,7 @@ function identifyRequests() {
 function seedDrawerBranches() {
   const taken = new Set<string>();
   const seed = (want: (s: SelectionTrace, r: RequestLog) => boolean, trace: (s: SelectionTrace, r: RequestLog) => SelectionTrace) => {
-    const r = REQUESTS.find((x) => !taken.has(x.id) && !handWritten(x) && x.kind === 'inference' && x.status === 200 && x.attempts.length === 1 && x.attempts[0].selection !== null && want(x.attempts[0].selection, x));
+    const r = REQUESTS.find((x) => !taken.has(x.id) && drawnRow(x) && x.kind === 'inference' && x.status === 200 && x.attempts.length === 1 && x.attempts[0].selection !== null && want(x.attempts[0].selection, x));
     if (!r) return;
     taken.add(r.id);
     r.attempts = [{ ...r.attempts[0], selection: trace(r.attempts[0].selection as SelectionTrace, r) }];
@@ -2123,7 +2121,7 @@ function seedHolds() {
     else REQUEST_EVENTS.delete(r.id);
   };
   const failoversOnly = (r: RequestLog) => (REQUEST_EVENTS.get(r.id) ?? []).every((e) => e.kind === 'pin_migrated' && e.detail?.reason === 'cooldown');
-  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && failoversOnly(r) && !STORY_IDS.has(r.id));
+  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && failoversOnly(r) && drawnRow(r));
   // A hold waits on an account that could serve the request then, at its cap.
   const servableFor = (r: RequestLog, at: number) => (id: string) => holdableAt(r, id, at);
   if (atCap) {
@@ -2145,7 +2143,7 @@ function seedHolds() {
     return members.find((id) => !tried.includes(id) && serves(id, r.canonicalModel) && servableFor(r, heldAt(r))(id));
   };
   // A 429 fails the attempt over to a reselect, which can find every account at its cap. A 529 or a 502 is committed.
-  const failedTurn = (r: RequestLog) => r !== atCap && !STORY_IDS.has(r.id) && r.kind === 'inference' && r.status === 429 && drawnPart(r).slice(-1)[0]?.upstreamStatus === 429 && untried(r) !== undefined;
+  const failedTurn = (r: RequestLog) => r !== atCap && drawnRow(r) && r.kind === 'inference' && r.status === 429 && drawnPart(r).slice(-1)[0]?.upstreamStatus === 429 && untried(r) !== undefined;
   // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt. The oldest turn
   // that failed over then takes the story, which keeps it at every clock.
   const oldest = [...REQUESTS].reverse();
@@ -2179,7 +2177,7 @@ export const bandAt = (model: string, at: number): boolean | null => (weightOf(T
  * The router frees only the classifier call that landed on the judged turn's account, the one it reads `client`. A
  * declaration, since the story's rows read it while the module loads, above this line.
  */
-export function freesPlanShare(classifier: string | null): boolean {
+function freesPlanShare(classifier: string | null): boolean {
   return classifier === 'client';
 }
 
@@ -2192,6 +2190,9 @@ export function freesPlanShare(classifier: string | null): boolean {
 function freeCall(classifier: string | null, serving: Parameters<typeof fundingOf>[0]): boolean {
   return freesPlanShare(classifier) && fundingOf(serving) === 'plan';
 }
+
+/** `freeCall` over a rollup part, which files its rows under one classifier and one funding. */
+export const freedPart = (r: Pick<HourlyRollup, 'classifier' | 'funding'>): boolean => freesPlanShare(r.classifier) && r.funding === 'plan';
 
 /**
  * A row's Pro-week figure and its shares of its account's windows, as the request route answers them: null for a
@@ -2377,6 +2378,11 @@ function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
   return codes;
 }
 
+/** An answer that read no cache though the diagnostics named no change, so its prefix expired between turns. */
+export function expiredBetweenTurns(r: RequestLog): boolean {
+  return r.usage.cacheRead === 0 && servedMissReason(r) === 'none';
+}
+
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -2429,6 +2435,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const cacheMissReasons = emptyCacheMissReasons();
       for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = countOf(cacheMissReasons, a.cacheMissReason) + 1;
       const keptHere = partRows.filter((r) => kept.has(r));
+      const freed = freedPart({ classifier, funding });
       out.push({
         hour,
         client,
@@ -2481,14 +2488,14 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
         incompleteCodes: incompleteCodesOf(partRows),
-        expiredBetweenTurns: ok.filter((r) => r.usage.cacheRead === 0 && servedMissReason(r) === 'none').length,
+        expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
         // The router answers a zero split for a call it frees, as it answers its dollars.
-        cost: sumSplit(partRows.filter((r) => !freeCall(r.classifier, servingAttempt(r))).map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
+        cost: freed ? sumSplit([]) : sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
         // At each answer's completion, the instant its own shares price it at. A part of freed classifier calls prices
         // nothing and reads zero.
-        ...hourShares(accountId, partRows[0].canonicalModel, !freesPlanShare(classifier) ? partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage })) : []),
+        ...hourShares(accountId, partRows[0].canonicalModel, freed ? [] : partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },
