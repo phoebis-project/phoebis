@@ -769,8 +769,7 @@ test('the attention read is one GET, and its failures reach no toast, since the 
     items.map((i) => [i.kind, i.subject.id, i.link]),
     [
       ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
-      // The console draws a kind it does not know as `unknown`, which opens nothing.
-      ['unknown', 'usage-seat', null],
+      ['pairing_expiring', 'usage-seat', { id: 'usage-seat', page: 'accounts' }],
       ['limit_reset_ending', 'reset-ending', { id: 'reset-ending', page: 'accounts' }],
       ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
       ['model_unpriced', 'claude-opus-99', null],

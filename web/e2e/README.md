@@ -20,11 +20,14 @@ expert field's wrapper (a half cell beside the plain one, a lone field the grid'
 mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight 600 on one line and inside the
 sidebar's content box), the dashboard's attention line (one 22 px row in every state, each badge and the "+N more" badge
 the pool card's strip badge on the row's one top edge, in the content box and clear of the tiles, with the story's
-twenty items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in the
-router pass), the list the "+N more" badge opens (every item, one badge per row inside the box, 8 px under the badge and
-8 px inside the window, the unpriced model's info badge against the first warning badge in height, left edge and type,
-its ink on its fill contrasting less than the warning badge's and at 4.5 to 1 or more, read here since the line folds
-the item at 1280 px and shows none at the phone widths, closed by Escape with the focus back on the badge), the
+twenty-two items folded behind the dashed "+N more" badge in the mock pass, the seeded exhaustion or the quiet line in
+the router pass), the list the "+N more" badge opens (every item, one badge per row inside the box's left and right
+edges, 8 px under the badge and 8 px inside the window, every badge inside the box's top and bottom where the list fits,
+and where the box stands capped at the room under the badge and scrolls, the first badge inside its top at rest and the
+last inside its bottom with the box scrolled to its end, the box's client and scroll heights recorded so the measure's
+line names the case that ran, the unpriced model's info badge against the first warning badge in height, left edge and
+type, its ink on its fill contrasting less than the warning badge's and at 4.5 to 1 or more, read here since the line
+folds the item at 1280 px and shows none at the phone widths, closed by Escape with the focus back on the badge), the
 attention line at the phone widths from 360 to 414 px (the first row one 22 px row of the lead, the badges that fit and
 the fold badge, the Replay button on a second row where they need more than the line, every part inside the line's box,
 the same draw on a second read), the dashboard's stat grid at the pass's viewport, at 1024 by 768 and at 400 by 900 (all

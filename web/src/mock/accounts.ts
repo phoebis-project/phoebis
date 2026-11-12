@@ -402,7 +402,8 @@ const SEEDS = [
       lastError: null,
       lastRefreshAt: ago(2 * HOUR + 50 * MINUTE),
       quarantined: false,
-      refreshTokenExpiresAt: ahead(44 * DAY),
+      // Inside the attention line's three-day lead, so the story words a refresh token's end before it passes.
+      refreshTokenExpiresAt: ahead(2 * DAY),
     },
     subscription: { billingType: 'monthly', organizationType: 'claude_pro', planDisplayName: null, rateLimitTier: 'default_claude_ai', since: ago(90 * DAY), trialEndsAt: null, endsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 0 },

@@ -19,6 +19,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   limit_reset_ending: 'Reset ending',
   meter_drift: 'Meter drift against the table',
   model_unpriced: 'Model unpriced',
+  pairing_expiring: 'Refresh token expiring',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
@@ -44,6 +45,7 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'info' | 'seriou
   limit_reset_ending: 'warning',
   meter_drift: 'warning',
   model_unpriced: 'info',
+  pairing_expiring: 'warning',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
@@ -148,6 +150,8 @@ const resetEnds = (d: AttentionItem['detail']): string => {
   // The route floors the days left, so a reset at 0 ends within a day, as the certificate's item reads its last.
   return `${ending > 1 ? `the first of ${ending} resets` : 'a reset'} ${left <= 0 ? 'ends today' : `ends in ${plural(left, 'day')}`}`;
 };
+/** An end by the route's floored days left: 0 ends within a day, and -1 ended within the last day. */
+const endWords = (left: number): string => (left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${plural(-left, 'day')} ago` : `expires in ${plural(left, 'day')}`);
 
 /** The item's detail as the one line a pool card's row draws. */
 export function attentionDetail(item: AttentionItem, now: number): string {
@@ -182,12 +186,13 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       const next = isoOrNull(d.next_attempt_at);
       return `${plural(n, 'rate-limited answer')} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
     }
-    case 'certificate_expiring': {
+    case 'pairing_expiring': {
       const left = num(d.days_left);
+      return `${text(d.label) ?? item.subject.label}'s refresh token ${endWords(left)} (${fmtAbsolute(isoOrNull(d.expires))}). ${left < 0 ? 'Re-pair the account' : 'Re-pair the account before then'}.`;
+    }
+    case 'certificate_expiring': {
       const file = text(d.cert_file);
-      // The route floors the days left, so a leaf at 0 ends within a day and one at -1 ended within the last day.
-      const end = left === 0 ? 'expires today' : left === -1 ? 'expired today' : left < 0 ? `expired ${plural(-left, 'day')} ago` : `expires in ${plural(left, 'day')}`;
-      return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${end} (${fmtAbsolute(isoOrNull(d.expires))}). Replace the pair and run phoebis tls reload.`;
+      return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${endWords(num(d.days_left))} (${fmtAbsolute(isoOrNull(d.expires))}). Replace the pair and run phoebis tls reload.`;
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
@@ -195,7 +200,9 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       return `${resetEnds(d)} (${fmtAbsolute(isoOrNull(d.ends_at))}) and clears ${listWords(strings(d.clears).map((w) => windowTag(w)))}: ${text(d.grant_label) ?? ''}`;
     case 'model_unpriced': {
       const n = num(d.requests);
-      return `${text(d.model) ?? item.subject.id} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
+      const model = text(d.model) ?? item.subject.id;
+      if (n === 0) return `${model} has no weight in the cost model, so a plan-funded request on it will price no window share.`;
+      return `${model} has no weight in the cost model, so its ${plural(n, 'plan-funded request')} since ${fmtAbsolute(item.since)} priced no window share.`;
     }
     case 'wall_reached':
     case 'destination_spent':

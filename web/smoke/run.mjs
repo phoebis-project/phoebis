@@ -735,6 +735,11 @@ await forView('/', async () => {
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['serves nothing until its credential is renewed', 'account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
     ['Credential refresh failed: legacy', 'badge--serious', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    // The refresh tokens near their end rank after the failed refreshes, oldest first: legacy's ended 2 days and 2
+    // hours before the mock's load and reserve's ends 2 days after it (the two seeds in mock/accounts.ts). The smoke
+    // runs under TZ=UTC, so each sentence dates its end in UTC, where a viewer's zone moves it.
+    ['Refresh token expiring: legacy', 'badge--warning', '/accounts/legacy', ["legacy's refresh token expired 3 days ago (Sep 14, 2026, 12:30:00). Re-pair the account.", 'account: legacy', 'days_left: -3', 'expires: <instant>', 'label: legacy']],
+    ['Refresh token expiring: reserve', 'badge--warning', '/accounts/reserve', ["reserve's refresh token expires in 2 days (Sep 18, 2026, 14:30:00). Re-pair the account before then.", 'account: reserve', 'days_left: 2', 'expires: <instant>', 'label: reserve']],
     ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     // nightly's reset ends 4 days and 12 hours out, inside the mock's five days, and its item opens nightly's card.
     ['nightly: a reset ends in 4 days', 'badge--warning', '/quota#nightly', ['account: nightly', 'clears: ["five_hour","seven_day_fable"]', 'days_left: 4', 'ending: 1', 'ends_at: <instant>', 'grant: rg-nightly-1', 'grant_label: Launch reset', 'resets_left: 1']],
@@ -804,16 +809,16 @@ await forView('/', async () => {
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty, nightly's reset item among them, while no layout folds it",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's and a routing condition's without a usable reset the routing log, a reset item's and a wall's that a reset can clear the account's Quota card, and titled with its detail and age, its sentence first where no pool card draws it, read from the row and the list behind its \"+N more\" together, the row holding all twenty-two, nightly's reset item among them, while no layout folds it",
     ok:
-      lead() === '20 need attention' &&
+      lead() === '22 need attention' &&
       unpriced !== undefined &&
       drift !== undefined &&
       JSON.stringify(read) === JSON.stringify(want) &&
       /^started 1[34]m ago$/.test(ages[0] ?? '') &&
-      ages[6] === 'started 18d ago' &&
-      /^started 1h( 1m)? ago$/.test(ages[8] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[10] ?? '') &&
+      ages[8] === 'started 18d ago' &&
+      /^started 1h( 1m)? ago$/.test(ages[9] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[11] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -894,7 +899,7 @@ await forView('/', async () => {
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: "/ the story back, the next tick draws its twenty items again, nightly's reset item among them", ok: lead() === '20 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: "/ the story back, the next tick draws its twenty-two items again, nightly's reset item among them", ok: lead() === '22 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 
   {
@@ -979,10 +984,10 @@ await forView('/', async () => {
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its twenty items, nightly's reset item among them, shows the four that fit and folds the other sixteen behind \"+16 more\" titled with their words one per line, whose list holds all twenty worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its twenty-two items, nightly's reset item among them, shows the four that fit and folds the other eighteen behind \"+18 more\" titled with their words one per line, whose list holds all twenty-two worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+16 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify(['+18 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -994,7 +999,7 @@ await forView('/', async () => {
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+19 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+21 more', ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({

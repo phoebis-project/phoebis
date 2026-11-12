@@ -28,6 +28,23 @@ const ofRouter = (id: string, label: string): Pick<AttentionItem, 'link' | 'pool
 
 const secondaryPoll = accountById.get('secondary')?.usage?.poll ?? null;
 
+/** The reader's lead before a refresh token's fixed end, in days. */
+const PAIRING_WARNING_DAYS = 3;
+
+/**
+ * The refresh tokens near their end as the reader holds them: an item for every OAuth account whose stored end lies no
+ * more than three days ahead of the story's clock or behind it, dated from three days before the end. The route holds
+ * it until a re-pair stores an end more than three days away, or until a disconnect or the account's deletion, so
+ * legacy holds it past its end and spare, disconnected, holds none. The days left are floored off `NOW`, since
+ * reserve's end lies two days after it to the millisecond and a later read of the clock floors to 1. The route orders
+ * a kind's items by start, then subject.
+ */
+const PAIRING_EXPIRING: AttentionItem[] = ACCOUNTS.flatMap((a) => {
+  const end = a.kind === 'oauth' ? ms(a.credential.refreshTokenExpiresAt) : null;
+  if (end === null || NOW < end - PAIRING_WARNING_DAYS * DAY) return [];
+  return [{ ...ATTENTION_ITEM_SAMPLE, ...ofAccount(a.id), detail: { account: a.id, days_left: Math.floor((end - NOW) / DAY), expires: end, label: a.label }, kind: 'pairing_expiring' as const, since: iso(end - PAIRING_WARNING_DAYS * DAY) }];
+}).sort((x, y) => Date.parse(x.since) - Date.parse(y.since) || x.subject.id.localeCompare(y.subject.id));
+
 /**
  * A pool's exhaustion as the reader dates it from the rows: the first exhausted answer after the pool's last success,
  * under that request's key, since a success clears the condition. Null when no request since the last success was
@@ -258,19 +275,21 @@ const RESET_ITEMS: AttentionItem[] = ACCOUNTS.flatMap((a) => {
 }).sort(byStart);
 
 /**
- * One item per kind but a failed certificate reload and a wall, which holds on two accounts, on the story's accounts,
- * pools, keys, proxy listener, models and keepalive engine, in the route's order: jobs exhausted from the runner's
- * first request after its one member spent the day's budget, a client build refused on the laptop key, the routing
- * state writer keeping its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding as its
- * account reads, legacy's refreshes failing, the proxy listener's certificate 12 days from its end, nightly's reset 4
- * days from its end, a priced record of the jobs pool's one member parked in the ledger file, the keepalive engine's
+ * One item per kind but a failed certificate reload, a refresh token near its end, which holds on two accounts, and a
+ * wall, which holds on three, on the story's accounts, pools, keys, proxy listener, models and keepalive engine, in the
+ * route's order: jobs exhausted from the runner's first request after its one member spent the day's budget, a client
+ * build refused on the laptop key, the routing state writer keeping its writes in memory, legacy's lapsed credential,
+ * the Overflow workspace out of funding as its account reads, legacy's refreshes failing, the refresh token on legacy
+ * past its end and on reserve two days from it, the proxy listener's certificate 12 days from its end, nightly's reset
+ * 4 days from its end, a priced record of the jobs pool's one member parked in the ledger file, the keepalive engine's
  * bus gaps, the backoff secondary's poll is in, Sonnet 4.5 priced nothing, nightly's 5-hour window charged twice the
- * table up to its 13:11 reset, nightly's wall at 12:01 and secondary's after the 11:00 round, which secondary's reset
- * can clear, nightly spent after the least-bad move onto it, the all pool's round that found no destination with
- * runway, studio slowed in work for 2 h 8 min of the day, the engine's retained prompts at 92 percent of their cap, and
- * the day's expiries between turns a probe could have prevented. The meter drift reads the reconciled windows, the four
- * routing conditions the routing log's events, as the ledger folds them, the reset item and the wall's reset the stored
- * blocks, the two keepalive items the overview's figures, and the expiries the ledger rows of the day.
+ * table up to its 13:11 reset, nightly's wall at 12:01, secondary's after the 11:00 round, which secondary's reset can
+ * clear, and studio's at 14:20 after its stretch round, nightly spent after the least-bad move onto it, the all pool's
+ * round that found no destination with runway, studio slowed in work for 2 h 8 min of the day, the engine's retained
+ * prompts at 92 percent of their cap, and the day's expiries between turns a probe could have prevented. The meter
+ * drift reads the reconciled windows, the four routing conditions the routing log's events, as the ledger folds them,
+ * the reset item and the wall's reset the stored blocks, the two keepalive items the overview's figures, and the
+ * expiries the ledger rows of the day.
  */
 export const ATTENTION: AttentionItem[] = [
   ...(jobsExhausted
@@ -322,6 +341,7 @@ export const ATTENTION: AttentionItem[] = [
     kind: 'refresh_failed',
     since: ago(2 * DAY + 2 * HOUR + 50 * MINUTE),
   },
+  ...PAIRING_EXPIRING,
   {
     ...ATTENTION_ITEM_SAMPLE,
     ...ofRouter('proxy.tls', 'proxy.tls'),

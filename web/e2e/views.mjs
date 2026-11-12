@@ -596,10 +596,10 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row in every state, every badge it shows and its "+N more"
  * badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges on the row's one top edge, none past
- * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's twenty
+ * the content box, and the line on the tiles' left edge and clear of them. The mock pass draws the story's twenty-two
  * items, nightly's reset item among them, more than the row holds at 1280 by 800: the badges shown and the fold's count
- * add up to twenty, the fold badge draws its dashed border, and its list opens under it inside the window with all
- * twenty, closing on Escape with the focus back on the badge. The router pass seeds an exhaustion of its main pool,
+ * add up to twenty-two, the fold badge draws its dashed border, and its list opens under it inside the window with all
+ * twenty-two, closing on Escape with the focus back on the badge. The router pass seeds an exhaustion of its main pool,
  * which any request the pool serves later in the run (a keepalive probe among them) clears: the light pass, which
  * reaches the dashboard first, requires that item, so a route answering an empty list fails it, and the dark pass draws
  * that item or the quiet line, never the unavailable one.
@@ -644,7 +644,7 @@ async function attentionLine(theme) {
   const texts = read.badges.map((b) => b.text);
   const folded = Number(/^\+(\d+) more$/.exec(read.more?.text ?? '')?.[1] ?? 0);
   if (mock) {
-    if (read.lead !== '20 need attention' || texts.length + folded !== 20 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's twenty items, nightly's reset item among them, folded behind a dashed "+N more" at 1280 by 800`);
+    if (read.lead !== '22 need attention' || texts.length + folded !== 22 || folded === 0 || read.more?.border !== 'dashed') say(`reads ${read.lead} over ${JSON.stringify(texts)} and ${JSON.stringify(read.more?.text ?? null)}, not the story's twenty-two items, nightly's reset item among them, folded behind a dashed "+N more" at 1280 by 800`);
     else {
       await attentionList(theme);
       await attentionLineNarrow(theme);
@@ -657,12 +657,15 @@ async function attentionLine(theme) {
 }
 
 /**
- * The list the attention line's "+N more" badge opens: every item, one badge per row, each inside the box, the box 8 px
- * under the badge and 8 px inside the window, the badge marked expanded while it stands. The unpriced model's info
- * badge compares against the first warning badge in height, left edge and type, its ink on its own fill contrasting
- * less than the warning badge's (WCAG's relative luminance over the computed colors) and at 4.5 to 1 or more, since
- * the line at 1280 px folds it and one badge per row gives each its own box. Escape closes it and hands the focus back
- * to the badge.
+ * The list the attention line's "+N more" badge opens: every item, one badge per row, each inside the box's left and
+ * right edges, the box 8 px under the badge and 8 px inside the window, the badge marked expanded while it stands. A
+ * list that fits keeps every badge inside the box's top and bottom. One taller than the room under the badge stands
+ * capped at that room and scrolls, as `placeFixed` places it, so its first badge is read inside the top at rest and its
+ * last inside the bottom with the box scrolled to its end, then back to its top. The box's client and scroll heights
+ * go to the measurements, so the line names the case that ran. The unpriced model's info badge compares against the
+ * first warning badge in height, left edge and type, its ink on its own fill contrasting less than the warning badge's
+ * (WCAG's relative luminance over the computed colors) and at 4.5 to 1 or more, since the line at 1280 px folds it and
+ * one badge per row gives each its own box. Escape closes it and hands the focus back to the badge.
  */
 async function attentionList(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line's list ${what}`);
@@ -675,7 +678,15 @@ async function attentionList(theme) {
     const r = box.getBoundingClientRect();
     const at = fold.getBoundingClientRect();
     const rows = [...box.children].map((row) => row.getBoundingClientRect());
-    const badges = [...box.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+    const items = [...box.querySelectorAll('.badge')];
+    const badges = items.map((b) => b.getBoundingClientRect());
+    const capped = box.scrollHeight > box.clientHeight;
+    let lastAtEnd = null;
+    if (capped) {
+      box.scrollTo({ behavior: 'instant', top: box.scrollHeight });
+      lastAtEnd = items[items.length - 1].getBoundingClientRect().bottom;
+      box.scrollTo({ behavior: 'instant', top: 0 });
+    }
     // A fill with any transparency reads through to what lies under it, so it has no contrast of its own to read.
     const channels = (color) => {
       const m = /^rgba?\(([^)]+)\)$/.exec(color);
@@ -697,19 +708,22 @@ async function attentionList(theme) {
       return { contrast: high === null ? null : Math.round(((high + 0.05) / (low + 0.05)) * 100) / 100, fill: s.backgroundColor, font: `${s.fontSize} ${s.fontWeight}`, height: edge.height, ink: s.color, left: Math.round(edge.left), text: b.textContent?.trim() ?? '' };
     };
     return {
+      across: badges.every((b) => b.left >= r.left && b.right <= r.right),
       badges: badges.length,
       info: tone(box.querySelector('.badge--info')),
       warning: tone(box.querySelector('.badge--warning')),
       bottom: Math.round(r.bottom),
+      clientHeight: box.clientHeight,
       expanded: fold.getAttribute('aria-expanded'),
       gap: Math.round((r.top - at.bottom) * 10) / 10,
-      inside: badges.every((b) => b.left >= r.left && b.right <= r.right && b.bottom <= r.bottom),
+      inside: capped ? badges.length > 0 && badges[0].top >= r.top && lastAtEnd <= r.bottom : badges.every((b) => b.top >= r.top && b.bottom <= r.bottom),
       label: box.getAttribute('aria-label'),
       left: Math.round(r.left),
       oneRowEach: rows.every((row, i) => i === 0 || row.top >= rows[i - 1].bottom),
       right: Math.round(r.right),
       role: box.getAttribute('role'),
       rows: rows.length,
+      scrollHeight: box.scrollHeight,
       top: Math.round(r.top),
       view: { height: window.innerHeight, width: document.documentElement.clientWidth },
       width: Math.round(r.width),
@@ -718,8 +732,11 @@ async function attentionList(theme) {
   measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
   if (!read) say('did not open');
   else {
-    if (read.badges !== 20 || read.rows !== 20 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's twenty items, nightly's reset item among them, one per row`);
-    if (!read.inside) say('draws a badge past its box');
+    if (read.badges !== 22 || read.rows !== 22 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's twenty-two items, nightly's reset item among them, one per row`);
+    if (!read.across) say('draws a badge past its left or right edge');
+    if (!read.inside) {
+      say(read.scrollHeight > read.clientHeight ? `capped at ${read.clientHeight} of its ${read.scrollHeight} px draws its first badge above its top at rest or its last past its bottom at the scroll's end` : 'draws a badge past its top or bottom');
+    }
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
     if (read.left < 8 || read.right > read.view.width - 8 || read.bottom > read.view.height - 8) say(`spans ${read.left} to ${read.right} and down to ${read.bottom}, outside the window less 8 px`);
