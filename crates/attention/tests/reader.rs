@@ -1,6 +1,6 @@
-//! The twenty conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
-//! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
-//! refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
+//! The twenty-one conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the
+//! clear, the router's own components among them, a deleted subject's series gone unless a parked record still names
+//! it, a refresh run read back by a second reader, a listener's pair read on the read's clock, an unpriced model the
 //! ledger's landing saw, the keepalive engine's standing, and the gauge the metrics listener scrapes from the same
 //! read.
 mod common;

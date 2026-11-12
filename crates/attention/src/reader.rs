@@ -68,9 +68,6 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
 /// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
-/// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
-/// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
-/// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
 /// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, an account's
 /// refresh token near its fixed end, the router's own certificate about to lapse, an account's unused limit reset about
 /// to end, the fourth lapse with a date on it and the one whose miss stops no traffic, priced records the ledger file
@@ -547,8 +544,6 @@ impl ResetFacts<'_> {
     }
 }
 
-/// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
-/// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear, so
 /// a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read this
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
