@@ -26319,7 +26319,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     // Each line's Account cell links to the account's page with the account's kind on its title, its description
     // carrying the same words to a reader that never hovers, and the account's speed chip while its slow-down holds.
-    // The row's "+N" badges stand beside the figure they qualify.
+    // The row's "+N" badges stand with the figure they qualify, inside its cell.
     const KINDS = { 'API-key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
     const accounts = await api.listAccounts();
     const slowed = new Set(accounts.filter((a) => a.slowDown !== null && a.slowDown.speed < 1).map((a) => a.id));
@@ -26340,7 +26340,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // session one. The written auxiliary-only session draws its subagent's recipe line. Main's line drawn from a row
     // stands on no pin and no recipe, so it names no account.
     results.push({
-      name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the row's +N badges stand beside their figure",
+      name: "/sessions each line's Account cell links to the account with its kind on the title and in its description and its speed chip while slowed, and the row's +N badges stand with their figure, inside its cell",
       ok: links.length === 30 && off.length === 0 && kinds.includes('oauth') && kinds.includes('api_key') && links.some((l) => l.chip) && plus.length > 0 && plus.every((b) => b.closest('.srow__pin') !== null),
       missing: [`${links.length} lines`, ...new Set(kinds), ...off.slice(0, 6).map((l) => l.link?.outerHTML ?? 'no link'), `${plus.length} +N badges`],
     });
