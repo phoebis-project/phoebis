@@ -61,7 +61,6 @@ const ratio = (v: number, min: number) => v >= min && v <= 1;
  * for text it cannot parse.
  */
 export type TypedField = { bad: boolean; text: string };
-export const EMPTY_FIELD: TypedField = { bad: false, text: '' };
 export const typedOf = (el: HTMLInputElement): TypedField => ({ bad: el.validity.badInput, text: el.value });
 
 /** A number field's value: null where it reads empty, NaN where the browser could not parse what was typed. */
@@ -124,12 +123,13 @@ const listed = (label: string) => `${label} is one of its listed choices.`;
 
 /** What the pool dialog knows beyond the input it sends. */
 export interface PoolChecks {
-  /** The input sends 0 for an emptied retention as for capture off, so the field is read as typed while capture is on. */
+  /** The input sends 0 for capture off, so the retention is read from its field, and only while capture is on. */
   capture?: {
     /** The bootstrap's limit, absent until the settings read answers and after it fails, when the floor of 1 alone is checked. */
     maxHours?: number;
     on: boolean;
-    typed: string;
+    /** The retention its field reports, NaN for an emptied field or text the browser could not parse. */
+    typed: number;
   };
   /** On create the id derives from the name, so a taken one is held before the route's 409; a rename keeps its id. */
   identity?: { isNew: boolean; poolIds: ReadonlySet<string> };
@@ -158,9 +158,9 @@ const derivedIdRefusal = (noun: 'key' | 'pool', name: string, taken: ReadonlySet
   return taken.has(id) ? `Another ${noun} already has the id ${id}.` : null;
 };
 
-/** Typed capture hours outside 1 to `maxHours`, or under 1 with no ceiling, as the sentence `subject` leads. */
-const hoursRefusal = (subject: string, typed: string, maxHours: number | undefined): string | null => {
-  if (whole(Number(typed), 1, maxHours ?? Number.MAX_SAFE_INTEGER)) return null;
+/** Capture hours outside 1 to `maxHours`, or under 1 with no ceiling, as the sentence `subject` leads. */
+const hoursRefusal = (subject: string, hours: number, maxHours: number | undefined): string | null => {
+  if (whole(hours, 1, maxHours ?? Number.MAX_SAFE_INTEGER)) return null;
   return maxHours === undefined ? `${subject} of at least 1.` : `${subject} from 1 to ${maxHours}.`;
 };
 
@@ -201,7 +201,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
   choice('pinning', 'Pin sessions', AFFINITY_MODE_VALUES, input.affinityMode);
 
-  // NaN is a field left empty, which fails the range and so holds the save.
+  // NaN is a field left empty or one whose text the browser could not parse, which fails the range and so holds the
+  // save.
   refuse('utilization', 'Window ceiling (%)', ratio(input.windowCeiling, 0.5) ? null : 'Window ceiling (%) is from 50 to 100.');
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
@@ -416,7 +417,7 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
   if (rules) out.push({ field: 'Model rules', group: 'models', text: rules });
   // An emptied field would send 0, which the route stores as capture off while the radio still says Override.
   if (form.captureMode === 'override') {
-    const text = hoursRefusal('Capture hours is a whole number', form.captureHours, checks.maxHours);
+    const text = hoursRefusal('Capture hours is a whole number', Number(form.captureHours), checks.maxHours);
     if (text) out.push({ field: 'Capture hours for this key', group: 'capture', text });
   }
   return out;

@@ -354,17 +354,17 @@ test('a pool refusal names the group its control sits in', () => {
 test('a retention while capture is on must be a whole number of hours inside the limit', () => {
   const retention = (typed, on = true, maxHours = 72) => d.poolRefusals(input, accounts, { capture: { maxHours, on, typed } });
   const refused = (maxHours) => [{ field: 'Capture retention in hours', group: 'bodyCapture', text: `Retention is a whole number of hours from 1 to ${maxHours}.` }];
-  for (const typed of ['', '0', '1.5', '-1', '73']) assert.deepEqual(retention(typed), refused(72), `${JSON.stringify(typed)} is refused`);
-  for (const typed of ['1', '72']) assert.deepEqual(retention(typed), [], `${typed} is inside`);
-  assert.deepEqual(retention('', false), [], 'with capture off the field is not read');
-  assert.deepEqual(retention('48', true, 24), refused(24), 'the limit is the one passed in');
+  for (const typed of [Number.NaN, 0, 1.5, -1, 73]) assert.deepEqual(retention(typed), refused(72), `${typed} is refused`);
+  for (const typed of [1, 72]) assert.deepEqual(retention(typed), [], `${typed} is inside`);
+  assert.deepEqual(retention(Number.NaN, false), [], 'with capture off the field is not read');
+  assert.deepEqual(retention(48, true, 24), refused(24), 'the limit is the one passed in');
 });
 
 test('a retention while the limit is unread checks the floor of 1 alone', () => {
   const retention = (typed) => d.poolRefusals(input, accounts, { capture: { on: true, typed } });
   const floor = [{ field: 'Capture retention in hours', group: 'bodyCapture', text: 'Retention is a whole number of hours of at least 1.' }];
-  for (const typed of ['', '0', '1.5', '-1']) assert.deepEqual(retention(typed), floor, `${JSON.stringify(typed)} is refused`);
-  for (const typed of ['1', '5', '500']) assert.deepEqual(retention(typed), [], `${typed} is inside, since no upper bound applies before the limit is read`);
+  for (const typed of [Number.NaN, 0, 1.5, -1]) assert.deepEqual(retention(typed), floor, `${typed} is refused`);
+  for (const typed of [1, 5, 500]) assert.deepEqual(retention(typed), [], `${typed} is inside, since no upper bound applies before the limit is read`);
 });
 
 test("a new pool's name is refused when its id is taken, by case or by punctuation, or holds no letter or digit", () => {
@@ -397,7 +397,7 @@ test('the Keepalive group refuses its three numbers in the order it draws them',
 });
 
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
-  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***') }, accounts, { capture: { maxHours: 72, on: true, typed: '' } });
+  const refusals = d.poolRefusals({ ...input, name: '', members: [], modelRules: rules('a***') }, accounts, { capture: { maxHours: 72, on: true, typed: Number.NaN } });
   assert.deepEqual(
     refusals.map((r) => r.group),
     ['identity', 'members', 'models', 'bodyCapture'],

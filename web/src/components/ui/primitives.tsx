@@ -5,6 +5,7 @@ import type { ToastItem } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtDate, plural } from '@/lib/format';
+import { typedNumber, typedOf, type TypedField } from '@/lib/forms';
 import { useKeyedMap, useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
@@ -376,6 +377,34 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(pro
   return <input ref={ref} {...props} className={`input ${props.className ?? ''}`} />;
 });
 
+const numberText = (value: number | null) => (value === null || Number.isNaN(value) ? '' : String(value));
+
+/**
+ * A number field that keeps its typed text and reports its value as `typedNumber` reads it: a number, null for an
+ * emptied field and NaN for text the browser cannot parse. It reads `onInput`, since `onChange` stays silent while a
+ * number field's value reads empty for text it cannot parse. `value` seeds the text, and replaces it for a value the
+ * text does not read, null included, compared with `Object.is`, so the field's own NaN leaves the text the browser
+ * still draws.
+ */
+type NumberInputProps = Omit<InputProps, 'onChange' | 'onInput' | 'type' | 'value'> & { onNumber: (value: number | null) => void; value: number | null };
+export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(function NumberInput({ onNumber, value, ...rest }, ref) {
+  const [typed, setTyped] = useState<TypedField>(() => ({ bad: false, text: numberText(value) }));
+  const text = Object.is(typedNumber(typed), value) ? typed.text : numberText(value);
+  return (
+    <Input
+      ref={ref}
+      {...rest}
+      type="number"
+      value={text}
+      onInput={(e) => {
+        const next = typedOf(e.currentTarget);
+        setTyped(next);
+        onNumber(typedNumber(next));
+      }}
+    />
+  );
+});
+
 export function SearchInput(props: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <span className="search">
@@ -404,11 +433,12 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
 
 /**
  * A switch over the number it enables: the number stays drawn under the switch and turns on with it. `disabled`
- * disables the switch and the number together; with it off, the switch alone gates the number.
+ * disables the switch and the number together, and with it off the switch alone gates the number. The number is a
+ * `NumberInput`, so `input` hands it the value and `onNumber`.
  */
-export function SwitchedNumber({ checked, disabled, hint, input, label, numberLabel, onChange }: { checked: boolean; disabled?: boolean; hint?: ReactNode; input: InputHTMLAttributes<HTMLInputElement>; label: string; numberLabel?: string; onChange: (v: boolean) => void }) {
+export function SwitchedNumber({ checked, disabled, hint, input, label, numberLabel, onChange }: { checked: boolean; disabled?: boolean; hint?: ReactNode; input: NumberInputProps; label: string; numberLabel?: string; onChange: (v: boolean) => void }) {
   // After the spread, so a `disabled` the caller put in `input` can never reopen a gated number.
-  const number = <Input type="number" {...input} disabled={disabled || !checked} />;
+  const number = <NumberInput {...input} disabled={disabled || !checked} />;
   return (
     <div className="switched">
       <Field label={label} beside>

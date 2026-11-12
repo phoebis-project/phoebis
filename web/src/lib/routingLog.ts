@@ -1045,7 +1045,8 @@ export function laneChips(lane: string): Chip[] {
 
 /**
  * An exhausted line's obstacle, `account:name` as the engine weighs it, the account as the key. An operator obstacle
- * reads the member's own pause or state and a spent one the member's own window and reset, as its candidate row does.
+ * reads the member's own pause or state whatever obstacle the member's row carries. Any other obstacle reads the
+ * member's row words and hover where the row's own obstacle carries the line's name, and the bare word otherwise.
  */
 function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
   const at = text.lastIndexOf(':');
@@ -1055,8 +1056,8 @@ function obstacleChip(text: string, record: DecisionRecord, now: number): Chip {
   const { title, value } =
     name === 'operator' && member !== undefined
       ? operatorWords(member)
-      : name === 'spent' && member?.obstacle?.name === 'spent'
-        ? spentChip(member.obstacle, now)
+      : member !== undefined && member.obstacle !== null && member.obstacle.name === name
+        ? rowObstacleChip(member, member.obstacle, now)
         : { title: hintOf(name), value: wordOf(OBSTACLE_WORD, name) };
   return id === '' ? { label: 'obstacle', title, value } : { label: id, labelEntity: accountEntity(id), title, value };
 }
@@ -1388,13 +1389,19 @@ function obstacleWords(c: RecordCandidate, now: number): string {
   }
 }
 
+/** A candidate row's obstacle as its chip: the operator's own words, a spent window's chip, else the obstacle's
+ *  words with its hint. The candidate table and an exhausted line both draw it. */
+function rowObstacleChip(c: RecordCandidate, obstacle: NonNullable<RecordCandidate['obstacle']>, now: number): Chip {
+  return obstacle.name === 'operator' ? operatorWords(c) : obstacle.name === 'spent' ? spentChip(obstacle, now) : { title: hintOf(obstacle.name), value: obstacleWords(c, now) };
+}
+
 /** The chip of a destination the gate read and found short: rewrite only and least bad warn, an ending account is neutral. */
 const FIT_CHIP: Record<string, { tone: VerdictTone; word: string }> = { ending: { tone: 'neutral', word: 'ending' }, least_bad: { tone: 'warning', word: 'least bad' }, rewrite_only: { tone: 'warning', word: 'rewrite only' } };
 
 /** The verdict cell's one chip, and the tone it carries where it names the destination's fit. */
 function verdictChipOf(c: RecordCandidate, now: number): { chip: Chip | null; tone: VerdictTone | null } {
   const untoned = (chip: Chip | null) => ({ chip, tone: null });
-  if (c.obstacle !== null) return untoned(c.obstacle.name === 'operator' ? operatorWords(c) : c.obstacle.name === 'spent' ? spentChip(c.obstacle, now) : { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) });
+  if (c.obstacle !== null) return untoned(rowObstacleChip(c, c.obstacle, now));
   if (c.partition !== null) return untoned({ title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) });
   // The cap held the request on its member whatever that member's fit, so the cap explains the hold.
   if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return untoned(plain('at its cap'));

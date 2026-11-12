@@ -235,6 +235,30 @@ test('an idle window set above the break-even reads a note under its field and i
   assert.equal(note(), undefined, 'no note while the field reads 0');
 });
 
+test('an emptied Priority holds the save under its sentence', async () => {
+  const pool = pools.find((p) => p.members.length > 0);
+  assert.ok(pool, 'the mock holds a pool with members');
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  type(container.querySelector('dialog[open] .members-table input[aria-label^="Priority for "]:not([disabled])'), '');
+  assert.equal(statusOf(container), 'Save is held: Priority is a whole number of 0 or more.');
+});
+
+test('text the browser cannot parse in Max idle holds the save under its sentence, where a number it parses saves', async () => {
+  const pool = pools.find((p) => p.keepalive.enabled && p.affinityTtlSeconds >= 300);
+  assert.ok(pool, 'the mock holds a pool that keeps prompt caches warm, so its idle window takes an entry');
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  const idle = fieldIn(container, 'Max idle (s)')?.querySelector('input');
+  type(idle, '600');
+  assert.equal(statusOf(container), 'Every group saves together.', 'a number the browser parses saves');
+  // A browser empties a number field's value for text it cannot parse and reports it through the field's validity,
+  // which jsdom never does.
+  Object.defineProperty(idle, 'validity', { configurable: true, value: { badInput: true } });
+  type(idle, '');
+  assert.equal(statusOf(container), 'Save is held: Max idle (s) is a whole number from 0 to 31,536,000.');
+});
+
 test('a new pool opens with the switch to keep prompt caches warm off, and free to turn on', async () => {
   const { container, draw } = mount();
   await draw(poolDialog({ accounts: accountsRead(accounts), pool: null }));

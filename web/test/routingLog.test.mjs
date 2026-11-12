@@ -746,19 +746,25 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ obstacle: operator, state: 'funding_required', verdict: 'out' }), ['out', 'needs funding', 'the account leaves every eligible set until funded']);
   assert.deepEqual(verdict({ obstacle: operator, state: 'reauth_required', verdict: 'out' }), ['out', 'needs re-auth', 'the account leaves every eligible set until it is paired again']);
   assert.deepEqual(verdict({ enabled: false, obstacle: operator, state: 'deleted', verdict: 'out' }), ['out', 'deleted', 'the account left the registry']);
-  // The exhausted line reads each operator and spent obstacle as the member's own row does.
+  // An exhausted line's chip reads its member's row where the row's own obstacle carries the chip's name, an operator
+  // chip the member's state whatever the row carries, and any other chip the bare word. The router names a member's
+  // own obstacle, or `spent` over a row with none, so the last two entries hold the rule's halves on records it does
+  // not write.
   const capped = { name: 'spent', reason: 'spent', scope: null, until: until(15, 42), window: 'spend' };
+  const cooled = { name: 'cooldown', reason: 'rate_limit', scope: 'account', until: until(15, 42), window: 'five_hour' };
   const held = record({
     candidates: [
       candidate({ accountId: 'overflow', obstacle: operator, state: 'funding_required', verdict: 'out' }),
       candidate({ accountId: 'nightly', enabled: false, obstacle: operator, verdict: 'out' }),
       candidate({ accountId: 'contract', obstacle: capped, verdict: 'out' }),
+      candidate({ accountId: 'secondary', obstacle: cooled, verdict: 'out' }),
+      candidate({ accountId: 'reserve', obstacle: cooled, state: 'funding_required', verdict: 'out' }),
     ],
     outcome: { accountId: null, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null },
-    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator', 'contract:spent'])])],
+    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator', 'contract:spent', 'secondary:cooldown', 'contract:cooldown', 'reserve:operator'])])],
   });
   const exhausted = d.walkLines(held)[0].chips;
-  assert.deepEqual(texts(exhausted), ['overflow needs funding', 'nightly held by hand', 'contract spend cap reached until 15:42']);
+  assert.deepEqual(texts(exhausted), ['overflow needs funding', 'nightly held by hand', 'contract spend cap reached until 15:42', 'secondary 429 on 5h until 15:42', 'contract cooldown', 'reserve needs funding']);
   assert.equal(exhausted[2].title, 'at its spend cap until 15:42');
   assert.deepEqual(verdict({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }], obstacle: { name: 'budget', reason: 'day', until: iso(MIDNIGHT), window: null }, verdict: 'out' }), ['out', 'budget $1.10 of $5.00', 'at its spend budget for the period']);
   const daily = { budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1 };

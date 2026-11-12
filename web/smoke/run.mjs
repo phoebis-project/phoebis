@@ -29195,7 +29195,7 @@ await forView(['/guardrails', '/keys', '/pools'], async () => {
   function Switched({ disabled, initial = false }) {
     const [checked, setChecked] = useState(initial);
     // The caller's own `disabled: false` must lose to the switch's gate.
-    return h(SwitchedNumber, { checked, disabled, input: { 'aria-label': 'Cap amount', disabled: false, value: 5, onChange() {} }, label: 'Cap', numberLabel: 'Amount', onChange: setChecked });
+    return h(SwitchedNumber, { checked, disabled, input: { 'aria-label': 'Cap amount', disabled: false, value: 5, onNumber() {} }, label: 'Cap', numberLabel: 'Amount', onChange: setChecked });
   }
   const parts = (c) => ({ input: c.querySelector('input[aria-label="Cap amount"]'), toggle: c.querySelector('button[role="switch"]') });
   f = await mountNode(h(Switched));

@@ -27,12 +27,12 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { EMPTY_FIELD, ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, typedNumber, typedOf, type PoolGroup, type TypedField } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -48,6 +48,11 @@ const CREATE_MARKS: Partial<Record<PoolGroup, string>> = { guardrails: 'after sa
 // the rail.
 const EXPERT_ONLY: ReadonlySet<PoolGroup> = new Set(['autoMode', 'cacheDiagnostics', 'failover', 'placement', 'slowDown']);
 const percentOf = (share: number) => Math.round(share * 10_000) / 100;
+/** A share's field in percent, and the share a percent field reports, null for an emptied field either way. */
+const percentField = (share: number | null) => (share === null ? null : percentOf(share));
+const shareField = (percent: number | null) => (percent === null ? null : percent / 100);
+/** A required number as the save reads it: an emptied field is NaN, which `poolRefusals` holds under its sentence. */
+const held = (value: number | null) => value ?? Number.NaN;
 /** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
 const CEILING_PERCENT = { max: 100, min: 50 } as const;
 const CAP_PERCENT = { max: 100, min: 10 } as const;
@@ -145,7 +150,7 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'never', title: 'Never', body: 'treat an account in extra usage as unavailable until its window resets' },
 ];
 /** Members first, lowest priority number first, then alphabetically. Non-members trail alphabetically. */
-const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] => orderRows(accounts, (a) => members[a.id] ?? null, 'asc', (a) => a.label).map((a) => a.id);
+const orderedAccountIds = (accounts: Account[], members: Record<string, number | null>): string[] => orderRows(accounts, (a) => members[a.id] ?? null, 'asc', (a) => a.label).map((a) => a.id);
 const AFFINITY_HINT = 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.';
 // The order the pills read in: the default, the two directions away from it, then a hand-set mix.
 const PRESET_PILLS = ['balanced', 'fast', 'conservative', 'custom'] as const;
@@ -1005,37 +1010,59 @@ function WordedBadge({ badge, tone }: { badge: StandingBadge; tone: 'serious' | 
   );
 }
 
+/** The engine's settings as the dialog holds them, each number as its field reports it. */
+type EngineForm = { [K in keyof PoolEngineFields]: PoolEngineFields[K] extends number ? number | null : PoolEngineFields[K] };
+
+/** The engine's settings as the save and the presets read them. */
+const engineInput = (e: EngineForm): PoolEngineFields => ({
+  ...e,
+  burnAverageSeconds: held(e.burnAverageSeconds),
+  inFlightCap: held(e.inFlightCap),
+  overageMoveGraceMinutes: held(e.overageMoveGraceMinutes),
+  retryInPlaceSeconds: held(e.retryInPlaceSeconds),
+  returnToPlanDwellSeconds: held(e.returnToPlanDwellSeconds),
+  shedCap: held(e.shedCap),
+  shedDwellSeconds: held(e.shedDwellSeconds),
+  slowDownHoldSeconds: held(e.slowDownHoldSeconds),
+  slowDownStretchSeconds: held(e.slowDownStretchSeconds),
+  windDownMinutes: held(e.windDownMinutes),
+  windowCeiling: held(e.windowCeiling),
+});
+
+/**
+ * The dialog's fields as the operator leaves them. Each number is what its field reports: null for an emptied field
+ * and NaN for text the browser could not parse.
+ */
 interface PoolForm {
-  affinity: number;
+  affinity: number | null;
   affinityMode: AffinityMode;
   autoModeServer: boolean;
-  /** Each member's daily and monthly budget fields, empty for none, and kept for an unticked member too. */
-  budgets: Record<string, { daily: TypedField; monthly: TypedField }>;
+  /** Each member's daily and monthly budget, null for none, and kept for an unticked member too. */
+  budgets: Record<string, { daily: number | null; monthly: number | null }>;
   cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
   capture: boolean;
-  /** The retention field as typed, so an emptied field stays empty rather than reading as 0. */
-  captureHours: string;
+  captureHours: number | null;
   customAffinity: boolean;
-  engine: PoolEngineFields;
+  engine: EngineForm;
   /** The Custom pill is held apart from the values, so its inputs stay open while an edit passes through a preset. */
   failoverCustom: boolean;
   /** The pool's guardrail ids in the order they run, which the save sends apart from the input. */
   guardrails: string[];
   /** Off sends the scheduled horizon as null, the recipe's break-even, and keeps the number for the switch coming back. */
   horizonOn: boolean;
-  horizonSeconds: number;
+  horizonSeconds: number | null;
   keepalive: boolean;
-  maxIdleSeconds: number;
+  maxIdleSeconds: number | null;
   /** Off sends the parked ceiling as null, the recipe's break-even, and keeps the number for the switch coming back. */
   maxParkedOn: boolean;
-  maxParkedSeconds: number;
-  members: Record<string, number>;
+  maxParkedSeconds: number | null;
+  members: Record<string, number | null>;
   modelRules: ModelRule[];
   name: string;
   overage: OveragePolicy;
   preferSubscription: boolean;
-  prefixTokens: TypedField;
+  prefixTokens: number | null;
   sessionPlacement: SessionPlacement;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
@@ -1043,7 +1070,7 @@ interface PoolForm {
   subagentPlacement: SubagentPlacement;
 }
 
-const NO_BUDGET: PoolForm['budgets'][string] = { daily: EMPTY_FIELD, monthly: EMPTY_FIELD };
+const NO_BUDGET: PoolForm['budgets'][string] = { daily: null, monthly: null };
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
 
@@ -1055,7 +1082,7 @@ const blankForm = (): PoolForm => ({
   cacheDiagnostics: false,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
   capture: false,
-  captureHours: '24',
+  captureHours: 24,
   customAffinity: false,
   engine: { ...POOL_ENGINE_DEFAULTS },
   failoverCustom: false,
@@ -1071,7 +1098,7 @@ const blankForm = (): PoolForm => ({
   name: '',
   overage: 'prefer_plan',
   preferSubscription: true,
-  prefixTokens: { bad: false, text: String(POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens) },
+  prefixTokens: POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
   sheddingCustom: false,
   status: 'active',
@@ -1083,7 +1110,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
   autoModeServer: pool.autoModeServer,
-  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: { bad: false, text: m.budgetDailyUsd === null ? '' : String(m.budgetDailyUsd) }, monthly: { bad: false, text: m.budgetMonthlyUsd === null ? '' : String(m.budgetMonthlyUsd) } }])),
+  budgets: Object.fromEntries(pool.members.map((m) => [m.accountId, { daily: m.budgetDailyUsd, monthly: m.budgetMonthlyUsd }])),
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: {
     ...pool.cacheTtl,
@@ -1091,7 +1118,7 @@ const formFrom = (pool: Pool): PoolForm => ({
     plan: { ...pool.cacheTtl.plan, models: pool.cacheTtl.plan.models.map((m) => ({ ...m })) },
   },
   capture: pool.bodyCaptureHours > 0,
-  captureHours: String(pool.bodyCaptureHours || 24),
+  captureHours: pool.bodyCaptureHours || 24,
   customAffinity: !isPreset(pool.affinityTtlSeconds),
   engine: {
     burnAverageSeconds: pool.burnAverageSeconds,
@@ -1125,7 +1152,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   overage: pool.overagePolicy,
   // The stored answer, never the effective one, so reopening a pool shows what the operator chose.
   preferSubscription: pool.preferSubscription,
-  prefixTokens: { bad: false, text: String(pool.minSharedPrefixTokens) },
+  prefixTokens: pool.minSharedPrefixTokens,
   sessionPlacement: pool.sessionPlacement,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form. A degraded or exhausted pool is still routing.
@@ -1266,7 +1293,7 @@ export function PoolDialog({
   // The id the create call derives from the name, which keys created before the pool is saved use too.
   const draftPoolId = slug(form.name.trim());
   const draftName = form.name.trim() || 'new pool';
-  const draftCaptureHours = form.capture ? Number(form.captureHours) || 0 : 0;
+  const draftCaptureHours = form.capture ? form.captureHours || 0 : 0;
   const keyDialogPools = useMemo(
     () =>
       pool || pools.some((p) => p.id === draftPoolId)
@@ -1276,31 +1303,34 @@ export function PoolDialog({
   );
   const keyIds = useMemo(() => new Set([...keys, ...localKeys].map((k) => k.id)), [keys, localKeys]);
   const suggestions = useCatalogSuggestions(Object.keys(form.members), open);
-  // Below five minutes a pin expires before the probe it scheduled can help.
-  const keepaliveBlocked = form.affinity < 300;
-  const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
+  const affinity = held(form.affinity);
+  // Below five minutes a pin expires before the probe it scheduled can help. An affinity that reads no number blocks
+  // warming too, so its own sentence alone holds the save.
+  const keepaliveBlocked = Number.isNaN(affinity) || affinity < 300;
+  const shortAffinity = affinity >= 300 && affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
   // The router's figures for the saved pool. The console holds no price, so an unsaved edit moves none of them.
   const resolved = pool?.keepaliveResolved ?? null;
   // 0 runs the window to the break-even and any other figure runs as set, above the break-even too, which the note
   // names.
   const idleAtBreakEven: Range | null = resolved && form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds : null;
-  const idleAbove: Range | null = resolved && form.maxIdleSeconds > resolved.breakEvenSeconds.min ? resolved.breakEvenSeconds : null;
+  const idleAbove: Range | null = resolved && held(form.maxIdleSeconds) > resolved.breakEvenSeconds.min ? resolved.breakEvenSeconds : null;
   // The router caps the two ceilings at the one break-even, so a ceiling switched on past it names the one in effect.
-  const parkedCapped = resolved && form.maxParkedOn ? cappedAt(form.maxParkedSeconds, resolved.breakEvenSeconds) : null;
-  const scheduledCapped = resolved && form.horizonOn ? cappedAt(form.horizonSeconds, resolved.breakEvenSeconds) : null;
+  const parkedCapped = resolved && form.maxParkedOn ? cappedAt(held(form.maxParkedSeconds), resolved.breakEvenSeconds) : null;
+  const scheduledCapped = resolved && form.horizonOn ? cappedAt(held(form.horizonSeconds), resolved.breakEvenSeconds) : null;
   // The share is the router's for the saved window, so a typed window names the window the share belongs to.
-  const savedIdle = pool?.keepalive.maxIdleSeconds ?? form.maxIdleSeconds;
-  const shareOf = savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
+  const savedIdle = pool?.keepalive.maxIdleSeconds ?? null;
+  const shareOf = savedIdle === null || savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? NO_BUDGET;
+  // The one reading of the form the save, the refusals, the presets and the previews take.
   const input: CreatePoolInput = {
-    ...form.engine,
+    ...engineInput(form.engine),
     affinityMode: form.affinityMode,
-    affinityTtlSeconds: form.affinity,
+    affinityTtlSeconds: affinity,
     autoModeServer: form.autoModeServer,
-    bodyCaptureHours: form.capture ? Number(form.captureHours) : 0,
+    bodyCaptureHours: form.capture ? held(form.captureHours) : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
     // With warming off the block is disabled, so what it holds goes back as stored: an edit left in it can
@@ -1308,18 +1338,20 @@ export function PoolDialog({
     keepalive: warming
       ? {
           enabled: true,
-          maxIdleSeconds: form.maxIdleSeconds,
-          maxParkedSeconds: form.maxParkedOn ? form.maxParkedSeconds : null,
-          scheduledHorizonSeconds: form.horizonOn ? form.horizonSeconds : null,
+          maxIdleSeconds: held(form.maxIdleSeconds),
+          // A switched-on ceiling left empty is held, where null would send the break-even.
+          maxParkedSeconds: form.maxParkedOn ? held(form.maxParkedSeconds) : null,
+          scheduledHorizonSeconds: form.horizonOn ? held(form.horizonSeconds) : null,
         }
       : { ...(pool?.keepalive ?? KEEPALIVE_DEFAULTS), enabled: false },
+    // An emptied budget is none, so it reaches the refusals as null, where an emptied priority is held.
     members: Object.entries(form.members).map(([accountId, priority]) => {
       const budget = budgetOf(accountId);
-      return { accountId, budgetDailyUsd: typedNumber(budget.daily), budgetMonthlyUsd: typedNumber(budget.monthly), priority };
+      return { accountId, budgetDailyUsd: budget.daily, budgetMonthlyUsd: budget.monthly, priority: held(priority) };
     }),
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
-      ? (typedNumber(form.prefixTokens) ?? Number.NaN)
+      ? held(form.prefixTokens)
       : (pool?.minSharedPrefixTokens ?? POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens),
     modelRules: form.modelRules,
     name: form.name.trim(),
@@ -1333,13 +1365,13 @@ export function PoolDialog({
   const listed = new Set(accounts.map((a) => a.id));
   // Until the list answers every stored member stands, so nothing is refused for an id the list may yet hold.
   const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)), {
-    capture: { maxHours: captureMaxHours, on: form.capture, typed: form.captureHours },
+    capture: { maxHours: captureMaxHours, on: form.capture, typed: held(form.captureHours) },
     identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
   });
   const { first, invalid, refusalOf, refusedFields, refusedGroups } = refusalsView(refusals);
   const valid = first === null;
 
-  const setEngine = <K extends keyof PoolEngineFields>(key: K, value: PoolEngineFields[K]) => setForm((f) => ({ ...f, engine: { ...f.engine, [key]: value } }));
+  const setEngine = <K extends keyof EngineForm>(key: K, value: EngineForm[K]) => setForm((f) => ({ ...f, engine: { ...f.engine, [key]: value } }));
   const pickShedding = (name: SheddingPreset) =>
     setForm((f) => (name === 'custom' ? { ...f, sheddingCustom: true } : { ...f, engine: { ...f.engine, ...SHEDDING_PRESETS[name] }, sheddingCustom: false }));
   const pickFailover = (name: FailoverPreset) =>
@@ -1424,8 +1456,8 @@ export function PoolDialog({
     const orderedAccounts = [...accounts].sort((a, b) => (orderIndex.get(a.id) ?? accounts.length) - (orderIndex.get(b.id) ?? accounts.length) || a.label.localeCompare(b.label));
     // A stored member the list does not hold gets a row of its own, the only place it can be unticked.
     const unlisted = accountsFailed === null ? Object.keys(form.members).filter((id) => !listed.has(id)).sort() : [];
-    const sheddingPill: SheddingPreset = form.sheddingCustom ? 'custom' : sheddingPresetOf(form.engine);
-    const failoverPill: FailoverPreset = form.failoverCustom ? 'custom' : failoverPresetOf(form.engine);
+    const sheddingPill: SheddingPreset = form.sheddingCustom ? 'custom' : sheddingPresetOf(input);
+    const failoverPill: FailoverPreset = form.failoverCustom ? 'custom' : failoverPresetOf(input);
     const budgetRefusal = refusals.find((r) => r.member?.column === 'budget_daily' || r.member?.column === 'budget_monthly');
     const budgetRefused = budgetRefusal && {
       label: accounts.find((a) => a.id === budgetRefusal.member?.accountId)?.label ?? budgetRefusal.field,
@@ -1537,13 +1569,12 @@ export function PoolDialog({
                           </label>
                         </td>
                         <td className="right col-fit">
-                          <Input
-                            type="number"
+                          <NumberInput
                             min={0}
                             max={9}
-                            value={on ? form.members[a.id] : ''}
+                            value={on ? form.members[a.id] : null}
                             disabled={!on}
-                            onChange={(e) => set('members', { ...form.members, [a.id]: Number(e.target.value) })}
+                            onNumber={(v) => set('members', { ...form.members, [a.id]: v })}
                             onBlur={() => setMemberOrder(orderedAccountIds(accounts, form.members))}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter') setMemberOrder(orderedAccountIds(accounts, form.members));
@@ -1553,27 +1584,25 @@ export function PoolDialog({
                           />
                         </td>
                         <td className="right col-fit">
-                          <Input
-                            type="number"
+                          <NumberInput
                             min={0.01}
                             step="any"
-                            value={budgetOf(a.id).daily.text}
+                            value={budgetOf(a.id).daily}
                             disabled={!on}
                             placeholder="none"
-                            onInput={(e) => setBudget(a.id, { daily: typedOf(e.currentTarget) })}
+                            onNumber={(v) => setBudget(a.id, { daily: v })}
                             aria-label={`Daily budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_daily', a.id))}
                           />
                         </td>
                         <td className="right col-fit">
-                          <Input
-                            type="number"
+                          <NumberInput
                             min={0.01}
                             step="any"
-                            value={budgetOf(a.id).monthly.text}
+                            value={budgetOf(a.id).monthly}
                             disabled={!on}
                             placeholder="none"
-                            onInput={(e) => setBudget(a.id, { monthly: typedOf(e.currentTarget) })}
+                            onNumber={(v) => setBudget(a.id, { monthly: v })}
                             aria-label={`Monthly budget for ${a.label}, USD`}
                             aria-invalid={invalid(memberField('budget_monthly', a.id))}
                           />
@@ -1602,13 +1631,13 @@ export function PoolDialog({
                         </label>
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={form.members[id]} disabled aria-label={`Priority for ${id}`} />
+                        <Input type="number" value={form.members[id] ?? ''} disabled aria-label={`Priority for ${id}`} />
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={budgetOf(id).daily.text} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
+                        <Input type="number" value={budgetOf(id).daily ?? ''} disabled placeholder="none" aria-label={`Daily budget for ${id}, USD`} />
                       </td>
                       <td className="right col-fit">
-                        <Input type="number" value={budgetOf(id).monthly.text} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
+                        <Input type="number" value={budgetOf(id).monthly ?? ''} disabled placeholder="none" aria-label={`Monthly budget for ${id}, USD`} />
                       </td>
                     </tr>
                   ))}
@@ -1793,12 +1822,11 @@ export function PoolDialog({
                 </>
               }
             >
-              <Input
-                type="number"
+              <NumberInput
                 min={0}
                 step={1_000}
-                value={form.prefixTokens.text}
-                onInput={(e) => set('prefixTokens', typedOf(e.currentTarget))}
+                value={form.prefixTokens}
+                onNumber={(v) => set('prefixTokens', v)}
                 disabled={!prefixEnabled}
                 aria-label="Minimum shared prefix, tokens"
                 aria-invalid={invalid('Minimum shared prefix, tokens')}
@@ -1832,12 +1860,11 @@ export function PoolDialog({
                 custom
               </button>
             </span>
-            <Input
-              type="number"
+            <NumberInput
               min={60}
               step={30}
               value={form.affinity}
-              onChange={(e) => set('affinity', Math.max(0, Number(e.target.value)))}
+              onNumber={(v) => set('affinity', v === null ? null : Math.max(0, v))}
               disabled={!form.customAffinity}
               aria-label="Session affinity in seconds"
               aria-invalid={invalid('Session affinity in seconds')}
@@ -1871,24 +1898,22 @@ export function PoolDialog({
               className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds) ? 'cell--half' : undefined}
               hint="A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it."
             >
-              <Input
-                type="number"
+              <NumberInput
                 min={CEILING_PERCENT.min}
                 max={CEILING_PERCENT.max}
-                value={percentOf(form.engine.windowCeiling)}
-                onChange={(e) => setEngine('windowCeiling', Number(e.target.value) / 100)}
+                value={percentField(form.engine.windowCeiling)}
+                onNumber={(v) => setEngine('windowCeiling', shareField(v))}
                 aria-label="Window ceiling (%)"
                 aria-invalid={invalid('Window ceiling (%)')}
               />
             </Field>
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
               <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding.">
-                <Input
-                  type="number"
+                <NumberInput
                   min={ENGINE_BOUNDS.burnAverageSeconds.min}
                   step={60}
                   value={form.engine.burnAverageSeconds}
-                  onChange={(e) => setEngine('burnAverageSeconds', Number(e.target.value))}
+                  onNumber={(v) => setEngine('burnAverageSeconds', v)}
                   disabled={sheddingPill !== 'custom'}
                   aria-invalid={invalid(ENGINE_FIELD_LABELS.burnAverageSeconds)}
                 />
@@ -1904,7 +1929,8 @@ export function PoolDialog({
               }
             >
               <UtilizationBar
-                ceiling={{ onChange: (v) => setEngine('windowCeiling', v / 100), value: percentOf(form.engine.windowCeiling) }}
+                // The handle takes a number, so an emptied or unparsable field puts it at 0.
+                ceiling={{ onChange: (v) => setEngine('windowCeiling', v / 100), value: percentOf(form.engine.windowCeiling || 0) }}
                 min={CEILING_PERCENT.min}
                 max={CEILING_PERCENT.max}
                 readings={readings}
@@ -1931,12 +1957,11 @@ export function PoolDialog({
                 so a refused half drawn alone in the plain view spans its row. */}
             <Expert refused={refusedFields.has('Shed cap (%)')}>
               <Field label="Shed cap (%)" className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds) ? 'cell--half' : undefined} hint="The most of the member's burn one round removes. The round removes what brings the window under the ceiling, up to this.">
-                <Input
-                  type="number"
+                <NumberInput
                   min={CAP_PERCENT.min}
                   max={CAP_PERCENT.max}
-                  value={percentOf(form.engine.shedCap)}
-                  onChange={(e) => setEngine('shedCap', Number(e.target.value) / 100)}
+                  value={percentField(form.engine.shedCap)}
+                  onNumber={(v) => setEngine('shedCap', shareField(v))}
                   disabled={sheddingPill !== 'custom'}
                   aria-invalid={invalid('Shed cap (%)')}
                 />
@@ -1944,12 +1969,11 @@ export function PoolDialog({
             </Expert>
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.shedDwellSeconds)}>
               <Field label={ENGINE_FIELD_LABELS.shedDwellSeconds} className={expertView || refusedFields.has('Shed cap (%)') ? 'cell--half' : undefined} hint="The least time between two rounds on one member, and how long a moved session stays off it.">
-                <Input
-                  type="number"
+                <NumberInput
                   min={ENGINE_BOUNDS.shedDwellSeconds.min}
                   step={60}
                   value={form.engine.shedDwellSeconds}
-                  onChange={(e) => setEngine('shedDwellSeconds', Number(e.target.value))}
+                  onNumber={(v) => setEngine('shedDwellSeconds', v)}
                   disabled={sheddingPill !== 'custom'}
                   aria-invalid={invalid(ENGINE_FIELD_LABELS.shedDwellSeconds)}
                 />
@@ -1995,25 +2019,23 @@ export function PoolDialog({
                 className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds) ? 'cell--half' : undefined}
                 hint="The time the slow-down may add to a session before a round moves sessions off the member, with load shedding on. Under it the slow-down holds alone."
               >
-                <Input
-                  type="number"
+                <NumberInput
                   min={ENGINE_BOUNDS.slowDownStretchSeconds.min}
                   max={ENGINE_BOUNDS.slowDownStretchSeconds.max}
                   step={60}
                   value={form.engine.slowDownStretchSeconds}
-                  onChange={(e) => setEngine('slowDownStretchSeconds', Number(e.target.value))}
+                  onNumber={(v) => setEngine('slowDownStretchSeconds', v)}
                   aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownStretchSeconds)}
                 />
               </Field>
             </Expert>
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}>
               <Field label={ENGINE_FIELD_LABELS.slowDownHoldSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.slowDownStretchSeconds) ? 'cell--half' : undefined} hint="The longest one request waits. 120 s leaves 60 s of the client's 180 s first-byte window for the upstream's head.">
-                <Input
-                  type="number"
+                <NumberInput
                   min={ENGINE_BOUNDS.slowDownHoldSeconds.min}
                   max={ENGINE_BOUNDS.slowDownHoldSeconds.max}
                   value={form.engine.slowDownHoldSeconds}
-                  onChange={(e) => setEngine('slowDownHoldSeconds', Number(e.target.value))}
+                  onNumber={(v) => setEngine('slowDownHoldSeconds', v)}
                   aria-invalid={invalid(ENGINE_FIELD_LABELS.slowDownHoldSeconds)}
                 />
               </Field>
@@ -2046,11 +2068,10 @@ export function PoolDialog({
                 className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds) ? 'cell--half' : undefined}
                 hint="Requests one member serves at once. A member at the cap takes no fresh session while a sibling has room. With every member full, a request waits up to Retry in place for a slot."
               >
-                <Input
-                  type="number"
+                <NumberInput
                   min={ENGINE_BOUNDS.inFlightCap.min}
                   value={form.engine.inFlightCap}
-                  onChange={(e) => setEngine('inFlightCap', Number(e.target.value))}
+                  onNumber={(v) => setEngine('inFlightCap', v)}
                   disabled={failoverPill !== 'custom'}
                   aria-invalid={invalid(ENGINE_FIELD_LABELS.inFlightCap)}
                 />
@@ -2058,12 +2079,11 @@ export function PoolDialog({
             </Expert>
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}>
               <Field label={ENGINE_FIELD_LABELS.retryInPlaceSeconds} className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.inFlightCap) ? 'cell--half' : undefined} hint="The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.">
-                <Input
-                  type="number"
+                <NumberInput
                   min={ENGINE_BOUNDS.retryInPlaceSeconds.min}
                   max={ENGINE_BOUNDS.retryInPlaceSeconds.max}
                   value={form.engine.retryInPlaceSeconds}
-                  onChange={(e) => setEngine('retryInPlaceSeconds', Number(e.target.value))}
+                  onNumber={(v) => setEngine('retryInPlaceSeconds', v)}
                   disabled={failoverPill !== 'custom'}
                   aria-invalid={invalid(ENGINE_FIELD_LABELS.retryInPlaceSeconds)}
                 />
@@ -2092,12 +2112,11 @@ export function PoolDialog({
           </Field>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}>
             <Field label={ENGINE_FIELD_LABELS.overageMoveGraceMinutes} hint="Under Prefer plan quota, a session stays on an account in overage while its window resets within this many minutes. At 0 it moves at once.">
-              <Input
-                type="number"
+              <NumberInput
                 min={ENGINE_BOUNDS.overageMoveGraceMinutes.min}
                 max={ENGINE_BOUNDS.overageMoveGraceMinutes.max}
                 value={form.engine.overageMoveGraceMinutes}
-                onChange={(e) => setEngine('overageMoveGraceMinutes', Number(e.target.value))}
+                onNumber={(v) => setEngine('overageMoveGraceMinutes', v)}
                 aria-invalid={invalid(ENGINE_FIELD_LABELS.overageMoveGraceMinutes)}
               />
             </Field>
@@ -2109,12 +2128,11 @@ export function PoolDialog({
           </Expert>
           <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.returnToPlanDwellSeconds)}>
             <Field label={ENGINE_FIELD_LABELS.returnToPlanDwellSeconds} hint="Under Always, how long a warm session stays on the API-key member before it returns. 0 returns it at once.">
-              <Input
-                type="number"
+              <NumberInput
                 min={ENGINE_BOUNDS.returnToPlanDwellSeconds.min}
                 max={ENGINE_BOUNDS.returnToPlanDwellSeconds.max}
                 value={form.engine.returnToPlanDwellSeconds}
-                onChange={(e) => setEngine('returnToPlanDwellSeconds', Number(e.target.value))}
+                onNumber={(v) => setEngine('returnToPlanDwellSeconds', v)}
                 onFocus={() => setDwellFocused(true)}
                 onBlur={() => setDwellFocused(false)}
                 // A refused dwell stays editable whatever the mode, or its hold on the save could not be cleared.
@@ -2132,12 +2150,11 @@ export function PoolDialog({
                 </>
               }
             >
-              <Input
-                type="number"
+              <NumberInput
                 min={ENGINE_BOUNDS.windDownMinutes.min}
                 max={ENGINE_BOUNDS.windDownMinutes.max}
                 value={form.engine.windDownMinutes}
-                onChange={(e) => setEngine('windDownMinutes', Number(e.target.value))}
+                onNumber={(v) => setEngine('windDownMinutes', v)}
                 aria-invalid={invalid(ENGINE_FIELD_LABELS.windDownMinutes)}
               />
             </Field>
@@ -2246,12 +2263,11 @@ export function PoolDialog({
                 </>
               }
             >
-              <Input
-                type="number"
+              <NumberInput
                 min={KEEPALIVE_BOUNDS.maxIdleSeconds.min}
                 max={KEEPALIVE_BOUNDS.maxIdleSeconds.max}
                 value={form.maxIdleSeconds}
-                onChange={(e) => set('maxIdleSeconds', Number(e.target.value))}
+                onNumber={(v) => set('maxIdleSeconds', v)}
                 disabled={!warming}
                 aria-invalid={invalid(KEEPALIVE_FIELD_LABELS.maxIdleSeconds)}
               />
@@ -2262,7 +2278,7 @@ export function PoolDialog({
                 disabled={!warming}
                 checked={form.maxParkedOn}
                 onChange={(v) => set('maxParkedOn', v)}
-                input={{ min: KEEPALIVE_BOUNDS.maxParkedSeconds.min, max: KEEPALIVE_BOUNDS.maxParkedSeconds.max, value: form.maxParkedSeconds, onChange: (e) => set('maxParkedSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.maxParkedSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.maxParkedSeconds) }}
+                input={{ min: KEEPALIVE_BOUNDS.maxParkedSeconds.min, max: KEEPALIVE_BOUNDS.maxParkedSeconds.max, value: form.maxParkedSeconds, onNumber: (v) => set('maxParkedSeconds', v), 'aria-label': KEEPALIVE_FIELD_LABELS.maxParkedSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.maxParkedSeconds) }}
                 hint={
                   <>
                     How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
@@ -2278,7 +2294,7 @@ export function PoolDialog({
                 disabled={!warming}
                 checked={form.horizonOn}
                 onChange={(v) => set('horizonOn', v)}
-                input={{ min: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.min, max: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.max, value: form.horizonSeconds, onChange: (e) => set('horizonSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds) }}
+                input={{ min: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.min, max: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.max, value: form.horizonSeconds, onNumber: (v) => set('horizonSeconds', v), 'aria-label': KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds) }}
                 hint={
                   <>
                     A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
@@ -2294,7 +2310,7 @@ export function PoolDialog({
             <div className="callout callout--warning" role="status">
               <IconWarning size={16} />
               <div>
-                Session affinity is {fmtAffinity(form.affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
+                Session affinity is {fmtAffinity(affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
               </div>
             </div>
           )}
@@ -2321,12 +2337,11 @@ export function PoolDialog({
               </>
             }
           >
-            <Input
-              type="number"
+            <NumberInput
               min={1}
               max={captureMaxHours}
               value={form.captureHours}
-              onChange={(e) => set('captureHours', e.target.value)}
+              onNumber={(v) => set('captureHours', v)}
               disabled={!form.capture}
               aria-label="Capture retention in hours"
               aria-invalid={invalid('Capture retention in hours')}
