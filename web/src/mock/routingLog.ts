@@ -2946,13 +2946,35 @@ const EVENT_KINDS: readonly string[] = [
  * under `dir: 'asc'`, so a cursor resumes past its row by the same comparisons flipped.
  */
 const cursorOf = (row: RoutingLogPage['rows'][number]) => (row.type === 'decision' ? `${Date.parse(row.at)}:1:${row.requestId}/${row.seq}` : `${Date.parse(row.at)}:0:${row.id}`);
-/** The fields of the row a cursor names, as `compareRows` reads them. */
+/**
+ * A cursor's integer as the routes parse one, an optional sign and digits alone, or null. An integer past what a
+ * number holds exactly reads null too, where the routes read one up to their 64-bit bound.
+ */
+export const cursorInteger = (text: string): number | null => (/^[+-]?\d+$/.test(text) && Number.isSafeInteger(Number(text)) ? Number(text) : null);
+/**
+ * The fields of the row a cursor names, as `compareRows` reads them, or null for a cursor the route refuses. The
+ * request id may hold a `/` or a `:` of its own, so the sequence, the route's 32-bit unsigned figure, is read off the
+ * last `/`.
+ */
 const cursorKeyOf = (cursor: string) => {
-  const [at, rank, ...rest] = cursor.split(':');
-  const id = rest.join(':');
-  if (rank !== '1') return { at: iso(Number(at)), id: Number(id), type: 'event' as const };
+  const first = cursor.indexOf(':');
+  const second = first < 0 ? -1 : cursor.indexOf(':', first + 1);
+  if (second < 0) return null;
+  const ms = cursorInteger(cursor.slice(0, first));
+  // A `Date` holds a narrower range than the route's 64-bit instant, so an instant past it is refused where the route
+  // answers a page.
+  if (ms === null || Number.isNaN(new Date(ms).getTime())) return null;
+  const rank = cursor.slice(first + 1, second);
+  const id = cursor.slice(second + 1);
+  if (rank === '0') {
+    const rowid = cursorInteger(id);
+    return rowid === null ? null : { at: iso(ms), id: rowid, type: 'event' as const };
+  }
   const slash = id.lastIndexOf('/');
-  return { at: iso(Number(at)), requestId: id.slice(0, slash), seq: Number(id.slice(slash + 1)), type: 'decision' as const };
+  const seq = id.slice(slash + 1);
+  // Below 1, the slash is missing or leaves the request id empty.
+  if (rank !== '1' || slash < 1 || !/^\+?\d+$/.test(seq) || Number(seq) > 0xffff_ffff) return null;
+  return { at: iso(ms), requestId: id.slice(0, slash), seq: Number(seq), type: 'decision' as const };
 };
 
 /**
@@ -2961,9 +2983,11 @@ const cursorKeyOf = (cursor: string) => {
  * exactly what it lists, `probe` for a probe's decision of any kind. `accounts` matches a decision's source too.
  * `limit + 1` rows are read so a cursor is offered only when a next page exists, and the counts come under a request
  * filter. The rows are the ledger's as the caller reads them: its decision summaries, its events, and the rows a mock's
- * writes recorded since, which `written` holds.
+ * writes recorded since, which `written` holds. A cursor the route refuses answers null, so the caller answers its 400.
  */
-export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { events: readonly RoutingEvent[]; summaries: readonly DecisionSummary[]; written: readonly RoutingEvent[] }): RoutingLogPage {
+export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { events: readonly RoutingEvent[]; summaries: readonly DecisionSummary[]; written: readonly RoutingEvent[] }): RoutingLogPage | null {
+  const cursor = query.cursor === undefined ? undefined : cursorKeyOf(query.cursor);
+  if (cursor === null) return null;
   const from = query.from ? Date.parse(query.from) : now - HOUR;
   const to = query.to ? Date.parse(query.to) : now;
   // An empty list is no filter, as the client omits it from the query.
@@ -3001,9 +3025,8 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { even
   const merged = [...decisions, ...events].sort(compareRows);
   if (dir === 'asc') merged.reverse();
   // The route resumes strictly past the cursor's row in the page's order.
-  const cursor = query.cursor ? cursorKeyOf(query.cursor) : null;
   const sign = dir === 'asc' ? -1 : 1;
-  const rest = cursor === null ? merged : merged.filter((row) => sign * compareRows(row, cursor) > 0);
+  const rest = cursor === undefined ? merged : merged.filter((row) => sign * compareRows(row, cursor) > 0);
   const limit = query.limit ?? 25;
   const page = rest.slice(0, limit);
   const last = page[page.length - 1];

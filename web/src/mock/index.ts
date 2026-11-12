@@ -31,7 +31,7 @@ import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, getDecision, listRoutingLog } from './routingLog';
+import { ROUTING_LOG_KINDS, WEEKLY_RESETS, claimDetail, cursorInteger, getDecision, listRoutingLog } from './routingLog';
 import { ROUTING_EVENTS, SUMMARIES } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, hourCeil, iso, startOfHour } from './time';
@@ -512,10 +512,18 @@ const figureOf = (r: RequestLog, order: RequestOrder): number | null => {
 const keyOf = (r: RequestLog, order: RequestOrder): OrderKey => ({ figure: figureOf(r, order), id: r.id });
 /** The route's cursor under a key: `<figure>:<id>`, the figure empty where the row carries none. */
 const cursorOf = (r: RequestLog, order: RequestOrder): string => `${figureOf(r, order) ?? ''}:${r.id}`;
-const cursorKeyOf = (cursor: string): OrderKey => {
+/**
+ * The keys a cursor names, or null for a cursor the route refuses: no separator, a figure its integer parse does not
+ * read, or an empty figure under `received_at` or `attempts`, whose rows all carry one.
+ */
+const cursorKeyOf = (cursor: string, order: RequestOrder): OrderKey | null => {
   const sep = cursor.indexOf(':');
+  if (sep < 0) return null;
   const value = cursor.slice(0, sep);
-  return { figure: value === '' ? null : Number(value), id: cursor.slice(sep + 1) };
+  const id = cursor.slice(sep + 1);
+  if (value === '') return order === 'received_at' || order === 'attempts' ? null : { figure: null, id };
+  const figure = cursorInteger(value);
+  return figure === null ? null : { figure, id };
 };
 
 const requestOrderOf = (order: RequestOrder, dir: 'asc' | 'desc') => {
@@ -1324,6 +1332,8 @@ export class MockApi implements Api {
     const order = query.order ?? 'received_at';
     if (!REQUEST_ORDER_VALUES.includes(order)) return Promise.reject(new ApiError(400, 'order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens', null));
     const dir = query.dir ?? 'desc';
+    const cursor = query.cursor === undefined ? undefined : cursorKeyOf(query.cursor, order);
+    if (cursor === null) return Promise.reject(new ApiError(400, 'cursor is <value>:<id>', null));
     const live = new Map(this.registry().keys.map((k) => [k.id, Date.parse(k.createdAt)]));
     // The newest stamp is over the rows the query's filters admit, its `to` included, with its `landedAfter` as the
     // floor and capped at its `to` unless the query marks a fixed end, as the route reads it.
@@ -1335,9 +1345,8 @@ export class MockApi implements Api {
     const landedThrough = query.to && !query.fixedEnd ? Math.min(newest, Date.parse(query.to)) : newest;
     // The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither
     // repeated nor skipped.
-    const cursor = query.cursor ? cursorKeyOf(query.cursor) : null;
     const compare = compareOrderKeys(dir);
-    const after = cursor === null ? matched : matched.filter((r) => compare(keyOf(r, order), cursor) > 0);
+    const after = cursor === undefined ? matched : matched.filter((r) => compare(keyOf(r, order), cursor) > 0);
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];
@@ -1352,7 +1361,9 @@ export class MockApi implements Api {
     if (query.limit !== undefined && !(Number.isInteger(query.limit) && query.limit >= 1 && query.limit <= 200)) return Promise.reject(new ApiError(400, 'limit is 1 to 200', null));
     const { routingEvents, summaries } = ledger();
     // The writes' rows are the ledger's too, so a fresh installation lists none of them.
-    return latency(listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: emptyStore() ? [] : this.written }));
+    const page = listRoutingLog(query, Date.now(), { events: routingEvents, summaries, written: emptyStore() ? [] : this.written });
+    if (page === null) return Promise.reject(new ApiError(400, 'cursor is <at>:<rank>:<id>', null));
+    return latency(page);
   }
 
   listSessions() {

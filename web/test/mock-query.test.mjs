@@ -177,6 +177,27 @@ test("listRequests orders by a nullable key with the rows without a figure last 
   );
 });
 
+test("the request list and the routing log answer a cursor their route's parser refuses with its 400, and a cursor the log wrote still turns its page", async () => {
+  const refused = (message) => (e) => e instanceof d.ApiError && e.status === 400 && e.message === message;
+  // A figure that is no number, one `Number` reads where the route's integer parse does not, an empty figure under the
+  // default order, whose rows all carry one, and no separator.
+  for (const cursor of ['abc:req_1', '1e3:req_1', ':req_1', 'req_1']) {
+    await assert.rejects(api.listRequests({ cursor }), refused('cursor is <value>:<id>'), cursor);
+  }
+  // An instant that is no number, one separator, a rank other than 0 or 1, a decision id with no `/` and an event id
+  // that is no number.
+  for (const cursor of ['abc:1:req_1/1', '123:1', '100:2:r1/1', '100:1:req', '100:0:x']) {
+    await assert.rejects(api.listRoutingLog({ cursor }), refused('cursor is <at>:<rank>:<id>'), cursor);
+  }
+  // The log's default range is the wall clock's last hour, which holds none of the story's rows.
+  const from = new Date(Date.parse(AT) - 3_600_000).toISOString();
+  const four = await api.listRoutingLog({ from, limit: 4, to: AT });
+  const first = await api.listRoutingLog({ from, limit: 2, to: AT });
+  assert.ok(first.nextCursor !== null, 'a page of two rows out of the hour offers a cursor');
+  const next = await api.listRoutingLog({ cursor: first.nextCursor, from, limit: 2, to: AT });
+  assert.deepEqual(next.rows, four.rows.slice(2), "the page under the cursor holds the hour's third and fourth rows");
+});
+
 test('the mock answers a request id with the one row, whole and never by prefix', async () => {
   const [row] = unprobed;
   assert.deepEqual(await listed({ request: row.id }), [row.id]);
