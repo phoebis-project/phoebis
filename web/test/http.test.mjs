@@ -728,7 +728,6 @@ test("a dialog's write reaches no toast when refused, since the dialog draws the
     () => api.clearCooldown('work', 'account'),
     () => api.deleteAccount('work'),
     () => api.pauseAccount('work'),
-    () => api.releaseSession('desktop', 's1'),
     () => api.resumeAccount('work'),
     () => api.revokeKey('desktop'),
     () => api.rotateKey('desktop'),

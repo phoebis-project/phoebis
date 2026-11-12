@@ -278,7 +278,6 @@ export interface Api {
   /** `POST /admin/accounts/{id}/limit-resets/read`, quiet for the shell's toast: the dialog draws its failure. */
   readLimitResets(accountId: string): Promise<LimitResetsRead>;
   refreshUsage(accountId: string): Promise<void>;
-  releaseSession(keyId: string, sessionId: string): Promise<void>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   renameAccount(accountId: string, label: string, revision?: number): Promise<Account>;
   /** `POST /admin/ledger/parked/replay`; a `503` under a held writer is thrown as an `ApiError` the caller draws. */

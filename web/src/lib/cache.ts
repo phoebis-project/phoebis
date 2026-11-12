@@ -60,7 +60,7 @@ export const WASTED_PROBE_LABEL: Record<WastedProbeReason, string> = {
   horizon: 'Horizon held the recipe',
   idle_limit: 'Idle limit ran out',
   parked_limit: 'Parked limit ran out',
-  released: 'Released by an operator',
+  released: 'Released',
   replaced: 'Replaced by a new registration',
   session_ended: 'Session ended',
 };

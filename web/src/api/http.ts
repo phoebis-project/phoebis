@@ -306,7 +306,6 @@ export class HttpApi implements Api {
   refreshUsage = async (accountId: string) => {
     await call('POST', `/admin/accounts/${enc(accountId)}/usage/refresh`);
   };
-  releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
   renameAccount = async (accountId: string, label: string, revision?: number) =>
     d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision), DIALOG_WRITE));
   // Quiet: the dashboard's line draws a refusal, the held writer's `503` among them, in its own slot.

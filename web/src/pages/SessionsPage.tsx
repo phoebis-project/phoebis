@@ -5,7 +5,6 @@ import { iso } from '@/api/decode';
 import type { Account, ApiKey, BurnFigures, CompanionState, KeepaliveRecipe, ModelTiers, Pool, RecipeState, Session, SessionSpend } from '@/api/types';
 import { LIFECYCLE_VALUES } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
-import { useSession } from '@/app/session';
 import { FilterBar } from '@/components/FilterBar';
 import { SortControl } from '@/components/SortControl';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
@@ -14,7 +13,7 @@ import type { Option } from '@/components/ui/OptionList';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, KeyValue, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
+import { Badge, Button, Card, EmptyState, ErrorState, KeyValue, Menu, ReadNotice, Skeleton, toggleRow, useHostedDescription } from '@/components/ui/primitives';
 import { accountHref, ACTIVE_WITHIN, ANALYTICS_CODEC, keyHref, REQUESTS_CODEC, requestsHref as requestsAddressHref, SESSION_SORT_KEYS, SESSIONS_CODEC, type SessionsAddress, sortDirOf, type SortDir } from '@/lib/address';
 import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
@@ -22,7 +21,7 @@ import { clock } from '@/lib/clock';
 import { tierOrder, weekReadingOf } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, messageOf, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
 import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
@@ -186,12 +185,6 @@ const ledgerItems = (session: Session, lastRequestAt: string | null, navigate: (
 };
 
 /**
- * A session id reads whole, since the cell's column cuts it with an ellipsis, and a sentence passes `chars` to cut it
- * at a label's width.
- */
-const sessionLabel = (session: Session, chars?: number) => (chars === undefined ? session.sessionId : shortId(session.sessionId, chars));
-
-/**
  * When the pool stopped probing: the longest idle window the router resolves for the pool's recipes, counted from the
  * session's last activity, so the time never reads earlier than the window could have run.
  */
@@ -345,7 +338,6 @@ interface CostContext extends WeekReading {
 
 export function SessionsPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
-  const [pending, setPending] = useState<Row | null>(null);
   // Every dialog and the bar's and the rows' menus hold the reads through the page's host, since an answer landing
   // under a row's open menu could add or drop rows beneath it.
   const { cause: pauseCause, host } = useHoldHost();
@@ -368,7 +360,6 @@ export function SessionsPage() {
   // The open rows whose fold line was opened, by row, so each row unfolds the agents the filters hide on its own.
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
   const [visible, setVisible] = useState<Set<SessionColumnId>>(() => new Set(SESSION_COLUMNS.map((c) => c.id).filter((id) => !HIDDEN_BY_DEFAULT.includes(id))));
-  const { notify } = useSession();
   // The base row the last fork link led to, marked until another fork link is followed.
   const [current, setCurrent] = useState<string | null>(null);
   const [howOpen, setHowOpen] = useState(false);
@@ -401,17 +392,6 @@ export function SessionsPage() {
   // draws its error state where that read is the sessions. A refresh that fails after a first answer keeps the rows.
   const reads = { keys, recipes, sessions };
   const firstFailed = (['sessions', 'recipes', 'keys'] as const).find((n) => failedFirst(reads[n])) ?? null;
-  const onConfirmRelease = () => {
-    if (!pending) return;
-    void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
-      () => {
-        notify('Session released');
-        sessions.reload();
-        recipes.reload();
-      },
-      (e: unknown) => notify(messageOf(e)),
-    );
-  };
   // The listed rows by element id, so a fork's badge finds its base's row and reads the account the base sits on.
   const listedRows = useMemo(() => new Map((rows ?? []).map((r) => [rowDomId(r.session), r])), [rows]);
   // Main's pin, a fork's base and each line read their account here rather than off the rows, so an accounts answer
@@ -532,7 +512,6 @@ export function SessionsPage() {
                         lines={lines ?? { drawn: [], hidden: 0, shown: [] }}
                         listedRows={listedRows}
                         onFollowFork={followFork}
-                        onRelease={() => setPending(row)}
                         onUnfold={() => unfold(id)}
                         unfolded={unfolded.has(id)}
                         visible={visible}
@@ -564,19 +543,6 @@ export function SessionsPage() {
             </div>
           )}
         </Card>
-
-        <ConfirmDialog
-          open={pending !== null}
-          onClose={() => setPending(null)}
-          title="Release session"
-          confirmLabel="Release"
-          body={
-            pending
-              ? `Session ${sessionLabel(pending.session, SESSION_CHARS)} loses its pin to ${pending.session.accountId ?? 'its account'} and every recipe on it is dropped. The next request picks an account again and the prompt cache on ${pending.session.accountId ?? 'it'} goes cold.`
-              : ''
-          }
-          onConfirm={onConfirmRelease}
-        />
       </div>
     </PopoverHost.Provider>
   );
@@ -808,7 +774,6 @@ function SessionRows({
   lines: { drawn: drawnLines, shown: shownLines },
   listedRows,
   onFollowFork,
-  onRelease,
   onUnfold,
   unfolded,
   visible,
@@ -826,7 +791,6 @@ function SessionRows({
   listedRows: ReadonlyMap<string, Row>;
   now: number;
   onFollowFork: (id: string) => void;
-  onRelease: () => void;
   onToggle: () => void;
   onUnfold: () => void;
   open: boolean;
@@ -913,7 +877,7 @@ function SessionRows({
           </span>
         </td>
         <td className="mono col-fill" title={session.sessionId}>
-          <span className="srow__id ellipsis">{sessionLabel(session)}</span>
+          <span className="srow__id ellipsis">{session.sessionId}</span>
           {(forkBase !== null || client !== '') && (
             <span className="sub srow__client" title={clientTitle === '' ? undefined : clientTitle}>
               {forkBase !== null && (
@@ -1053,7 +1017,6 @@ function SessionRows({
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
               // opens an hour either side of the session's last activity.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => navigate(routingLogTo()) },
-              ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />
         </td>

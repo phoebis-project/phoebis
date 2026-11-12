@@ -19437,7 +19437,7 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Saved by probes', 'Net saving', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Saved by probes', 'Net saving', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
 {
   const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
   const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
@@ -21928,7 +21928,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     api.getAnalyticsBreakdown = getAnalyticsBreakdown;
     const weekCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
     const wasteBars = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-    const labels = ['Entry expired', 'Evicted at the byte cap', 'Horizon held the recipe', 'Idle limit ran out', 'Parked limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
+    const labels = ['Entry expired', 'Evicted at the byte cap', 'Horizon held the recipe', 'Idle limit ran out', 'Parked limit ran out', 'Released', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
     results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 9 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
     const wasteCounts = [...(weekCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
     results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 9 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
@@ -26747,8 +26747,8 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   {
     const items = await openMenu(barren);
     results.push({
-      name: '/sessions the overflow menu carries the same four entries',
-      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in requests|View in routing log|Release',
+      name: '/sessions the overflow menu carries the same three entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in requests|View in routing log',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
     // The routing log reads the session's decisions, which need no ledgered request, while both ledger
@@ -26822,21 +26822,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     await m.navigate('/sessions?finished=1');
     await until(m, () => rows().length > 0);
   }
-  {
-    const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
-    release?.click();
-    await m.settle(250);
-    const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-    // The story's first session sits on primary, which the body names twice.
-    const words = { action: [...(confirm?.querySelectorAll('button') ?? [])].some((b) => b.textContent?.trim() === 'Release'), body: confirm?.textContent ?? '', title: confirm?.querySelector('.dialog__title')?.textContent ?? null };
-    results.push({
-      name: '/sessions Release from the menu confirms first with the dialog\'s words',
-      ok: words.title === 'Release session' && words.action && words.body.includes(' loses its pin to primary and every recipe on it is dropped. The next request picks an account again and the prompt cache on primary goes cold.'),
-      missing: [JSON.stringify(words).slice(0, 400)],
-    });
-    [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
-    await m.settle(200);
-  }
 
   // One row per key, generation and session: a key id created again leaves the earlier holder's sessions in
   // the ledger, so the id they share appears twice. The earlier holder's row left the route's list under the
@@ -26882,15 +26867,6 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
       name: '/sessions the live holder keeps the recipes of the id they share',
       ok: live !== undefined && Number(cell(live, 'Agents')?.firstChild?.textContent?.trim()) > 0 && cell(live, 'Cache')?.querySelector('.badge') !== null,
       missing: live ? [cell(live, 'Agents')?.textContent?.trim() ?? '', cell(live, 'Cache')?.textContent?.trim() ?? ''] : ['absent'],
-    });
-    const liveItems = (await openMenu(live)).map((b) => b.textContent?.trim());
-    await openMenu(live);
-    const goneItems = (await openMenu(gone)).map((b) => b.textContent?.trim());
-    await openMenu(gone);
-    results.push({
-      name: '/sessions only the live holder can be released',
-      ok: liveItems.includes('Release') && goneItems.length === 3 && !goneItems.includes('Release'),
-      missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
     });
     gone?.click();
     await m.settle(200);
@@ -27238,56 +27214,24 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     row?.click();
     await m.settle(150);
   }
-
-  // Last of the /sessions blocks: the release drops a row from the shared mock that every count above still expects.
-  // The release is read with every row the route lists shown.
-  await m.navigate('/sessions?finished=1');
-  await until(m, () => busyRow() !== undefined);
   {
-    const id = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
-    const release = (await openMenu(busyRow())).find((b) => b.textContent?.trim() === 'Release');
-    release?.click();
-    await m.settle(250);
-    [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
-    await m.settle(600);
-    // The route's 27 rows with the finished sessions shown, the two written sessions and the workshop session among
-    // them, less the one released.
-    results.push({ name: '/sessions Release calls the API and the row leaves', ok: m.text().includes('Session released') && rows().length === 26, missing: [String(rows().length)] });
-    {
-      // The earlier holder left the route's list under the non-companion timeout, so the case reads its drawing from
-      // the seed, the view mounted again past another page with the Key column on.
-      const { listSessions } = api;
-      api.listSessions = seedSessions(listSessions);
-      await m.navigate('/settings');
-      await m.navigate('/sessions?finished=1');
-      await until(m, () => rows().length > 0);
-      await showColumn(m, 'Key');
-      const released = rows().filter((r) => cell(r, 'Session')?.getAttribute('title') === id);
-      const keys = released.map((r) => ({ key: cell(r, 'Key')?.textContent?.trim() ?? '', sub: cell(r, 'Key')?.querySelector('.sub')?.textContent?.trim() ?? null }));
-      api.listSessions = listSessions;
-      await m.navigate('/settings');
-      await m.navigate('/sessions?finished=1');
-      await until(m, () => rows().length > 0);
-      results.push({
-        name: '/sessions releasing the live holder leaves the earlier one in the ledger',
-        ok: keys.length === 1 && keys[0].sub === 'deleted holder',
-        missing: keys.map((k) => k.key),
-      });
-    }
-  }
-  {
-    // A fork whose base is no longer listed names the base and the depth on its title and links nowhere.
-    const forked = (await api.listSessions()).find((s) => s.forkedFrom !== null);
-    const base = rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.forkedFrom);
-    (await openMenu(base)).find((b) => b.textContent?.trim() === 'Release')?.click();
-    await m.settle(250);
-    [...([...m.container.querySelectorAll('dialog[open]')].pop()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Release')?.click();
-    await m.settle(600);
+    // A fork whose base is no longer listed names the base and the depth on its title and links nowhere. The answer
+    // leaves out a base the route lists, so the case reads the drop of a real row, the view mounted again past another
+    // page.
+    const { listSessions } = api;
+    const listed = await listSessions.call(api);
+    const forked = listed.find((s) => s.forkedFrom !== null);
+    const base = listed.find((s) => forked !== undefined && s.keyId === forked.keyId && s.keyGeneration === forked.keyGeneration && s.sessionId === forked.forkedFrom);
+    api.listSessions = async () => (await listSessions.call(api)).filter((s) => !(base !== undefined && s.keyId === base.keyId && s.keyGeneration === base.keyGeneration && s.sessionId === base.sessionId));
+    await m.navigate('/settings');
+    await m.navigate('/sessions?finished=1');
+    await until(m, () => rows().length > 0);
     const forkCell = cell(rows().find((r) => cell(r, 'Session')?.getAttribute('title') === forked?.sessionId), 'Session');
     const badge = forkCell?.querySelector('.badge--accent');
     const unheld = `Branched from session ${forked?.forkedFrom} at depth ${forked?.forkDepth}, which this list does not hold`;
     const describedBy = badge?.getAttribute('aria-describedby');
     const description = describedBy ? (m.container.querySelector(`[id="${describedBy}"]`)?.textContent ?? null) : null;
+    api.listSessions = listSessions;
     results.push({
       name: '/sessions a fork whose base is not listed reads fork with no link, the unheld base and its depth on its title and in its description',
       ok: forked !== undefined && base !== undefined && badge?.textContent?.trim() === 'fork' && badge.tagName !== 'A' && forkCell.querySelector('a') === null && badge.getAttribute('title') === unheld && description === unheld,

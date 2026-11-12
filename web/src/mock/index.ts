@@ -1386,11 +1386,6 @@ export class MockApi implements Api {
     return latency(undefined, 400);
   }
 
-  async releaseSession(keyId: string, sessionId: string) {
-    this.sessions = this.sessions.filter((s) => !(s.keyId === keyId && s.sessionId === sessionId && !s.historical));
-    return latency(undefined, 250);
-  }
-
   async renameAccount(accountId: string, label: string, revision?: number) {
     const a = this.account(accountId);
     if (revision !== undefined && revision !== a.revision) {
