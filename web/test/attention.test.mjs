@@ -113,6 +113,15 @@ test("a certificate item reads its last day and its first day past the end as to
   assert.equal(words(-2), 'expired 2 days ago');
 });
 
+test('a refresh token on its last day asks for the re-pair before its end, and one past its end for the re-pair alone', () => {
+  const token = (left, expires) => attentionDetail(item('pairing_expiring', { detail: { account: 'legacy', days_left: left, expires, label: 'legacy' }, subject: { id: 'legacy', label: 'legacy', type: 'account' } }), NOW);
+  const endsToday = NOW + 6 * 3_600_000;
+  const endedToday = NOW - 6 * 3_600_000;
+  const date = (ms) => fmtAbsolute(new Date(ms).toISOString());
+  assert.equal(token(0, endsToday), `legacy's refresh token expires today (${date(endsToday)}). Re-pair the account before then.`, 'an end within the day still lies ahead');
+  assert.equal(token(-1, endedToday), `legacy's refresh token expired today (${date(endedToday)}). Re-pair the account.`, 'an end within the last day has passed');
+});
+
 test("a badge's title lists the detail's members, an instant read as one, then the age", () => {
   const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, pools: ['all'], since: new Date(NOW - 42 * 60_000).toISOString() });
   assert.equal(attentionTitle(backoff, NOW), ['account: secondary', `backoff_since: ${fmtAbsolute(new Date(NOW - 42 * 60_000).toISOString())}`, 'rate_limited_in_a_row: 6', 'started 42m ago'].join('\n'));

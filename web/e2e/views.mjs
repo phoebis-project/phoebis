@@ -661,11 +661,13 @@ async function attentionLine(theme) {
  * right edges, the box 8 px under the badge and 8 px inside the window, the badge marked expanded while it stands. A
  * list that fits keeps every badge inside the box's top and bottom. One taller than the room under the badge stands
  * capped at that room and scrolls, as `placeFixed` places it, so its first badge is read inside the top at rest and its
- * last inside the bottom with the box scrolled to its end, then back to its top. The box's client and scroll heights
- * go to the measurements, so the line names the case that ran. The unpriced model's info badge compares against the
- * first warning badge in height, left edge and type, its ink on its own fill contrasting less than the warning badge's
- * (WCAG's relative luminance over the computed colors) and at 4.5 to 1 or more, since the line at 1280 px folds it and
- * one badge per row gives each its own box. Escape closes it and hands the focus back to the badge.
+ * last inside the bottom with the box scrolled to its end, then back to its top. A capped box's computed overflow-y
+ * reads auto or scroll, since a script scrolls a box whose overflow is hidden too, where no wheel or touch reaches its
+ * last badges. The box's client and scroll heights and its overflow-y go to the measurements, so the line names the
+ * case that ran. The unpriced model's info badge compares against the first warning badge in height, left edge and
+ * type, its ink on its own fill contrasting less than the warning badge's (WCAG's relative luminance over the computed
+ * colors) and at 4.5 to 1 or more, since the line at 1280 px folds it and one badge per row gives each its own box.
+ * Escape closes it and hands the focus back to the badge.
  */
 async function attentionList(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line's list ${what}`);
@@ -720,6 +722,7 @@ async function attentionList(theme) {
       label: box.getAttribute('aria-label'),
       left: Math.round(r.left),
       oneRowEach: rows.every((row, i) => i === 0 || row.top >= rows[i - 1].bottom),
+      overflowY: getComputedStyle(box).overflowY,
       right: Math.round(r.right),
       role: box.getAttribute('role'),
       rows: rows.length,
@@ -737,6 +740,7 @@ async function attentionList(theme) {
     if (!read.inside) {
       say(read.scrollHeight > read.clientHeight ? `capped at ${read.clientHeight} of its ${read.scrollHeight} px draws its first badge above its top at rest or its last past its bottom at the scroll's end` : 'draws a badge past its top or bottom');
     }
+    if (read.scrollHeight > read.clientHeight && read.overflowY !== 'auto' && read.overflowY !== 'scroll') say(`capped at ${read.clientHeight} of its ${read.scrollHeight} px reads overflow-y ${read.overflowY}, which no wheel or touch scrolls`);
     if (read.role !== 'dialog' || read.label !== 'Needs attention' || read.expanded !== 'true') say(`is ${read.role} named ${JSON.stringify(read.label)} under a badge expanded ${read.expanded}`);
     if (read.gap !== 8) say(`stands ${read.gap} px under its badge, not 8`);
     if (read.left < 8 || read.right > read.view.width - 8 || read.bottom > read.view.height - 8) say(`spans ${read.left} to ${read.right} and down to ${read.bottom}, outside the window less 8 px`);
