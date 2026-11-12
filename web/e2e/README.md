@@ -271,12 +271,13 @@ figure inside its ring, the billed ring alone in the mock pass, whose range pric
 Cost by table (its width recorded, every column inside its wrap at 1280 by 800), the filter bar of every list view at
 1280 by 800 and 1440 by 900, at rest, with the view's chips and, on a ranged view, with a span across midnight (the row
 32 px on one line with every control 32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px
-with a chip line, 49 and 83 px as the Analytics sticky bar, the Requests row at 1280 by 800 under the mock's count on
-two lines at rest (72 px, the count "25 shown, more available" taking the slots to 1275 px, so the edge wraps alone onto
-the second line) and across midnight (72 px, the slots 1175 px), and on one line with its chips (the bar 66 px, since
-that address lists no row and the "No rows" count fits its edge in 164.7 px), under another count on two lines where its
-slots run past the row and on one line otherwise, and on one line at 1440 by 900 in every case under the mock, each chip
-26 px with its word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below the
+with a chip line, 49 and 83 px as the Analytics sticky bar, the Requests row under the mock on two lines at 1280 by 800
+in every case, since the count's slot keeps the width of its longest text whatever the count reads (the slots 1284 px in
+the 992 px row, so the edge wraps alone onto the second line, the row 72 px, the bar 72 px at rest and across midnight
+and 106 px with its chips), and at 1440 by 900 on one line at rest and with its chips and on two across midnight (the
+Custom pill's span taking the slots to 1444 px in the 1152 px row, the row and the bar 72 px), under another story on
+two lines where its slots run past the row and on one line otherwise, each chip 26 px with its word in `--ink-2` and its
+values in `--ink`, the chip line on one line, the first card's head below the
 bar, on a card view the next element and the tiles below it, on Analytics the Group by select against Add filter, and on
 the routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by 800 on
 Analytics and Requests the bar's scroll width at most its client width with the count inside the window, the trailing

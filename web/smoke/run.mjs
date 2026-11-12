@@ -19703,6 +19703,30 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   page.unmount();
 }
 {
+  // A null Fable peak reads by the registry's row. Studio's seed (mock/accounts.ts) holds a 7-day Fable window, and
+  // here its rows hold no Fable peak, so its cell reads the dash of a range with no sample. Secondary's seed holds no
+  // Fable window, so its rows' null peak reads n/a.
+  const { listAccountRollups } = api;
+  api.listAccountRollups = async (...args) => (await listAccountRollups.apply(api, args)).map((r) => (r.accountId === 'studio' ? { ...r, peak: { ...r.peak, '7d_fable': null } } : r));
+  const page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  await page.settle(700);
+  api.listAccountRollups = listAccountRollups;
+  const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Accounts in range');
+  const column = [...(card?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === 'Peak Fable');
+  const cell = (id) => {
+    const span = [...(card?.querySelectorAll('tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === id)?.children[column]?.querySelector('span');
+    return span ? [span.textContent?.trim(), span.getAttribute('title')] : null;
+  };
+  const studio = cell('studio');
+  const secondary = cell('secondary');
+  results.push({
+    name: '/analytics the Peak Fable cell reads the dash for a Fable account with no sample in range and n/a for an account with no Fable window',
+    ok: JSON.stringify(studio) === '["-","no utilization sampled in range"]' && JSON.stringify(secondary) === '["n/a","no Fable window"]',
+    missing: [`studio ${JSON.stringify(studio)}`, `secondary ${JSON.stringify(secondary)}`],
+  });
+  page.unmount();
+}
+{
   // "Unused allowance by account" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts) and sunset's
   // term end, the last four weeks whatever the range. The priced cases read the four weeks' 7-day shares each account
   // left: secondary 0.61, 0.55, 0.7 and 0.58 of its week (2.44), sunset 0.54, 0.52, 0.48 and 0.57 (2.11, its newest
@@ -28667,7 +28691,7 @@ await forView(['/', '/accounts', '/analytics', '/guardrails', '/keys', '/pools',
   const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
-    ['/quota', (c, t) => t.includes('0 accounts') && c.querySelector('.qcard') === null, '0 accounts, no account card'],
+    ['/quota', (c, t) => t.includes('No accounts to list') && t.includes('The view lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended.') && c.querySelector('.qcard') === null, 'No accounts to list with its sentence, no account card'],
     ['/accounts', (c, t) => t.includes('The router holds no account yet'), 'The router holds no account yet'],
     // Under native, the shell's default, the cost tile reads an empty day's zero in each unit.
     ['/pools', (c) => c.querySelector('.pool-grid')?.childElementCount === 0 && zeroTiles(c).slice(0, 4).join(' ') === '0 0 0 0' && pairLines(c).join(' over ') === '0% subscription over $0.00 billed', 'no pool card, tiles 0 0 0 0, the cost tile 0% subscription over $0.00 billed'],

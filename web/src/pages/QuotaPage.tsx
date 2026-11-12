@@ -11,7 +11,7 @@ import { useChartInk } from '@/components/charts/useChartInk';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { IconChevronLeft, IconChevronRight, IconRefresh, IconReset, IconUser } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, Button, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, EmptyState, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, listWords, messageOf, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
@@ -112,13 +112,16 @@ export function QuotaPage() {
 
         {shown === 'accounts' ? (
           <section className="quota-section" id="accounts" role="tabpanel" aria-labelledby="tab-accounts">
-            {failure ?? (
-              <div className="quota-grid">
-                {!accounts.data
-                  ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-                  : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} warningDays={warningDays} />)}
-              </div>
-            )}
+            {failure ??
+              (accounts.data !== null && total === 0 ? (
+                <EmptyState title="No accounts to list" body="The view lists a subscription account that is paired, not awaiting re-authentication and whose plan has not ended." />
+              ) : (
+                <div className="quota-grid">
+                  {!accounts.data
+                    ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
+                    : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} warningDays={warningDays} />)}
+                </div>
+              ))}
           </section>
         ) : (
           <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">

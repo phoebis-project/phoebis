@@ -1117,6 +1117,7 @@ export function AnalyticsPage() {
               bucketMs={bucketMs}
               error={accountRollups.error}
               otherFilters={otherFilters}
+              registry={registry.data}
               rollups={accountRollups.current}
               slotOf={slotOf}
               span={span}
@@ -2701,6 +2702,7 @@ function AccountsSection({
   bucketMs,
   error,
   otherFilters,
+  registry,
   rollups: all,
   slotOf,
   span,
@@ -2713,6 +2715,8 @@ function AccountsSection({
   bucketMs: number;
   error: string | null;
   otherFilters: boolean;
+  /** The registry read's accounts, null while it runs or after it failed. */
+  registry: Account[] | null;
   rollups: AccountRollup[] | null;
   slotOf: (id: string) => number | null;
   span: { fromMs: number; toMs: number };
@@ -2740,6 +2744,9 @@ function AccountsSection({
       }),
     [accounts, rollups],
   );
+  // A null Fable peak reads n/a only where the registry's row holds no Fable window, so an account the registry no
+  // longer holds, and every account while the registry read is in flight or failed, reads the unsampled dash.
+  const fableless = useMemo(() => new Set((registry ?? []).filter((a) => a.fableWindow === null).map((a) => a.id)), [registry]);
   const data = useMemo(() => peakLines(rollups ?? [], accounts, span, bucketMs), [rollups, accounts, span, bucketMs]);
   const [window, setWindow] = useState('five_hour');
   const usage = useMemo(() => windowLines(rollups ?? [], window, 'usage', span, bucketMs), [rollups, window, span, bucketMs]);
@@ -2817,7 +2824,7 @@ function AccountsSection({
           cells: [
             r.peak5 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak5),
             r.peak7 === null ? <span className="muted" title={NO_SAMPLE_HINT}>-</span> : fmtPct(r.peak7),
-            r.peakF === null ? <span className="muted" title="no Fable window">n/a</span> : fmtPct(r.peakF),
+            r.peakF !== null ? fmtPct(r.peakF) : fableless.has(r.id) ? <span className="muted" title="no Fable window">n/a</span> : <span className="muted" title={NO_SAMPLE_HINT}>-</span>,
             r.overage ? fmtDuration(r.overage * 1000) : <span className="muted">none</span>,
             r.cooldown ? fmtDuration(r.cooldown * 1000) : <span className="muted">none</span>,
             fmtInt(r.created),

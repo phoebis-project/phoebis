@@ -89,9 +89,7 @@ if (inside) {
 
 const VIEWS = [
   { path: '/', title: 'Dashboard', wait: '.stat-grid', slug: 'dashboard' },
-  // The router's seed holds no subscription account, so its Quota view draws no card and its Accounts section is an
-  // empty grid of no height: the wait is on the section's presence, which a wait for a visible element never meets.
-  { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', attached: true, slug: 'quota' },
+  { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', slug: 'quota' },
   // The page shows one section at a time, so the timeline's shot is a view of its own, and the mock pass's alone,
   // since the router's seed has no window to draw.
   { path: '/quota#quota-windows', title: 'Quota', wait: '.timeline', slug: 'quota-windows', mockOnly: true },
@@ -7297,12 +7295,12 @@ const MIDNIGHT = (origin) => {
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
  * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips and, on a
  * ranged view, with a span across midnight, and the row against the first card's head. Under the mock's story the
- * Requests row at 1280 by 800 holds two lines at rest, where the count "25 shown, more available" takes the slots to
- * 1275 px in the 992 px row and wraps the edge alone onto the second line (the row and the bar 72 px), and across
- * midnight, whose Custom pill takes them to 1175 px (72 px). With its chips the address lists no row, so the "No rows"
- * count's 164.7 px edge fits beside the slots at 992 px: one line under the chip line, the bar 66 px. Against another
- * story the row holds two lines where its slots run past it and one otherwise. At 1440 by 900 every case holds one line
- * under the mock. On a card view the element after the bar and the tiles stand under the bar's bottom. The row's
+ * Requests row at 1280 by 800 holds two lines in every case, since the count's slot keeps the width of its longest text
+ * whatever the count reads: the slots take 1284 px in the 992 px row and the edge wraps alone onto the second line, the
+ * row 72 px and the bar 72 at rest and across midnight and 106 with its chips. At 1440 by 900 it holds one line at rest
+ * and with its chips, and two across midnight, whose Custom pill takes the slots to 1444 px in the 1152 px row (the row
+ * and the bar 72 px). Against another story the row holds two lines where its slots run past it and one otherwise. On a
+ * card view the element after the bar and the tiles stand under the bar's bottom. The row's
  * `width`, its slots' widths and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the
  * Group by select reads the Add filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row
  * run no wider than their boxes and the right edge, and the count where the view draws one, end inside the window. At
@@ -7396,10 +7394,11 @@ async function barRow(theme, view) {
         await advance(LOAD_MS);
         await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
         const got = await read();
-        // Under the mock the Requests bar's slots outrun the 1280 px content column, so its edge slot wraps to a second
-        // line where the story's count needs it, and the chips' address lists no row, whose shorter count leaves the
-        // edge room beside the slots. Another count's text sets the line count by the slots the row measured.
-        const lines = mock ? (view === '/requests' && width === 1280 && label !== 'with its chips' ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
+        // Under the mock the Requests bar's slots outrun the 1280 px content column whatever the count reads, since the
+        // count's slot keeps the width of its longest text, so the edge wraps to a second line there. At 1440 px the
+        // Custom pill's span across midnight takes them past the row too. Against another story the line count follows
+        // the slots the row measured.
+        const lines = mock ? (view === '/requests' && (width === 1280 || label === 'with a span across midnight') ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped, lines);
         if (chipped) {
@@ -13593,7 +13592,7 @@ try {
       await booted();
       await advance(LOAD_MS);
       try {
-        await page.waitForSelector(view.wait, { state: view.attached ? 'attached' : 'visible', timeout: 15_000 });
+        await page.waitForSelector(view.wait, { timeout: 15_000 });
       } catch {
         failures.push(`${theme} ${view.path}: ${view.wait} never appeared`);
         continue;
