@@ -274,8 +274,10 @@ test('text the browser cannot parse in a Daily budget holds the save, where an e
   assert.equal(statusOf(container), 'Save is held: A budget is a dollar amount above 0. Leave it empty for no budget.');
 });
 
-test('an emptied Hold (s) leaves the slow-down preview on the hold the dialog opened with, while the field holds the save', async () => {
-  // The pool work slows its member studio to half speed and stores a hold of 120 s (`web/src/mock/pools.ts`).
+test('an emptied Hold (s) or Stretch (s) leaves the slow-down preview on the figure the dialog opened with, while the field holds the save', async () => {
+  // The pool work slows its member studio to half speed, studio's served stretch reads 42 min, and the pool stores a
+  // hold of 120 s and a stretch of 1,800 s, where a new pool's defaults read 120 s and 9,000 s
+  // (`web/src/mock/pools.ts`, `web/src/mock/accounts.ts`).
   const pool = pools.find((p) => p.id === 'work');
   assert.ok(pool?.slowDown, 'the mock holds the pool work with its slow-down on');
   const { container, draw } = mount();
@@ -287,6 +289,9 @@ test('an emptied Hold (s) leaves the slow-down preview on the hold the dialog op
   type(fieldIn(container, 'Hold (s)')?.querySelector('input'), '');
   assert.equal(statusOf(container), 'Save is held: Hold (s) is a whole number from 1 to 300.');
   assert.equal(preview(), opened, 'the preview keeps the stored hold');
+  // The stored stretch of 1,800 s reads 30 min, where the default's 9,000 s would read 2 h 30 min.
+  type(fieldIn(container, 'Stretch (s)')?.querySelector('input'), '');
+  assert.equal(preview(), '1 member is slowed: studio at 0.5x (42 min of 30 min). A session there waits its cycle times 1.0, up to 120 s.', 'the preview keeps the stored stretch');
 });
 
 test("a ticked member's emptied Priority stands last among the members and above every account that is not one", async () => {
