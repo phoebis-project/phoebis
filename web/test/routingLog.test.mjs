@@ -632,16 +632,25 @@ test("the pin step's credit fact names its account once, as an account chip labe
 
 test("a classifier call's Pin fold reads the turn it judged, that turn's account or none, and where the call went", () => {
   // The router writes every fact of the step as text, the judged account about itself, and no turn in a session that
-  // holds none. A call a fallback credit sends to its issuer names the issuer and no direction.
+  // holds none. A call a fallback credit sends to its issuer names the issuer and no direction. The account a fact is
+  // about tells an account from the word, so an account whose id is the text `none` reads as an account, as the strip
+  // reads it.
   const call = (facts) => record({ pin: null, pinReason: 'classifier', walk: [wstep('pin', 'none', [wfact('reason', 'classifier', 'text'), ...facts])] });
   const fold = (r) => d.pinRows(r, NOW).map((row) => [row.label, row.chips]);
   const turn = [wfact('judged_agent', 'a5e1', 'text'), wfact('judged_model', 'claude-haiku-4-5-20251001', 'text'), wfact('judged', 'primary', 'text', 'primary')];
   const followed = call([...turn, wfact('direction', 'turn_account', 'text')]);
   const unjudged = call([wfact('judged', 'none', 'text'), wfact('direction', 'strategy', 'text')]);
+  const namedNone = call([wfact('judged', 'none', 'text', 'none'), wfact('direction', 'strategy', 'text')]);
   const credited = call([wfact('credit', 'secondary', 'text', 'secondary'), ...turn]);
   const pin = { value: 'classifier call without a pin' };
   assert.deepEqual(
-    { credited: fold(credited).find(([label]) => label === 'Sent to'), followed: fold(followed), unjudged: fold(unjudged), unjudgedChips: d.factChips(unjudged.walk[0].facts[1], unjudged, NOW) },
+    {
+      credited: fold(credited).find(([label]) => label === 'Sent to'),
+      followed: fold(followed),
+      namedNone: fold(namedNone).find(([label]) => label === 'Judged account'),
+      unjudged: fold(unjudged),
+      unjudgedChips: d.factChips(unjudged.walk[0].facts[1], unjudged, NOW),
+    },
     {
       credited: ['Sent to', [{ entity: { id: 'secondary', kind: 'account' }, label: 'credit issuer', value: 'secondary' }]],
       followed: [
@@ -650,6 +659,7 @@ test("a classifier call's Pin fold reads the turn it judged, that turn's account
         ['Judged account', [{ entity: { id: 'primary', kind: 'account' }, value: 'primary' }]],
         ['Sent to', [{ value: "the judged turn's account" }]],
       ],
+      namedNone: ['Judged account', [{ entity: { id: 'none', kind: 'account' }, value: 'none' }]],
       unjudged: [['Pin', [pin]], ['Judged account', [{ value: 'none' }]], ['Sent to', [{ value: 'placed by the strategy' }]]],
       unjudgedChips: [{ label: 'judged account', value: 'none' }],
     },

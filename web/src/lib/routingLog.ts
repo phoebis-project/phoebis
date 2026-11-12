@@ -1129,9 +1129,11 @@ export function factChips(f: WalkFact, record: DecisionRecord, now: number): Chi
     // The pin step writes the issuer's or the judged turn's account as the value and about the same account, so one
     // chip names it once. A value about no account, the text `none` among them, reads as a plain fact.
     case 'credit':
-    case 'judged':
-      if (typeof v === 'string' && f.accountId === v) return [accountChip(v, keyWord(f.key))];
+    case 'judged': {
+      const account = namedAccount(f);
+      if (account !== null) return [accountChip(account, keyWord(f.key))];
       break;
+    }
     case 'lane':
       if (typeof v === 'string') return laneChips(v);
       break;
@@ -2354,19 +2356,34 @@ export function requestRows(record: DecisionRecord, row: DecisionSummary): CardR
 }
 
 /**
+ * The account a walk fact names: its value where the step wrote it about that same account, as the pin step writes a
+ * credit's issuer and a judged turn's account, else null.
+ */
+function namedAccount(f: WalkFact | undefined): string | null {
+  return f !== undefined && typeof f.value === 'string' && f.accountId === f.value ? f.value : null;
+}
+
+/**
  * The Pin fold of a classifier call, read off its `pin` step's facts: the call holds no pin and follows the turn it
  * judges. A call a fallback credit directs carries the issuer in its `credit` fact and no `direction`, so its "Sent
- * to" row names the issuer. A fact the step lacks draws no row.
+ * to" row names the issuer. A fact the step lacks draws no row. An account reads by the fact's own account, as the
+ * strip reads it, and a fact that names none reads the word `none`.
  */
 function classifierPinRows(record: DecisionRecord): CardRow[] {
   const facts = record.walk.find((s) => s.step === 'pin')?.facts ?? [];
-  const text = (key: string): string | null => str(facts.find((f) => f.key === key)?.value);
-  const [agent, model, judged, direction, credit] = [text('judged_agent'), text('judged_model'), text('judged'), text('direction'), text('credit')];
-  const sentTo = direction !== null ? [plain(DIRECTION_WORDS[direction] ?? direction)] : credit !== null ? [accountChip(credit, keyWord('credit'))] : null;
+  const factOf = (key: string) => facts.find((f) => f.key === key);
+  const text = (key: string): string | null => str(factOf(key)?.value);
+  const account = (f: WalkFact, label?: string): Chip => {
+    const id = namedAccount(f);
+    return id === null ? plain('none', label) : accountChip(id, label);
+  };
+  const [agent, model, direction] = [text('judged_agent'), text('judged_model'), text('direction')];
+  const [judged, credit] = [factOf('judged'), factOf('credit')];
+  const sentTo = direction !== null ? [plain(DIRECTION_WORDS[direction] ?? direction)] : credit !== undefined ? [account(credit, keyWord('credit'))] : null;
   return [
     { chips: [plain(PIN_REASON_LABEL.classifier)], label: 'Pin' },
     ...(agent === null ? [] : [{ chips: [plain(agent), ...(model === null ? [] : [modelChip(model)])], label: 'Judged turn' }]),
-    ...(judged === null ? [] : [{ chips: [judged === 'none' ? plain('none') : accountChip(judged)], label: 'Judged account' }]),
+    ...(judged === undefined ? [] : [{ chips: [account(judged)], label: 'Judged account' }]),
     ...(sentTo === null ? [] : [{ chips: sentTo, label: 'Sent to' }]),
   ];
 }
