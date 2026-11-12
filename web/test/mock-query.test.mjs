@@ -180,14 +180,15 @@ test("listRequests orders by a nullable key with the rows without a figure last 
 test("the request list and the routing log answer a cursor their route's parser refuses with its 400, and a cursor the log wrote still turns its page", async () => {
   const refused = (message) => (e) => e instanceof d.ApiError && e.status === 400 && e.message === message;
   // A figure that is no number, one `Number` reads where the route's integer parse does not, an empty figure under the
-  // default order, whose rows all carry one, and no separator.
-  for (const cursor of ['abc:req_1', '1e3:req_1', ':req_1', 'req_1']) {
-    await assert.rejects(api.listRequests({ cursor }), refused('cursor is <value>:<id>'), cursor);
+  // default order, whose rows all carry one, no separator, and an empty cursor, which the route refuses where an absent
+  // one reads the first page.
+  for (const cursor of ['abc:req_1', '1e3:req_1', ':req_1', '123', '']) {
+    await assert.rejects(api.listRequests({ cursor }), refused('cursor is <value>:<id>'), JSON.stringify(cursor));
   }
-  // An instant that is no number, one separator, a rank other than 0 or 1, a decision id with no `/` and an event id
-  // that is no number.
-  for (const cursor of ['abc:1:req_1/1', '123:1', '100:2:r1/1', '100:1:req', '100:0:x']) {
-    await assert.rejects(api.listRoutingLog({ cursor }), refused('cursor is <at>:<rank>:<id>'), cursor);
+  // An instant that is no number, one separator, a rank other than 0 or 1, a decision id whose request id is empty, a
+  // sequence that is no number, an event id that is no number, and an empty cursor.
+  for (const cursor of ['abc:1:req_1/1', '123:1', '100:2:r1/1', '100:1:/1', '100:1:r/x', '100:0:x', '']) {
+    await assert.rejects(api.listRoutingLog({ cursor }), refused('cursor is <at>:<rank>:<id>'), JSON.stringify(cursor));
   }
   // The log's default range is the wall clock's last hour, which holds none of the story's rows.
   const from = new Date(Date.parse(AT) - 3_600_000).toISOString();
