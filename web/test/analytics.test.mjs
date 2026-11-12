@@ -679,13 +679,14 @@ test("a plan card scales a bucket by the anchor's capacity at the read over the 
 
 test("a range whose later revision drops the chosen tier's capacity draws its earlier buckets and leaves its later ones as gaps", () => {
   // Under the Max week Max 5x reads 200 on the 7-day window beside Pro's 100 in the first revision and nothing in the
-  // second, which takes effect between the two hours and is in force at the read.
+  // second, which takes effect between the first two hours and is in force at the read. The third hour's rows were
+  // billed, a figure of 0, which drew nothing from the plan whatever the scale.
   const table = (max) => ({ ...EMPTY, capacity: { default_claude_ai: { fiveHour: null, sevenDay: 100 }, default_claude_max_5x: { fiveHour: null, sevenDay: max } } });
   const start = Date.parse('2026-09-10T00:00:00Z');
   const costs = { ...table(null), revisions: [{ content: table(200), effective: '2026-09-01', effectiveDate: '2026-09-01T00:00:00.000Z' }, { content: table(null), effective: '2026-09-10', effectiveDate: '2026-09-10T00:00:00.000Z' }] };
-  const points = [point(start - HOUR, 'a', { equivalent: 0.2, uncachedTokens: 100 }), point(start, 'a', { equivalent: 0.2, uncachedTokens: 100 })];
+  const points = [point(start - HOUR, 'a', { equivalent: 0.2, uncachedTokens: 100 }), point(start, 'a', { equivalent: 0.2, uncachedTokens: 100 }), point(start + HOUR, 'a', { equivalent: 0, uncachedTokens: 100 })];
   const { lines, rows } = d.foldBurn(d.scalePoints(points, d.weekScaleAt(costs, 'max', start + HOUR)), 'model', 3_600, NONE);
-  assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null], "the first hour at Pro's 100 over Max 5x's 200, the second a gap");
+  assert.deepEqual(rows.map((r) => r.equivalent[0]), [0.1, null, 0], "the first hour at Pro's 100 over Max 5x's 200, the second a gap, the third's billed zero");
   assert.equal(lines[0].unpriced, true, 'the gap reads unpriced rather than idle');
 });
 

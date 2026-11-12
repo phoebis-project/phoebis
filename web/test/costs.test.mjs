@@ -104,7 +104,7 @@ test('a week the file does not list prices as the 7-day share once', () => {
   assert.deepEqual(d.pricedWindow(costs, 'seven_day_other'), { divisor: 1, priced: 'seven_day' });
 });
 
-test('a peak zone the browser cannot read leaves the band state unknown, so a share prices on a given state alone', () => {
+test('a peak zone the browser cannot read leaves the band state unknown, so a share prices on a given state alone, the band weighing the 5-hour window and leaving the week whole', () => {
   const unzoned = { ...costs, peak: { ...costs.peak, zone: 'Not/AZone' } };
   assert.equal(d.inBand(unzoned, IN), null);
   assert.equal(d.inBand({ ...costs, peak: { ...costs.peak, zone: '' } }, IN), null, 'the empty zone reads the same');
@@ -112,6 +112,7 @@ test('a peak zone the browser cannot read leaves the band state unknown, so a sh
   assert.equal(d.unreachableBand(d.bandNow(unzoned, IN)), null, 'both states stay in reach');
   close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), true), 0.04, 'inside the band, 2 / 100 / 0.5');
   close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), false), 0.02, 'outside it, 2 / 100');
+  close(d.shareIn(unzoned, 'seven_day', MAX_20X, OPUS, usage({ input: 1 }), true), 0.002, 'the week inside the band as outside it, 2 / 1000 at its capacity factor of 1');
   assert.equal(d.nextLocalChange(unzoned, IN, 'Europe/Berlin'), null);
   const clock = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
   assert.equal(d.bandCaption(unzoned, IN, 'Europe/Berlin', clock), 'Mon to Fri, 05:00 to 11:00 in AZone (Not/AZone), the zone the cost model names.', 'the hours in the zone the file names alone');
