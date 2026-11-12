@@ -125,8 +125,8 @@ interface Row {
    */
   idleLimit: { ranOutAt: string | null } | null;
   /**
-   * The instant the Last used cell and the expiry count from. A session known from the ledger or from a registration
-   * alone carries no activity of its own, so the last ledgered request stands in for it.
+   * The instant the Last used cell reads. A session known from the ledger or from a registration alone carries no
+   * activity of its own, so the last ledgered request stands in for it.
    */
   lastUsed: string | null;
   /** The session's lines in the view's order, the released ones among them, which `hiddenLines` draws or hides. */
@@ -359,7 +359,8 @@ export function SessionsPage() {
   const pools = useAsync(() => api.listPools(), []);
   const recipes = useAsync(() => api.listKeepaliveRecipes(), [], reread);
   const sessions = useAsync(() => api.listSessions(), [], reread);
-  // The session expiry, and the cost model whose capacities scale a spend to the chosen week.
+  // The listing limits, the non-companion timeout and the session expiry, and the cost model whose capacities scale a
+  // spend to the chosen week.
   const settings = useAsync(() => api.getSettings(), []);
   const { modelTiers, unit, week } = useAppSettings();
   const weekReading = weekReadingOf(settings.data?.subscriptionCosts ?? null, settings.error, week);

@@ -59,11 +59,12 @@ test('orderRows reads the newest created first, ties by session id and a row wit
 
 test('orderRows by cost puts a row with no spend last under either direction, ties by session id, and by requests reads the count', () => {
   // The creation times run in neither key's order, so a key that fell back to them reads otherwise.
-  const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, sessionId, spend: { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });
-  const rows = [row('a', ms(13, 0), 0.5, 2), row('b', ms(14, 0), null, 9), row('c', ms(12, 0), 0.25, 4), row('d', ms(11, 0), 0.5, 1)];
+  // A row with no spend carries a null one, as the route answers it, so it counts no request.
+  const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, sessionId, spend: usd === null ? null : { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });
+  const rows = [row('a', ms(13, 0), 0.5, 2), row('b', ms(14, 0), null, 0), row('c', ms(12, 0), 0.25, 4), row('d', ms(11, 0), 0.5, 1)];
   assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'desc')), ['a', 'd', 'c', 'b']);
   assert.deepEqual(sessionIds(d.orderRows(rows, 'cost', 'asc')), ['c', 'a', 'd', 'b']);
-  assert.deepEqual(sessionIds(d.orderRows(rows, 'requests', 'desc')), ['b', 'c', 'a', 'd']);
+  assert.deepEqual(sessionIds(d.orderRows(rows, 'requests', 'desc')), ['c', 'a', 'd', 'b']);
 });
 
 /** A line as `sessionLines` answers it: a recipe with its pin or none, or a pin with no recipe, with its lifecycle

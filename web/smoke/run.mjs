@@ -24950,8 +24950,8 @@ await forView('/sessions', async () => {
     // order alone, since a row's lines keep the order their own key gives them.
     const name = '/sessions the sort control orders the rows by Cost and by Requests, largest first and then smallest, each pick writing the address';
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
-    // Each pick's drawn order by session id prefix, read off the 24 rows' `spend.usd` and `requests` (the mock's fold
-    // over the request seed in `web/src/mock/requests.ts`). The five rows with no spend, `0f1d7c64`, `3e9b7c21`,
+    // Each pick's drawn order by session id prefix, read off the 24 rows' `spend.usd` and `spend.requests` (the mock's
+    // fold over the request seed in `web/src/mock/requests.ts`). The five rows with no spend, `0f1d7c64`, `3e9b7c21`,
     // `6d2f8b40`, `b7e2d5a9` and `cd9a5904`, stand last under Cost either way and read by session id, while their zero
     // requests put them first under Requests ascending. `0d588de5`, with its classifier call of 14:02:40, and
     // `fa23a6da` tie at eight requests and read by session id under both directions.
