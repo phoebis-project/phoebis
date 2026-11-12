@@ -678,7 +678,7 @@ function AccountLink({ account, id }: { account: Account | null; id: string }) {
 function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: { accountId: string; agentId: string; model: string }[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
   if (session.accountId === null) return <span className="muted">-</span>;
   return (
-    <span className="srow__pin">
+    <span className="srow__pin srow__pin--wraps">
       <AccountLink account={account} id={session.accountId} />
       {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
       {session.speed !== null && <SpeedChip {...speed} />}

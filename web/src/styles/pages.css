@@ -3650,9 +3650,9 @@
 }
 
 /* The cells take 5 px each side, one step wider than 4. Each pixel of padding widens the fit columns by 17 px and the
-   Session column's floor by 2, so in the 990 px card at 1280 px the default columns leave Session 112 px at 5 px,
-   fourteen characters of its id, and each pixel more takes two or three of them. The row's first and last cells keep
-   the card's 12 px edge, and an expanded row's detail cell keeps its own inset. */
+   Session column's floor by 2, so in the 990 px card at 1280 px the default columns leave Session's content 152 px at
+   5 px, twenty-one characters of its id, and each pixel more takes two or three of them. The row's first and last
+   cells keep the card's 12 px edge, and an expanded row's detail cell keeps its own inset. */
 .sessions-table th,
 .sessions-table td {
   padding-left: 5px;
@@ -3666,7 +3666,7 @@
 
 /* Session, the one fill, takes what the fit columns leave, but never shrinks under the fork badge's widest word with
    the badge's padding (63.8 px) and the cell's (10 px), so a column set wider than the card scrolls inside its wrap
-   rather than cutting that word. The default set leaves it 112 px at 1280 px. */
+   rather than cutting that word. The default set leaves its content 152 px at 1280 px. */
 .sessions-table th.col-fill,
 .sessions-table td.col-fill {
   min-width: 74px;
@@ -3743,8 +3743,9 @@
   align-items: baseline;
 }
 
-/* The Model and Cost cells' badges wrap under their figure, so each column is as wide as its widest figure: on one line
-   with the figures, the badges would leave the default columns' Session cell under eleven characters at 1280 px. */
+/* The Model, Account and Cost cells' badges and chips wrap under their figure or name, so each column is as wide as its
+   widest single item: on one line, the badges beside a figure or a `leaving` badge beside an account's name would leave
+   the default columns' Session cell under eleven characters at 1280 px. */
 .sessions-table .srow__pin--wraps {
   flex-wrap: wrap;
   row-gap: 2px;

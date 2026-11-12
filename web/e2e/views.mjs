@@ -13624,7 +13624,7 @@ try {
         await costReference(theme);
         if (mock) await costReferenceHeadlines(theme);
         await sessionsTableFits(theme);
-        await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1, { wrapping: ['Cost', 'Model'] });
+        await tableColumns(theme, 'sessions', '.sessions-table', ['Session'], 1, { wrapping: ['Account', 'Cost', 'Model'] });
         await sessionIdWidth(theme);
         await sessionRowMenu(theme);
         await agentLines(theme, 1280);

@@ -387,7 +387,8 @@ Account cell, at 1440 by 900 every column the Columns control lists turned on, t
 control's order with Context among them and the menu's last and the page as wide as the window, the table's and the
 wrap's widths recorded, and after a load that draws the defaults again, at 375 by 800 scrolling inside its wrap with
 Session at its 74 px floor and the page as wide as the window) and its columns (each fit column as wide as its content,
-the Model and Cost cells' badges wrapping under their figure, the Session column the fill), the session id's width, the
+the Model and Cost cells' badges wrapping under their figure and the Account cell's chips under the account's name, the
+Session column the fill), the session id's width, the
 session row menu, the agent lines of the Cache warming details (each opened on every row Expand all opens, at 1280 by
 800 and 1440 by 900: the head's, main's and the longest subagent id's cells on one left edge per column within 1 px on
 the companion session that holds that id, seven columns closing on State, every id whole on one line, each state badge
