@@ -1,5 +1,6 @@
 //! What the relay tells the bus, request by request.
 mod common;
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
@@ -923,8 +924,8 @@ fn answer_with_diagnostics(id: &str, member: &str) -> Respond {
     )
 }
 
-/// A streamed 200 whose `message_start` and `message_delta` end with `head` and `delta`, each empty or a
-/// `diagnostics` member led by its comma.
+/// A streamed 200 whose `message_start` and `message_delta` end with `head` and `delta`, each empty or a member led
+/// by its comma.
 fn stream_with_diagnostics(id: &str, head: &str, delta: &str) -> Respond {
     Respond::Sse {
         status: 200,
@@ -1084,6 +1085,77 @@ async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_messag
         );
     }
     assert_eq!(up.requests().len(), count, "one pass per case");
+    up.shutdown().await;
+}
+
+/// Sends `request`, reads its 200 to the end and returns the serving attempt the ledger files from the request's
+/// events.
+async fn served_attempt_of(
+    h: &Harness,
+    sub: &mut Subscriber,
+    request: Request<Body>,
+) -> phoebis_ledger::AttemptRecord {
+    let resp = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await;
+    let mut assembler = phoebis_ledger::Assembler::new(std::sync::Arc::new(|| 0));
+    common::drain_until_complete(sub)
+        .await
+        .into_iter()
+        .flat_map(|event| assembler.observe(event))
+        .find_map(|record| match record {
+            phoebis_ledger::Record::Request { mut attempts, .. } => attempts.pop(),
+            _ => None,
+        })
+        .expect("the request's ledger row with its attempt")
+}
+
+#[tokio::test]
+async fn a_deltas_empty_list_clears_the_starts_dropped_blocks_on_the_served_attempt_and_a_delta_without_one_keeps_them(
+) {
+    const START: &str = r#","input_transformations":[{"type":"thinking_dropped","reason":"end_user_binding_mismatch","path":"messages.5"},{"type":"thinking_dropped","reason":"end_user_binding_mismatch","path":"messages.7"}]"#;
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        stream_with_diagnostics("msg_cleared", START, r#","input_transformations":[]"#),
+    );
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        stream_with_diagnostics("msg_kept", START, ""),
+    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let cleared = served_attempt_of(
+        &h,
+        &mut sub,
+        request_for(KEY, "claude-sonnet-4-5", "s-cleared"),
+    )
+    .await;
+    assert_eq!(
+        cleared.input_transformations,
+        Some(BTreeMap::new()),
+        "the delta's empty list replaces the start's entries"
+    );
+    let kept = served_attempt_of(
+        &h,
+        &mut sub,
+        request_for(KEY, "claude-sonnet-4-5", "s-kept"),
+    )
+    .await;
+    assert_eq!(
+        kept.input_transformations,
+        Some(BTreeMap::from([(
+            "thinking_dropped.end_user_binding_mismatch".to_string(),
+            phoebis_ledger::InputTransformation {
+                blocks: 2,
+                first_message: 5,
+            }
+        )])),
+        "a delta without the member keeps the start's entries"
+    );
     up.shutdown().await;
 }
 

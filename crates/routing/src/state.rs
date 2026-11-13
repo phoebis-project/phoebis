@@ -502,6 +502,15 @@ impl PinUsage {
     }
 }
 
+/// The blocks an answer dropped from the request under one `<type>.<reason>` key, the shape the relay reads off the
+/// answer's `input_transformations`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DroppedBlocks {
+    pub blocks: u64,
+    /// The lowest index `i` of the dropped blocks' `messages.{i}` paths.
+    pub first_message: u64,
+}
+
 /// The share of an account's own window a completed request consumed, priced through the ledger's tables, which
 /// this crate cannot name; the default prices nothing, so a task spawned without one predicts from readings alone.
 #[derive(Clone)]

@@ -1771,6 +1771,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cache_ttl_ms: 300_000,
                 fast: false,
                 turn_end: phoebis_routing::RenewalEnd::Turn,
+                thinking_tokens: None,
+                input_transformations: None,
             })
             .await;
         parts
@@ -1858,6 +1860,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: phoebis_routing::RenewalEnd::Turn,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     // A session no companion reports, placed on `direct` a day and an hour back and failed over to `business` a second
@@ -1958,6 +1962,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: phoebis_routing::RenewalEnd::Turn,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     parts.router.pins().await.unwrap();

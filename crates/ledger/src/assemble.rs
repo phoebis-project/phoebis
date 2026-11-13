@@ -525,6 +525,19 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         last.speed = response.speed;
         last.inference_geo = response.inference_geo;
         last.cleared_input_tokens = response.cleared_input_tokens;
+        last.input_transformations = response.input_transformations.map(|map| {
+            map.into_iter()
+                .map(|(key, dropped)| {
+                    (
+                        key,
+                        crate::record::InputTransformation {
+                            blocks: dropped.blocks,
+                            first_message: dropped.first_message,
+                        },
+                    )
+                })
+                .collect()
+        });
         last.refusal_category = response.refusal_category;
         last.refusal_recommended_model = response.refusal_recommended_model;
         last.issued_digest = response.issued_digest;

@@ -2,11 +2,14 @@
 //! the usage block and the answer's own facts, and the shape of a content delta. Nothing here changes what
 //! is relayed.
 
+use std::collections::BTreeMap;
+
 use axum::http::{header, HeaderMap};
-use phoebis_bus::{header_published, ResponseFacts, Usage};
+use phoebis_bus::{header_published, InputTransformation, ResponseFacts, Usage};
 use serde_json::Value;
 
 use crate::credit::{digest_of, hex_of, CreditDigest};
+use crate::identity::is_filed_word;
 
 /// The caller's headers as the bus carries them: everything the denylist does not name, which is what a
 /// keepalive recipe replays. A request the relay inflated is published as the plain body it holds, so a recipe
@@ -126,6 +129,7 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
         refusal_category: text(details.and_then(|d| d.get("category"))),
         refusal_recommended_model: text(details.and_then(|d| d.get("recommended_model"))),
         issued_digest: credit_digest.as_ref().map(hex_of),
+        input_transformations: input_transformations_of(at),
     };
     Answer {
         usage,
@@ -133,6 +137,52 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
         credit_digest,
         message_id: text(at.get("id")),
     }
+}
+
+/// The `input_transformations` array beside `usage`, per `<type>.<reason>` key. An entry is read only where its two
+/// words are strings and its `path` places it in a message, so each key holds a message index.
+fn input_transformations_of(at: &Value) -> Option<BTreeMap<String, InputTransformation>> {
+    let entries = at.get("input_transformations")?.as_array()?;
+    let word = |w: &str| {
+        if is_filed_word(w) {
+            w.to_string()
+        } else {
+            "other".to_string()
+        }
+    };
+    let mut map = BTreeMap::<String, InputTransformation>::new();
+    for entry in entries {
+        let (Some(kind), Some(reason), Some(index)) = (
+            entry.get("type").and_then(Value::as_str),
+            entry.get("reason").and_then(Value::as_str),
+            entry
+                .get("path")
+                .and_then(Value::as_str)
+                .and_then(message_index),
+        ) else {
+            continue;
+        };
+        let dropped = map
+            .entry(format!("{}.{}", word(kind), word(reason)))
+            .or_insert(InputTransformation {
+                blocks: 0,
+                first_message: index,
+            });
+        dropped.blocks += 1;
+        dropped.first_message = dropped.first_message.min(index);
+    }
+    Some(map)
+}
+
+/// The `i` of a path that reads `messages.{i}`, alone or followed by a `.`.
+fn message_index(path: &str) -> Option<u64> {
+    let rest = path.strip_prefix("messages.")?;
+    let digits = rest.split_once('.').map_or(rest, |(index, _)| index);
+    // `parse` alone would take a leading `+`.
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// A `content_block_delta` whose delta is tool input, which is what the keepalive view counts as tool use.
@@ -268,6 +318,68 @@ mod tests {
         assert!(answer_from_json(br#"{"type":"message"}"#, &[], false)
             .response
             .is_empty());
+    }
+
+    fn dropped(blocks: u64, first_message: u64) -> InputTransformation {
+        InputTransformation {
+            blocks,
+            first_message,
+        }
+    }
+
+    #[test]
+    fn a_dropped_blocks_key_counts_its_entries_and_keeps_their_lowest_message_index() {
+        let answer = br#"{"type":"message","usage":{"input_tokens":1},"input_transformations":[{"type":"thinking_dropped","reason":"end_user_binding_mismatch","path":"messages.9"},{"type":"thinking_dropped","reason":"end_user_binding_mismatch","path":"messages.2"},{"type":"thinking_dropped","reason":"prefix_binding_mismatch","path":"messages.4"}]}"#;
+        assert_eq!(
+            answer_from_json(answer, &[], false)
+                .response
+                .input_transformations,
+            Some(BTreeMap::from([
+                (
+                    "thinking_dropped.end_user_binding_mismatch".to_string(),
+                    dropped(2, 2)
+                ),
+                (
+                    "thinking_dropped.prefix_binding_mismatch".to_string(),
+                    dropped(1, 4)
+                ),
+            ]))
+        );
+    }
+
+    #[test]
+    fn a_word_of_64_bytes_files_as_sent_and_one_of_65_bytes_reads_other() {
+        let at_bound = "t".repeat(64);
+        let past_bound = "t".repeat(65);
+        let answer = format!(
+            r#"{{"type":"message","input_transformations":[{{"type":"{at_bound}","reason":"end_user_binding_mismatch","path":"messages.1"}},{{"type":"{past_bound}","reason":"end_user_binding_mismatch","path":"messages.3"}}]}}"#
+        );
+        assert_eq!(
+            answer_from_json(answer.as_bytes(), &[], false)
+                .response
+                .input_transformations,
+            Some(BTreeMap::from([
+                (
+                    format!("{at_bound}.end_user_binding_mismatch"),
+                    dropped(1, 1)
+                ),
+                ("other.end_user_binding_mismatch".to_string(), dropped(1, 3)),
+            ]))
+        );
+    }
+
+    #[test]
+    fn an_entry_without_a_reason_or_a_message_path_is_skipped() {
+        let answer = br#"{"type":"message","input_transformations":[{"type":"thinking_dropped","reason":"organization_binding_mismatch","path":"messages.3.content.1"},{"type":"thinking_dropped","path":"messages.1"},{"type":"thinking_dropped","reason":"organization_binding_mismatch","path":"system.0"}]}"#;
+        assert_eq!(
+            answer_from_json(answer, &[], false)
+                .response
+                .input_transformations,
+            Some(BTreeMap::from([(
+                "thinking_dropped.organization_binding_mismatch".to_string(),
+                dropped(1, 3)
+            )]))
+        );
     }
 
     #[test]

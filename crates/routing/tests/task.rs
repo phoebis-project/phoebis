@@ -7063,6 +7063,8 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: RenewalEnd::NoTurn,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     let pin = handle.pins().await.unwrap().remove(0);
@@ -7107,6 +7109,8 @@ fn renewal(pin: PinRef, now: i64, usage: PinUsage, keepalive: bool, cache_ttl_ms
         } else {
             RenewalEnd::Turn
         },
+        thinking_tokens: None,
+        input_transformations: None,
     }
 }
 
@@ -7257,6 +7261,8 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
             cache_ttl_ms: 3_600_000,
             fast: false,
             turn_end: RenewalEnd::Turn,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     let pins = handle.pins().await.unwrap();
@@ -7362,6 +7368,8 @@ async fn a_fast_renewal_lands_in_the_pins_fast_usage_and_lets_both_copies_of_its
             cache_ttl_ms: 300_000,
             fast: true,
             turn_end: RenewalEnd::Turn,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     handle
@@ -7871,6 +7879,8 @@ fn speed_renewal(pin: PinRef, now: i64, fast: bool, input: u64) -> Report {
         cache_ttl_ms: 300_000,
         fast,
         turn_end: RenewalEnd::Turn,
+        thinking_tokens: None,
+        input_transformations: None,
     }
 }
 
@@ -8983,6 +8993,8 @@ async fn a_round_leaves_out_a_pin_whose_agent_ended_until_the_agent_sends_again(
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: RenewalEnd::AgentEnded,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     handle
@@ -9153,6 +9165,8 @@ async fn a_projection_leaves_out_the_burn_of_a_pin_whose_agent_ended_until_the_a
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: RenewalEnd::AgentEnded,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     handle
@@ -9674,6 +9688,8 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: RenewalEnd::AgentEnded,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -9705,6 +9721,8 @@ async fn every_set_of_an_ended_agents_mark_and_its_clear_by_an_exhausted_request
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: RenewalEnd::AgentEnded,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     handle.shutdown().await.unwrap();
@@ -16298,6 +16316,8 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
         } else {
             RenewalEnd::Turn
         },
+        thinking_tokens: None,
+        input_transformations: None,
     };
     let stored = || async { handle.pins().await.unwrap().remove(0).effort };
     assert_eq!(
@@ -17078,6 +17098,8 @@ async fn an_auxiliary_calls_end_on_another_agents_turn_pin_does_not_redirect_the
             cache_ttl_ms: 300_000,
             fast: false,
             turn_end: RenewalEnd::NoTurn,
+            thinking_tokens: None,
+            input_transformations: None,
         })
         .await;
     let call = SelectRequest {

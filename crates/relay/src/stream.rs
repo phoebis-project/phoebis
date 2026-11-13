@@ -1,5 +1,6 @@
 //! Upstream connection lifecycle and the piece-by-piece relay of a response body.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::io;
 use std::sync::Arc;
@@ -8,9 +9,13 @@ use std::time::Duration;
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
 use futures::future::BoxFuture;
-use phoebis_bus::{Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage};
+use phoebis_bus::{
+    InputTransformation, Interruption, Outcome, Phase, ResponseChunk, ResponseFacts, Usage,
+};
 use phoebis_oauth::Clock;
-use phoebis_routing::{AffinityReport, PinRef, PinUsage, RenewalEnd, Report, RouterHandle};
+use phoebis_routing::{
+    AffinityReport, DroppedBlocks, PinRef, PinUsage, RenewalEnd, Report, RouterHandle,
+};
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::response::BodyReader;
@@ -256,6 +261,8 @@ impl Renewal {
                 cache_ttl_ms: self.cache_ttl_ms,
                 fast: response.speed.as_deref() == Some("fast"),
                 turn_end,
+                thinking_tokens: usage.and_then(|u| u.thinking_tokens),
+                input_transformations: response.input_transformations.as_ref().map(dropped_blocks),
             },
         );
     }
@@ -409,6 +416,20 @@ fn pin_usage(usage: &Usage) -> PinUsage {
         write_1h: usage.cache_write_1h_tokens.unwrap_or(0),
         output: usage.output_tokens.unwrap_or(0),
     }
+}
+
+fn dropped_blocks(map: &BTreeMap<String, InputTransformation>) -> BTreeMap<String, DroppedBlocks> {
+    map.iter()
+        .map(|(key, dropped)| {
+            (
+                key.clone(),
+                DroppedBlocks {
+                    blocks: dropped.blocks,
+                    first_message: dropped.first_message,
+                },
+            )
+        })
+        .collect()
 }
 
 impl Publish {

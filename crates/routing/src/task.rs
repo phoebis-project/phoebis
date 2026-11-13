@@ -33,9 +33,10 @@ use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
     is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell, shed_dwell_ms,
     slow_down_hold_ms, spend_reset_estimate, standing_mark, wait_until, AccountTicket, BurnUnit,
-    CreditsState, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage,
-    RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite,
-    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    CreditsState, DroppedBlocks, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
+    PinUsage, RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
 
@@ -743,6 +744,10 @@ pub enum Report {
         /// What the stream's end ended, as the relay read it from the request's class, the answer's stop reason and
         /// whether a keepalive probe sent the request.
         turn_end: RenewalEnd,
+        /// The answer's `output_tokens_details.thinking_tokens`, `None` where it reported none.
+        thinking_tokens: Option<u64>,
+        /// The blocks the answer dropped per `<type>.<reason>` key, `None` where the answer held no such member.
+        input_transformations: Option<BTreeMap<String, DroppedBlocks>>,
     },
     Sample {
         account_id: String,
@@ -4045,6 +4050,8 @@ impl Task {
                 cache_ttl_ms,
                 fast,
                 turn_end,
+                thinking_tokens: _,
+                input_transformations: _,
             } => {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {

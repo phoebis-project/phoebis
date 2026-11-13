@@ -1,6 +1,7 @@
 //! The owned, serializable events the relay publishes. Nothing here borrows from the relay, so a consumer can
 //! keep an event for as long as it likes without holding a request open.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -149,6 +150,14 @@ impl Usage {
     }
 }
 
+/// The blocks an answer dropped from the request under one `<type>.<reason>` key of its `input_transformations`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct InputTransformation {
+    pub blocks: u64,
+    /// The lowest index `i` of the dropped blocks' `messages.{i}` paths.
+    pub first_message: u64,
+}
+
 /// What the answer said about itself beyond its usage, read from `message_start` (the served model), from
 /// `message_delta` (the stop, the context edits, the refusal), or from the whole JSON answer. A member the
 /// upstream did not send stays `None`.
@@ -167,6 +176,9 @@ pub struct ResponseFacts {
     /// The SHA-256 of `stop_details.fallback_credit_token` where the answer carries one, which the upstream issues with
     /// a refusal, lowercase hex, `None` elsewhere.
     pub issued_digest: Option<String>,
+    /// The blocks the answer dropped from the request, per `<type>.<reason>` key of `input_transformations`. An
+    /// empty map for an answer that listed nothing, `None` for an answer without the member.
+    pub input_transformations: Option<BTreeMap<String, InputTransformation>>,
 }
 
 impl ResponseFacts {
@@ -184,6 +196,10 @@ impl ResponseFacts {
         overlay(
             &mut self.refusal_recommended_model,
             &later.refusal_recommended_model,
+        );
+        overlay(
+            &mut self.input_transformations,
+            &later.input_transformations,
         );
     }
 
