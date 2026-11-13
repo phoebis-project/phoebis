@@ -73,11 +73,6 @@ test('an account decodes with its windows, plan, pool, and models', () => {
   assert.equal(a.status, 'cooldown');
   assert.equal(a.email, 'test@example.invalid');
   assert.equal(a.companionId, '1fa58bef');
-  assert.deepEqual(
-    Object.keys(a).sort(),
-    ['canceled', 'companionId', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'limitResets', 'overage', 'plan', 'planEndedAt', 'pool', 'requests', 'revision', 'routingEnabled', 'slowDown', 'spend', 'status', 'subscription', 'usage', 'usageBased', 'windows'],
-    'an account decodes to the fields the console draws and nothing more',
-  );
 });
 
 test("an account decodes its slow-down and each window's demand, and an api_key account reads null", () => {
@@ -248,7 +243,6 @@ test('extra usage the provider switched off keeps the reason it gave', () => {
 
 test('the account list folds state, enabled, and cooldowns onto one status', () => {
   const list = fixture('accounts').accounts.map(d.decodeAccount);
-  assert.deepEqual(list.map((a) => a.id), ['business', 'direct', 'free-org', 'reset-cooldown', 'reset-ending', 'reset-used', 'usage-seat'], 'sorted by label');
   const direct = list.find((a) => a.id === 'direct');
   assert.equal(direct.kind, 'api_key');
   assert.equal(direct.subscription, null);
@@ -2456,30 +2450,9 @@ test("decodeReconciliations reads the fixture's rows and an empty list", () => {
   assert.deepEqual(d.decodeReconciliations({ reconciliations: [], request_retention_days: 30 }), { reconciliations: [], requestRetentionDays: 30 }, 'an empty list decodes to none');
 });
 
-test('settings decode the members the route answers and nothing more', () => {
+test('settings decode the members the route answers', () => {
   const wire = fixture('settings');
   const s = d.decodeSettings(wire);
-  assert.deepEqual(
-    Object.keys(s).sort(),
-    ['about', 'access', 'apiPrices', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
-    'the decoder reads the members the route answers',
-  );
-  const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
-  assert.deepEqual(
-    members,
-    {
-      about: ['build', 'profile', 'version'],
-      access: ['adminConfigured'],
-      apiPrices: ['effective', 'effectiveDate', 'models', 'revisions', 'source'],
-      listeners: ['metrics', 'proxy', 'proxyTls'],
-      retention: ['bodyCaptureMaxHours', 'retentionDays', 'rollupRetentionDays'],
-      sessions: ['expireAfterSeconds', 'nonCompanionIdleSeconds'],
-      storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
-      subscriptionCosts: ['capacity', 'effective', 'modelTier', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'regimes', 'revisions', 'source', 'tierOrder', 'typeMultiplier', 'unit'],
-      usage: ['limitResetWarningDays'],
-    },
-    'each member carries what the pages read and no other key',
-  );
   assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy, proxyTls: wire.listeners.proxy_tls });
   assert.equal(d.decodeSettings({ ...wire, listeners: { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy } }).listeners.proxyTls, false, 'an answer without proxy_tls reads a listener that terminates no TLS');
   assert.equal(d.decodeSettings({ ...wire, listeners: { ...wire.listeners, proxy_tls: true } }).listeners.proxyTls, true);

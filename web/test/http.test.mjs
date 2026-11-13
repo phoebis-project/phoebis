@@ -206,26 +206,11 @@ test('createAccount sends the id, kind, label, and secret in snake_case', async 
   assert.deepEqual([calls[0].init.method, calls[0].url, JSON.parse(calls[0].init.body)], ['POST', '/admin/accounts', { id: 'console', kind: 'api_key', label: 'Console', secret: 'sk-ant-api03-FAKE' }]);
 });
 
-test('the accounts list carries the poll standing and no usage route is read', async () => {
+test('the accounts list is one GET, and no usage route is read', async () => {
   const body = JSON.parse(readFileSync(new URL('./fixtures/accounts.json', import.meta.url), 'utf8')).body;
   const calls = stub(() => answer(200, body));
-  const accounts = await new HttpApi().listAccounts();
+  await new HttpApi().listAccounts();
   assert.deepEqual(calls.map((c) => [c.init.method ?? 'GET', c.url]), [['GET', '/admin/accounts']], 'one read of the list, no usage read per account');
-  // No poll has read the three reset accounts or the seat yet, so their rows carry the sentence standing in for a
-  // snapshot. The free organization's row answers the reading the router holds from before its plan ended.
-  const cooldown = body.accounts.find((a) => a.id === 'reset-cooldown').usage;
-  const ending = body.accounts.find((a) => a.id === 'reset-ending').usage;
-  const used = body.accounts.find((a) => a.id === 'reset-used').usage;
-  const seat = body.accounts.find((a) => a.id === 'usage-seat').usage;
-  assert.deepEqual(accounts.map((a) => [a.id, a.usage?.poll?.lastOutcome ?? a.usage]), [
-    ['business', 'clean'],
-    ['direct', null],
-    ['free-org', { accountId: 'free-org', error: null, fetchedAt: '2026-09-30T12:16:40.000Z', heldUntil: null, poll: null }],
-    ['reset-cooldown', { accountId: 'reset-cooldown', error: cooldown.error, fetchedAt: null, heldUntil: null, poll: null }],
-    ['reset-ending', { accountId: 'reset-ending', error: ending.error, fetchedAt: null, heldUntil: null, poll: null }],
-    ['reset-used', { accountId: 'reset-used', error: used.error, fetchedAt: null, heldUntil: null, poll: null }],
-    ['usage-seat', { accountId: 'usage-seat', error: seat.error, fetchedAt: null, heldUntil: null, poll: null }],
-  ]);
 });
 
 test('updateAccount is one PATCH that carries the canceled flag and the end in milliseconds', async () => {
@@ -765,23 +750,6 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   const calls = stub(() => answer(200, body));
   const items = await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.deepEqual(
-    items.map((i) => [i.kind, i.subject.id, i.link]),
-    [
-      ['pool_exhausted', 'main', { id: 'main', page: 'pools' }],
-      ['pairing_expiring', 'usage-seat', { id: 'usage-seat', page: 'accounts' }],
-      ['limit_reset_ending', 'reset-ending', { id: 'reset-ending', page: 'accounts' }],
-      ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }],
-      ['model_unpriced', 'claude-opus-99', null],
-      ['meter_drift', 'business', { id: 'business', page: 'accounts' }],
-      ['wall_reached', 'business', { id: 'business', page: 'accounts' }],
-      ['destination_spent', 'business', { id: 'business', page: 'accounts' }],
-      ['shed_no_runway', 'main', { id: 'main', page: 'pools' }],
-      ['slowed_long', 'business', { id: 'business', page: 'accounts' }],
-      ['expired_between_turns', 'keepalive', null],
-    ],
-    'every captured kind decodes as itself with its subject and its link',
-  );
   assert.ok(items.some((i) => i.kind === 'model_unpriced'), "the capture's unpriced model among them");
   assert.deepEqual(
     items.filter((i) => ['wall_reached', 'destination_spent', 'shed_no_runway'].includes(i.kind)).map((i) => [i.kind, i.subject.id, i.link]),

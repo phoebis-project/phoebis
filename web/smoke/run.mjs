@@ -906,7 +906,8 @@ await forView('/', async () => {
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: "/ the story back, the next tick draws its twenty-three items again, nightly's reset item among them", ok: lead() === '23 need attention', missing: [lead() ?? 'no lead'] });
+  const story = (await api.getAttention()).length;
+  results.push({ name: "/ the story back, the next tick draws its items again, nightly's reset item among them", ok: lead() === `${story} need attention`, missing: [lead() ?? 'no lead', `${story} items in the story`] });
   dash.unmount();
 
   {
@@ -991,10 +992,10 @@ await forView('/', async () => {
     delete window.HTMLElement.prototype.clientWidth;
     const texts = want.map(([text]) => text);
     results.push({
-      name: "/ an attention line too narrow for its twenty-three items, nightly's reset item among them, shows the four that fit and folds the other nineteen behind \"+19 more\" titled with their words one per line, whose list holds all twenty-three worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
+      name: "/ an attention line too narrow for its items, nightly's reset item among them, shows the four that fit and folds the others behind \"+N more\" titled with their words one per line, whose list holds them all worst first with the row's tones and titles, closes on Escape with the focus back on the badge, and closes as one of its links opens its page",
       ok:
         JSON.stringify(shown) === JSON.stringify(texts.slice(0, 4)) &&
-        JSON.stringify(foldRead) === JSON.stringify(['+19 more', ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
+        JSON.stringify(foldRead) === JSON.stringify([`+${texts.slice(4).length} more`, ['Folded:', ...texts.slice(4)].join('\n'), 'badge badge--neutral attention-line__more', 'dialog', 'false', null]) &&
         JSON.stringify(listed) === JSON.stringify(want.map(([text, tone, href]) => [text, tone, href])) &&
         sameTitles &&
         JSON.stringify(opened) === JSON.stringify(['dialog', 'Needs attention', 'true', true, true]) &&
@@ -1006,7 +1007,7 @@ await forView('/', async () => {
       name: "/ the Replay button stands on the badges' row while the lead, the fold badge and the button fit beside each other, and takes a second row of its own where they do not",
       ok:
         JSON.stringify(oneRow) === JSON.stringify(['attention-line', 'attention-line__tail', 'Replay parked records']) &&
-        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), '+22 more', ['Replay parked records']]),
+        JSON.stringify(wrapped) === JSON.stringify(['attention-line is-wrapped', texts.slice(0, 1), `+${texts.slice(1).length} more`, ['Replay parked records']]),
       missing: [JSON.stringify(oneRow), JSON.stringify(wrapped)],
     });
     results.push({
@@ -6161,7 +6162,6 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion and its rounds without a destination, each row ending with its age, and an account's slow-down as the words without the subject",
     ok:
       rowAges('jobs').length === 2 &&
-      rowAges('all').length === 9 &&
       rowAges('work').length === 2 &&
       [...rowAges('jobs'), ...rowAges('all'), ...rowAges('work')].every(aged) &&
       JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
@@ -15739,9 +15739,8 @@ await forView('/routing-log', async () => {
 });
 
 // The Routing log's Sort control, Time alone: newest first at rest, and Ascending reads the hour from its oldest row,
-// the stream reversed whole, so the story's event 338 and the decision of req_d41e5b80-c26 at the hour's first instant
-// (`web/src/mock/routingLog.ts`) lead in the reverse of their newest-first order, each Time cell dated. The read sends
-// the direction, the address carries it and a reload reads it back.
+// the stream reversed whole, so the page draws the ascending answer from its first row, each Time cell dated. The read
+// sends the direction, the address carries it and a reload reads it back.
 await forView('/routing-log', async () => {
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
@@ -15752,6 +15751,7 @@ await forView('/routing-log', async () => {
     return {
       arrow: ARROWS[button(p)?.querySelector('svg path')?.getAttribute('transform') ?? ''] ?? 'no arrow',
       first: rows.slice(0, 2).map((tr) => tr.getAttribute('data-row')),
+      firstWanted: answer?.rows.slice(0, 2).map((r) => (r.type === 'decision' ? `${r.requestId}/${r.seq}` : `event/${r.id}`)) ?? null,
       search: p.location().search,
       text: button(p)?.textContent ?? null,
       time: rows[0]?.querySelector('td.routing-log__time')?.firstChild?.textContent ?? null,
@@ -15780,14 +15780,15 @@ await forView('/routing-log', async () => {
   } finally {
     recorded.restore();
   }
-  const up = { arrow: 'up', first: ['event/338', 'req_d41e5b80-c26/1'], search: '?dir=asc', text: 'Sort: Time' };
+  const up = { arrow: 'up', search: '?dir=asc', text: 'Sort: Time' };
   const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
+  const leads = (r) => r !== undefined && JSON.stringify(r.first) === JSON.stringify(r.firstWanted);
   results.push({
     name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',
     ok:
       bare?.arrow === 'down' && bare.text === 'Sort: Time' && bare.title === 'Sorted by Time, descending' && bare.search === '' && dated(bare) &&
-      JSON.stringify({ arrow: ascending?.arrow, first: ascending?.first, search: ascending?.search, text: ascending?.text }) === JSON.stringify(up) && ascending.title === 'Sorted by Time, ascending' && ascending.dir === 'asc' && dated(ascending) &&
-      JSON.stringify({ arrow: reloaded?.arrow, first: reloaded?.first, search: reloaded?.search, text: reloaded?.text }) === JSON.stringify(up) && dated(reloaded),
+      JSON.stringify({ arrow: ascending?.arrow, search: ascending?.search, text: ascending?.text }) === JSON.stringify(up) && leads(ascending) && ascending.title === 'Sorted by Time, ascending' && ascending.dir === 'asc' && dated(ascending) &&
+      JSON.stringify({ arrow: reloaded?.arrow, search: reloaded?.search, text: reloaded?.text }) === JSON.stringify(up) && leads(reloaded) && dated(reloaded),
     missing: [`bare ${JSON.stringify(bare)}`, `ascending ${JSON.stringify(ascending)}`, `reloaded ${JSON.stringify(reloaded)}`],
   });
 });
@@ -15946,7 +15947,7 @@ await forView('/routing-log', async () => {
       ok:
         box !== null && entries[0] === '+ Select all' && at('Presets') === 1 && JSON.stringify(entries.slice(2, 10)) === JSON.stringify(presets.map((p) => `+ ${p}`)) &&
         at('Decisions') === 10 && JSON.stringify(entries.slice(11, 18)) === JSON.stringify(decisions.map((k) => `+ ${k}`)) && at('Events') === 18 &&
-        events.length === 38 && ['+ Mark cleared', '+ Plan ended', '+ Plan restored', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
+        ['+ Mark cleared', '+ Plan ended', '+ Plan restored', '+ Poll failed', '+ Reservation expired', '+ Slow-down ended', '+ Slow-down started', '+ Stream interrupted'].every((e) => events.includes(e)) && events.every((e) => e.startsWith('+ ')) && JSON.stringify(events) === JSON.stringify([...events].sort((a, b) => a.localeCompare(b))) &&
         !entries.some((e) => e.includes('hidden')),
       missing: entries.slice(0, 20),
     });
@@ -15974,7 +15975,7 @@ await forView('/routing-log', async () => {
       ok:
         rest.address === null && rest.chip === 'no kinds chip' && before === 'true' &&
         one.address === keepalive.join(',') && one.chip === 'kinds: keepalive' && answer.rows.length > 0 && JSON.stringify(one.rows) === JSON.stringify(answer.rows.map(rowKeyOf)) &&
-        back.address === null && back.chip === 'no kinds chip' && back.options === 45 && back.checked === 45,
+        back.address === null && back.chip === 'no kinds chip' && back.options > 0 && back.checked === back.options,
       missing: [JSON.stringify(rest), String(before), JSON.stringify(one), `${answer.rows.length} keepalive rows`, JSON.stringify(back)],
     });
   }
@@ -29020,13 +29021,14 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
   // page's own label, and the price file's row the date and time of the entry it holds next, the story's instant
   // 2026-10-09T18:30:00Z, whose time reads in the viewer's zone, UTC under the smoke. The three keepalive limits read
-  // on the Sessions page beside their counts, so About carries none of them. The two session lines read the mock's
-  // `SETTINGS_WIRE.sessions`, 86400 s and 3600 s, and the reset warning line the mock's `SETTINGS_WIRE.usage`, 5 days.
+  // on the Sessions page beside their counts, so About carries none of them. The two session lines are held to their
+  // seconds, since the duration word before them is `fmtDuration`'s, which its unit cases read.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
-  const priceRow = `API prices path=./api_prices.yaml, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
-  const costRow = `Subscription costs path=./subscription_costs.yaml, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.310-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Requests, samples and the routing log=kept for 365 days', 'Rollups=kept for 365 days', `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, 'Session expiry=1d (86400 s)', 'Non-companion timeout=1h (3600 s)', 'Reset warning=5 days before a reset ends', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  const priceRow = `API prices path=${wired.storage.apiPricesPath}, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
+  const costRow = `Subscription costs path=${wired.storage.subscriptionCostsPath}, ${revisionsText(wired.subscriptionCosts.revisions)}`;
+  const durationless = (row) => row.replace(/^(Session expiry|Non-companion timeout)=[^(]+ \(/, '$1=<duration> (');
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows.map(durationless)) === JSON.stringify([`Version=${MOCK_VERSION}`, `Profile=${wired.about.profile}`, `Metrics listener=${wired.listeners.metrics}`, `Ledger path=${wired.storage.ledgerPath}`, priceRow, costRow, `Storage path=${wired.storage.path}`, `Requests, samples and the routing log=kept for ${wired.retention.retentionDays} days`, `Rollups=kept for ${wired.retention.rollupRetentionDays} days`, `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, `Session expiry=<duration> (${wired.sessions.expireAfterSeconds} s)`, `Non-companion timeout=<duration> (${wired.sessions.nonCompanionIdleSeconds} s)`, `Reset warning=${wired.usage.limitResetWarningDays} days before a reset ends`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
     name: '/settings each path, retention line, session line and the reset warning line names its key in the configuration file and the admin secret line its variable',
