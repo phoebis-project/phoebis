@@ -385,6 +385,7 @@ fn request_event(
         session_id: observed.session_id.clone(),
         model: Some(observed.canonical_model.clone()),
         detail: Some(detail.to_string()),
+        pool_id: observed.pool_id.clone(),
         request_id: Some(observed.request_id.clone()),
         ..Default::default()
     })

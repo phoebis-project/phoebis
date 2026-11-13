@@ -1526,12 +1526,12 @@ pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStateme
 /// `None` when the kinds name no event kind, so the statement is never run.
 fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
     let mut statement = LogStatement::new("e", filter);
-    in_list(
-        "e.account_id",
-        &filter.accounts,
-        &mut statement.args,
-        &mut statement.clauses,
-    );
+    if !filter.accounts.is_empty() {
+        let marks = bind_all(&filter.accounts, &mut statement.args);
+        statement.clauses.push(format!(
+            "(e.account_id IN ({marks}) OR e.from_account_id IN ({marks}))"
+        ));
+    }
     if let Some(kinds) = &filter.kinds {
         if kinds.events.is_empty() {
             return None;

@@ -151,6 +151,9 @@ pub enum RouterEvent {
         /// was bound to the wall, the window's ceiling where it was bound to the span. `None` on a heal by the
         /// stretch, which reads `stretch_ms` and `threshold_ms`, and under `moved` and `released`.
         limit: Option<f64>,
+        /// The pool the event's key ran in: the pool of the decision's request for an event of a selection, else the
+        /// pool the snapshot in force names for the key, `None` for a key the snapshot no longer holds.
+        pool_id: Option<String>,
         at: i64,
     },
     OverageEnded {
@@ -166,6 +169,9 @@ pub enum RouterEvent {
         pin: PinKey,
         account_id: String,
         epoch: u64,
+        /// The pool the event's key ran in: the pool of the decision's request for an event of a selection, else the
+        /// pool the snapshot in force names for the key, `None` for a key the snapshot no longer holds.
+        pool_id: Option<String>,
         at: i64,
     },
     PinExpired {
@@ -174,6 +180,9 @@ pub enum RouterEvent {
         /// What the selection found against the account, in its own order (see `release_reasons`), or
         /// `client_error` alone for a pin the relay released after the request that created it failed.
         reasons: Vec<&'static str>,
+        /// The pool the event's key ran in: the pool of the decision's request for an event of a selection, else the
+        /// pool the snapshot in force names for the key, `None` for a key the snapshot no longer holds.
+        pool_id: Option<String>,
         at: i64,
     },
     PinMigrated {
@@ -194,6 +203,9 @@ pub enum RouterEvent {
         /// Why a failover moved the session, `None` for a rule's move, for a replaced pin's move and for a failover
         /// the relay sent with neither a cooldown nor a mark.
         cause: Option<MoveCause>,
+        /// The pool the event's key ran in: the pool of the decision's request for an event of a selection, else the
+        /// pool the snapshot in force names for the key, `None` for a key the snapshot no longer holds.
+        pool_id: Option<String>,
         at: i64,
     },
     /// A reservation left the account's prediction without the usage that would have replaced it: the request
@@ -331,6 +343,9 @@ pub enum RouterEvent {
         entries: u32,
         deepest: CacheMapEntry,
         cause: &'static str,
+        /// The pool the event's key ran in: the pool of the decision's request for an event of a selection, else the
+        /// pool the snapshot in force names for the key, `None` for a key the snapshot no longer holds.
+        pool_id: Option<String>,
         at: i64,
     },
     /// A pool member entered its wind-down window at a tick.
@@ -362,11 +377,18 @@ pub enum RouterEvent {
 }
 
 impl RouterEvent {
-    fn pin_created(key: &PinKey, account_id: &str, epoch: u64, at: i64) -> RouterEvent {
+    fn pin_created(
+        key: &PinKey,
+        account_id: &str,
+        epoch: u64,
+        pool_id: Option<String>,
+        at: i64,
+    ) -> RouterEvent {
         RouterEvent::PinCreated {
             pin: key.clone(),
             account_id: account_id.to_string(),
             epoch,
+            pool_id,
             at,
         }
     }
@@ -375,12 +397,14 @@ impl RouterEvent {
         key: &PinKey,
         account_id: &str,
         reasons: Vec<&'static str>,
+        pool_id: Option<String>,
         at: i64,
     ) -> RouterEvent {
         RouterEvent::PinExpired {
             pin: key.clone(),
             account_id: account_id.to_string(),
             reasons,
+            pool_id,
             at,
         }
     }
@@ -408,6 +432,7 @@ impl RouterEvent {
             runway_ms,
             binding,
             cause,
+            pool_id: Some(record.request.pool_id.clone()),
             at,
         }
     }
@@ -416,6 +441,7 @@ impl RouterEvent {
         account_id: String,
         pin: PinKey,
         facts: MarkClearedFacts,
+        pool_id: Option<String>,
         at: i64,
     ) -> RouterEvent {
         let MarkClearedFacts {
@@ -439,6 +465,7 @@ impl RouterEvent {
             stretch_ms,
             threshold_ms,
             limit,
+            pool_id,
             at,
         }
     }
@@ -2598,12 +2625,18 @@ fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEve
 /// The `mark_cleared` of a pin that left its account, when its mark stood: `moved` for a live pin a placement replaced
 /// on another account, `released` for a pin that left without a move (a release, an expiry, a fail-over's invalidation
 /// or a rekey's merge the row lost). `None` for an unmarked pin.
-fn cleared_mark(row: &PinRow, reason: &'static str, at: i64) -> Option<RouterEvent> {
+fn cleared_mark(
+    row: &PinRow,
+    reason: &'static str,
+    pool_id: Option<String>,
+    at: i64,
+) -> Option<RouterEvent> {
     standing_mark(row).map(|mark| {
         RouterEvent::mark_cleared(
             row.account_id.clone(),
             row.key(),
             mark_cleared_of(mark, reason, None),
+            pool_id,
             at,
         )
     })
@@ -3157,6 +3190,7 @@ impl Task {
                 // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
                 // its row and its pin events in one tick.
                 let mut pin_events = Vec::new();
+                let pool_id = Some(record.request.pool_id.clone());
                 let after = self.state.pin(&pin_key);
                 let now = request.now;
                 let selected = matches!(result, SelectResult::Selected(_));
@@ -3198,6 +3232,7 @@ impl Task {
                                 &pin_key,
                                 &new.account_id,
                                 new.epoch,
+                                pool_id.clone(),
                                 now,
                             )),
                         }
@@ -3236,12 +3271,14 @@ impl Task {
                                         &pin_key,
                                         &old.account_id,
                                         released.clone(),
+                                        pool_id.clone(),
                                         now,
                                     ));
                                     pin_events.push(RouterEvent::pin_created(
                                         &pin_key,
                                         &new.account_id,
                                         new.epoch,
+                                        pool_id.clone(),
                                         now,
                                     ));
                                 }
@@ -3264,6 +3301,7 @@ impl Task {
                             &pin_key,
                             &old.account_id,
                             released,
+                            pool_id.clone(),
                             now,
                         ));
                     }
@@ -3281,13 +3319,14 @@ impl Task {
                             account_id,
                             pin_key.clone(),
                             facts.clone(),
+                            pool_id.clone(),
                             request.now,
                         )),
                         None => left.and_then(|reason| {
-                            cleared_mark(old, reason, request.now).or_else(|| {
-                                marked_here
-                                    .as_ref()
-                                    .and_then(|row| cleared_mark(row, reason, request.now))
+                            cleared_mark(old, reason, pool_id.clone(), request.now).or_else(|| {
+                                marked_here.as_ref().and_then(|row| {
+                                    cleared_mark(row, reason, pool_id.clone(), request.now)
+                                })
                             })
                         }),
                     }
@@ -3762,7 +3801,8 @@ impl Task {
                     } else {
                         if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                             let now = (self.clock)();
-                            if let Some(event) = cleared_mark(&row, "released", now) {
+                            let pool_id = key_pool_id(&self.snapshot(), &row.key_id);
+                            if let Some(event) = cleared_mark(&row, "released", pool_id, now) {
                                 self.emit(event);
                             }
                             self.invalidated.insert(
@@ -3962,7 +4002,8 @@ impl Task {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
                     let now = (self.clock)();
-                    if let Some(event) = cleared_mark(&row, "released", now) {
+                    let pool_id = key_pool_id(&self.snapshot(), &row.key_id);
+                    if let Some(event) = cleared_mark(&row, "released", pool_id, now) {
                         self.emit(event);
                     }
                     self.invalidated.insert(
@@ -4027,13 +4068,15 @@ impl Task {
                 self.state.remove_pin(&key);
                 let now = (self.clock)();
                 let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, now);
+                let pool_id = key_pool_id(&self.snapshot(), &key.key_id);
                 self.emit(RouterEvent::pin_expired(
                     &key,
                     &current.account_id,
                     vec!["client_error"],
+                    pool_id.clone(),
                     now,
                 ));
-                if let Some(event) = cleared_mark(&current, "released", now) {
+                if let Some(event) = cleared_mark(&current, "released", pool_id, now) {
                     self.emit(event);
                 }
                 self.write(
@@ -4458,8 +4501,10 @@ impl Task {
 
     fn resolve(&mut self, spelling: &str, dated_id: &str, at: i64) {
         let (rekey, merged_away) = self.state.rekey(spelling, dated_id, at);
+        let snapshot = self.snapshot();
         for row in &merged_away {
-            if let Some(event) = cleared_mark(row, "released", at) {
+            let pool_id = key_pool_id(&snapshot, &row.key_id);
+            if let Some(event) = cleared_mark(row, "released", pool_id, at) {
                 self.emit(event);
             }
         }
@@ -4722,13 +4767,15 @@ impl Task {
         let mut pin_ends = Vec::with_capacity(purged.pins.len());
         for (row, reason) in &purged.pins {
             let key = row.key();
+            let pool_id = key_pool_id(&snapshot, &row.key_id);
             self.emit(RouterEvent::pin_expired(
                 &key,
                 &row.account_id,
                 vec![*reason],
+                pool_id.clone(),
                 now,
             ));
-            if let Some(event) = cleared_mark(row, "released", now) {
+            if let Some(event) = cleared_mark(row, "released", pool_id, now) {
                 self.emit(event);
             }
             pin_ends.push(StateWrite::DeletePin(key));
@@ -4736,7 +4783,7 @@ impl Task {
         let restored = !std::mem::replace(&mut self.purged, true);
         self.clock_resets(now, restored);
         self.wind_downs(&snapshot, now, restored);
-        self.expiries(&purged.affinity_entries, now);
+        self.expiries(&snapshot, &purged.affinity_entries, now);
         let mut writes: Vec<StateWrite> = purged
             .cooldowns
             .into_iter()
@@ -5085,7 +5132,7 @@ impl Task {
 
     /// One expiry per root and account from the entries the purge removed: how many left, the largest of them, and
     /// `incarnation` when any left with its account rather than its age.
-    fn expiries(&self, purged: &[PurgedEntry], now: i64) {
+    fn expiries(&self, snapshot: &RegistrySnapshot, purged: &[PurgedEntry], now: i64) {
         let mut groups: BTreeMap<(&str, &str), Vec<&PurgedEntry>> = BTreeMap::new();
         for purged in purged {
             groups
@@ -5122,6 +5169,7 @@ impl Task {
                     account_id: account_id.to_string(),
                 },
                 cause,
+                pool_id: key_pool_id(snapshot, &deepest.entry.key_id),
                 at: now,
             });
         }
@@ -5466,6 +5514,12 @@ fn holder<'a>(
 
 fn current(shared: &RwLock<Arc<RegistrySnapshot>>) -> Arc<RegistrySnapshot> {
     shared.read().expect("snapshot lock poisoned").clone()
+}
+
+/// The pool a pin event outside a selection names: the one the snapshot holds for the key, `None` for a key it no
+/// longer holds.
+fn key_pool_id(snapshot: &RegistrySnapshot, key_id: &str) -> Option<String> {
+    snapshot.key_pool(key_id).map(|pool| pool.id.clone())
 }
 
 /// The burn window of the pool the key routes through, or the default preset's for a key the snapshot no longer

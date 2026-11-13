@@ -2047,6 +2047,7 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
         pin: PinKey::new("k", "s", agent_id, "m"),
         account_id: "a".into(),
         epoch: 1,
+        pool_id: None,
         at: 1,
     };
     let (main_row, sibling_row) = (
@@ -2140,6 +2141,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             stretch_ms: None,
             threshold_ms: None,
             limit: None,
+            pool_id: None,
             at: 1,
         },
         RouterEvent::OverageEnded {
@@ -2155,12 +2157,14 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             pin: PinKey::new("k", "s", "main", "m"),
             account_id: "a".into(),
             epoch: 1,
+            pool_id: None,
             at: 1,
         },
         RouterEvent::PinExpired {
             pin: PinKey::new("k", "s", "main", "m"),
             account_id: "a".into(),
             reasons: Vec::new(),
+            pool_id: None,
             at: 1,
         },
         RouterEvent::PinMigrated {
@@ -2174,6 +2178,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             runway_ms: None,
             binding: None,
             cause: None,
+            pool_id: None,
             at: 1,
         },
         RouterEvent::ReservationExpired {
@@ -2253,6 +2258,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
                 account_id: "a".into(),
             },
             cause: "ttl",
+            pool_id: None,
             at: 1,
         },
         RouterEvent::WindDownStarted {

@@ -1137,9 +1137,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
             j!({ "agent_id": "main", "from_account": "direct", "epoch": 2, "reason": "spent" })
                 .to_string(),
         ),
-        pool_id: None,
+        pool_id: Some("main".into()),
         agent_id: Some("main".into()),
         request_id: None,
+        from_account_id: Some("direct".into()),
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 200,
@@ -1150,9 +1151,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-sonnet-5".into()),
         actor: None,
         detail: Some(j!({ "agent_id": "main", "reasons": ["cooldown", "spent"] }).to_string()),
-        pool_id: None,
+        pool_id: Some("main".into()),
         agent_id: Some("main".into()),
         request_id: None,
+        from_account_id: None,
     }));
     // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
     // key-models fixture reads the pool's deny entry with no cooldown while a cooldown its pattern matches is live.
@@ -1208,9 +1210,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-haiku-4-5-20251001".into()),
         actor: None,
         detail: Some(j!({ "attempt": 1, "request_id": "req-rejected", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
-        pool_id: None,
+        pool_id: Some("main".into()),
         agent_id: None,
         request_id: Some("r-failover".into()),
+        from_account_id: None,
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 350,
@@ -1221,9 +1224,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-haiku-4-5-20251001".into()),
         actor: None,
         detail: Some(j!({ "attempt": 2, "rejected_by": ["business"], "request_id": "req-permitted", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
-        pool_id: None,
+        pool_id: Some("main".into()),
         agent_id: None,
         request_id: Some("r-failover".into()),
+        from_account_id: None,
     }));
     // The serving attempt's stream was cut after its head, so the detail answers `stream_cut`. The row sits at the
     // request's finish, where the ledger writes it, so the detail's read of the request's window holds it.
@@ -1236,9 +1240,10 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-sonnet-5-5".into()),
         actor: None,
         detail: Some(j!({ "code": "stream_cut", "text": "malformed response: connection closed inside chunked body", "bytes_relayed": 2_048, "upstream_request_id": "req_r-failover_2", "attempt": 2 }).to_string()),
-        pool_id: None,
+        pool_id: Some("main".into()),
         agent_id: None,
         request_id: Some("r-failover".into()),
+        from_account_id: None,
     }));
     // Two weeks of `business`'s 7-day window, one reset the clock walk found, and one Fable week, so the unused
     // allowance capture carries both `observed` words and each reset's pair, the seeded profile's. Days back, so the
@@ -3537,6 +3542,7 @@ async fn routing_stories(
             stretch_ms: None,
             threshold_ms: None,
             limit: None,
+            pool_id: Some("main".into()),
             at: at(7),
         },
         // A projection over the ceiling still heals under the wall, the line of a horizon at the window's reset.
@@ -3551,6 +3557,7 @@ async fn routing_stories(
             stretch_ms: None,
             threshold_ms: None,
             limit: Some(1.0),
+            pool_id: Some("main".into()),
             at: at(24),
         },
         RouterEvent::ReservationExpired {
@@ -3580,6 +3587,7 @@ async fn routing_stories(
                 account_id: "direct".into(),
             },
             cause: "ttl",
+            pool_id: Some("main".into()),
             at: at(3),
         },
         RouterEvent::WindDownStarted {

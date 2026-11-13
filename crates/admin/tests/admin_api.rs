@@ -8714,6 +8714,7 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin() {
         pool_id: None,
         agent_id: Some("main".into()),
         request_id: None,
+        from_account_id: Some("direct".into()),
     }));
 
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {

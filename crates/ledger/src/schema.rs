@@ -2,8 +2,9 @@
 //! `cooldown_spans`, `decisions`, `events`, `extra_usage_samples`, `kept_warm_marks`, `parked_records`,
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
 //! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
-//! dropping the unused `requests.request_truncated` and adding `attempts.input_transformations` and
-//! `requests.input_transformations`.
+//! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
+//! `requests.input_transformations` and `events.from_account_id`, and filling the stored events' move sources and
+//! pools.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -431,10 +432,21 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 
 /// Step 4 drops `requests.request_truncated`, a column no insert wrote and no read took. The two
 /// `input_transformations` columns hold the blocks an answer dropped, per attempt and for the serving attempt on the
-/// request row.
+/// request row. `events.from_account_id` holds the account a pin move left, filled on the stored moves from their
+/// detail, and a stored pin or request event with no pool takes its request's pool or the pool of its key's newest
+/// decision at or before it.
 const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
-    ALTER TABLE requests ADD COLUMN input_transformations TEXT";
+    ALTER TABLE requests ADD COLUMN input_transformations TEXT; \
+    ALTER TABLE events ADD COLUMN from_account_id TEXT; \
+    UPDATE events SET from_account_id = json_extract(detail, '$.from_account') WHERE kind = 'pin_migrated'; \
+    UPDATE events SET pool_id = (SELECT r.pool_id FROM requests r WHERE r.id = events.request_id) \
+        WHERE pool_id IS NULL AND request_id IS NOT NULL \
+        AND kind IN ('model_permitted', 'model_rejected', 'stream_interrupted'); \
+    UPDATE events SET pool_id = (SELECT d.pool_id FROM decisions d \
+        WHERE d.key_id = events.key_id AND d.at <= events.at AND d.pool_id IS NOT NULL ORDER BY d.at DESC LIMIT 1) \
+        WHERE pool_id IS NULL AND key_id IS NOT NULL \
+        AND kind IN ('mark_cleared', 'pin_created', 'pin_expired', 'pin_migrated', 'warm_prefix_expired')";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

@@ -102,24 +102,28 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             pin,
             account_id,
             epoch,
+            pool_id,
             at,
         } => EventRecord {
             at: *at,
             kind: PIN_CREATED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id, "epoch": epoch }).to_string()),
+            pool_id: pool_id.clone(),
             ..pin_row(pin)
         },
         RouterEvent::PinExpired {
             pin,
             account_id,
             reasons,
+            pool_id,
             at,
         } => EventRecord {
             at: *at,
             kind: PIN_EXPIRED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id, "reasons": reasons }).to_string()),
+            pool_id: pool_id.clone(),
             ..pin_row(pin)
         },
         RouterEvent::PinMigrated {
@@ -133,6 +137,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             runway_ms,
             binding,
             cause,
+            pool_id,
             at,
         } => {
             let mut detail = json!({
@@ -154,6 +159,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 kind: PIN_MIGRATED.into(),
                 account_id: Some(to_account.clone()),
                 detail: Some(detail.to_string()),
+                pool_id: pool_id.clone(),
+                from_account_id: Some(from_account.clone()),
                 ..pin_row(pin)
             }
         }
@@ -168,6 +175,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             stretch_ms,
             threshold_ms,
             limit,
+            pool_id,
             at,
         } => EventRecord {
             at: *at,
@@ -187,6 +195,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 })
                 .to_string(),
             ),
+            pool_id: pool_id.clone(),
             ..pin_row(pin)
         },
         RouterEvent::ReservationExpired {
@@ -401,12 +410,14 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             entries,
             deepest,
             cause,
+            pool_id,
             at,
         } => EventRecord {
             at: *at,
             kind: WARM_PREFIX_EXPIRED.into(),
             account_id: Some(account_id.clone()),
             key_id: Some(key_id.clone()),
+            pool_id: pool_id.clone(),
             // The root is the conversation's identity, which is what the session column holds.
             session_id: Some(root.clone()),
             model: Some(model.clone()),
@@ -1033,6 +1044,7 @@ mod tests {
                 runway_ms: None,
                 binding: None,
                 cause,
+                pool_id: None,
                 at: 5,
             })
             .expect("a pin row");
@@ -1088,6 +1100,7 @@ mod tests {
             runway_ms: Some(5_400_000),
             binding: Some("five_hour".into()),
             cause: None,
+            pool_id: None,
             at: 5,
         })
         .expect("a pin row");
@@ -1199,6 +1212,7 @@ mod tests {
                     pin: PinKey::new("k", "s", "main", "m"),
                     account_id: "a".into(),
                     epoch: 1,
+                    pool_id: None,
                     at: 1,
                 },
                 "pin_created",
@@ -1208,6 +1222,7 @@ mod tests {
                     pin: PinKey::new("k", "s", "main", "m"),
                     account_id: "a".into(),
                     reasons: vec!["expired"],
+                    pool_id: None,
                     at: 1,
                 },
                 "pin_expired",
@@ -1244,6 +1259,7 @@ mod tests {
             pin: PinKey::new("k", "s", "main", "m"),
             account_id: "a".into(),
             reasons: vec!["cooldown", "spent"],
+            pool_id: None,
             at: 1,
         })
         .expect("a pin row");
@@ -1603,6 +1619,7 @@ mod tests {
                 account_id: "a".into(),
             },
             cause: "ttl",
+            pool_id: Some("p".into()),
             at: 4_000,
         })
         .expect("an expiry row");
@@ -1611,7 +1628,7 @@ mod tests {
             (
                 "warm_prefix_expired",
                 Some("a"),
-                None,
+                Some("p"),
                 Some("k"),
                 Some("s1"),
                 None,
@@ -1641,6 +1658,7 @@ mod tests {
             stretch_ms: Some(1_440_000),
             threshold_ms: Some(1_800_000),
             limit: None,
+            pool_id: Some("p".into()),
             at: 6_000,
         })
         .expect("a mark row");
@@ -1651,7 +1669,7 @@ mod tests {
                 (
                     "mark_cleared",
                     Some("a"),
-                    None,
+                    Some("p"),
                     Some("k"),
                     Some("s1"),
                     Some("sub-1"),

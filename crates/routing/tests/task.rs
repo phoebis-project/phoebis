@@ -3859,6 +3859,39 @@ async fn an_expired_idle_pin_the_selection_replaces_emits_the_decision_then_both
 }
 
 #[tokio::test]
+async fn a_selection_s_pin_event_and_the_purge_s_expiry_name_the_pool_the_key_runs_in() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        seeded(&["a"]),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    next_decision(&mut events).await;
+    let created = next_event(&mut events).await;
+    assert!(
+        matches!(&created, RouterEvent::PinCreated { pool_id, .. } if pool_id.as_deref() == Some("p")),
+        "the selection's pin names its request's pool: {created:?}"
+    );
+    // One millisecond past the pool's hour-long affinity TTL while the key stands, so the purge ends the pin as idle.
+    now.store(1_000 + HOUR + 1, Ordering::SeqCst);
+    let expired = next_event(&mut events).await;
+    assert!(
+        matches!(&expired, RouterEvent::PinExpired { pool_id, reasons, .. } if pool_id.as_deref() == Some("p") && *reasons == vec!["expired"]),
+        "the purge's expiry names the pool the snapshot holds for the key: {expired:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_pin_whose_account_left_the_pool_moves_to_the_member_under_unserved() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a", "b"]);

@@ -334,6 +334,8 @@ pub struct EventRecord {
     pub pool_id: Option<String>,
     pub agent_id: Option<String>,
     pub request_id: Option<String>,
+    /// The account a pin move left, on a `pin_migrated` row alone, so the Account filter lists the move under it.
+    pub from_account_id: Option<String>,
 }
 
 /// One decision as the ledger stores it: the columns, the summary and the record as the router typed them. The

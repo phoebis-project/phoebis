@@ -1165,9 +1165,9 @@ fn fill_serving_slice(
 
 pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), LedgerError> {
     conn.prepare_cached(
-        "INSERT INTO events (at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "INSERT INTO events (at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id, from_account_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
     )?
-    .execute(params![e.at, e.kind, e.account_id, e.key_id, e.session_id, e.model, e.actor, e.detail, e.pool_id, e.agent_id, e.request_id])?;
+    .execute(params![e.at, e.kind, e.account_id, e.key_id, e.session_id, e.model, e.actor, e.detail, e.pool_id, e.agent_id, e.request_id, e.from_account_id])?;
     Ok(())
 }
 
@@ -1474,7 +1474,7 @@ pub(crate) fn fill_guardrails(
 /// `concat!` it.
 macro_rules! event_select {
     () => {
-        "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events"
+        "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id, from_account_id FROM events"
     };
 }
 pub(crate) use event_select;
@@ -1493,6 +1493,7 @@ pub(crate) fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<EventRecor
         pool_id: r.get(8)?,
         agent_id: r.get(9)?,
         request_id: r.get(10)?,
+        from_account_id: r.get(11)?,
     })
 }
 
@@ -2360,6 +2361,63 @@ mod tests {
             (estimated_columns(&conn), read_version(&conn).unwrap()),
             (0, 4)
         );
+    }
+
+    /// The baseline and the chain's first two steps, so the fourth step runs over rows its statements never wrote.
+    fn prepared_at_version_three() -> Connection {
+        let mut conn = prepared_in_memory();
+        migrations::apply(&mut conn, schema::SCHEMA, 1, &schema::MIGRATIONS[..2]).unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_ledger_from_before_the_fourth_step_opens_with_its_stored_rows_as_the_step_leaves_them() {
+        let mut conn = prepared_at_version_three();
+        conn.execute_batch(
+            r#"
+            INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts,
+              pool_id) VALUES ('r1', 1000, 'm', 'm', 0, 'inference', 'client', 'succeeded', 0, 'q');
+            INSERT INTO decisions (request_id, seq, attempt, at, kind, key_id, pool_id, summary, record) VALUES
+              ('d1', 1, 1, 1000, 'placed', 'k', 'a', '{}', x''),
+              ('d2', 1, 1, 2000, 'placed', 'k', 'b', '{}', x'');
+            INSERT INTO events (at, kind, key_id, request_id, detail) VALUES
+              (1000, 'pin_created', 'k', NULL, NULL),
+              (1500, 'stream_interrupted', NULL, 'r1', NULL),
+              (1600, 'ledger_gap', NULL, 'r1', NULL),
+              (3000, 'pin_migrated', 'k', NULL, '{"agent_id":"main","from_account":"x","epoch":2,"reason":"spent"}');
+            "#,
+        )
+        .unwrap();
+        migrations::apply(&mut conn, schema::SCHEMA, 3, schema::MIGRATIONS).unwrap();
+        let events = conn
+            .prepare(concat!(event_select!(), " ORDER BY at"))
+            .unwrap()
+            .query_map([], row_to_event)
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        let of_kind = |kind: &str| events.iter().find(|e| e.kind == kind).expect(kind);
+        assert_eq!(
+            of_kind("pin_created").pool_id.as_deref(),
+            Some("a"),
+            "the key's newest decision at or before the event, never the later one"
+        );
+        assert_eq!(
+            of_kind("stream_interrupted").pool_id.as_deref(),
+            Some("q"),
+            "a request event takes its request's pool"
+        );
+        assert_eq!(
+            of_kind("pin_migrated").from_account_id.as_deref(),
+            Some("x"),
+            "a move's source comes from its detail"
+        );
+        assert_eq!(
+            of_kind("ledger_gap").pool_id,
+            None,
+            "a gap that names a request keeps no pool"
+        );
+        assert_eq!(read_version(&conn).unwrap(), 4);
     }
 
     #[tokio::test]

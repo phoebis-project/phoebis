@@ -471,7 +471,7 @@ pub(crate) struct DecisionRecord {
 #[into_params(parameter_in = Query)]
 pub(crate) struct RoutingLogQuery {
     /// A comma list of ids. Matches a decision's source (`from_account_id`) as well as the account it placed on, and
-    /// an event's account.
+    /// an event's account as well as the account a pin move left.
     pub accounts: Option<String>,
     /// The decisions and the events whose agent id equals the value, literally, so an event that names no agent is
     /// left out. Combines with `session` and every other filter.
@@ -494,7 +494,8 @@ pub(crate) struct RoutingLogQuery {
     pub limit: Option<u32>,
     /// A comma list of ids.
     pub models: Option<String>,
-    /// A comma list of ids.
+    /// A comma list of ids. Matches the decisions and the events that name the pool, so an event that names none is
+    /// left out.
     pub pools: Option<String>,
     /// One request id: its decisions and the events that name it.
     pub request: Option<String>,

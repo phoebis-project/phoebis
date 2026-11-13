@@ -4368,6 +4368,7 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fi
         pool_id: None,
         agent_id: None,
         request_id: None,
+        from_account_id: Some("direct".into()),
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 200,
@@ -4384,6 +4385,7 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fi
         pool_id: None,
         agent_id: None,
         request_id: None,
+        from_account_id: Some("business".into()),
     }));
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("r-rewrite").await.unwrap()
@@ -4474,6 +4476,7 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
             pool_id: None,
             agent_id: None,
             request_id: None,
+            from_account_id: None,
         })
     };
     let event = |account: &str, reason: &str| event_at(account, reason, now - 100);

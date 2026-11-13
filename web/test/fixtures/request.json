@@ -251,7 +251,7 @@
           "epoch": 2,
           "reason": "spent"
         },
-        "pool_id": null,
+        "pool_id": "main",
         "agent_id": "main",
         "request_id": null
       },
@@ -270,7 +270,7 @@
             "spent"
           ]
         },
-        "pool_id": null,
+        "pool_id": "main",
         "agent_id": "main",
         "request_id": null
       },
@@ -288,7 +288,7 @@
           "source_request_id": "r-failover",
           "wire_model": "claude-haiku-4-5"
         },
-        "pool_id": null,
+        "pool_id": "main",
         "agent_id": null,
         "request_id": "r-failover"
       },
@@ -309,7 +309,7 @@
           "source_request_id": "r-failover",
           "wire_model": "claude-haiku-4-5"
         },
-        "pool_id": null,
+        "pool_id": "main",
         "agent_id": null,
         "request_id": "r-failover"
       },
@@ -328,7 +328,7 @@
           "upstream_request_id": "req_r-failover_2",
           "attempt": 2
         },
-        "pool_id": null,
+        "pool_id": "main",
         "agent_id": null,
         "request_id": "r-failover"
       }

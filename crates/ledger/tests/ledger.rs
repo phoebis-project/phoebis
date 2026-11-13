@@ -8698,6 +8698,87 @@ fn accounts_match_a_move_s_source() {
     assert_eq!(log_ids(&db, &accounts("c")), ["d:r2/1"]);
 }
 
+#[test]
+fn a_pin_event_and_a_cut_stream_list_under_the_pool_they_ran_in_and_under_no_other() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let created = phoebis_ledger::event_of(&phoebis_routing::RouterEvent::PinCreated {
+        pin: phoebis_store::PinKey::new("k", "s1", "main", "claude-sonnet-5"),
+        account_id: "a".into(),
+        epoch: 1,
+        pool_id: Some("main".into()),
+        at: 100,
+    })
+    .expect("a pin row");
+    db.insert_event(&created).unwrap();
+    let mut assembler = Assembler::new(Arc::new(|| NOW));
+    let BusEvent::RequestObserved(mut observed) = observed_event("r1") else {
+        unreachable!()
+    };
+    observed.pool_id = Some("main".into());
+    assembler.observe(BusEvent::RequestObserved(observed));
+    let BusEvent::RequestComplete(mut complete) = complete_event("r1") else {
+        unreachable!()
+    };
+    complete.outcome = BusOutcome::Incomplete;
+    complete.interruption = Some(Interruption {
+        code: "stream_cut".into(),
+        text: "malformed response: connection closed inside chunked body".into(),
+        bytes_relayed: 42,
+    });
+    complete.finished_at = 200;
+    for record in assembler.observe(BusEvent::RequestComplete(complete)) {
+        if let Record::Event(event) = record {
+            db.insert_event(&event).unwrap();
+        }
+    }
+    let pools = |pool: &str| phoebis_ledger::RoutingLogFilter {
+        pools: vec![pool.into()],
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &pools("main")),
+        ["e:stream_interrupted@200", "e:pin_created@100"],
+        "each event names the pool it ran in"
+    );
+    assert_eq!(log_ids(&db, &pools("other")), Vec::<String>::new());
+}
+
+#[test]
+fn a_pin_move_lists_under_the_account_it_left_and_the_one_it_landed_on() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let moved = phoebis_ledger::event_of(&phoebis_routing::RouterEvent::PinMigrated {
+        pin: phoebis_store::PinKey::new("k", "s1", "main", "claude-sonnet-5"),
+        from_account: "a".into(),
+        to_account: "b".into(),
+        epoch: 2,
+        reason: "spent".into(),
+        reasons: Vec::new(),
+        fit: Some("fits"),
+        runway_ms: None,
+        binding: None,
+        cause: None,
+        pool_id: Some("main".into()),
+        at: 100,
+    })
+    .expect("a pin row");
+    db.insert_event(&moved).unwrap();
+    let accounts = |a: &str| phoebis_ledger::RoutingLogFilter {
+        accounts: vec![a.into()],
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &accounts("a")),
+        ["e:pin_migrated@100"],
+        "the account the pin left"
+    );
+    assert_eq!(
+        log_ids(&db, &accounts("b")),
+        ["e:pin_migrated@100"],
+        "the account it landed on"
+    );
+    assert_eq!(log_ids(&db, &accounts("c")), Vec::<String>::new());
+}
+
 /// A decision row's identity, its own attempt, the request's count, and the answering attempt's status and cache.
 type CompletionFacts = (
     String,
