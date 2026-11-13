@@ -3,7 +3,10 @@
 //! and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
 //! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
 //! `request_guardrails`. `ServingFacts` is the request row's nested block of its serving attempt's columns, read into
-//! the one member `RequestRecord::serving`.
+//! the one member `RequestRecord::serving`. `InputTransformation` holds one key's entry of the JSON object the two
+//! `input_transformations` columns store.
+
+use std::collections::BTreeMap;
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary, PinUsage};
 use phoebis_store::AccountKind;
@@ -139,6 +142,8 @@ pub struct ServingFacts {
     pub cache_read_tokens: Option<u64>,
     /// The 5-minute and 1-hour writes summed.
     pub cache_write_tokens: Option<u64>,
+    /// The serving attempt's `input_transformations`, cloned as the attempt holds it.
+    pub input_transformations: Option<BTreeMap<String, InputTransformation>>,
 }
 
 impl ServingFacts {
@@ -159,6 +164,7 @@ impl ServingFacts {
             output_tokens: last.output_tokens,
             cache_read_tokens: last.cache_read_tokens,
             cache_write_tokens: last.cache_write_tokens(),
+            input_transformations: last.input_transformations.clone(),
         }
     }
 }
@@ -170,6 +176,14 @@ pub struct GuardrailMatchRecord {
     pub guardrail_id: String,
     pub position: u32,
     pub blocked: bool,
+}
+
+/// The blocks an answer dropped under one `<type>.<reason>` key of its `input_transformations`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct InputTransformation {
+    pub blocks: u64,
+    /// The lowest index `i` of the dropped blocks' `messages.{i}` paths.
+    pub first_message: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -233,6 +247,9 @@ pub struct AttemptRecord {
     /// The SHA-256 of `stop_details.fallback_credit_token` where the attempt's answer carries one, which the upstream
     /// issues with a refusal, lowercase hex, `None` elsewhere and on a row from before the column.
     pub issued_digest: Option<String>,
+    /// The blocks the answer dropped, per `<type>.<reason>` key. An empty map for an answer that listed nothing,
+    /// `None` for an answer without the member and for an attempt from before the column.
+    pub input_transformations: Option<BTreeMap<String, InputTransformation>>,
 }
 
 impl AttemptRecord {

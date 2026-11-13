@@ -2,7 +2,8 @@
 //! `cooldown_spans`, `decisions`, `events`, `extra_usage_samples`, `kept_warm_marks`, `parked_records`,
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
 //! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
-//! dropping the unused `requests.request_truncated`.
+//! dropping the unused `requests.request_truncated` and adding `attempts.input_transformations` and
+//! `requests.input_transformations`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -428,8 +429,12 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
     CREATE INDEX requests_serving_pending ON requests (received_at) \
         WHERE serving_account_id IS NULL AND attempts > 0";
 
-/// Step 4 drops `requests.request_truncated`, a column no insert wrote and no read took.
-const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated";
+/// Step 4 drops `requests.request_truncated`, a column no insert wrote and no read took. The two
+/// `input_transformations` columns hold the blocks an answer dropped, per attempt and for the serving attempt on the
+/// request row.
+const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
+    ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
+    ALTER TABLE requests ADD COLUMN input_transformations TEXT";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

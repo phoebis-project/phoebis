@@ -95,8 +95,8 @@ pub use reconcile::{
 };
 pub use record::{
     AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
-    GuardrailMatchRecord, KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
-    SampleSource, ServingFacts,
+    GuardrailMatchRecord, InputTransformation, KeepaliveDelta, ParkedRecord, QuotaSampleRecord,
+    RequestRecord, SampleSource, ServingFacts,
 };
 pub use refold::refold_bands;
 pub use rollup::{
