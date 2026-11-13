@@ -839,6 +839,26 @@ impl AccountRollupRow {
         add_counts(&mut self.migrations, &o.migrations);
         self.wall_early_ms = self.wall_early_ms.max(o.wall_early_ms);
     }
+
+    /// Whether the row holds no figure: the seven counts zero, the three maxima null and the moves map empty. Ledger
+    /// step 4 deletes the stored rows in this state by the same eleven columns, so a stored row and a new one agree.
+    fn holds_nothing(&self) -> bool {
+        [
+            self.overage_seconds,
+            self.cooldown_seconds,
+            self.pins_created,
+            self.pins_migrated_in,
+            self.pins_migrated_out,
+            self.rewrite_tokens,
+            self.wall_early_ms,
+        ]
+        .iter()
+        .all(|count| *count == 0)
+            && self.utilization_5h_max.is_none()
+            && self.utilization_7d_max.is_none()
+            && self.utilization_7d_oi_max.is_none()
+            && self.migrations.is_empty()
+    }
 }
 
 pub fn fold_request(
@@ -1178,11 +1198,7 @@ pub fn fold_event(tx: &Transaction<'_>, event: &EventRecord) -> Result<(), Ledge
             };
             for (bucket, counted) in take_segments(tx, account, scope)? {
                 // The part of this hour's segment that lies after the clear never elapsed.
-                let start_ms = bucket * 1_000;
-                let end_ms = hour_end(bucket) * 1_000;
-                let unelapsed =
-                    ((until.min(end_ms) - event.at.max(start_ms)).max(0) / 1_000) as u64;
-                let seconds = unelapsed.min(counted);
+                let seconds = unelapsed_segment_seconds(event.at, bucket, until, counted);
                 if seconds > 0 {
                     unfold_cooldown(tx, bucket, account, seconds)?;
                 }
@@ -1802,7 +1818,8 @@ fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), Led
     Ok(())
 }
 
-/// Takes back cooldown seconds an announcement counted that the account never spent.
+/// Takes back cooldown seconds an announcement counted that the account never spent. A row the take-back leaves
+/// holding nothing is deleted, so a cooldown cleared early lists no hour of zeros.
 fn unfold_cooldown(
     tx: &Transaction<'_>,
     hour: i64,
@@ -1811,6 +1828,13 @@ fn unfold_cooldown(
 ) -> Result<(), LedgerError> {
     let mut row = account_row(tx, hour, account_id)?;
     row.cooldown_seconds = row.cooldown_seconds.saturating_sub(seconds);
+    if row.holds_nothing() {
+        tx.prepare_cached(
+            "DELETE FROM account_rollups_hourly WHERE hour = ?1 AND account_id = ?2",
+        )?
+        .execute(params![hour, account_id])?;
+        return Ok(());
+    }
     write_account(tx, &row)
 }
 
@@ -1902,6 +1926,46 @@ fn take_segments(
     tx.prepare_cached("DELETE FROM cooldown_segments WHERE account_id = ?1 AND scope = ?2")?
         .execute(params![account_id, scope])?;
     Ok(segments)
+}
+
+/// The seconds of a booked cooldown segment that have not elapsed at `at`: the part of the hour between `at` and
+/// the earlier of the span's end and the hour's end, capped by the segment. `at` and `span_end` are Unix
+/// milliseconds, and `hour` is the hour's start in seconds as `hour_of` answers it.
+pub(crate) fn unelapsed_segment_seconds(
+    at: i64,
+    hour: i64,
+    span_end: i64,
+    segment_seconds: u64,
+) -> u64 {
+    let unelapsed = (span_end.min(hour_end(hour) * 1_000) - at.max(hour * 1_000)).max(0) / 1_000;
+    (unelapsed as u64).min(segment_seconds)
+}
+
+/// Per account, the seconds of the current hour that its open cooldowns booked and that have not passed at `now`.
+/// Reads `cooldown_spans` and `cooldown_segments` and writes nothing.
+pub fn open_cooldown_remainders(
+    conn: &Connection,
+    now: i64,
+) -> Result<BTreeMap<String, i64>, LedgerError> {
+    let hour = hour_of(now);
+    let mut stmt = conn.prepare_cached(
+        "SELECT s.account_id, s.until, g.seconds FROM cooldown_spans s JOIN cooldown_segments g \
+         ON g.account_id = s.account_id AND g.scope = s.scope AND g.hour = ?1",
+    )?;
+    let segments = stmt.query_map(params![hour], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, i64>(2)? as u64,
+        ))
+    })?;
+    let mut remainders = BTreeMap::new();
+    for segment in segments {
+        let (account_id, until, seconds) = segment?;
+        *remainders.entry(account_id).or_insert(0) +=
+            unelapsed_segment_seconds(now, hour, until, seconds) as i64;
+    }
+    Ok(remainders)
 }
 
 const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled";
@@ -3047,6 +3111,50 @@ mod tests {
             (by_hour.values().sum::<u64>(), span),
             (3_600, None),
             "only the hour the cooldown held is left"
+        );
+    }
+
+    #[test]
+    fn a_cooldown_cleared_seconds_after_its_set_leaves_no_empty_hour_and_keeps_an_hour_with_a_pin()
+    {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        // The pin folds before the clear, so the take-back meets an hour that holds more than its cooldown.
+        let events = [
+            cooldown_set_event(0, 3 * HOUR),
+            EventRecord {
+                at: HOUR + 60_000,
+                kind: PIN_CREATED.into(),
+                account_id: Some("a".into()),
+                ..Default::default()
+            },
+            cooldown_cleared_event(14_000),
+        ];
+        db.write(|c| {
+            let tx = c.transaction()?;
+            for event in &events {
+                fold_event(&tx, event)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let rows = db
+            .read_blocking(|c| read_account_rollups(c, 0, i64::MAX))
+            .unwrap();
+        let hour = |hour: i64| {
+            rows.iter()
+                .find(|r| r.hour == hour)
+                .map(|r| (r.cooldown_seconds, r.pins_created))
+        };
+        assert_eq!(
+            hour(7_200),
+            None,
+            "an hour that held only the time the clear gave back leaves"
+        );
+        assert_eq!(
+            hour(3_600),
+            Some((0, 1)),
+            "an hour that also holds a created pin keeps its row with the pin"
         );
     }
 

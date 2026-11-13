@@ -4,7 +4,8 @@
 //! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
 //! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
 //! `requests.input_transformations`, `events.from_account_id` and `rollups_hourly.client_canceled`, filling the stored
-//! events' move sources and pools, and filling the client's cancels from the stored rollups' errors maps.
+//! events' move sources and pools, filling the client's cancels from the stored rollups' errors maps, and deleting the
+//! stored account hours that hold nothing.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -437,6 +438,8 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 /// detail, and a stored pin or request event with no pool takes its request's pool or the pool of its key's newest
 /// decision at or before it. `rollups_hourly.client_canceled` counts a client's cancels apart from `failed`, and each
 /// stored row that is no probe's moves its errors map's `client_gone` count there, off `failed` and out of the map.
+/// The stored account hours that hold nothing are deleted, judged by the eleven columns `AccountRollupRow::holds_nothing`
+/// reads, so the rows a cleared cooldown emptied before the step leave as `unfold_cooldown` deletes them after it.
 const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
     ALTER TABLE requests ADD COLUMN input_transformations TEXT; \
@@ -454,7 +457,11 @@ const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
         SET client_canceled = json_extract(errors_json, '$.client_gone'), \
             failed = MAX(failed - json_extract(errors_json, '$.client_gone'), 0), \
             errors_json = json_remove(errors_json, '$.client_gone') \
-        WHERE kind <> 'probe' AND json_extract(errors_json, '$.client_gone') IS NOT NULL";
+        WHERE kind <> 'probe' AND json_extract(errors_json, '$.client_gone') IS NOT NULL; \
+    DELETE FROM account_rollups_hourly \
+        WHERE utilization_5h_max IS NULL AND utilization_7d_max IS NULL AND utilization_7d_oi_max IS NULL \
+        AND overage_seconds = 0 AND cooldown_seconds = 0 AND pins_created = 0 AND pins_migrated_in = 0 \
+        AND pins_migrated_out = 0 AND rewrite_tokens = 0 AND wall_early_ms = 0 AND migrations_json = '{}'";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

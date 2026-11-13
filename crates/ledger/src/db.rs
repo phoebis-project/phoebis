@@ -2395,6 +2395,10 @@ mod tests {
                 '{}', x'', x'', x'', x'', '{"client_gone":2,"upstream_error":1}', '{}'),
               (3600, 'k', 'p', 'a', 'm', 'probe', '-', 5, 2, 0, 3, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 '{}', x'', x'', x'', x'', '{"client_gone":2,"upstream_error":1}', '{}');
+            INSERT INTO account_rollups_hourly (hour, account_id, overage_seconds, cooldown_seconds, pins_created,
+              pins_migrated_in, pins_migrated_out) VALUES
+              (3600, 'a', 0, 0, 0, 0, 0),
+              (7200, 'a', 0, 0, 1, 0, 0);
             "#,
         )
         .unwrap();
@@ -2454,6 +2458,23 @@ mod tests {
                 ])
             ),
             "a probe row reads as stored"
+        );
+        let account_rows = crate::rollup::read_account_rollups(&conn, 0, i64::MAX).unwrap();
+        let pins_in = |hour: i64| {
+            account_rows
+                .iter()
+                .find(|r| r.hour == hour)
+                .map(|r| r.pins_created)
+        };
+        assert_eq!(
+            pins_in(3_600),
+            None,
+            "an account hour that holds nothing leaves"
+        );
+        assert_eq!(
+            pins_in(7_200),
+            Some(1),
+            "an account hour with a single count stays"
         );
         assert_eq!(read_version(&conn).unwrap(), 4);
     }

@@ -91,8 +91,9 @@ usage-based seat's `usage_based`, the last priced in dollars with no window shar
 funding filter. They also count, per account and pool, the time the slow-down held the hour's requests before their
 heads and how many requests it held, which the Analytics view's held chart reads ([Slow-down](routing.md#slow-down)). An
 account's rollups also book a cooldown's time when its announcement lands, each part to the hour it falls in, up to
-seven days past the announcement, a later announcement booking on from the end already booked, and a cooldown cleared
-early gives back the time after the clear.
+seven days past the announcement, a later announcement booking on from the end already booked. A cooldown cleared early
+gives back the time after the clear and leaves no time behind: an hour that held nothing but the returned time leaves
+the account's rollups.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
