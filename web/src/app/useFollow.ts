@@ -20,10 +20,10 @@ import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, u
 export function useFollow<R>(input: {
   address: string;
   /**
-   * Whether `compare` cannot place a polled row against the last row shown, so the poll lands every row it reads, as
-   * under a list with no next cursor. Without one, `compare` places every row.
+   * Whether `compare` cannot place a polled row against the row the list's cursor stands on, so the poll lands every
+   * row it reads, as under a list with no next cursor. Without one, `compare` places every row.
    */
-  cannotPlace?: (last: R) => boolean;
+  cannotPlace?: (atCursor: R) => boolean;
   compare: (a: R, b: R) => number;
   cursor: string | undefined;
   error: string | null;
@@ -101,9 +101,14 @@ export function useFollow<R>(input: {
       // shown. A stale list hands none, since its cursor is another query's.
       const tail = standing === null ? list?.nextCursor : standing.cursor;
       // The list answered no next cursor, so every polled row is the list's whatever the range's end. Where `compare`
-      // cannot place a row against the last row shown, a row it files below may stand above the route's cursor, and a
-      // row drawn twice is a smaller harm than one hidden.
-      const lands = tail === null || (last !== undefined && cannotPlace?.(last) === true);
+      // cannot place a row against the row the cursor stands on, a row it files below may stand above the cursor, and
+      // a row drawn twice is a smaller harm than one hidden. The list's cursor stands on its last row in the route's
+      // order, which a poll's re-sort may no longer show last. A stand-in's cursor stands on no row the hook keeps, so
+      // there any row shown that `compare` cannot place lands the poll. With no cursor in force the guard reads
+      // nothing.
+      const atCursor = standing === null ? list?.rows.at(-1) : undefined;
+      const unplaced = cannotPlace !== undefined && typeof tail === 'string' && (standing === null ? atCursor !== undefined && cannotPlace(atCursor) : (start ?? []).some(cannotPlace));
+      const lands = tail === null || unplaced;
       // On a custom range each page the poll reads notes a row it withholds below the rows shown while the ref holds no
       // list (a stale or a failed read) and no stand-in, since such a poll lands nothing below and the stamp must not
       // pass the row.

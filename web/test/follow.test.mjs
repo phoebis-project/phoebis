@@ -382,6 +382,33 @@ test('under a token order a poll lands a row below a last row shown of count 0, 
   );
 });
 
+/** A row whose serving attempt answered 200, with its two token counts as the wire answers them. */
+const served200 = (id, input, output = 0) => ({ at: at(1), attempts: [{ upstreamStatus: 200 }], id, usage: { input, output } });
+
+test("under an ascending token order a poll lands a row above the page's largest count while the list's cursor stands on a count never stored", async () => {
+  // The route files a count it never stored last under either direction and answers it as 0, so its page ends on req_m
+  // and req_n and its cursor stands on req_n. The comparator reads their 0 first, so once the first poll re-sorts the
+  // rows shown, req_p's 5 is the last of them. The route files req_q's stored 9 before req_n, where the list's next
+  // cursor never brings it.
+  const clock = frozen();
+  const read = async (_cursor, _to, landedAfter) => (landedAfter < 6 ? { landedThrough: 6, nextCursor: null, rows: [] } : { landedThrough: 7, nextCursor: null, rows: [served200('req_q', 9)] });
+  const list = { landedThrough: 5, nextCursor: 'c2', rows: [served200('req_p', 5), served200('req_m', 0), served200('req_n', 0)] };
+  const f = follow({ cannotPlace: d.cannotPlaceUnder('input_tokens'), compare: d.requestOrder('input_tokens', 'asc'), list, read });
+  await twoPolls(clock);
+  assert.deepEqual(f.last().rows.map(byId), ['req_m', 'req_n', 'req_p', 'req_q']);
+});
+
+test("under the output token order a poll reads the output count of the row the list's cursor stands on", async () => {
+  // req_z's output count reads 0 beside an input count of 1, so a guard that read the input count would let the
+  // comparator file req_a, of output 0 and a smaller id, below req_z and withhold it.
+  const clock = frozen();
+  const read = async () => ({ landedThrough: 6, nextCursor: null, rows: [served200('req_a', 0)] });
+  const f = follow({ cannotPlace: d.cannotPlaceUnder('output_tokens'), compare: d.requestOrder('output_tokens', 'desc'), list: { landedThrough: 5, nextCursor: 'c2', rows: [served200('req_z', 1)] }, read });
+  act(() => clock.tick(5_000));
+  await settled();
+  assert.deepEqual(f.last().rows.map(byId), ['req_z', 'req_a']);
+});
+
 test("a custom range's poll over a stale list with no next cursor leaves a late row below the last row shown to Next", async () => {
   // After the first poll the list answers another query, one with no next cursor, while this query's own list holds
   // one. That cursor is the other query's, so it hands the poll no landing.
