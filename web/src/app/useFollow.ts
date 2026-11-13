@@ -20,10 +20,11 @@ import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, u
 export function useFollow<R>(input: {
   address: string;
   /**
-   * Whether `compare` cannot place a polled row against the row the list's cursor stands on, so the poll lands every
-   * row it reads, as under a list with no next cursor. Without one, `compare` places every row.
+   * Whether `compare` cannot place a polled row against `row`. The poll asks it about the row the list's cursor stands
+   * on, and under a stand-in about each row shown. Where it answers yes the poll lands every row it reads, as under a
+   * list with no next cursor. Without one, `compare` places every row.
    */
-  cannotPlace?: (atCursor: R) => boolean;
+  cannotPlace?: (row: R) => boolean;
   compare: (a: R, b: R) => number;
   cursor: string | undefined;
   error: string | null;
@@ -103,9 +104,9 @@ export function useFollow<R>(input: {
       // The list answered no next cursor, so every polled row is the list's whatever the range's end. Where `compare`
       // cannot place a row against the row the cursor stands on, a row it files below may stand above the cursor, and
       // a row drawn twice is a smaller harm than one hidden. The list's cursor stands on its last row in the route's
-      // order, which a poll's re-sort may no longer show last. A stand-in's cursor stands on no row the hook keeps, so
-      // there any row shown that `compare` cannot place lands the poll. With no cursor in force the guard reads
-      // nothing.
+      // order, which a poll's re-sort may no longer show last. A stand-in's page is merged into the rows shown, so the
+      // hook can no longer tell which row its cursor stands on, and there the poll lands every row while `compare`
+      // cannot place a row against any row shown. With no cursor in force the guard reads nothing.
       const atCursor = standing === null ? list?.rows.at(-1) : undefined;
       const unplaced = cannotPlace !== undefined && typeof tail === 'string' && (standing === null ? atCursor !== undefined && cannotPlace(atCursor) : (start ?? []).some(cannotPlace));
       const lands = tail === null || unplaced;
