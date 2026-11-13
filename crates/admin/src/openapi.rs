@@ -570,6 +570,9 @@ pub(crate) struct BreakdownRow {
     pub succeeded: u64,
     pub rate_limited: u64,
     pub failed: u64,
+    /// The requests that ended canceled under `client_gone`, a client that left before its answer ended, counted apart
+    /// from `failed` and in `requests`.
+    pub client_canceled: u64,
     pub exhausted: u64,
     pub rejected: u64,
     pub attempts: u64,

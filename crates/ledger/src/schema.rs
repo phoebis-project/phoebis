@@ -3,8 +3,8 @@
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
 //! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
 //! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
-//! `requests.input_transformations` and `events.from_account_id`, and filling the stored events' move sources and
-//! pools.
+//! `requests.input_transformations`, `events.from_account_id` and `rollups_hourly.client_canceled`, filling the stored
+//! events' move sources and pools, and filling the client's cancels from the stored rollups' errors maps.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -241,8 +241,9 @@ CREATE TABLE IF NOT EXISTS "extra_usage_samples" (
 -- band and tier name the cells and windows the counts price at, and classifier files a classifier call's usage apart,
 -- so the share readers price it at no plan share. probes_skipped counts the due probes a scheduling gate withheld,
 -- incomplete the committed answers whose body ended early, the two kept-warm token columns what a kept-warm credit read
--- under each TTL, the slow-down columns the waits of the row's requests, and refusals_json the refusals by error code
--- apart from every other figure, so a reader that sums the row sees none of them.
+-- under each TTL, the slow-down columns the waits of the row's requests, client_canceled the requests whose client
+-- left (a column of the migration to version 4), in requests and apart from failed and errors_json, and refusals_json
+-- the refusals by error code apart from every other figure, so a reader that sums the row sees none of them.
 CREATE TABLE IF NOT EXISTS "rollups_hourly" (
   hour INTEGER NOT NULL,
   key_id TEXT NOT NULL,
@@ -434,7 +435,8 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 /// `input_transformations` columns hold the blocks an answer dropped, per attempt and for the serving attempt on the
 /// request row. `events.from_account_id` holds the account a pin move left, filled on the stored moves from their
 /// detail, and a stored pin or request event with no pool takes its request's pool or the pool of its key's newest
-/// decision at or before it.
+/// decision at or before it. `rollups_hourly.client_canceled` counts a client's cancels apart from `failed`, and each
+/// stored row that is no probe's moves its errors map's `client_gone` count there, off `failed` and out of the map.
 const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
     ALTER TABLE requests ADD COLUMN input_transformations TEXT; \
@@ -446,7 +448,13 @@ const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     UPDATE events SET pool_id = (SELECT d.pool_id FROM decisions d \
         WHERE d.key_id = events.key_id AND d.at <= events.at AND d.pool_id IS NOT NULL ORDER BY d.at DESC LIMIT 1) \
         WHERE pool_id IS NULL AND key_id IS NOT NULL \
-        AND kind IN ('mark_cleared', 'pin_created', 'pin_expired', 'pin_migrated', 'warm_prefix_expired')";
+        AND kind IN ('mark_cleared', 'pin_created', 'pin_expired', 'pin_migrated', 'warm_prefix_expired'); \
+    ALTER TABLE rollups_hourly ADD COLUMN client_canceled INTEGER NOT NULL DEFAULT 0; \
+    UPDATE rollups_hourly \
+        SET client_canceled = json_extract(errors_json, '$.client_gone'), \
+            failed = MAX(failed - json_extract(errors_json, '$.client_gone'), 0), \
+            errors_json = json_remove(errors_json, '$.client_gone') \
+        WHERE kind <> 'probe' AND json_extract(errors_json, '$.client_gone') IS NOT NULL";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

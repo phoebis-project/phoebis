@@ -31,7 +31,8 @@ pub struct KeyUsageWindow {
     pub to: i64,
     pub requests: u64,
     pub succeeded: u64,
-    /// Every request that was neither a success nor incomplete: failed, rate limited, exhausted, and rejected.
+    /// Every request that ended in a failure: failed, rate limited, exhausted, and rejected. A request that its client
+    /// canceled counts in `requests` alone.
     pub failed: u64,
     /// The committed answers whose body ended before its end, counted apart from `failed` since the client
     /// received part of the answer.

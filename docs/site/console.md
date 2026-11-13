@@ -154,21 +154,22 @@ with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Er
 `Most common: {code}` or "No errors", and "Refused, 24h" with `Most common: {code}` or "None", which counts the
 requests the router refused before any account was asked. "Requests, 24h" and the error rate leave those out and say
 so on hover, "Requests the router asked an account for. The refused requests are in the Refused tile." on the first and
-"Errors among the requests the router asked an account for, the refused requests left out" on the second. The Refused
-tile's hover names the refusals it counts apart from the router's own, "Requests refused for the client's or a policy's
-cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable,
-body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead." Under Native
-the cost tile reads the subscription traffic's figure in the chosen week over the billed dollars, a side with no traffic
-left out, with `{usd} billed per hour` under them, or the figure per hour while no request was billed. Where a
-subscription request of the day priced nothing, its model without a weight in the cost model, the subscription side
-reads a dash with the hover "No subscription request priced: its model has no weight in the cost model", the note under
-it reads the dash per hour while no request was billed, and the spark leaves that hour a gap. Under the Max and Ultra
-weeks the figure waits on the settings, so the tile draws its placeholder until they answer. Under All in dollars and
-Billed dollars it reads those dollars with `{usd} per hour`, and under Dollar equivalent the subscription traffic's
-dollars at the API price list with `{usd} per hour` as well. Under the tiles a line says when the figures were read, `As
-of {ago}`, by the oldest of the page's reads, or names the read whose last refresh failed and why: `Last refresh of the
-{read} failed: {error}. Showing data as of {ago}`, the read being the 24-hour figures, the accounts, the keepalive
-overview, the recent requests, the recipes, the sessions or the settings.
+"Errors among the requests the router asked an account for, the refused requests left out" on the second. The error rate
+and its most common code also leave out the requests whose client left before its answer ended. The Refused tile's hover
+names the refusals it counts apart from the router's own, "Requests refused for the client's or a policy's cause before
+any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted,
+key_body_reads, ledger_behind and router_unavailable, count as requests instead." Under Native the cost tile reads the
+subscription traffic's figure in the chosen week over the billed dollars, a side with no traffic left out, with `{usd}
+billed per hour` under them, or the figure per hour while no request was billed. Where a subscription request of the day
+priced nothing, its model without a weight in the cost model, the subscription side reads a dash with the hover "No
+subscription request priced: its model has no weight in the cost model", the note under it reads the dash per hour while
+no request was billed, and the spark leaves that hour a gap. Under the Max and Ultra weeks the figure waits on the
+settings, so the tile draws its placeholder until they answer. Under All in dollars and Billed dollars it reads those
+dollars with `{usd} per hour`, and under Dollar equivalent the subscription traffic's dollars at the API price list with
+`{usd} per hour` as well. Under the tiles a line says when the figures were read, `As of {ago}`, by the oldest of the
+page's reads, or names the read whose last refresh failed and why: `Last refresh of the {read} failed: {error}. Showing
+data as of {ago}`, the read being the 24-hour figures, the accounts, the keepalive overview, the recent requests, the
+recipes, the sessions or the settings.
 
 Two rings, "7d remaining" and "Fable week remaining", show how much of the pooled 7-day and Fable week capacity is left,
 under the subtitles "Subscription accounts, 7-day window, weighed by tier" and "Subscription accounts, Fable week,
@@ -1084,7 +1085,8 @@ groups under "no model", which the Cache by model table leaves out, and a group 
 muted dash in its Error rate cell, as the head's `{pct}` reads a dash where the range rated no request. A request the
 router refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card,
 a guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
-outcome columns, the error rate, the cache figures or the latency.
+outcome columns, the error rate, the cache figures or the latency. A request whose client left before its answer ended
+counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

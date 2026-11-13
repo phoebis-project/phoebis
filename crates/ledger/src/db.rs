@@ -2385,6 +2385,16 @@ mod tests {
               (1500, 'stream_interrupted', NULL, 'r1', NULL),
               (1600, 'ledger_gap', NULL, 'r1', NULL),
               (3000, 'pin_migrated', 'k', NULL, '{"agent_id":"main","from_account":"x","epoch":2,"reason":"spent"}');
+            INSERT INTO rollups_hourly (hour, key_id, pool_id, account_id, canonical_model, kind, user_agent, requests,
+              succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses,
+              uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+              output_tokens, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes,
+              wasted_probe_reasons_json, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json,
+              cache_miss_reasons_json) VALUES
+              (3600, 'k', 'p', 'a', 'm', 'inference', '-', 5, 2, 0, 3, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                '{}', x'', x'', x'', x'', '{"client_gone":2,"upstream_error":1}', '{}'),
+              (3600, 'k', 'p', 'a', 'm', 'probe', '-', 5, 2, 0, 3, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                '{}', x'', x'', x'', x'', '{"client_gone":2,"upstream_error":1}', '{}');
             "#,
         )
         .unwrap();
@@ -2416,6 +2426,34 @@ mod tests {
             of_kind("ledger_gap").pool_id,
             None,
             "a gap that names a request keeps no pool"
+        );
+        let rollups = crate::rollup::read_rollups(
+            &conn,
+            0,
+            i64::MAX,
+            &crate::rollup::RollupSelect::default(),
+        )
+        .unwrap();
+        let figures = |kind: &str| {
+            let row = rollups.iter().find(|r| r.kind == kind).expect(kind);
+            (row.client_canceled, row.failed, row.errors.clone())
+        };
+        assert_eq!(
+            figures("inference"),
+            (2, 1, BTreeMap::from([("upstream_error".to_string(), 1)])),
+            "a client's cancels leave the failed count and the map for their own column"
+        );
+        assert_eq!(
+            figures("probe"),
+            (
+                0,
+                3,
+                BTreeMap::from([
+                    ("client_gone".to_string(), 2),
+                    ("upstream_error".to_string(), 1)
+                ])
+            ),
+            "a probe row reads as stored"
         );
         assert_eq!(read_version(&conn).unwrap(), 4);
     }

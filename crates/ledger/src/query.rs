@@ -2083,6 +2083,9 @@ pub struct GroupRow {
     pub succeeded: u64,
     pub rate_limited: u64,
     pub failed: u64,
+    /// The requests that ended canceled under `client_gone`, a client that left before its answer ended, counted apart
+    /// from `failed` and in `requests`.
+    pub client_canceled: u64,
     pub exhausted: u64,
     pub rejected: u64,
     pub attempts: u64,
@@ -2459,6 +2462,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         succeeded: sum.succeeded,
         rate_limited: sum.rate_limited,
         failed: sum.failed,
+        client_canceled: sum.client_canceled,
         exhausted: sum.exhausted,
         rejected: sum.rejected,
         attempts: sum.attempts,
@@ -3112,8 +3116,8 @@ pub struct Dashboard {
     pub tokens_24h: u64,
     pub tokens_cached_24h: u64,
     pub cost_24h: f64,
-    /// The requests that did not succeed over the requests. The refused requests are in neither, since the fold never
-    /// counted them.
+    /// The requests that did not succeed, the ones a client canceled left out, over the requests. The refused requests
+    /// are in neither, since the fold never counted them.
     pub error_rate_24h: Option<f64>,
     /// The most frequent error code of the window.
     pub top_error_code: Option<String>,
@@ -4158,7 +4162,8 @@ pub fn pools_traffic(
     let mut clauses = vec!["kind != 'probe' AND hour >= ?1 AND hour < ?2".to_string()];
     pool_term(pool_ids, &[], &mut args, &mut clauses);
     let mut stmt = conn.prepare(&format!(
-        "SELECT pool_id, SUM(MAX(requests - succeeded, 0)), {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} \
+        "SELECT pool_id, SUM(MAX(MAX(requests - succeeded, 0) - client_canceled, 0)), {PRICE_GROUP_COLUMNS}, \
+         {PRICE_GROUP_SUMS} \
          FROM rollups_hourly WHERE {} GROUP BY pool_id, {PRICE_GROUP_COLUMNS} \
          ORDER BY pool_id, {PRICE_GROUP_COLUMNS}",
         clauses.join(" AND ")
@@ -4226,7 +4231,11 @@ impl<'a> TrafficFold<'a> {
             billed_usd: billed,
             equivalent,
         };
-        self.add_sums(out, r.hour, r.requests.saturating_sub(r.succeeded), &totals);
+        let failed = r
+            .requests
+            .saturating_sub(r.succeeded)
+            .saturating_sub(r.client_canceled);
+        self.add_sums(out, r.hour, failed, &totals);
     }
 
     fn add_sums(&self, out: &mut [TrafficBucket], hour: i64, failed: u64, totals: &Totals) {

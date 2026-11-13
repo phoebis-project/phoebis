@@ -7956,6 +7956,50 @@ async fn the_dashboard_counts_an_unflagged_block_in_the_rate_and_the_top_code_li
     assert_eq!(day.top_error_code.as_deref(), Some("guardrail_blocked"));
 }
 
+/// A request canceled under `code` on the pool `p` in the minute before `WEEKDAY_OFF_PEAK`, with no attempt.
+fn canceled_at(n: i64, code: &str) -> RequestRecord {
+    RequestRecord {
+        id: format!("r{n}"),
+        received_at: WEEKDAY_OFF_PEAK - 60_000 + n,
+        key_id: Some("k".into()),
+        pool_id: Some("p".into()),
+        model: "claude-opus-5-5".into(),
+        canonical_model: "claude-opus-5-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "canceled".into(),
+        error_code: Some(code.into()),
+        ..RequestRecord::default()
+    }
+}
+
+/// A client that left is a request and no error: the day's errors, its rate and its most common code read the
+/// account's cancel alone, whose code sorts first, so a tie would name the client's.
+#[tokio::test]
+async fn the_dashboard_counts_a_client_that_left_among_the_requests_and_not_the_errors() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_request(&canceled_at(0, "account_canceled"), &[], None)
+        .unwrap();
+    db.insert_request(&canceled_at(1, "client_gone"), &[], None)
+        .unwrap();
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let day = db
+        .read(move |c| phoebis_ledger::dashboard_on(c, WEEKDAY_OFF_PEAK, &PRICES, &COSTS))
+        .await
+        .unwrap();
+    let point = day
+        .hourly
+        .iter()
+        .find(|h| h.at == hour * 1_000)
+        .expect("the planted hour");
+    assert_eq!(
+        (day.requests_24h, point.errors, day.error_rate_24h),
+        (2, 1, Some(0.5)),
+        "the account's cancel is the one error among the two requests"
+    );
+    assert_eq!(day.top_error_code.as_deref(), Some("account_canceled"));
+}
+
 /// Six requests of the key `desktop` in the minute before `WEEKDAY_OFF_PEAK` on the pool `p`: two guardrail blocks
 /// and a contract refusal, each flagged with no attempt as the landing flags a refusal, a `client_not_allowed`
 /// rejection after one attempt, a succeeded request and a 529. The succeeded request and the two blocks share the
@@ -8113,6 +8157,30 @@ async fn pools_traffic_answers_every_asked_pool_and_adds_each_rows_figures_into_
         "a former member's row counts for the hour it was a member"
     );
     assert_eq!(requests("q", hour), Some(1));
+}
+
+/// The pools' statement takes the client's cancels off its own complement, apart from the dashboard's fold.
+#[test]
+fn pools_traffic_reads_a_client_that_left_as_a_request_and_no_failed_request() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.insert_request(&canceled_at(0, "client_gone"), &[], None)
+        .unwrap();
+    let hour = hour_of(WEEKDAY_OFF_PEAK - 60_000);
+    let traffic = db
+        .read_blocking(|c| {
+            pools_traffic(
+                c,
+                &["p".into()],
+                hour,
+                hour + 3_600,
+                3_600,
+                &PRICES,
+                &COSTS,
+                NOW,
+            )
+        })
+        .unwrap();
+    assert_eq!((traffic["p"][0].requests, traffic["p"][0].failed), (1, 0));
 }
 
 /// The day's requests, its error rate and its most common error code read the asked requests alone, and the refused

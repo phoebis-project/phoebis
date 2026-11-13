@@ -32,7 +32,8 @@ pub(crate) struct Dashboard {
     /// The window's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced
     /// nothing.
     pub equivalent_24h: Option<f64>,
-    /// The requests that did not succeed over the requests, null with none. The refused requests are in neither.
+    /// The requests that did not succeed, the ones a client canceled left out, over the requests, null with none. The
+    /// refused requests are in neither.
     pub error_rate_24h: Option<f64>,
     /// The window's most frequent error code, null with none.
     pub top_error_code: Option<String>,
@@ -42,8 +43,8 @@ pub(crate) struct Dashboard {
     /// The window's most frequent refusal code, null with none.
     pub top_refusal_code: Option<String>,
     /// The window's 24 hours, oldest first: each hour's start as `at`, and its `billed`, `cost`, `equivalent`,
-    /// `errors` (the requests that did not succeed), `refused` (the requests the router refused before any account
-    /// was asked, not in `requests`), `requests` and `tokens`.
+    /// `errors` (the requests that did not succeed, the ones a client canceled left out), `refused` (the requests the
+    /// router refused before any account was asked, not in `requests`), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
     pub sessions: DashboardSessions,
 }

@@ -223,6 +223,9 @@ pub struct RollupRow {
     pub succeeded: u64,
     pub rate_limited: u64,
     pub failed: u64,
+    /// The requests no probe sent that ended canceled under `client_gone`, a client that left before its answer
+    /// ended, counted in `requests` and apart from `failed` and `errors`.
+    pub client_canceled: u64,
     pub exhausted: u64,
     pub incomplete: u64,
     pub rejected: u64,
@@ -331,6 +334,7 @@ impl RollupRow {
         f(&mut self.succeeded, o.succeeded);
         f(&mut self.rate_limited, o.rate_limited);
         f(&mut self.failed, o.failed);
+        f(&mut self.client_canceled, o.client_canceled);
         f(&mut self.exhausted, o.exhausted);
         f(&mut self.incomplete, o.incomplete);
         f(&mut self.rejected, o.rejected);
@@ -619,6 +623,11 @@ pub fn deltas_of(
     // leaves, so every other figure of the row reads the requests an account was asked for. A probe is never flagged,
     // so the probe arms stand.
     let counted = !held && !request.refused;
+    // A client that left is no failure of the router's or an account's, so it stays out of the error figures. A probe
+    // is the keepalive's own request, whose cancel stays a failure.
+    let client_left = request.outcome == "canceled"
+        && request.kind != Kind::Probe.as_str()
+        && request.error_code.as_deref() == Some("client_gone");
     if held {
         d.probes_held = 1;
     } else if request.refused {
@@ -630,6 +639,7 @@ pub fn deltas_of(
         match request.outcome.as_str() {
             "succeeded" => d.succeeded = 1,
             "failed" if request.status == Some(429) => d.rate_limited = 1,
+            _ if client_left => d.client_canceled = 1,
             "failed" | "canceled" => d.failed = 1,
             "exhausted" => d.exhausted = 1,
             "incomplete" => d.incomplete = 1,
@@ -688,7 +698,7 @@ pub fn deltas_of(
                 d.output_tps_hist.record(out as f64 / span_s);
             }
         }
-        if let Some(code) = &request.error_code {
+        if let Some(code) = request.error_code.as_ref().filter(|_| !client_left) {
             *d.errors.entry(code.clone()).or_default() += 1;
         }
     }
@@ -745,7 +755,7 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
 
 /// The 16 columns of a probe or kept-warm rollup row the keepalive overview folds, which `read_overview_rollups`
 /// answers. The overview reads a day of every row on each poll and holds a reader connection through the decode, so it
-/// reads these alone in place of all 58 a `RollupRow` decodes, the four histograms among them.
+/// reads these alone in place of all 59 a `RollupRow` decodes, the four histograms among them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverviewRollupRow {
     pub kind: String,
@@ -1894,7 +1904,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled";
 const ACCOUNT_COLUMNS: &str = "hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms";
 
 /// The rollup key, the table's primary key in its order: the upsert's conflict target, the order a read answers in and
@@ -2055,6 +2065,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
         r.kept_warm_1h_tokens as i64,
         r.classifier,
         counts_json(&r.refusals),
+        r.client_canceled as i64,
     ])?;
     Ok(())
 }
@@ -2091,6 +2102,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         succeeded: u(16)?,
         rate_limited: u(17)?,
         failed: u(18)?,
+        client_canceled: u(58)?,
         exhausted: u(19)?,
         rejected: u(20)?,
         attempts: u(21)?,
@@ -2665,6 +2677,51 @@ mod tests {
         );
     }
 
+    /// The fold reads the cancel's code: a client that left counts apart from the failures, and the router's own
+    /// shutdown stays a failure with its code.
+    #[test]
+    fn a_client_that_left_counts_apart_from_the_failures_and_a_router_shutdown_stays_one() {
+        let canceled = |code: &str| RequestRecord {
+            error_code: Some(code.into()),
+            ..request("canceled", None, Some("k"))
+        };
+        let answered = [attempt(1, "a", None, None, Some(10))];
+        let d = one_delta(&canceled("client_gone"), &answered, &prices());
+        assert_eq!(
+            (
+                d.requests,
+                d.client_canceled,
+                d.failed,
+                d.errors.get("client_gone")
+            ),
+            (1, 1, 0, None),
+            "a client's cancel counts in the requests and under no failure and no code"
+        );
+        let d = one_delta(&canceled("router_shutdown"), &answered, &prices());
+        assert_eq!(
+            (d.client_canceled, d.failed, d.errors.get("router_shutdown")),
+            (0, 1, Some(&1)),
+            "the router's own shutdown stays a failure with its code"
+        );
+    }
+
+    /// A probe's cancel stays a failure whatever its code, so the keepalive's figures read every probe that did not
+    /// answer.
+    #[test]
+    fn a_probe_canceled_under_client_gone_stays_a_failure_with_its_code() {
+        let probe = RequestRecord {
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            error_code: Some("client_gone".into()),
+            ..request("canceled", None, Some("k"))
+        };
+        let d = one_delta(&probe, &[attempt(1, "a", None, None, Some(10))], &prices());
+        assert_eq!(
+            (d.client_canceled, d.failed, d.errors.get("client_gone")),
+            (0, 1, Some(&1))
+        );
+    }
+
     /// The fixed filters narrow the read in SQL: with a pool and an account named, the planner seeks the member
     /// index on both rather than walking every row of the range.
     #[test]
@@ -3017,10 +3074,12 @@ mod tests {
     #[test]
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
         let db = crate::LedgerDb::open_in_memory().unwrap();
+        // The replaced request is a client's cancel beside a success, so its count must leave with it.
         let (req, attempts) = (
             RequestRecord {
                 canonical_model: SONNET.into(),
-                ..request("succeeded", Some(200), Some("k"))
+                error_code: Some("client_gone".into()),
+                ..request("canceled", Some(200), Some("k"))
             },
             vec![AttemptRecord {
                 thinking_tokens: Some(25),
@@ -3032,7 +3091,8 @@ mod tests {
         let (req2, attempts2) = (
             RequestRecord {
                 id: "r2".into(),
-                ..req.clone()
+                canonical_model: SONNET.into(),
+                ..request("succeeded", Some(200), Some("k"))
             },
             vec![AttemptRecord {
                 thinking_tokens: Some(25),
@@ -3758,6 +3818,7 @@ mod tests {
         r.succeeded = 11;
         r.rate_limited = 12;
         r.failed = 13;
+        r.client_canceled = 58;
         r.exhausted = 14;
         r.incomplete = 48;
         r.rejected = 15;
