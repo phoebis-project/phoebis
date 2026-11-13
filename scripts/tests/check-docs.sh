@@ -3,9 +3,10 @@
 # shellcheck disable=SC2016
 # The checker has to fail on what it exists to catch: a dangling link, a fragment its page lacks, a route the
 # client page skipped, a row the proxy listener does not serve, and a handler call it cannot consume. Every
-# checker case runs against a throwaway tree, never the real site. The five content checks run against throwaway
+# checker case runs against a throwaway tree, never the real site. The six content checks run against throwaway
 # files in the same way: a page list short a line the binary prints, a code with no row, a quoted example that
-# drifted, a quoted unit that drifted, and prose that breaks a rule. The favicon case at the end reads the real tree.
+# drifted, a quoted unit that drifted, a schema figure that differs from its table's last step, and prose that breaks a
+# rule. The favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)
@@ -497,6 +498,52 @@ echo "$out" | grep -qF "codes [RS_FILE... CLIENT_MD]" || fail "codes with one ar
 out=$(python3 "$check" codes "$tmp/codes/errors.rs" "$tmp/codes/shape.rs" "$tmp/codes/moved-client.md" 2>&1) && fail "codes passed a missing client page"
 echo "$out" | grep -q "moved-client.md is missing" || fail "codes did not report the missing client page: $out"
 echo "$out" | grep -q "Traceback" && fail "codes ended in a traceback on a missing client page: $out"
+
+# The schema figures: the page's two figures against the last step of each store's table. The registry's table stands
+# on one line and the ledger's is wrapped, with a literal that holds a parenthesis and a comma, and the page wraps its
+# sentence after "and the". The two tables end at different steps, so a check that reads them swapped fails the
+# passing tree. Each failing case changes one thing of that tree.
+mkdir -p "$tmp/schema"
+echo 'pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (5, V5), (8, V8)];' > "$tmp/schema/registry.rs"
+cat > "$tmp/schema/ledger.rs" <<'RS'
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (
+        2,
+        "CREATE INDEX requests_by_pool ON requests (pool_id, started_at)",
+    ),
+    (3, STEP_3),
+    (4, STEP_4),
+];
+RS
+cat > "$tmp/schema/operations.md" <<'MD'
+Schema migrations run when the new binary opens each database. This build writes the registry at schema 8 and the
+ledger at schema 4.
+MD
+python3 "$check" schema "$tmp/schema/registry.rs" "$tmp/schema/ledger.rs" "$tmp/schema/operations.md" >/dev/null \
+  || fail "page figures equal to the last step of both tables were refused"
+sed 's/registry at schema 8/registry at schema 7/' "$tmp/schema/operations.md" > "$tmp/schema/registry-behind.md"
+out=$(python3 "$check" schema "$tmp/schema/registry.rs" "$tmp/schema/ledger.rs" "$tmp/schema/registry-behind.md" 2>&1) \
+  && fail "a registry figure behind its table's last step passed"
+echo "$out" | grep -q "registry at schema 7" \
+  || fail "the registry figure behind its table did not name the registry: $out"
+sed 's/ledger at schema 4/ledger at schema 3/' "$tmp/schema/operations.md" > "$tmp/schema/ledger-behind.md"
+out=$(python3 "$check" schema "$tmp/schema/registry.rs" "$tmp/schema/ledger.rs" "$tmp/schema/ledger-behind.md" 2>&1) \
+  && fail "a ledger figure behind its table's last step passed"
+echo "$out" | grep -q "ledger at schema 3" \
+  || fail "the ledger figure behind its table did not name the ledger: $out"
+echo 'Schema migrations run when the new binary opens each database.' > "$tmp/schema/no-sentence.md"
+out=$(python3 "$check" schema "$tmp/schema/registry.rs" "$tmp/schema/ledger.rs" "$tmp/schema/no-sentence.md" 2>&1) \
+  && fail "a page without the schema sentence passed"
+# The entry that is no step stands after the step the page names, so a reader that drops it compares 4 with 4.
+cat > "$tmp/schema/unreadable.rs" <<'RS'
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (3, STEP_3),
+    (4, STEP_4),
+    STEP_5,
+];
+RS
+out=$(python3 "$check" schema "$tmp/schema/registry.rs" "$tmp/schema/unreadable.rs" "$tmp/schema/operations.md" 2>&1) \
+  && fail "a ledger table whose last entry is no (number, expression) step passed"
 
 # The prose rules: each rule fires outside a code span and a fenced block and stays quiet inside them, a fence
 # closes only on its own character and length, and a span wrapped across two lines is code on both.

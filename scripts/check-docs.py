@@ -8,7 +8,8 @@ on the client page, so a route added or removed in the router fails the build un
 `check-config` compares the lines the binary's `check-config` arm prints with the installation page's list, `codes`
 the refusal codes the `x-phoebis-error-code` header carries on the proxy listener with the client page's table,
 `example` the installation page's quoted example with the file, `unit` the installation page's quoted unit with
-`deploy/phoebis.service`, and `prose` holds the mechanical content rules of the site's prose.
+`deploy/phoebis.service`, `schema` the schema versions the operations page states with the last step of the registry's
+and the ledger's migration tables, and `prose` holds the mechanical content rules of the site's prose.
 """
 import functools
 import html.parser
@@ -32,6 +33,9 @@ MAIN_RS = ROOT / "crates/router/src/main.rs"
 INSTALLATION_MD = ROOT / "docs/site/installation.md"
 EXAMPLE_YAML = ROOT / "deploy/config.example.yaml"
 UNIT_FILE = ROOT / "deploy/phoebis.service"
+REGISTRY_SCHEMA_RS = ROOT / "crates/store/src/schema.rs"
+LEDGER_SCHEMA_RS = ROOT / "crates/ledger/src/schema.rs"
+OPERATIONS_MD = ROOT / "docs/site/operations.md"
 # Every file whose refusals carry a code in the `x-phoebis-error-code` header on the proxy listener, and the bus
 # constant the body-shape code is spelled by. A file listed here that does not exist fails the check rather than
 # narrowing it.
@@ -393,6 +397,71 @@ UNIT_FENCE = '```ini title="deploy/phoebis.service"'
 def check_unit(unit_file, installation_md):
     """The installation page's quoted unit against the file, line for line, a trailing newline aside."""
     return check_quoted_block(UNIT_FENCE, "deploy/phoebis.service", "unit", unit_file, installation_md)
+
+
+# Read over the text `tokenized` blanks, so a literal's contents and a comment hold no bracket, comma or semicolon. A
+# literal keeps its quotes, so it still stands in its step as the expression.
+MIGRATIONS_DECLARATION = re.compile(r"\bpub const MIGRATIONS\b")
+# The declaration's type, `&[(u32, &str)]`, is no step, so the list starts after the `= &[`.
+MIGRATIONS_LIST = re.compile(r"[^;=]*=\s*&\s*\[([^;]*)\]\s*;")
+# A step as rustfmt writes it, on one line or wrapped with a comma after the expression: the number, then a constant
+# or a plain or raw string literal.
+MIGRATIONS_STEP = re.compile(
+    r"\s*\(\s*(?P<number>\d+)\s*,\s*"
+    r'(?:[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*|"\s*"|r(?P<hashes>#*)"\s*"(?P=hashes))'
+    r"\s*,?\s*\)\s*(?:,|$)"
+)
+SCHEMA_SENTENCE = re.compile(r"the registry at schema (\d+) and the ledger at schema (\d+)")
+
+
+def table_steps(listed):
+    """The numbers of a `MIGRATIONS` list's steps in order, or None where any of its text is no step."""
+    steps, at = [], 0
+    while listed[at:].strip():
+        step = MIGRATIONS_STEP.match(listed, at)
+        if not step:
+            return None
+        steps.append(int(step.group("number")))
+        at = step.end()
+    return steps
+
+
+def last_step(schema_rs):
+    """The number of the last step of the `MIGRATIONS` table in `schema_rs`, or None after printing why there is not
+    one table that reads as `(number, expression)` steps whose numbers ascend."""
+    shown = schema_rs.relative_to(ROOT) if schema_rs.is_relative_to(ROOT) else schema_rs
+    _, blanked = tokenized(schema_rs.read_text(encoding="utf-8"))
+    declarations = list(MIGRATIONS_DECLARATION.finditer(blanked))
+    if len(declarations) != 1:
+        print(f"{shown}: {len(declarations)} MIGRATIONS tables, expected one")
+        return None
+    listed = MIGRATIONS_LIST.match(blanked, declarations[0].end())
+    steps = table_steps(listed.group(1)) if listed else None
+    if not steps or any(earlier >= later for earlier, later in zip(steps, steps[1:])):
+        line = line_of(blanked, declarations[0].start())
+        print(f"{shown}:{line}: a MIGRATIONS table this check cannot read as ascending (number, expression) steps")
+        return None
+    return steps[-1]
+
+
+def check_schema(registry_rs, ledger_rs, page):
+    """The registry's and the ledger's schema versions the operations page states against the last step of each
+    store's `MIGRATIONS` table. The page's lines are joined, so a sentence wrapped across two reads as one."""
+    if missing([registry_rs, ledger_rs, page]):
+        return 1
+    registry, ledger = last_step(registry_rs), last_step(ledger_rs)
+    findings = [registry, ledger].count(None)
+    joined = " ".join(line.strip() for line in page.read_text(encoding="utf-8").splitlines())
+    sentences = SCHEMA_SENTENCE.findall(joined)
+    if len(sentences) != 1:
+        print(f"{page.name}: {len(sentences)} sentences stating the registry's and the ledger's schema, expected one")
+        return 1
+    stated_registry, stated_ledger = (int(figure) for figure in sentences[0])
+    for store, stated, last in (("registry", stated_registry, registry), ("ledger", stated_ledger, ledger)):
+        if last is not None and stated != last:
+            print(f"{page.name}: the {store} at schema {stated}, but its MIGRATIONS table ends at step {last}")
+            findings += 1
+    return 1 if findings else 0
 
 
 CHECK_CONFIG_ARM = "Some(Command::CheckConfig) => {"
@@ -837,7 +906,8 @@ def check_prose(files):
 USAGE = (
     "usage: check-docs.py links [SITE_DIR] | client [ROUTE_RS... CLIENT_MD]"
     " | check-config [MAIN_RS INSTALLATION_MD] | codes [RS_FILE... CLIENT_MD]"
-    " | example [EXAMPLE_YAML INSTALLATION_MD] | unit [UNIT_FILE INSTALLATION_MD] | prose [FILE...]"
+    " | example [EXAMPLE_YAML INSTALLATION_MD] | unit [UNIT_FILE INSTALLATION_MD]"
+    " | schema [REGISTRY_SCHEMA_RS LEDGER_SCHEMA_RS OPERATIONS_MD] | prose [FILE...]"
 )
 
 
@@ -881,6 +951,14 @@ def main(argv):
         unit = pathlib.Path(argv[2]) if len(argv) == 4 else UNIT_FILE
         page = pathlib.Path(argv[3]) if len(argv) == 4 else INSTALLATION_MD
         return check_unit(unit, page)
+    if len(argv) >= 2 and argv[1] == "schema":
+        if len(argv) not in (2, 5):
+            print(USAGE)
+            return 2
+        registry_rs = pathlib.Path(argv[2]) if len(argv) == 5 else REGISTRY_SCHEMA_RS
+        ledger_rs = pathlib.Path(argv[3]) if len(argv) == 5 else LEDGER_SCHEMA_RS
+        page = pathlib.Path(argv[4]) if len(argv) == 5 else OPERATIONS_MD
+        return check_schema(registry_rs, ledger_rs, page)
     if len(argv) >= 2 and argv[1] == "prose":
         return check_prose([pathlib.Path(p) for p in argv[2:]] or prose_files())
     print(USAGE)

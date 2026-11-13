@@ -373,6 +373,7 @@ python3 scripts/check-docs.py check-config
 python3 scripts/check-docs.py codes
 python3 scripts/check-docs.py example
 python3 scripts/check-docs.py unit
+python3 scripts/check-docs.py schema
 python3 scripts/check-docs.py prose docs/site/<page>.md
 ```
 
@@ -392,6 +393,8 @@ read rather than dropping it:
   under [Refusal codes](client.md#refusal-codes) on The client.
 - `example` compares the installation page's quoted example with `deploy/config.example.yaml`.
 - `unit` compares the installation page's quoted unit with `deploy/phoebis.service`.
+- `schema` compares the schema versions the operations page states with the last step of the registry's and the ledger's
+  migration tables.
 - `prose` holds the site's prose to its mechanical rules, by path or, with no path, over every page and the README: a
   semicolon on a prose line, a line over 120 columns that is not a table row, an em-dash or an en-dash, a word from
   its list of words no page carries, and a bare `api_key` outside a code span. It drops fenced blocks and code spans
