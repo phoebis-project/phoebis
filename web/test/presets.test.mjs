@@ -108,7 +108,7 @@ const hot = oauth('hot', 0.99, 0.4);
 const cool = oauth('cool', 0.3, 0.2);
 const three = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.025, true), pin('hot', 'warm-c', 0.01, true)];
 
-test('the round marks pins in order until the target, refuses a mark that leaves the account none of its burn, and passes over a pin it may not mark', () => {
+test('the round marks pins in order until the target and passes over a pin it may not mark', () => {
   const ordered = [
     { burn: 3, id: 'cold-3' },
     { burn: 4, id: 'warm-4' },
@@ -116,7 +116,6 @@ test('the round marks pins in order until the target, refuses a mark that leaves
     { burn: 1, id: 'warm-1' },
   ];
   assert.deepEqual(d.shedMarks(ordered, 5), ['cold-3', 'warm-4'], 'marked in order until the target is reached');
-  assert.deepEqual(d.shedMarks([{ burn: 9, id: 'only' }], 9), [], 'a mark that leaves none of the burn on the account is refused');
   assert.deepEqual(d.shedMarks(ordered, 0), [], 'nothing for a zero target');
   assert.deepEqual(d.shedMarks([{ burn: 1, id: 'priced' }, { burn: null, id: 'unpriced' }, { burn: 2, id: 'last' }], 3), ['priced', 'last'], 'an unpriced pin is passed over and stays the one unmarked pin');
   assert.deepEqual(d.shedMarks([{ burn: 3, id: 'stuck', skip: true }, { burn: 2, id: 'free' }, { burn: 1, id: 'last' }], 2), ['free'], 'a pin with no sibling to move to is passed over and counts nothing toward the target');

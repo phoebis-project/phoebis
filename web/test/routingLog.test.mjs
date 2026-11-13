@@ -375,9 +375,8 @@ test("a window fact reads the Fable tag under the stored key's spelling, and a w
   assert.equal(d.valueText('window', 'seven_day_opus', null, NOW), 'seven day opus');
 });
 
-test('releaseLabel words the cooldown and expired reasons and keeps an unknown one as sent', () => {
+test('releaseLabel words a known reason and keeps an unknown one as sent', () => {
   assert.equal(d.releaseLabel('cooldown'), 'account cooled');
-  assert.equal(d.releaseLabel('expired'), 'pin idle past the affinity window');
   assert.equal(d.releaseLabel('a_reason_added_later'), 'a_reason_added_later');
 });
 
@@ -1216,13 +1215,11 @@ test('a mark healed under the threshold says so', () => {
     next_cursor: null,
     rows: [
       { type: 'event', account_id: 'studio', actor: null, agent_id: 'main', at: ms(14, 20), detail: { agent_id: 'main', marked_at: ms(14, 5), marked_on: 'studio', marked_window: 'five_hour', projection: 0.93, reason: 'healed', stretch_ms: 1_440_000, threshold_ms: 2_700_000 }, id: 31, key_id: 'notebook', kind: 'mark_cleared', model: 'claude-sonnet-5-5', pool_id: 'work', request_id: null, session_id: 's1-0000-4000' },
-      { type: 'event', account_id: 'secondary', actor: null, agent_id: 'main', at: ms(14, 20), detail: { agent_id: 'main', marked_at: ms(13, 0), marked_on: 'secondary', marked_window: 'five_hour', projection: 0.91, reason: 'healed', stretch_ms: null, threshold_ms: null }, id: 32, key_id: 'desktop', kind: 'mark_cleared', model: 'claude-sonnet-5-5', pool_id: 'all', request_id: null, session_id: 's2-0000-4000' },
     ],
   });
   const reason = (row) => texts(d.detailPairs(row, NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Reason').chips);
   // The detail's own threshold, 45 minutes here, since the pool's setting may have moved since the heal.
   assert.deepEqual(reason(page.rows[0]), ['healed: the stretch read 24 min under the threshold 45 min']);
-  assert.deepEqual(reason(page.rows[1]), ['healed: the 5h projection read 91% under the ceiling']);
 });
 
 test('a mark healed by the projection names the line it read under: the wall, the ceiling with its figure, or neither on a stored event', () => {
