@@ -15738,9 +15738,9 @@ await forView('/routing-log', async () => {
   });
 });
 
-// The Routing log's Sort control, Time alone: newest first at rest, and Ascending reads the hour from its oldest row,
-// the stream reversed whole, so the page draws the ascending answer from its first row, each Time cell dated. The read
-// sends the direction, the address carries it and a reload reads it back.
+// The Routing log's Sort control, Time alone: newest first at rest, and under Ascending the page draws the rows of the
+// ascending answer it received from that answer's first row, each Time cell dated. The read sends the direction, the
+// address carries it and a reload reads it back.
 await forView('/routing-log', async () => {
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const ARROWS = { 'rotate(-90 12 12)': 'up', 'rotate(90 12 12)': 'down' };
@@ -15784,7 +15784,7 @@ await forView('/routing-log', async () => {
   const dated = (r) => r !== undefined && r.time !== null && r.time === r.timeWanted;
   const leads = (r) => r !== undefined && JSON.stringify(r.first) === JSON.stringify(r.firstWanted);
   results.push({
-    name: '/routing-log the sort control reads Time newest first at rest, Ascending reads the hour from its oldest row with the stream reversed whole, the read sends the direction, and a reload reads it back',
+    name: '/routing-log the sort control reads Time newest first at rest, Ascending draws the rows of the ascending answer the page received, the read sends the direction, and a reload reads it back',
     ok:
       bare?.arrow === 'down' && bare.text === 'Sort: Time' && bare.title === 'Sorted by Time, descending' && bare.search === '' && dated(bare) &&
       JSON.stringify({ arrow: ascending?.arrow, search: ascending?.search, text: ascending?.text }) === JSON.stringify(up) && leads(ascending) && ascending.title === 'Sorted by Time, ascending' && ascending.dir === 'asc' && dated(ascending) &&
@@ -29021,14 +29021,14 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
   // page's own label, and the price file's row the date and time of the entry it holds next, the story's instant
   // 2026-10-09T18:30:00Z, whose time reads in the viewer's zone, UTC under the smoke. The three keepalive limits read
-  // on the Sessions page beside their counts, so About carries none of them. The two session lines are held to their
-  // seconds, since the duration word before them is `fmtDuration`'s, which its unit cases read.
+  // on the Sessions page beside their counts, so About carries none of them. The session lines' words, 1d and 1h, are
+  // the mock's `SESSION_EXPIRE_SECONDS` and `NON_COMPANION_IDLE_SECONDS` (`web/src/mock/operations.ts`) as the page
+  // words them, written out since no other check reads the page's step from seconds to milliseconds.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
   const priceRow = `API prices path=${wired.storage.apiPricesPath}, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
   const costRow = `Subscription costs path=${wired.storage.subscriptionCostsPath}, ${revisionsText(wired.subscriptionCosts.revisions)}`;
-  const durationless = (row) => row.replace(/^(Session expiry|Non-companion timeout)=[^(]+ \(/, '$1=<duration> (');
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows.map(durationless)) === JSON.stringify([`Version=${MOCK_VERSION}`, `Profile=${wired.about.profile}`, `Metrics listener=${wired.listeners.metrics}`, `Ledger path=${wired.storage.ledgerPath}`, priceRow, costRow, `Storage path=${wired.storage.path}`, `Requests, samples and the routing log=kept for ${wired.retention.retentionDays} days`, `Rollups=kept for ${wired.retention.rollupRetentionDays} days`, `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, `Session expiry=<duration> (${wired.sessions.expireAfterSeconds} s)`, `Non-companion timeout=<duration> (${wired.sessions.nonCompanionIdleSeconds} s)`, `Reset warning=${wired.usage.limitResetWarningDays} days before a reset ends`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, `Profile=${wired.about.profile}`, `Metrics listener=${wired.listeners.metrics}`, `Ledger path=${wired.storage.ledgerPath}`, priceRow, costRow, `Storage path=${wired.storage.path}`, `Requests, samples and the routing log=kept for ${wired.retention.retentionDays} days`, `Rollups=kept for ${wired.retention.rollupRetentionDays} days`, `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, `Session expiry=1d (${wired.sessions.expireAfterSeconds} s)`, `Non-companion timeout=1h (${wired.sessions.nonCompanionIdleSeconds} s)`, `Reset warning=${wired.usage.limitResetWarningDays} days before a reset ends`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
     name: '/settings each path, retention line, session line and the reset warning line names its key in the configuration file and the admin secret line its variable',
