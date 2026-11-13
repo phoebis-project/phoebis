@@ -1,20 +1,22 @@
 //! The ledger schema at version 1: `account_rollups_hourly`, `attempts`, `bodies`, `cooldown_segments`,
 //! `cooldown_spans`, `decisions`, `events`, `extra_usage_samples`, `kept_warm_marks`, `parked_records`,
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
-//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 3, the last step
-//! carrying the fallback credit's digests and the serving attempt's facts onto the rows.
+//! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
+//! dropping the unused `requests.request_truncated`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 -- key_generation keeps the rows of a key created again under a deleted id from summing with its predecessor's.
 -- presented_retired and rotation_at scope the count of sessions still on a previous secret to the rotation whose grace
--- is running. The truncation flags sit on the row rather than being recomputed from bodies, since a capture cut by a
--- chunk lost after the last one that arrived never raises response_len_seen. held keeps the holds a request waited
--- through, since a hold that ends in an exhaustion dispatches nothing an attempt row could carry, and client_drift
--- keeps a refused request's drift kind for the same reason. guardrail_id names the guardrail that blocked the request,
--- null on most rows. landed_at is the instant the ledger wrote the row, strictly increasing across the writer's rows,
--- so a poll that passes back its newest stamp reads exactly the rows written since. refused flags a refusal the router
--- issued before it asked any account, for the client's or a policy's cause.
+-- is running. response_truncated sits on the row rather than being recomputed from bodies, since a capture cut by a
+-- chunk lost after the last one that arrived never raises response_len_seen. Every open runs this baseline, so it keeps
+-- request_truncated, which no insert writes, and the migration to version 4 drops it from a fresh file as from a
+-- stamped one. held keeps the holds a request waited through, since a hold that ends in an exhaustion dispatches
+-- nothing an attempt row could carry, and client_drift keeps a refused request's drift kind for the same reason.
+-- guardrail_id names the guardrail that blocked the request, null on most rows. landed_at is the instant the ledger
+-- wrote the row, strictly increasing across the writer's rows, so a poll that passes back its newest stamp reads
+-- exactly the rows written since. refused flags a refusal the router issued before it asked any account, for the
+-- client's or a policy's cause.
 CREATE TABLE IF NOT EXISTS requests (
   id TEXT PRIMARY KEY,
   received_at INTEGER NOT NULL,
@@ -426,6 +428,9 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
     CREATE INDEX requests_serving_pending ON requests (received_at) \
         WHERE serving_account_id IS NULL AND attempts > 0";
 
+/// Step 4 drops `requests.request_truncated`, a column no insert wrote and no read took.
+const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated";
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -434,4 +439,5 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
         "ALTER TABLE window_reconciliations DROP COLUMN estimated",
     ),
     (3, STEP_3),
+    (4, STEP_4),
 ];

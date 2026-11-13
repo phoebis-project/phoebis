@@ -304,7 +304,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(3), Some(0), Some(4_096)),
+        (Some(4), Some(0), Some(4_096)),
         "the ledger reports its chain's head, no dropped record and the channel depth it is built with"
     );
     assert_eq!(
