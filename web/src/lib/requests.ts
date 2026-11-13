@@ -57,13 +57,14 @@ export function requestOrder(order: RequestOrderWord, dir: SortDir): (a: Request
 }
 
 /**
- * Whether `requestOrder` cannot place a polled row against `last`, the last row shown: under a token order where
- * `last` carries no count above 0, since the wire answers 0 for a count the route never stored and files last.
+ * Whether `requestOrder` cannot place a polled row against `row`, which the poll hands as the row its cursor stands
+ * on: under a token order where `row` carries no count above 0, since the wire answers 0 for a count the route never
+ * stored and files last.
  */
-export function cannotPlaceUnder(order: RequestOrderWord): (last: RequestLog) => boolean {
+export function cannotPlaceUnder(order: RequestOrderWord): (row: RequestLog) => boolean {
   if (order !== 'input_tokens' && order !== 'output_tokens') return () => false;
   const kind = order === 'input_tokens' ? 'input' : 'output';
-  return (last) => (orderedTokens(last, kind) ?? 0) <= 0;
+  return (row) => (orderedTokens(row, kind) ?? 0) <= 0;
 }
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
