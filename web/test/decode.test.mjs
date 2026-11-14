@@ -2377,7 +2377,7 @@ test('a request row decodes its refused flag, false on a row from a capture with
 
 test('the dashboard, sessions, recipes, and overview decode', () => {
   const o = d.decodeDashboard(fixture('dashboard'));
-  assert.equal(o.hourly.length, 24);
+  assert.equal(o.hourly.length, 25);
   assert.equal(o.requests24h, fixture('dashboard').requests_24h);
   const sessions = fixture('sessions').sessions.map(d.decodeSession);
   const s1 = sessions.find((s) => s.sessionId === 's1');

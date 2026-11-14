@@ -1932,6 +1932,36 @@ async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_pas
     );
 }
 
+/// `now` stands 16 minutes and 40 seconds into its hour, so each request lies in the hour its offset names. The
+/// request inside the current hour keeps the session listed.
+#[tokio::test]
+async fn a_sessions_day_counts_the_hour_24_hours_back_and_leaves_out_the_hour_before_it() {
+    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let now = common::NOW;
+    for (id, at) in [
+        ("r-day-before", now - 25 * HOUR),
+        ("r-day-first", now - 24 * HOUR),
+        ("r-day-now", now - 1_000),
+    ] {
+        parts.ledger.record(agent_request(
+            id,
+            at,
+            "s-day",
+            "main",
+            "inference",
+            generation,
+        ));
+    }
+    common::landed(&parts, "r-day-now").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-day");
+    assert_eq!(
+        row["day"]["requests"],
+        serde_json::json!({ "other": 2 }),
+        "the day holds the request of the hour 24 hours back and the current hour's, the one before them left out: {row}"
+    );
+}
+
 /// The first poll fills the session, so the two later requests reach the fold through the read of the rows landed
 /// since, in landing order: `r-tie-b` lands first and `r-tie-a` last.
 #[tokio::test]

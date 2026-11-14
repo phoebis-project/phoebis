@@ -2333,19 +2333,19 @@ async fn the_dashboard_reads_the_day_and_the_pins_and_the_account_list_the_newes
     let dashboard = json(get(&parts.app, "/admin/dashboard", Some(&cookie)).await).await;
     assert_eq!(
         dashboard["requests_24h"].as_u64(),
-        Some(24),
-        "the 24 hourly rows ending now"
+        Some(25),
+        "the 25 hourly rows from the hour 24 hours back to the current one"
     );
     assert_eq!(
         (
             dashboard["tokens_24h"].as_u64(),
             dashboard["tokens_cached_24h"].as_u64()
         ),
-        (Some(24 * 150), Some(24 * 40))
+        (Some(25 * 150), Some(25 * 40))
     );
-    assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 24.0).abs() < 1e-9);
+    assert!((dashboard["error_rate_24h"].as_f64().unwrap() - 5.0 / 25.0).abs() < 1e-9);
     assert_eq!(dashboard["top_error_code"].as_str(), Some("upstream_error"));
-    assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 24);
+    assert_eq!(dashboard["hourly"].as_array().unwrap().len(), 25);
     assert_eq!(dashboard["sessions"]["active_pins"].as_u64(), Some(0));
     let list = json(get(&parts.app, "/admin/accounts", Some(&cookie)).await).await;
     let business = list["accounts"]

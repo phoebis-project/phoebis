@@ -12685,6 +12685,16 @@ export const FIXTURES: Record<string, Fixture> = {
       "top_refusal_code": "guardrail_blocked",
       "hourly": [
         {
+          "at": 1791633600000,
+          "billed": 0,
+          "cost": 0,
+          "equivalent": 0,
+          "errors": 0,
+          "refused": 0,
+          "requests": 0,
+          "tokens": 0
+        },
+        {
           "at": 1791637200000,
           "billed": 0,
           "cost": 0,

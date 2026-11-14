@@ -12,8 +12,8 @@ use crate::analytics::ledger_failure;
 use crate::openapi::{HourPointView, LedgerFailure};
 use crate::AdminState;
 
-/// The ledger's dashboard rollup and the live pin count. The rollup reads the last 24 hours up to the end of the
-/// current hour and leaves the probe rows out.
+/// The ledger's dashboard rollup and the live pin count. The rollup reads 25 hourly points, the 24 whole hours before
+/// the current hour and the current hour so far, and leaves the probe rows out.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
@@ -42,9 +42,10 @@ pub(crate) struct Dashboard {
     pub refused_24h: u64,
     /// The window's most frequent refusal code, null with none.
     pub top_refusal_code: Option<String>,
-    /// The window's 24 hours, oldest first: each hour's start as `at`, and its `billed`, `cost`, `equivalent`,
-    /// `errors` (the requests that did not succeed, the ones a client canceled left out), `refused` (the requests the
-    /// router refused before any account was asked, not in `requests`), `requests` and `tokens`.
+    /// The window's 25 hourly points, oldest first, from the hour 24 hours before the current one to the current hour
+    /// so far: each hour's start as `at`, and its `billed`, `cost`, `equivalent`, `errors` (the requests that did not
+    /// succeed, the ones a client canceled left out), `refused` (the requests the router refused before any account
+    /// was asked, not in `requests`), `requests` and `tokens`.
     pub hourly: Vec<HourPointView>,
     pub sessions: DashboardSessions,
 }

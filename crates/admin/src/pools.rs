@@ -1269,8 +1269,6 @@ pub(crate) async fn pool_context(
     let registry = state.store.load_registry()?;
     let guardrails = AttachmentIndex::from_load(&registry);
     let now = (state.clock)();
-    let hour = phoebis_ledger::hour_of(now);
-    let to = phoebis_ledger::hour_end(hour);
     let prices = state.pricing.revisions();
     let tables = state.tables.clone();
     let pool_ids: Vec<String> = match pool {
@@ -1278,7 +1276,7 @@ pub(crate) async fn pool_context(
         None => registry.pools.iter().map(|p| p.id.clone()).collect(),
     };
     // The day is 25 buckets, the current partial hour last, and a pool's day figures are their sums.
-    let day_start = hour - 24 * 3_600;
+    let (day_start, to) = phoebis_ledger::trailing_day_hours(now);
     // A registry with no pool answers no row, so it reads nothing from the ledger.
     let ledger = async {
         if pool_ids.is_empty() {

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use phoebis_bus::Kind;
 use phoebis_ledger::{
-    add_figures, hour_of, Connection, Funding, LedgerError, PlanTables, PriceRevisions,
-    RequestPrice, SessionSpendKey, SessionSpendRow, PROBE_KIND,
+    add_figures, hour_of, trailing_day_hours, Connection, Funding, LedgerError, PlanTables,
+    PriceRevisions, RequestPrice, SessionSpendKey, SessionSpendRow, PROBE_KIND,
 };
 use phoebis_routing::{DAY_MS, HOUR_MS};
 use utoipa::ToSchema;
@@ -409,11 +409,9 @@ impl Accumulator {
     fn figures(&self, now: i64) -> SessionFigures {
         let mut classes: BTreeMap<String, u64> = BTreeMap::new();
         let mut money = Money::default();
-        for hour in self
-            .hours
-            .range(hour_of(now - DAY_MS)..)
-            .map(|(_, hour)| hour)
-        {
+        // Open past the current hour: a row received after the poll's `now` keys a later hour and still counts.
+        let (day_start, _) = trailing_day_hours(now);
+        for hour in self.hours.range(day_start..).map(|(_, hour)| hour) {
             for (class, requests) in &hour.classes {
                 *classes.entry(class.clone()).or_default() += requests;
             }

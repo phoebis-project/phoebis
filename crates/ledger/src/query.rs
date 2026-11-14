@@ -32,9 +32,10 @@ use crate::record::{
 };
 use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of, migration_reason,
-    read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
-    RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, HIT_SUFFIX, NO_CLASS,
-    NO_EFFORT, OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, UNATTRIBUTED,
+    read_account_rollups, read_rollups_paged, trailing_day_hours, visit_rollups, CostSplit,
+    KeySelector, RollupRow, RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
+    HIT_SUFFIX, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE,
+    UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -3187,18 +3188,17 @@ pub struct Dashboard {
     pub equivalent_24h: Option<f64>,
 }
 
-/// The dashboard's day on `conn`, the last day's rollups folded hour by hour, each row's dollars and Pro-week figure
-/// priced from its counts, the figure against the anchor row in force at `now`. The day is one page of `PAGE_HOURS`,
-/// so one read holds the connection no longer than a page of `read_rollups_paged` would, and a caller folds another
-/// read into the same hold.
+/// The dashboard's day on `conn`, the rollups of the hours `trailing_day_hours` spans (the 24 whole hours before the
+/// current hour and the current hour so far) folded hour by hour, each row's dollars and Pro-week figure priced from
+/// its counts, the figure against the anchor row in force at `now`. One read holds the whole day, so the dashboard's
+/// poll holds the reader once.
 pub fn dashboard_on(
     conn: &Connection,
     now: i64,
     prices: &PriceRevisions,
     costs: &PlanTables,
 ) -> Result<Dashboard, LedgerError> {
-    let to_hour = hour_end(hour_of(now));
-    let from_hour = to_hour - 24 * 3_600;
+    let (from_hour, to_hour) = trailing_day_hours(now);
     let fold = TrafficFold::new(from_hour, to_hour, 3_600, prices, costs, now)?;
     let mut buckets = fold.zero.clone();
     let mut refused = vec![0_u64; buckets.len()];
