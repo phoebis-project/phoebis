@@ -880,6 +880,9 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
         request.kind = kind.into();
         for attempt in &mut attempts {
             attempt.request_id = id.into();
+            // The seed's row is a fast answer, a billed probe whose dollars would keep its group in, so the planted
+            // rows run on the plan.
+            attempt.speed = None;
         }
         db.insert_request(&request, &attempts, None).unwrap();
     };
@@ -920,6 +923,47 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
     assert!(
         with_probes.iter().any(|g| g.key == "k1"),
         "the same group appears once probes count as requests: {with_probes:?}"
+    );
+}
+
+/// A probe on an api_key account draws real dollars, so a breakdown that counts no probe as a request still answers
+/// the group its probe alone holds, with the probe's dollars and no request. One dollar a token, so its 57 tokens cost
+/// $57.
+#[tokio::test]
+async fn a_probes_off_breakdown_answers_a_billed_probe_s_group_with_its_dollars_and_no_request() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let model = "claude-sonnet-5-5";
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-probe",
+            account: "api",
+            account_kind: AccountKind::ApiKey,
+            kind: "probe",
+            model,
+            usage: usage(50, 7),
+            ..ShareRow::default()
+        },
+    );
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let groups = breakdown_paged(
+        &db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        from,
+        to,
+        GroupBy::Account,
+        &priced_table(model, 1.0),
+        &phoebis_ledger::test_tables::subscription_costs(),
+        NOW,
+    )
+    .await
+    .unwrap();
+    let api = group(&groups, "api");
+    assert_eq!(
+        (api.requests, api.cost_usd, api.billed_usd),
+        (0, 57.0, 57.0),
+        "{api:?}"
     );
 }
 
@@ -8917,6 +8961,181 @@ fn pools_traffic_reads_a_client_that_left_as_a_request_and_no_failed_request() {
         })
         .unwrap();
     assert_eq!((traffic["p"][0].requests, traffic["p"][0].failed), (1, 0));
+}
+
+/// A key's totals read the dollars of a usage-based seat's probe in their cost and billed dollars and count none of its
+/// requests or tokens, while a plan probe of the same key adds nothing. One dollar a token, so the plan request's 1,100
+/// tokens cost $1,100, the seat's probe $23 and the plan probe $400.
+#[test]
+fn a_key_s_totals_add_a_billed_probe_s_dollars_and_no_probe_s_request_or_token() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let model = "claude-sonnet-5-5";
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan",
+            model,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-seat-probe",
+            account: "seat",
+            kind: "probe",
+            model,
+            usage: usage(20, 3),
+            usage_based: true,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "r-plan-probe",
+            kind: "probe",
+            model,
+            usage: usage(400, 0),
+            ..ShareRow::default()
+        },
+    );
+    let (prices, costs) = (
+        priced_table(model, 1.0),
+        phoebis_ledger::test_tables::subscription_costs(),
+    );
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let live = LiveKeys(BTreeMap::from([("k".to_string(), 0)]));
+    let totals = db
+        .read_blocking(|c| key_request_totals(c, hour, hour + 3_600, &live, &prices, &costs, NOW))
+        .unwrap();
+    let k = &totals["k"];
+    assert_eq!(
+        (k.requests, k.tokens, k.cost_usd, k.billed_usd),
+        (1, 1_100, 1_123.0, 23.0),
+        "{k:?}"
+    );
+}
+
+/// On the pool `p` at `WEEKDAY_OFF_PEAK`, a plan request of 1,000 input and 100 output tokens and an overage probe that
+/// failed with a code after its answer read 300 cached tokens and 20 input tokens, both on Sonnet 5.5.
+fn plant_a_request_and_a_failed_billed_probe(db: &LedgerDb) {
+    let model = "claude-sonnet-5-5";
+    plant_share(
+        db,
+        ShareRow {
+            id: "r-plan",
+            model,
+            ..ShareRow::default()
+        },
+    );
+    let probe = RequestRecord {
+        id: "r-probe".into(),
+        received_at: WEEKDAY_OFF_PEAK,
+        finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+        key_id: Some("k".into()),
+        pool_id: Some("p".into()),
+        canonical_model: model.into(),
+        model: model.into(),
+        kind: "probe".into(),
+        origin: "client".into(),
+        status: Some(500),
+        outcome: "failed".into(),
+        error_code: Some("upstream_api_error".into()),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: "r-probe".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: AccountKind::Oauth,
+        started_at: WEEKDAY_OFF_PEAK,
+        finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+        upstream_status: Some(500),
+        outcome: "failed".into(),
+        input_tokens: Some(20),
+        cache_read_tokens: Some(300),
+        cache_write_5m_tokens: Some(0),
+        cache_write_1h_tokens: Some(0),
+        output_tokens: Some(0),
+        overage_in_use: Some(true),
+        ..Default::default()
+    };
+    db.insert_request(&probe, &[attempt], None).unwrap();
+}
+
+/// The pool's statement holds a clause of its own, so its bucket adds the failed overage probe's dollars and reads no
+/// request, no token and no failed request from it. One dollar a token, so the request costs $1,100 and the probe $320.
+#[tokio::test]
+async fn the_pool_s_bucket_adds_a_billed_probe_s_dollars_and_no_request_or_failure_of_it() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_a_request_and_a_failed_billed_probe(&db);
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let traffic = phoebis_ledger::pool_traffic(
+        &db,
+        "p",
+        hour,
+        hour + 3_600,
+        3_600,
+        std::sync::Arc::new(priced_table("claude-sonnet-5-5", 1.0)),
+        std::sync::Arc::new(phoebis_ledger::test_tables::subscription_costs()),
+        NOW,
+    )
+    .await
+    .unwrap();
+    let bucket = &traffic[0];
+    assert_eq!(
+        (
+            bucket.requests,
+            bucket.failed,
+            bucket.tokens,
+            bucket.cost_usd,
+            bucket.billed_usd
+        ),
+        (1, 0, 1_100, 1_420.0, 320.0),
+        "{bucket:?}"
+    );
+}
+
+/// The Dashboard's day adds the failed overage probe's dollars and no other figure of it: the requests, the errors, the
+/// refused count, the most common code and the cached tokens read the plan request alone. One dollar a token, so the
+/// request costs $1,100 and the probe $320.
+#[tokio::test]
+async fn the_dashboard_s_day_adds_a_billed_probe_s_dollars_and_no_other_figure_of_it() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_a_request_and_a_failed_billed_probe(&db);
+    let (prices, costs) = (
+        priced_table("claude-sonnet-5-5", 1.0),
+        phoebis_ledger::test_tables::subscription_costs(),
+    );
+    let day = db
+        .read(move |c| phoebis_ledger::dashboard_on(c, WEEKDAY_OFF_PEAK, &prices, &costs))
+        .await
+        .unwrap();
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let point = day
+        .hourly
+        .iter()
+        .find(|h| h.at == hour * 1_000)
+        .expect("the planted hour");
+    assert_eq!(
+        (day.cost_24h, day.billed_24h, point.cost, point.billed),
+        (1_420.0, 320.0, 1_420.0, 320.0),
+        "the day and its hour hold the probe's dollars"
+    );
+    assert_eq!(
+        (
+            day.requests_24h,
+            point.errors,
+            day.refused_24h,
+            day.top_error_code.as_deref(),
+            day.tokens_24h,
+            day.tokens_cached_24h
+        ),
+        (1, 0, 0, None, 1_100, 0),
+        "every other figure reads the plan request alone"
+    );
 }
 
 /// The day's requests, its error rate and its most common error code read the asked requests alone, and the refused

@@ -2476,9 +2476,14 @@ pub struct RollupSelect {
     pub clients: Vec<String>,
     /// Patterns under the wildcard grammar: a row matches when any of them matches its agent in full.
     pub user_agents: Vec<String>,
-    /// The probe rows left out in SQL, for a read that never counts them, so it decodes none to drop it.
-    pub exclude_probes: bool,
+    /// The probe rows the plan funded left out in SQL, for a read that counts no probe as a request and still sums a
+    /// billed probe's dollars, so it decodes no plan probe to drop it.
+    pub exclude_plan_probes: bool,
 }
+
+/// The clause of a read that counts no probe as a request: it leaves out the probe rows the plan funded and keeps a
+/// billed probe's, whose dollars the cost sums count.
+pub(crate) const NO_PLAN_PROBES: &str = "(kind != 'probe' OR funding != 'plan')";
 
 /// The page of the paged read, `read_rollups_paged`, which takes each page as its own read and folds it into the
 /// accumulators as it arrives: a long range holds one page in memory and releases a reader connection between pages.
@@ -2499,8 +2504,8 @@ pub(crate) fn select_statement(
     pool_term(&select.pools, &select.accounts, &mut binds, &mut clauses);
     in_list("account_id", &select.accounts, &mut binds, &mut clauses);
     in_list("kind", &select.kinds, &mut binds, &mut clauses);
-    if select.exclude_probes {
-        clauses.push("kind != 'probe'".into());
+    if select.exclude_plan_probes {
+        clauses.push(NO_PLAN_PROBES.into());
     }
     in_list("canonical_model", &select.models, &mut binds, &mut clauses);
     key_clause(&select.keys, false, &mut binds, &mut clauses);

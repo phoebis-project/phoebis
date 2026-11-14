@@ -992,9 +992,10 @@ pub(crate) struct Pool {
     #[schema(example = "disabled")]
     pub status: String,
     pub requests_24h: u64,
+    /// The day's estimated cost in dollars, a billed probe's among them, though `requests_24h` leaves the probes out.
     pub cost_24h: f64,
     /// The dollars of the day's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part
-    /// of `cost_24h`.
+    /// of `cost_24h`, a billed probe's among them.
     pub billed_24h: f64,
     /// The day's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced nothing
     /// and 0 with no plan-funded row.

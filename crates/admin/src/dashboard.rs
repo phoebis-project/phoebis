@@ -13,7 +13,7 @@ use crate::openapi::{HourPointView, LedgerFailure};
 use crate::AdminState;
 
 /// The ledger's dashboard rollup and the live pin count. The rollup reads 25 hourly points, the 24 whole hours before
-/// the current hour and the current hour so far, and leaves the probe rows out.
+/// the current hour and the current hour so far, and of the probe rows it reads a billed probe's dollars alone.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Dashboard {
@@ -24,10 +24,10 @@ pub(crate) struct Dashboard {
     pub tokens_24h: u64,
     /// The window's cache-read tokens.
     pub tokens_cached_24h: u64,
-    /// The window's estimated cost in dollars.
+    /// The window's estimated cost in dollars, a billed probe's among them.
     pub cost_24h: f64,
     /// The dollars of the window's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
-    /// part of `cost_24h`.
+    /// part of `cost_24h`, a billed probe's among them.
     pub billed_24h: f64,
     /// The window's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced
     /// nothing.

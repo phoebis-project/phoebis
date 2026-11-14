@@ -71,7 +71,7 @@ button on Escape, with one line per position in the switch's order:
   names, an API key, fast-mode, overage or usage-based request in dollars."
 - All in dollars: "Every request in dollars at the API price list, a subscription request at its dollar equivalent."
 - Billed dollars: "The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is
-  charged."
+  charged, a billed keepalive probe's among them."
 - Dollar equivalent: "The subscription requests alone at the API price list."
 
 The legend ends on what a subscription figure is: "A subscription figure is the share of a Pro 7-day window the same
@@ -167,10 +167,12 @@ reads a dash with the hover "No subscription request priced: its model has no we
 it reads the dash per hour while no request was billed, and the spark leaves that hour a gap. Under the Max and Ultra
 weeks the figure waits on the settings, so the tile draws its placeholder until they answer. Under All in dollars and
 Billed dollars it reads those dollars with `{usd} per hour`, and under Dollar equivalent the subscription traffic's
-dollars at the API price list with `{usd} per hour` as well. Under the tiles a line says when the figures were read, `As
-of {ago}`, by the oldest of the page's reads, or names the read whose last refresh failed and why: `Last refresh of the
-{read} failed: {error}. Showing data as of {ago}`, the read being the 24-hour figures, the accounts, the keepalive
-overview, the recent requests, the recipes, the sessions or the settings.
+dollars at the API price list with `{usd} per hour` as well. The tile's dollars count a billed keepalive probe's, one on
+an API key account or a usage-based seat, in overage or in fast mode, while the other tiles leave the probes out. Under
+the tiles a line says when the figures were read, `As of {ago}`, by the oldest of the page's reads, or names the read
+whose last refresh failed and why: `Last refresh of the {read} failed: {error}. Showing data as of {ago}`, the read
+being the 24-hour figures, the accounts, the keepalive overview, the recent requests, the recipes, the sessions or the
+settings.
 
 Two rings, "7d remaining" and "Fable week remaining", show how much of the pooled 7-day and Fable week capacity is left,
 under the subtitles "Subscription accounts, 7-day window, weighed by tier" and "Subscription accounts, Fable week,
@@ -516,8 +518,9 @@ sessions and the keepalive overview the pool dialog draws are read when it opens
 write from it, the overview also when the return rate's range is picked, never at the interval. "Cost, 24h" and each
 card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its figure in the chosen week
 over its billed dollars, a side with no traffic left out and the subscription side a dash with the Dashboard's hover
-where a request of the day priced nothing. A pool sums its members' accounts, so its figure carries no hint. Every
-field's meaning is on [Pools, keys and routing](routing.md#pools).
+where a request of the day priced nothing. The billed dollars count a billed keepalive probe's, while the request counts
+leave the probes out. A pool sums its members' accounts, so its figure carries no hint. Every field's meaning is on
+[Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". The edit
@@ -752,17 +755,18 @@ older than a week that lands late joins them within the hour. Lifetime cost, eac
 key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the subscription traffic's figure in the
 chosen week over the billed traffic's dollars, and a bar's figure and a cost line read a key's figure beside its billed
 dollars, a side with no traffic left out, the tile, the bar's figure and the cost line each reading the subscription
-side as a dash with the Dashboard's hover where a request priced nothing, and its bar draws no fill and sorts last. A
-key spans its pool's accounts, so its figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d",
-Expiry and Status, and each row ends in its menu. Under the name a row notes the capture setting, `bodies captured,
-{h}h` or `bodies not captured`, with "inherited" where the key follows its pool, and `allowance off` or `cache warming
-off` for each companion permission the key lacks ([The key's permissions](companion-mod.md#the-keys-permissions)).
-Models reads `{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads
-the date or "Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the
-previous secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are
-rejected immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its
-request history from the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with
-"Create key". What a key's settings mean is on [Keys](routing.md#keys).
+side as a dash with the Dashboard's hover where a request priced nothing, and its bar draws no fill and sorts last. The
+billed dollars count a billed keepalive probe's, while the requests and the tokens leave the probes out. A key spans its
+pool's accounts, so its figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and
+Status, and each row ends in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or
+`bodies not captured`, with "inherited" where the key follows its pool, and `allowance off` or `cache warming off` for
+each companion permission the key lacks ([The key's permissions](companion-mod.md#the-keys-permissions)). Models reads
+`{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or
+"Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the previous
+secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected
+immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its request
+history from the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with "Create
+key". What a key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -1200,9 +1204,11 @@ answer. Where that read fails, the tiles draw the read's error and the cards the
 Billed dollars and Dollar equivalent Cost draws the tiles Estimated cost, Billed dollars or Dollar equivalent, Cost per
 request and Cost per 1k output tokens, then Cost by the chosen group as a chart and a table (Requests, Cost, Input,
 Cache read, Cache write, Output, Per request, Per 1k output) and the Cost split as one ring in dollars (Input, Cache
-read, Cache write, Output). Every position draws Fast mode spend. The prices behind the dollars are on
-[Pricing](statistics.md#pricing), and the cost model behind the subscription figures on [Plan
-meter](statistics.md#plan-meter).
+read, Cache write, Output). Every position draws Fast mode spend. A billed keepalive probe's dollars count in the cost
+and the billed dollars, while its request and its tokens follow the Include probes toggle, and under a dollar position
+with the toggle off the tab's head says so: "A billed probe's dollars count whatever the Include probes toggle says".
+The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the subscription
+figures on [Plan meter](statistics.md#plan-meter).
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)

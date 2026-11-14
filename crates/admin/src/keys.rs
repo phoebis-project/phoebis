@@ -153,8 +153,9 @@ pub(crate) struct Key {
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyUsage {
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
-    /// `cost_usd`.
+    /// `cost_usd`, a billed probe's among them.
     pub billed_usd: f64,
+    /// The estimated cost in dollars, a billed probe's among them, though `requests` and `tokens` leave the probes out.
     pub cost_usd: f64,
     /// The plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced nothing and 0
     /// with no plan-funded row.
@@ -167,8 +168,9 @@ pub(crate) struct KeyUsage {
 #[serde(deny_unknown_fields)]
 pub(crate) struct KeyLifetime {
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
-    /// `cost_usd`.
+    /// `cost_usd`, a billed probe's among them.
     pub billed_usd: f64,
+    /// The estimated cost in dollars, a billed probe's among them, though `requests` leaves the probes out.
     pub cost_usd: f64,
     /// The plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced nothing and 0
     /// with no plan-funded row.

@@ -378,9 +378,11 @@ pub(crate) struct TrafficBucketView {
     pub requests: u64,
     pub failed: u64,
     pub tokens: u64,
+    /// The estimated cost in dollars, a billed probe's among them, though `requests`, `failed` and `tokens` leave the
+    /// probes out.
     pub cost_usd: f64,
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
-    /// `cost_usd`.
+    /// `cost_usd`, a billed probe's among them.
     pub billed_usd: f64,
     /// The plan-funded rows as the Pro-week figure, null where a row priced nothing.
     pub equivalent: Option<f64>,
@@ -599,6 +601,8 @@ pub(crate) struct BreakdownRow {
     pub expired_between_turns: u64,
     pub tokens: TokenSplitView,
     pub cost: CostSplitView,
+    /// The estimated cost in dollars of the rows `requests` counts, and of each billed probe whatever `include_probes`
+    /// says.
     pub cost_usd: f64,
     /// By error code.
     pub errors: BTreeMap<String, u64>,
@@ -659,7 +663,7 @@ pub(crate) struct BreakdownRow {
     /// The saving in the Pro-week figure, under every grouping, null where a kept-warm count priced nothing.
     pub saving_equivalent: Option<f64>,
     /// The dollars of the billed rows alone (fast mode, overage, API key accounts and usage-based seats), a part of
-    /// `cost_usd`.
+    /// `cost_usd`, a billed probe's among them whatever `include_probes` says.
     pub billed_usd: f64,
     /// `billed_usd` by token kind.
     pub billed: CostSplitView,
@@ -767,8 +771,10 @@ pub(crate) struct SeriesPointView {
 pub(crate) struct HourPointView {
     pub at: i64,
     /// The dollars of the hour's billed rows alone (fast mode, overage, API key accounts and usage-based seats), a
-    /// part of `cost`.
+    /// part of `cost`, a billed probe's among them.
     pub billed: f64,
+    /// The hour's estimated cost in dollars, a billed probe's among them, though `errors`, `requests` and `tokens`
+    /// leave the probes out.
     pub cost: f64,
     /// The hour's plan-funded rows as the Pro-week figure, whatever tier served them, null where a row priced nothing.
     pub equivalent: Option<f64>,

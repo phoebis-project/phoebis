@@ -34,8 +34,8 @@ use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, trailing_day_hours, visit_rollups, CostSplit,
     KeySelector, RollupRow, RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
-    HIT_SUFFIX, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE,
-    UNATTRIBUTED,
+    HIT_SUFFIX, NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
+    TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -2832,8 +2832,8 @@ fn cache_parts(usage: PinUsage) -> (PinUsage, PinUsage) {
     )
 }
 
-/// A group's dollars, each row priced at its own key as it joins: the counted rows' split, the billed rows' part of
-/// it, the probe rows' total, the wasted counts' total and the kept-warm counts' saving.
+/// A group's dollars, each row priced at its own key as it joins: the split of the counted rows and of the billed probe
+/// rows, the billed rows' part of it, the probe rows' total, the wasted counts' total and the kept-warm counts' saving.
 #[derive(Default)]
 struct GroupDollars {
     usd: CostSplit,
@@ -2951,6 +2951,10 @@ impl GroupSums {
             if row.kind == Kind::CountTokens.as_str() {
                 entry.sum.uncacheable += row.uncached_requests;
             }
+        }
+        // A billed probe draws real dollars, so they join the group whatever the flag says, while its request and its
+        // tokens follow the flag.
+        if counted || !plan {
             entry.dollars.usd.add(&usd);
             if !plan {
                 entry.dollars.billed.add(&usd);
@@ -2992,11 +2996,14 @@ impl GroupSums {
             probes_counted,
             ..
         } = *read;
-        // A group whose rows in the range are all probes never joins the request side under the default filter;
-        // without this it would report zero requests rather than staying out of a breakdown that does not count
-        // probes as requests. A group with any non-probe row, a keepalive credit included, stays.
-        self.0
-            .retain(|_, group| probes_counted || group.saw_non_probe);
+        // A group whose rows in the range are all probes never joins the request side under the default filter, so it
+        // stays out of a breakdown that does not count probes as requests, unless its billed probes hold dollars above
+        // zero: it answers those beside zero requests. A billed probe on a model the price list lacks prices at zero
+        // and would answer no figure, so its group stays out. A group with any non-probe row, a keepalive credit
+        // included, stays.
+        self.0.retain(|_, group| {
+            probes_counted || group.saw_non_probe || group.dollars.billed.total() > 0.0
+        });
         let mut out: Vec<GroupRow> = self
             .0
             .into_iter()
@@ -3212,11 +3219,16 @@ pub fn dashboard_on(
     let mut refusals: BTreeMap<String, u64> = BTreeMap::new();
     let mut tokens_cached = 0;
     let select = RollupSelect {
-        exclude_probes: true,
+        exclude_plan_probes: true,
         ..RollupSelect::default()
     };
     visit_rollups(conn, from_hour, to_hour, &select, |r| {
         fold.add(&mut buckets, &r);
+        // A probe is the router's own traffic, so the day reads a billed probe's dollars, which `fold.add` took, and
+        // nothing else of it.
+        if r.kind == Kind::Probe.as_str() {
+            return;
+        }
         if let Some(slot) = bucket_slot(&mut refused, from_hour, 3_600, r.hour) {
             *slot += r.refusals.values().sum::<u64>();
         }
@@ -3551,10 +3563,12 @@ impl Default for Totals {
     }
 }
 
-/// The price columns and the hour a SQL sum groups by beside its own column, and the sums it answers in the order
-/// `price_group` reads them, spelled once for both totals. The client is a price column, since its entrypoint names
-/// the regime a group's equivalent prices under, and so is the classifier, whose call prices at no share.
-const PRICE_GROUP_COLUMNS: &str = "canonical_model, speed, band, funding, client, classifier, hour";
+/// The price columns, the hour and whether the rows are probes, which a SQL sum groups by beside its own column, and
+/// the sums it answers in the order `price_group` reads them, spelled once for both totals. The client is a price
+/// column, since its entrypoint names the regime a group's equivalent prices under, and so is the classifier, whose
+/// call prices at no share. The probe rows group apart, since a group of them adds its dollars alone.
+const PRICE_GROUP_COLUMNS: &str =
+    "canonical_model, speed, band, funding, client, classifier, hour, kind = 'probe'";
 const PRICE_GROUP_SUMS: &str = "SUM(requests), SUM(input_tokens), SUM(cache_read_tokens), \
      SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens)";
 
@@ -3576,9 +3590,9 @@ fn summed_usage(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<PinUsage> 
 }
 
 /// One group of a priced SQL sum read from `offset`: its hour, and its requests, its five counts and its dollars,
-/// priced through `price_row` at the group's own hour as an inference row (the sums keep their `kind != 'probe'`
-/// clause), so the revision is the span's and the peak factor the hour's, the Pro-week figure against the anchor row at
-/// `now`.
+/// priced through `price_row` at the group's own hour as an inference row, so the revision is the span's and the peak
+/// factor the hour's, the Pro-week figure against the anchor row at `now`. The sums' `NO_PLAN_PROBES` clause admits the
+/// probe rows the plan did not fund, and a group of them answers its dollars alone, with no request and no token.
 fn price_group(
     r: &rusqlite::Row<'_>,
     offset: usize,
@@ -3599,20 +3613,27 @@ fn price_group(
         tier: UNATTRIBUTED.into(),
         ..RollupRow::default()
     };
-    let usage = summed_usage(r, offset + 8)?;
+    let probes: bool = r.get(offset + 7)?;
+    let usage = summed_usage(r, offset + 9)?;
     let key = group.price_key(now);
     let (cost_usd, billed_usd, equivalent) =
         shared_of(&price_row(prices, costs, &key, usage), key.funding, usage);
-    Ok((
-        group.hour,
+    let totals = if probes {
         Totals {
             cost_usd,
-            requests: clamped_count(r, offset + 7)?,
+            billed_usd,
+            ..Totals::default()
+        }
+    } else {
+        Totals {
+            cost_usd,
+            requests: clamped_count(r, offset + 8)?,
             tokens: tokens_of(usage),
             billed_usd,
             equivalent,
-        },
-    ))
+        }
+    };
+    Ok((group.hour, totals))
 }
 
 impl Totals {
@@ -3632,9 +3653,10 @@ impl std::ops::AddAssign<&Totals> for Totals {
     }
 }
 
-/// Request, token, and cost totals per live key over `[since_hour, to_hour)`, probe rows left out: the answer of
-/// `key_request_totals_by_generation` with only the live generation of each id kept, so a key's row never carries an
-/// earlier holder's. `now` is the read's instant, whose anchor row divides the Pro-week figure.
+/// Request, token, and cost totals per live key over `[since_hour, to_hour)`, a billed probe's dollars in and every
+/// other figure of a probe row left out: the answer of `key_request_totals_by_generation` with only the live generation
+/// of each id kept, so a key's row never carries an earlier holder's. `now` is the read's instant, whose anchor row
+/// divides the Pro-week figure.
 pub fn key_request_totals(
     conn: &Connection,
     since_hour: i64,
@@ -3658,11 +3680,12 @@ pub fn key_request_totals(
     )
 }
 
-/// Request, token, and cost totals per key and generation over `[since_hour, to_hour)`, probe rows left out: the pair
-/// is grouped in SQL beside the price columns and the hour, one query per span of `revision_spans`. Every generation
-/// is answered, so a caller that keeps the answer across a key's creation or deletion filters the live generations
-/// through [`LiveKeys::live_totals`], and a key created again under an id reads none of its earlier holder's rows.
-/// `now` is the read's instant, whose anchor row divides the Pro-week figure.
+/// Request, token, and cost totals per key and generation over `[since_hour, to_hour)`, a billed probe's dollars in
+/// and every other figure of a probe row left out: the pair is grouped in SQL beside the price columns and the hour,
+/// one query per span of `revision_spans`. Every generation is answered, so a caller that keeps the answer across a
+/// key's creation or deletion filters the live generations through [`LiveKeys::live_totals`], and a key created again
+/// under an id reads none of its earlier holder's rows. `now` is the read's instant, whose anchor row divides the
+/// Pro-week figure.
 pub fn key_request_totals_by_generation(
     conn: &Connection,
     since_hour: i64,
@@ -3687,10 +3710,10 @@ pub fn key_request_totals_by_generation(
     Ok(out)
 }
 
-/// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns and the
-/// hour, one query per span of `revision_spans`, each group's price columns read after the group columns and its key by
-/// `key_of`, a group whose key is `None` left out unpriced. The statement orders the groups as it groups them, so a key
-/// adds its groups' figures in one order whichever plan SQLite picks.
+/// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns, the hour
+/// and the probe rows apart, one query per span of `revision_spans`, each group's price columns read after the group
+/// columns and its key by `key_of`, a group whose key is `None` left out unpriced. The statement orders the groups as
+/// it groups them, so a key adds its groups' figures in one order whichever plan SQLite picks.
 fn grouped_totals<K: Ord>(
     conn: &Connection,
     group_columns: &[&str],
@@ -3702,7 +3725,7 @@ fn grouped_totals<K: Ord>(
 ) -> Result<BTreeMap<K, Totals>, LedgerError> {
     let offset = group_columns.len();
     let group_columns = group_columns.join(", ");
-    let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE kind != 'probe' AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
+    let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut out: BTreeMap<K, Totals> = BTreeMap::new();
     for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
         let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
@@ -4254,8 +4277,8 @@ impl Default for TrafficBucket {
     }
 }
 
-/// Every bucket in the range from the rollups of one pool, probes left out, read as `pools_traffic` reads it for the
-/// pool alone.
+/// Every bucket in the range from the rollups of one pool, a billed probe's dollars in and every other figure of a
+/// probe row left out, read as `pools_traffic` reads it for the pool alone.
 #[allow(clippy::too_many_arguments)]
 pub async fn pool_traffic(
     db: &Arc<LedgerDb>,
@@ -4285,12 +4308,13 @@ pub async fn pool_traffic(
     Ok(traffic.remove(pool_id).unwrap_or_default())
 }
 
-/// Every bucket in the range per pool of `pool_ids`, probes left out, from one statement on `conn` that sums each
-/// pool's rows by the price columns and the hour, so several pools read the table once and no row is decoded. Each
-/// group's dollars and Pro-week figure are priced from its summed counts through `price_group`, the figure against the
-/// anchor row in force at `now`. The statement orders the groups as it groups them, so a bucket adds its groups'
-/// figures in one order whichever plan SQLite picks. A pool without a row answers its zero buckets, and an empty
-/// `pool_ids` answers an empty map and runs no statement.
+/// Every bucket in the range per pool of `pool_ids`, a billed probe's dollars in and every other figure of a probe row
+/// left out, from one statement on `conn` that sums each pool's rows by the price columns and the hour, so several
+/// pools read the table once and no row is decoded. Each group's dollars and Pro-week figure are priced from its summed
+/// counts through `price_group`, the figure against the anchor row in force at `now`, and a group of probes counts no
+/// failed request. The statement orders the groups as it groups them, so a bucket adds its groups' figures in one order
+/// whichever plan SQLite picks. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an empty
+/// map and runs no statement.
 #[allow(clippy::too_many_arguments)]
 pub fn pools_traffic(
     conn: &Connection,
@@ -4311,11 +4335,12 @@ pub fn pools_traffic(
         .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
         .collect();
     let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
-    let mut clauses = vec!["kind != 'probe' AND hour >= ?1 AND hour < ?2".to_string()];
+    let mut clauses = vec![format!("{NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2")];
     pool_term(pool_ids, &[], &mut args, &mut clauses);
     let mut stmt = conn.prepare(&format!(
-        "SELECT pool_id, SUM(MAX(MAX(requests - succeeded, 0) - client_canceled, 0)), {PRICE_GROUP_COLUMNS}, \
-         {PRICE_GROUP_SUMS} \
+        "SELECT pool_id, \
+         SUM(CASE WHEN kind = 'probe' THEN 0 ELSE MAX(MAX(requests - succeeded, 0) - client_canceled, 0) END), \
+         {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} \
          FROM rollups_hourly WHERE {} GROUP BY pool_id, {PRICE_GROUP_COLUMNS} \
          ORDER BY pool_id, {PRICE_GROUP_COLUMNS}",
         clauses.join(" AND ")
@@ -4338,7 +4363,7 @@ pub fn pools_traffic(
 
 /// The zero buckets of a traffic range and the fold that adds figures to the bucket of their hour, nothing before the
 /// first bucket or past the last. The pool readers add each priced group of their sum, and the dashboard's day each
-/// rollup row of its read, which leaves the probe rows out.
+/// rollup row of its read, which leaves the plan's probe rows out and adds a billed probe's dollars alone.
 struct TrafficFold<'a> {
     first: i64,
     bucket_seconds: i64,
@@ -4376,6 +4401,15 @@ impl<'a> TrafficFold<'a> {
 
     fn add(&self, out: &mut [TrafficBucket], r: &RollupRow) {
         let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
+        if r.kind == Kind::Probe.as_str() {
+            let totals = Totals {
+                cost_usd: usd,
+                billed_usd: billed,
+                ..Totals::default()
+            };
+            self.add_sums(out, r.hour, 0, &totals);
+            return;
+        }
         let totals = Totals {
             cost_usd: usd,
             requests: r.requests,

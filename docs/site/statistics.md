@@ -89,18 +89,21 @@ every account at its cap, by any request's landing on another agent's pin of its
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
 day and the current month: an API-key member's rows whole, a subscription member's metered rows alone (`overage` and
 `fast`, and `usage_based` for a usage-based seat). A keepalive probe's cost counts toward it the same as any other
-request's, since a probe on an API-key member still draws real money. A member's spend is the period's hourly sums
-priced at the revision in force at each hour, so a revision that lands moves the spend at the next refresh, and a model
-priced by prompt length sums its hours by the band each attempt fell in. The rollups file each hour's traffic under who
-paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it, or a usage-based seat's
-dollars at the API rates. They key it by five words, `plan`, `overage`, `fast`, an API-key account's `billed` and a
-usage-based seat's `usage_based`, the last priced in dollars with no window share and kept by the analytics `billed`
-funding filter. They also count, per account and pool, the time the slow-down held the hour's requests before their
-heads and how many requests it held, which the Analytics view's held chart reads ([Slow-down](routing.md#slow-down)). An
-account's rollups also book a cooldown's time when its announcement lands, each part to the hour it falls in, up to
-seven days past the announcement, a later announcement booking on from the end already booked. A cooldown cleared early
-gives back the time after the clear and leaves no time behind: an hour that held nothing but the returned time leaves
-the account's rollups.
+request's, since a probe on an API-key member still draws real money. The other rollup reads count a billed probe's
+dollars too: the analytics breakdown and series, the Dashboard's day, a key's totals and a pool's traffic add the
+dollars of a probe the plan did not fund to their cost and billed dollars, even where they count no probe as a request.
+There its request, its tokens and its failure stay out, and a probe the plan funded adds nothing. A member's spend is
+the period's hourly sums priced at the revision in force at each hour, so a revision that lands moves the spend at the
+next refresh, and a model priced by prompt length sums its hours by the band each attempt fell in. The rollups file each
+hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it,
+or a usage-based seat's dollars at the API rates. They key it by five words, `plan`, `overage`, `fast`, an API-key
+account's `billed` and a usage-based seat's `usage_based`, the last priced in dollars with no window share and kept by
+the analytics `billed` funding filter. They also count, per account and pool, the time the slow-down held the hour's
+requests before their heads and how many requests it held, which the Analytics view's held chart reads
+([Slow-down](routing.md#slow-down)). An account's rollups also book a cooldown's time when its announcement lands, each
+part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from the end
+already booked. A cooldown cleared early gives back the time after the clear and leaves no time behind: an hour that
+held nothing but the returned time leaves the account's rollups.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The
