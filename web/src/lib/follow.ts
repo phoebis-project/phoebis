@@ -19,9 +19,11 @@ export const rowsRefreshTitle = (custom: boolean, from: number | string, to: num
   custom ? `Rows from ${fmtTime(from)} to ${fmtTime(to)}. Refresh reads the same window again` : `Rows up to ${fmtTime(to)}. Refresh reads up to now`;
 /** A read that failed before it ever answered, so the view has nothing to draw but the failure. */
 export const failedFirst = (read: { data: unknown; error: string | null }): boolean => read.data === null && read.error !== null;
+/** A log's count in words: the rows shown and whether a next page waits. */
+export const shownWords = (count: number, more: boolean): string => `${fmtInt(count)} shown${more ? ', more available' : ''}`;
 /** A log's count beside its filters: the rows shown and whether a next page waits, nothing before the first answer. */
 export const shownCount = (rows: readonly unknown[], nextCursor: string | null, loaded: boolean): string =>
-  rows.length > 0 ? `${fmtInt(rows.length)} shown${nextCursor ? ', more available' : ''}` : loaded ? 'No rows' : '';
+  rows.length > 0 ? shownWords(rows.length, Boolean(nextCursor)) : loaded ? 'No rows' : '';
 /**
  * The one interval the control and the poll read: 0 while a custom span has ended (nothing new to read, the part Off
  * and disabled), else the chosen interval.

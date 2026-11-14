@@ -7354,12 +7354,13 @@ const MIDNIGHT = (origin) => {
  * top (a segmented's pills 28 inside their group), the chips 26 with the word in --ink-2 and the values in --ink, one
  * line (scrollWidth equal to clientWidth) at 1280 by 800 and 1440 by 900 at rest, with the view's chips, on a ranged
  * view with a span across midnight and on Requests under "Sort: Output tokens", and the row against the first card's
- * head. Under the mock's story the Requests row at 1280 by 800 holds two lines in every case, since the count's slot
- * keeps the width of its longest text whatever the count reads: the slots take 1284 px in the 992 px row and the edge
- * wraps alone onto the second line, the row 72 px and the bar 72 at rest, across midnight and under the sort and 106
- * with its chips. At 1440 by 900 it holds one line at rest, with its chips and under the sort (the slots 1152 px in the
- * 1152 px row), and two across midnight, whose Custom pill takes the slots to 1444 px in the 1152 px row (the row and
- * the bar 72 px). Against another story the row holds two lines where its slots run past it and one otherwise. On a
+ * head. Under the mock's story the Requests row at 1280 by 800 holds two lines in every case, since a hidden
+ * sizer with the widest count of a freshly read page holds the count's slot at that width whatever the count
+ * reads: the slots take 1283 px in the 992 px row and the edge wraps alone onto the second line, the row 72 px
+ * and the bar 72 at rest, across midnight and under the sort and 106 with its chips. At 1440 by 900 it holds
+ * one line at rest, with its chips and under the sort (the slots 1152 px in the 1152 px row), and two across
+ * midnight, whose Custom pill takes the slots to 1443 px in the 1152 px row (the row and the bar 72 px).
+ * Against another story the row holds two lines where its slots run past it and one otherwise. On a
  * card view the element after the bar and the tiles stand under the bar's bottom. The row's `width`, its slots' widths
  * and the gaps between them, holds under the view's ROW_BOUND at rest. On Analytics the Group by select reads the Add
  * filter button's height and top. On the NARROW_VIEWS at 950 by 800 the bar and its row run no wider than their boxes
@@ -7454,10 +7455,10 @@ async function barRow(theme, view) {
         await advance(LOAD_MS);
         await page.waitForSelector('.filter-bar', { timeout: 15_000 }).catch(() => {});
         const got = await read();
-        // Under the mock the Requests bar's slots outrun the 1280 px content column whatever the count reads, since the
-        // count's slot keeps the width of its longest text, so the edge wraps to a second line there. At 1440 px the
-        // Custom pill's span across midnight takes them past the row too. Against another story the line count follows
-        // the slots the row measured.
+        // Under the mock the Requests bar's slots outrun the 1280 px content column whatever the count reads, since a
+        // hidden sizer with the widest count of a freshly read page holds the count's slot at that width, so the edge
+        // wraps to a second line there. At 1440 px the Custom pill's span across midnight takes them past the row too.
+        // Against another story the line count follows the slots the row measured.
         const lines = mock ? (view === '/requests' && (width === 1280 || label === 'with a span across midnight') ? 2 : 1) : got !== null && got.width > got.row.client ? 2 : 1;
         measurements.push(`${theme} ${view} bar row at ${width} by ${height} ${label} ${JSON.stringify(got)}`);
         check(`${width} by ${height} ${label}`, got, chipped, lines);

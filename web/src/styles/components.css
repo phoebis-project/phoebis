@@ -3265,7 +3265,23 @@ textarea.input {
   margin-left: auto;
 }
 
-.filter-bar__count {
+/* The count's slot holds the widest text of a freshly read page, so the edge's width and the row's line count stay
+   put while the count changes. A followed page past 999 rows outgrows the slot. */
+.filter-bar__count-slot {
+  display: inline-grid;
+  justify-items: end;
+}
+
+.filter-bar__count-slot > * {
+  grid-area: 1 / 1;
+}
+
+.filter-bar__count-sizer {
+  visibility: hidden;
+}
+
+.filter-bar__count,
+.filter-bar__count-sizer {
   font-size: 12.5px;
   white-space: nowrap;
 }

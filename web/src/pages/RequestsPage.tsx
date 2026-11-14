@@ -30,7 +30,7 @@ import { clock } from '@/lib/clock';
 import { groupInto } from '@/lib/counts';
 import { EFFORT_LEVELS, foldRequestClass, NO_CLASS, NO_EFFORT, OTHER_DIMENSION, REQUEST_KIND_LABEL, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { keyOptions, notLoadedReason, REQUESTS_DIMENSIONS } from '@/lib/filterBar';
-import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, spanEnded } from '@/lib/follow';
+import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, rowsRefreshTitle, shownCount, shownWords, spanEnded } from '@/lib/follow';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
@@ -252,6 +252,8 @@ function CostRows({ context, request: r, settings, unit }: { context: CostContex
 
 /** The route answers its rows as `requests`, and the poll reads a list's as `rows`. */
 const listed = (page: RequestPage) => ({ landedThrough: page.landedThrough, nextCursor: page.nextCursor, rows: page.requests });
+/** A full largest page with more available, the widest count a freshly read page draws. */
+const WIDEST_COUNT = shownWords(Math.max(...REQUEST_PAGE_SIZES), true);
 
 export function RequestsPage() {
   const { requestId } = useParams();
@@ -371,6 +373,7 @@ export function RequestsPage() {
         <FilterBar
           address={address}
           count={shownCount(rows, nextCursor, requests.data !== null)}
+          countSizer={WIDEST_COUNT}
           dimensions={REQUESTS_DIMENSIONS}
           disabled={disabled}
           filters={filters}

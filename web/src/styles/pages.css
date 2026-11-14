@@ -1733,13 +1733,6 @@
   grid-column: 1 / -1;
 }
 
-/* The count's slot holds the longest text of a freshly read page, "100 shown, more available", so the edge's width and
-   the row's line count stay put while the count changes. A followed page past 999 rows outgrows the slot. */
-.requests > .filter-bar .filter-bar__count {
-  min-width: 169px;
-  text-align: right;
-}
-
 /* Guardrails: the sentence under the bar, a switched-off row in the secondary ink, and the create menu's rows. */
 .guardrails__lead {
   margin: 0;

@@ -274,12 +274,13 @@ whose range prices its plan rows nothing), the native Cost by table (its width r
 1280 by 800), the filter bar of every list view at 1280 by 800 and 1440 by 900, at rest, with the view's chips, on a
 ranged view with a span across midnight and on Requests under "Sort: Output tokens" (the row 32 px on one line with
 every control 32 px at one top and a segmented's pills 28 px, the bar 32 px at rest and 66 px with a chip line, 49 and
-83 px as the Analytics sticky bar, the Requests row under the mock on two lines at 1280 by 800 in every case, since the
-count's slot keeps the width of its longest text whatever the count reads (the slots 1284 px in the 992 px row, so the
-edge wraps alone onto the second line, the row 72 px, the bar 72 px at rest, across midnight and under the sort and 106
-px with its chips), and at 1440 by 900 on one line at rest, with its chips and under the sort (the slots 1152 px in the
-1152 px row) and on two across midnight (the Custom pill's span taking the slots to 1444 px in the 1152 px row, the row
-and the bar 72 px), under another story on two lines where its slots run past the row and on one line otherwise, each
+83 px as the Analytics sticky bar, the Requests row under the mock on two lines at 1280 by 800 in every case,
+since a hidden sizer with the widest count of a freshly read page holds the count's slot at that width
+whatever the count reads (the slots 1283 px in the 992 px row, so the edge wraps alone onto the second line,
+the row 72 px, the bar 72 px at rest, across midnight and under the sort and 106 px with its chips), and at
+1440 by 900 on one line at rest, with its chips and under the sort (the slots 1152 px in the 1152 px row) and
+on two across midnight (the Custom pill's span taking the slots to 1443 px in the 1152 px row, the row and
+the bar 72 px), under another story on two lines where its slots run past the row and on one line otherwise, each
 chip 26 px with its word in `--ink-2` and its values in `--ink`, the chip line on one line, the first card's head below
 the bar, on a card view the next element and the tiles below it, on Analytics the Group by select against Add filter,
 and on the routing log and Analytics the width of the row's slots and gaps at rest under the view's bound, and at 950 by

@@ -15353,7 +15353,7 @@ await forView('/requests', async () => {
     const row = page.container.querySelector('.requests > .filter-bar:first-child > .filter-bar__row');
     const slots = [...(row?.children ?? [])];
     const read = {
-      edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.classList.contains('filter-bar__count') ? 'count' : el.className)),
+      edge: [...(row?.querySelector('.filter-bar__edge')?.children ?? [])].map((el) => (el.classList.contains('refresh-control') ? 'refresh' : el.classList.contains('filter-bar__count-slot') ? 'count slot' : el.className)),
       empty: slots.filter((el) => el.childElementCount === 0 && (el.textContent?.trim() ?? '') === '').map(slotOf),
       placeholder: barSearch(page)?.getAttribute('placeholder') ?? null,
       slots: slots.map(slotOf),
@@ -15367,7 +15367,7 @@ await forView('/requests', async () => {
       ok:
         JSON.stringify(read.slots) === JSON.stringify(['range', 'search', 'add filter', 'columns', 'sort', 'edge']) &&
         read.empty.length === 0 &&
-        JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count']) &&
+        JSON.stringify(read.edge) === JSON.stringify(['refresh', 'count slot']) &&
         read.placeholder === 'Search id, session, key, account, model, error, message id' &&
         JSON.stringify(opened) === JSON.stringify(['filter-bar', 'stack', 'drawer']),
       missing: [JSON.stringify(read), JSON.stringify(opened)],

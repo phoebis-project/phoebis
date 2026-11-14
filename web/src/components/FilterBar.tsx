@@ -16,6 +16,10 @@ export interface FilterBarProps<F extends object> {
   children?: ReactNode;
   /** The right edge's count ("25 shown, more available", or a node with the attention part in the critical ink), which Analytics leaves out. */
   count?: ReactNode;
+  /**
+   * The widest text a freshly read page's count draws. Where given, the count draws in a slot that keeps that width.
+   */
+  countSizer?: string;
   /** The Add filter list, which a view without filters leaves out. */
   dimensions?: Dimension[];
   disabled?: Record<string, string>;
@@ -35,7 +39,7 @@ export interface FilterBarProps<F extends object> {
   update: (patch: Partial<F>) => void;
 }
 
-function Bar<F extends object>({ address, children, count, dimensions, disabled, filters, options = {}, placeholder, presets, range, refresh, sticky = false, update }: FilterBarProps<F>, ref: ForwardedRef<HTMLDivElement>): JSX.Element {
+function Bar<F extends object>({ address, children, count, countSizer, dimensions, disabled, filters, options = {}, placeholder, presets, range, refresh, sticky = false, update }: FilterBarProps<F>, ref: ForwardedRef<HTMLDivElement>): JSX.Element {
   // TypeScript checks an object literal against `Partial<F>` only once `F` is known, so every patch the bar builds over
   // the generic `F` is asserted here, in one place.
   const patch = (next: Record<string, unknown>) => update(next as Partial<F>);
@@ -50,6 +54,7 @@ function Bar<F extends object>({ address, children, count, dimensions, disabled,
     if (dimension !== undefined) patch({ [field]: withoutValue(dimension, filters, value) });
   };
   const clearAll = () => patch(Object.fromEntries((dimensions ?? []).map((d) => [d.field, emptyValue(d)])));
+  const countSpan = <span className="filter-bar__count muted">{count}</span>;
 
   return (
     <div ref={ref} className={sticky ? 'filter-bar filter-bar--sticky' : 'filter-bar'}>
@@ -60,7 +65,17 @@ function Bar<F extends object>({ address, children, count, dimensions, disabled,
         {children}
         <div className="filter-bar__edge">
           <RefreshControl {...refresh} />
-          {count !== undefined && <span className="filter-bar__count muted">{count}</span>}
+          {count !== undefined &&
+            (countSizer === undefined ? (
+              countSpan
+            ) : (
+              <span className="filter-bar__count-slot">
+                <span className="filter-bar__count-sizer" aria-hidden="true">
+                  {countSizer}
+                </span>
+                {countSpan}
+              </span>
+            ))}
         </div>
       </div>
       {/* Mounted with no chips too: the line draws nothing then, and its focus hand-off after Clear all or the last
@@ -72,9 +87,10 @@ function Bar<F extends object>({ address, children, count, dimensions, disabled,
 
 /**
  * `div.filter-bar` (ref forwarded, for useStickyHeight) holding `div.filter-bar__row` in the slot order range, search,
- * Add filter, children, `div.filter-bar__edge` (RefreshControl, then `span.filter-bar__count`), and the ChipLine under
- * the row, which draws while a chip stands. The bar holds the chip-edit state and nothing else: its popovers hold the
- * page's auto reload through the page's PopoverHost.
+ * Add filter, children, `div.filter-bar__edge` (RefreshControl, then `span.filter-bar__count`, which a `countSizer`
+ * sets in `span.filter-bar__count-slot` over a hidden sizer of that text), and the ChipLine under the row, which draws
+ * while a chip stands. The bar holds the chip-edit state and nothing else: its popovers hold the page's auto reload
+ * through the page's PopoverHost.
  */
 // forwardRef drops the generic, so its result is read back under the generic signature.
 export const FilterBar = forwardRef(Bar) as <F extends object>(props: FilterBarProps<F> & { ref?: Ref<HTMLDivElement> }) => JSX.Element;
