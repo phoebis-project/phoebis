@@ -392,7 +392,9 @@ const ACCOUNT_BURNS = new Map(
     ) as Record<string, number>,
   ]),
 );
-/** Primary's 5-hour burn before the afternoon round's current session lands there, the burn of the sessions it carries. */
+/**
+ * Primary's 5-hour burn before the afternoon round's current session lands there, the burn of the sessions it carries.
+ */
 const PRIMARY_EARLIER_BURN = 0.085;
 /** The placement that lands the afternoon round's current session on primary, read off its row. */
 const CURRENT_SESSION_LANDED_AT = ((): number => {
@@ -867,11 +869,12 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
   // The one trigger: the first plan window, in the windows' order, whose projection at its horizon reads over the line
   // that horizon's bound sets, or on a pool that slows its pins the 5-hour window's stretch past the threshold once the
-  // safety wait has passed, a 5-hour window under the hold yielding to the next. A round the story writes fires past
-  // its window's wait, and so did the round whose dwell a decision stands in, so either reads the first window over its
-  // line as the trigger. Any other window over its line is inside its wait, which holds the round back and yields to
-  // the next window. The line names every projection it read with its horizon, its wall and its wait, the 5-hour
-  // window's age and hold inside the hold, and how long the stretch has read over while the safety wait holds.
+  // safety wait has passed, a 5-hour window under the hold yielding to the next. A round the story writes fires on the
+  // story's word, and the builder reads no wait for it. A decision inside a round's dwell reads the same trigger as the
+  // round, the first window over its line. Any other window over its line is inside its wait, which holds the round
+  // back and yields to the next window. The line names every projection it read with its horizon, its wall and its
+  // wait, the 5-hour window's age and hold inside the hold, and how long the stretch has read over while the safety
+  // wait holds.
   const newest = newestRound(source.accountId, at);
   const fires = spec.round !== undefined || (newest !== null && at - newest < pool.shedDwellSeconds * 1_000);
   const stretch = pool.slowDown ? stretchTriggerOf(source, pool, at) : null;

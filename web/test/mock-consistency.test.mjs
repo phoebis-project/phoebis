@@ -3270,6 +3270,28 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     );
   });
 
+  // The router places a classifier call on its judged turn's account or that turn's pin's without ranking, and names
+  // `classifier` as the pick's reason there alone (`judged_candidate` in `crates/routing/src/select.rs`). A call its
+  // Pin step leaves to the strategy is ranked as any other request.
+  test(`a classifier call's pick names classifier as its reason exactly where its Pin step directs the call, at ${at}`, async () => {
+    const s = await story;
+    const calls = new Set(s.requests.filter((r) => r.classifier !== null).map((r) => r.id));
+    const read = (await decisionsOf(s))
+      .filter((rec) => calls.has(rec.requestId))
+      .map((rec) => ({
+        direction: rec.walk.find((w) => w.step === 'pin')?.facts.find((f) => f.key === 'direction')?.value,
+        id: rec.requestId,
+        named: rec.walk.find((w) => w.step === 'pick')?.facts.some((f) => f.key === 'reason' && f.value === 'classifier') ?? false,
+      }));
+    const directed = read.filter((x) => ['pin_account', 'turn_account'].includes(x.direction));
+    const left = read.filter((x) => !directed.includes(x));
+    assert.ok(directed.length > 0 && left.length > 0, `the story's classifier calls read ${JSON.stringify(read)}`);
+    assert.deepEqual(
+      { directed: directed.filter((x) => !x.named).map((x) => x.id), left: left.filter((x) => x.named).map((x) => `${x.id} (${x.direction})`) },
+      { directed: [], left: [] },
+    );
+  });
+
   test(`the story's contract refusal names the missing item on a Claude Code row no account served, at ${at}`, async () => {
     const s = await story;
     const refusals = s.requests.filter((r) => r.errorCode === 'client_contract');

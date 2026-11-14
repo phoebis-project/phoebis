@@ -364,15 +364,17 @@ const barPhrases = (bars, account, at, compact) =>
  */
 const barsOff = (read) => read.filter((r) => r.reset === null || r.text !== (r.want === null ? r.reset : r.compact ? r.want : `${r.reset}, ${r.want}`));
 /**
- * The whole minutes from the clock's origin to the instant a window's projected burn spends it, which its "spent in"
- * phrase counts down to, null for a window with no projection or no burn.
+ * The whole minutes from the instant a window's projected burn spends it, which its "spent in" phrase counts down to,
+ * to its served reset, null for a window with no projection, no burn or no reset. The reset is an instant the mock
+ * fixes at its load, so the time the bundle takes to load does not move the read, as it would against the clock's
+ * origin.
  */
-const wallMinutes = (w) => (!w || w.projection === null || !w.burn ? null : Math.round((Date.parse(w.horizon) - ((w.projection - 1) / w.burn) * 3_600_000 - CLOCK_ORIGIN) / 60_000));
+const wallBeforeReset = (w) => (!w || w.projection === null || !w.burn || w.resetsAt === null ? null : Math.round((Date.parse(w.resetsAt) - Date.parse(w.horizon) + ((w.projection - 1) / w.burn) * 3_600_000) / 60_000));
 /**
- * primary's 5-hour seed reads 62% on a burn of 22.4% an hour (`web/src/mock/accounts.ts`), so the window is spent
- * (1 - 0.62) / 0.224 hours, 1 h 42 min, past the story's start, 32 min before its reset.
+ * primary's 5-hour seed projects 112% at its reset on a burn of 22.4% an hour (`web/src/mock/accounts.ts`), so the
+ * window is spent (1.12 - 1) / 0.224 hours, 32 min, before its reset.
  */
-const PRIMARY_5H_WALL_MINUTES = 102;
+const PRIMARY_5H_WALL_BEFORE_RESET = 32;
 const sessionCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.sessions-table > thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
@@ -1481,11 +1483,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     return a ? barPhrases([...card.querySelectorAll('.wbar:not(.wbar--spend)')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
   });
   const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
-  const primaryWall = wallMinutes(accounts.find((a) => a.id === 'primary')?.windows.find((w) => w.id === '5h'));
+  const primaryWall = wallBeforeReset(accounts.find((a) => a.id === 'primary')?.windows.find((w) => w.id === '5h'));
   results.push({
-    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour spent 1 h 42 min past the story's start",
-    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary.startsWith('spent in ') && primaryWall === PRIMARY_5H_WALL_MINUTES,
-    missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary', `primary's wall at ${primaryWall} min`],
+    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour spent 32 min before its reset",
+    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary.startsWith('spent in ') && primaryWall === PRIMARY_5H_WALL_BEFORE_RESET,
+    missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary', `primary's wall ${primaryWall} min before its reset`],
   });
   page.unmount();
 }
@@ -2296,13 +2298,13 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   // 2 h 6 min before the reset: 1 h 35 min after the story's start, plus the moment the mock took to load.
   const nightly = wOf('nightly', '5h');
   const spentIn = nightly === null ? null : Date.parse(nightly.horizon) - ((nightly.projection - 1) / nightly.burn) * 3_600_000 - at;
-  const primaryWall = wallMinutes(wOf('primary', '5h'));
+  const primaryWall = wallBeforeReset(wOf('primary', '5h'));
   results.push({
-    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's spent 1 h 42 min past it and its 7-day window 56% left in the span to its horizon",
+    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's spent 32 min before its reset and its 7-day window 56% left in the span to its horizon",
     ok:
       spentIn !== null && spentIn > 85 * 60_000 && spentIn < 95 * 60_000 &&
       story.nightly5h.endsWith(`, spent in ${minuteSpan(spentIn)}`) &&
-      /, spent in .+$/.test(story.primary5h) && primaryWall === PRIMARY_5H_WALL_MINUTES &&
+      /, spent in .+$/.test(story.primary5h) && primaryWall === PRIMARY_5H_WALL_BEFORE_RESET &&
       weekly !== null &&
       projectionWords(weekly, at)?.startsWith('56% left in ') === true &&
       story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
@@ -3741,11 +3743,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const detail = primary ? barPhrases([...(page.container.querySelector('.detail .wbars--3')?.querySelectorAll('.wbar') ?? [])], primary, at, false) : [];
   const rowText = rows.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   const detailText = detail.find((r) => r.label === '5-hour')?.text ?? '';
-  const primaryWall = wallMinutes(primary?.windows.find((w) => w.id === '5h'));
+  const primaryWall = wallBeforeReset(primary?.windows.find((w) => w.id === '5h'));
   results.push({
-    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour spent 1 h 42 min past the story's start",
-    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText.startsWith('spent in ') && primaryWall === PRIMARY_5H_WALL_MINUTES,
-    missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary', `primary's wall at ${primaryWall} min`],
+    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour spent 32 min before its reset",
+    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText.startsWith('spent in ') && primaryWall === PRIMARY_5H_WALL_BEFORE_RESET,
+    missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary', `primary's wall ${primaryWall} min before its reset`],
   });
   const opus = primary?.windows.find((w) => w.id === 'seven_day_opus') ?? null;
   const opusText = detail.find((r) => r.label === 'seven_day_opus')?.text ?? 'no seven_day_opus bar on the detail';
@@ -3755,8 +3757,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     missing: [opusText, JSON.stringify(opus)],
   });
   results.push({
-    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour spent 1 h 42 min past the story's start",
-    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, spent in .+$/.test(detailText) && primaryWall === PRIMARY_5H_WALL_MINUTES,
+    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour spent 32 min before its reset",
+    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, spent in .+$/.test(detailText) && primaryWall === PRIMARY_5H_WALL_BEFORE_RESET,
     missing: [...barsOff(detail).map((r) => JSON.stringify(r)), detailText || 'no 5-hour bar on the detail'],
   });
   page.unmount();
@@ -7205,7 +7207,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     shedSwitch()?.click();
     await m.settle(120);
     results.push({
-      name: "/pools the shedding preview replays the trigger over every member's windows and the round's marks from the served figures",
+      name: '/pools the shedding preview reads that no sibling has runway for the members over the ceiling, three at 75 and nightly and primary at 100',
       ok:
         stored === '3 members project over the ceiling: nightly, primary, secondary. No sibling has runway for them, so nothing would be marked.' &&
         raised === '2 members project over the ceiling: nightly, primary. No sibling has runway for them, so nothing would be marked.',
@@ -8810,7 +8812,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  // primary projects 81 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and the
+  // primary projects 112 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and the
   // annex, an API-key sibling, has runway for its pins.
   const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
   if (ceiling) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(ceiling, '80');

@@ -1113,7 +1113,7 @@ const CAUSED_MOVE_ID = 'req_c7e41d93-a26';
  * The first turn of a desktop conversation that the upstream answered 400, so the router released the pin its
  * placement created as the request ended, the release's reason `client_error`.
  */
-export const CLIENT_ERROR_TURN_ID = 'req_c1e40a95-b28';
+const CLIENT_ERROR_TURN_ID = 'req_c1e40a95-b28';
 const CLIENT_ERROR_SESSION_ID = 'f40a2c7e-9b31-4d58-8e06-1a7c3b5d9e24';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
@@ -2220,9 +2220,9 @@ export const freedPart = (r: Pick<HourlyRollup, 'classifier' | 'funding'>): bool
  * regime the row's client label names: null for a request no subscription window paid, else the figure at the
  * request's completion, null for a model without a weight of its own, and a share on each window of the account's set
  * and each week the model applies to, under the account's tier, a window the cost model cannot price carried as null
- * and an account without a tier an empty share map. A
- * classifier call `freeCall` frees reads zero, on each such window the tier sizes, with the share reason, while
- * any other classifier call and one billed in dollars carry no reason, as the route answers them.
+ * and an account without a tier an empty share map. A classifier call `freeCall` frees reads zero, on each such window
+ * the tier sizes, with the share reason, while any other classifier call and one billed in dollars carry no reason, as
+ * the route answers them.
  */
 function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'costShares' | 'shareReason'> {
   if (!planPaid(r)) return { costEquivalent: null, costShares: null, shareReason: null };
