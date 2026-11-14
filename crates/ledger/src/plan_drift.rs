@@ -3,7 +3,8 @@
 //! analyzed file, so a plan the statistics move is caught before a live file moves it. The session identities read, the
 //! top sessions read and the extra usage reads are the exceptions: each of their table references names its index,
 //! seeks the primary key on its leading column or reads by rowid, so no statistics move their plans. Each keeps its own
-//! test in `query.rs`, and the session identities test's planted statistics catch a dropped hint.
+//! test in `query.rs`, and the session identities test's planted statistics catch a dropped hint. The session attempts
+//! read names its index too and keeps its case here, since its read under a named key is the one a dropped hint fails.
 //!
 //! The file is seeded and analyzed once per process and each test opens its own copy of the bytes, since the seed is
 //! most of a second's writes and every test reads the same file. A copy per test keeps the tests independent of each
@@ -30,7 +31,7 @@ use crate::record::{
     AttemptRecord, BodyRecord, DecisionRow, EventRecord, ExtraUsageSampleRecord,
     GuardrailMatchRecord, QuotaSampleRecord, RequestRecord, SampleSource,
 };
-use crate::rollup::{key_range_statement, select_statement, RollupSelect};
+use crate::rollup::{key_range_statement, select_statement, KeySelector, RollupSelect};
 use crate::LedgerDb;
 
 /// 2026-01-01 00:00 UTC in milliseconds, the first request's arrival.
@@ -346,18 +347,25 @@ fn walks(plan: &[String], names: &[&str]) -> bool {
 #[test]
 fn the_session_attempts_read_keeps_its_plan_under_statistics() {
     let (_dir, db) = seeded();
-    let (sql, binds) =
-        session_attempts_statement(FROM, TO, &["s007".into(), "s008".into()], &[], &[]);
-    let steps = plan(&db, &sql, params_from_iter(binds));
-    assert!(
-        seeks(
-            &steps,
-            "requests_session",
-            &["session_id=?", "received_at>?", "received_at<?"]
-        ) && seeks(&steps, "sqlite_autoindex_attempts_1", &["request_id=?"])
-            && !walks(&steps, &["attempts", "a", "requests", "r"]),
-        "{steps:?}"
-    );
+    let sessions = ["s007".to_string(), "s008".to_string()];
+    // The key that holds nearly every row, which would draw the planner to its own index over its whole range.
+    let main = [KeySelector {
+        key_id: "main".into(),
+        key_generation: Some(KEY_GENERATION),
+    }];
+    for keys in [&[][..], &main[..]] {
+        let (sql, binds) = session_attempts_statement(FROM, TO, &sessions, keys, &[]);
+        let steps = plan(&db, &sql, params_from_iter(binds));
+        assert!(
+            seeks(
+                &steps,
+                "requests_session",
+                &["session_id=?", "received_at>?", "received_at<?"]
+            ) && seeks(&steps, "sqlite_autoindex_attempts_1", &["request_id=?"])
+                && !walks(&steps, &["attempts", "a", "requests", "r"]),
+            "{keys:?}: {steps:?}"
+        );
+    }
 }
 
 #[test]

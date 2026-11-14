@@ -6080,6 +6080,181 @@ fn a_session_series_under_a_key_or_a_pool_ranks_and_prices_its_requests_alone() 
     );
 }
 
+/// On six-hour buckets a range that starts inside a bucket reads back to the bucket's edge, and a session whose tokens
+/// lie there alone leaves the answer, so it takes none of the twenty slots: the twenty sessions of the range itself stay.
+#[test]
+fn a_session_with_tokens_before_the_ranges_first_hour_alone_takes_no_slot_of_the_twenty() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    // Each of the twenty carries a million tokens at 20:00, inside the range.
+    for n in 0..20 {
+        plant_burn(
+            &db,
+            &format!("r-b-{n:02}"),
+            "a",
+            MAX_20X,
+            "claude-opus-5-5",
+            &format!("s-b-{n:02}"),
+        );
+    }
+    // Two million tokens at 18:30, after the six-hour edge at 18:00 and before the range's first hour, 19:00.
+    let early = WEEKDAY_OFF_PEAK - 90 * 60_000;
+    db.insert_request(
+        &RequestRecord {
+            id: "r-early".into(),
+            received_at: early,
+            finished_at: Some(early + 500),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            session_id: Some("s-early".into()),
+            canonical_model: "claude-opus-5-5".into(),
+            model: "claude-opus-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r-early".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::Oauth,
+            started_at: early,
+            finished_at: Some(early + 500),
+            outcome: "succeeded".into(),
+            input_tokens: Some(2_000_000),
+            tier: Some(MAX_20X.into()),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let filter = SeriesFilter {
+        from: WEEKDAY_OFF_PEAK - 30 * 60_000,
+        to: WEEKDAY_OFF_PEAK + 3_600_000,
+        bucket_seconds: 6 * 3_600,
+        ..SeriesFilter::default()
+    };
+    let ids: Vec<String> = db
+        .read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &PlanTables::shipped(),
+                &PRICES,
+                &filter,
+                &LiveKeys::default(),
+                NOW,
+            )
+        })
+        .unwrap()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect();
+    assert_eq!(
+        (ids.len(), ids.contains(&"s-early".to_string())),
+        (20, false),
+        "the twenty sessions of the range, and not the early one: {ids:?}"
+    );
+}
+
+/// The reserved key id and the reserved pool name the requests that store no key and no pool, which the requests table
+/// keeps as NULL, and a request that stores both stays out. Under the account grouping the reserved key's rollup rows
+/// match at the generation they carry.
+#[tokio::test]
+async fn the_reserved_key_and_pool_read_the_requests_that_store_neither() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let plant = |id: &str, account: &str, key: Option<&str>, pool: Option<&str>| {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: WEEKDAY_OFF_PEAK,
+                finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+                key_id: key.map(Into::into),
+                pool_id: pool.map(Into::into),
+                session_id: Some(format!("s-{id}")),
+                canonical_model: "claude-opus-5-5".into(),
+                model: "claude-opus-5-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: account.into(),
+                account_kind: AccountKind::Oauth,
+                started_at: WEEKDAY_OFF_PEAK,
+                finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+                outcome: "succeeded".into(),
+                input_tokens: Some(1_000),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    };
+    plant("neither", "a", None, None);
+    plant("both", "b", Some("k"), Some("p"));
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let filter = |keys: Vec<String>, pools: Vec<String>| SeriesFilter {
+        from: hour * 1_000,
+        to: (hour + 3_600) * 1_000,
+        bucket_seconds: 3_600,
+        keys,
+        pools,
+        ..SeriesFilter::default()
+    };
+    let tables = PlanTables::shipped();
+    let sessions = |filter: SeriesFilter| -> Vec<String> {
+        db.read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &tables,
+                &PRICES,
+                &filter,
+                &LiveKeys::default(),
+                NOW,
+            )
+        })
+        .unwrap()
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect()
+    };
+    assert_eq!(
+        sessions(filter(vec![UNATTRIBUTED.into()], Vec::new())),
+        ["s-neither"],
+        "the reserved key reads the request that stores no key"
+    );
+    assert_eq!(
+        sessions(filter(Vec::new(), vec![UNATTRIBUTED.into()])),
+        ["s-neither"],
+        "the reserved pool reads the request that stores no pool"
+    );
+    let accounts: Vec<String> = burn_groups_paged(
+        &db,
+        &tables,
+        &PRICES,
+        &filter(vec![UNATTRIBUTED.into()], Vec::new()),
+        GroupBy::Account,
+        &LiveKeys::default(),
+        &[],
+        NOW,
+    )
+    .await
+    .unwrap()
+    .into_iter()
+    .map(|(group, _, _)| group)
+    .collect();
+    assert_eq!(
+        accounts,
+        ["a"],
+        "the reserved key's rollup rows under the account grouping"
+    );
+}
+
 /// The share cases' cost model.
 fn share_tables() -> PlanTables {
     phoebis_ledger::test_tables::tables(

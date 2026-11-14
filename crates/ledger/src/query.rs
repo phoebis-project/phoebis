@@ -5145,6 +5145,8 @@ struct SessionAttempt {
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
 /// statement the read runs. A request is admitted within an hour of any attempt's start, so the request's own index
 /// carries the range. The named keys and pools price their own requests' attempts alone, as `session_scope` binds them.
+/// The index is named: under statistics a named key that holds most requests draws the planner to `requests_key`,
+/// which reads that key's whole range for the rows of twenty sessions.
 pub(crate) fn session_attempts_statement(
     from: i64,
     to: i64,
@@ -5167,7 +5169,7 @@ pub(crate) fn session_attempts_statement(
     let scoped: String = clauses.iter().map(|c| format!(" AND {c}")).collect();
     let sql = format!(
         "SELECT r.session_id, a.account_id, a.started_at, {PRICED_ATTEMPT_COLUMNS} \
-         FROM attempts a JOIN requests r ON r.id = a.request_id \
+         FROM attempts a JOIN requests r INDEXED BY requests_session ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?{scoped}"
     );
@@ -5390,9 +5392,11 @@ pub fn session_burn_series(
     let Some(keys) = filter.key_select(live) else {
         return Ok(Vec::new());
     };
+    // The ranking counts the attempts the gate below counts, so a session whose tokens lie in the first bucket's
+    // reach-back alone takes none of the slots, while the attempts read keeps the reach-back in the first point.
     let sessions = top_sessions_by_tokens(
         conn,
-        first * 1_000,
+        from_hour * 1_000,
         last * 1_000,
         SESSION_BURN_LIMIT,
         &filter.accounts,
