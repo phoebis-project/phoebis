@@ -449,6 +449,7 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         response_chunks: None,
         held: None,
         diagnostics: None,
+        thinking_diagnostics: None,
         message_id: None,
         skipped_events: 0,
         interruption: None,

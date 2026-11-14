@@ -4,9 +4,10 @@
 //! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
 //! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
 //! `attempts.previous_input_tokens`, `requests.cache_marker`, `requests.input_transformations`,
-//! `events.from_account_id`, `rollups_hourly.client_canceled`, `rollups_hourly.input_transformations_json` and
-//! `rollups_hourly.uncacheable`, filling the stored events' move sources and pools, filling the client's cancels from
-//! the stored rollups' errors maps, and deleting the stored account hours that hold nothing.
+//! `requests.thinking_diagnostics_source`, `events.from_account_id`, `rollups_hourly.client_canceled`,
+//! `rollups_hourly.input_transformations_json` and `rollups_hourly.uncacheable`, filling the stored events' move
+//! sources and pools, filling the client's cancels from the stored rollups' errors maps, and deleting the stored
+//! account hours that hold nothing.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -449,7 +450,8 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 /// stored hour reads the empty map, since no attempt stored before the step carries the member.
 /// `attempts.previous_input_tokens` holds the size the selection handed on, `requests.cache_marker` the selection's
 /// marker fact and `rollups_hourly.uncacheable` the uncached requests whose body marked no cache, each with no fill,
-/// since no stored row holds the fact.
+/// since no stored row holds the fact. `requests.thinking_diagnostics_source` holds who sent the thinking-binding beta,
+/// null on a row stored before the step.
 const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
     ALTER TABLE requests ADD COLUMN input_transformations TEXT; \
@@ -475,7 +477,8 @@ const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE rollups_hourly ADD COLUMN input_transformations_json TEXT NOT NULL DEFAULT '{}'; \
     ALTER TABLE attempts ADD COLUMN previous_input_tokens INTEGER; \
     ALTER TABLE requests ADD COLUMN cache_marker INTEGER; \
-    ALTER TABLE rollups_hourly ADD COLUMN uncacheable INTEGER NOT NULL DEFAULT 0";
+    ALTER TABLE rollups_hourly ADD COLUMN uncacheable INTEGER NOT NULL DEFAULT 0; \
+    ALTER TABLE requests ADD COLUMN thinking_diagnostics_source TEXT";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

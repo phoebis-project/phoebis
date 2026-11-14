@@ -1206,6 +1206,7 @@ fn complete_event(id: &str) -> BusEvent {
         response_chunks: None,
         held: None,
         diagnostics: None,
+        thinking_diagnostics: None,
         message_id: None,
         skipped_events: 0,
         interruption: None,

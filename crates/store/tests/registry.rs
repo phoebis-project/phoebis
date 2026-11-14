@@ -87,9 +87,13 @@ fn rename(
 }
 
 /// The eighth step taken back on a file this build wrote, which every case that takes a file back past version 8
-/// runs first, since the step refuses its table as a duplicate on reopen.
+/// runs first, since the step refuses its table and its pool column as duplicates on reopen.
 fn eighth_step_taken_back(conn: &rusqlite::Connection) {
-    conn.execute_batch("DROP TABLE model_week_hours;").unwrap();
+    conn.execute_batch(
+        "DROP TABLE model_week_hours;
+         ALTER TABLE pools DROP COLUMN thinking_diagnostics;",
+    )
+    .unwrap();
 }
 
 /// The seventh step taken back on a file this build wrote, which every case that takes a file back past version 7
@@ -395,6 +399,78 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
             .collect::<Vec<_>>(),
         ["worker"],
         "the agent saved under the released cause leaves and the companion's released agent stands"
+    );
+}
+
+#[test]
+fn a_registry_before_the_eighth_step_lists_its_stored_pool_with_the_thinking_switch_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    {
+        let store = Store::open(&path, &key).unwrap();
+        store
+            .insert_pool(
+                &PoolRow {
+                    label: "Main".into(),
+                    ..PoolRow::new("main")
+                },
+                "test",
+            )
+            .unwrap();
+    }
+    // The file as a version-7 build left it: the pool stored, the eighth step taken back and the marker at 7.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    eighth_step_taken_back(&conn);
+    conn.execute_batch("UPDATE meta SET value = '7' WHERE key = 'schema_version';")
+        .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        store
+            .pools()
+            .unwrap()
+            .iter()
+            .map(|p| (p.id.as_str(), p.thinking_diagnostics))
+            .collect::<Vec<_>>(),
+        [("main", false)],
+        "a pool stored before the step reads the switch off"
+    );
+}
+
+#[test]
+fn a_pool_inserted_at_one_instant_and_updated_at_another_reads_both_stamps_and_its_first_incarnation(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap();
+    let instant = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(1_000_000));
+    let cell = instant.clone();
+    store.set_clock(std::sync::Arc::new(move || {
+        cell.load(std::sync::atomic::Ordering::SeqCst)
+    }));
+    let row = PoolRow {
+        label: "Main".into(),
+        ..PoolRow::new("main")
+    };
+    store.insert_pool_with_members(&row, None, "test").unwrap();
+    instant.store(2_000_000, std::sync::atomic::Ordering::SeqCst);
+    store
+        .update_pool_with_members_and_guardrails(
+            &PoolRow {
+                label: "Renamed".into(),
+                ..row
+            },
+            1_000_000,
+            None,
+            None,
+            "test",
+        )
+        .unwrap();
+    let stored = store.pool("main").unwrap().unwrap();
+    assert_eq!(
+        (stored.created_at, stored.updated_at, stored.incarnation),
+        (1_000_000, 2_000_000, 1),
+        "the insert stamps the first instant, the update the second, and a new id holds its first incarnation"
     );
 }
 

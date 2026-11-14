@@ -716,6 +716,9 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         auto_mode,
         held: complete.held,
         diagnostics_source: complete.diagnostics.map(|s| s.as_str().to_string()),
+        thinking_diagnostics_source: complete
+            .thinking_diagnostics
+            .map(|s| s.as_str().to_string()),
         guardrail_id: observed.guardrail_id,
         guardrails: observed
             .guardrails
@@ -941,6 +944,7 @@ mod tests {
             response_chunks: None,
             held: None,
             diagnostics: None,
+            thinking_diagnostics: None,
             message_id: None,
             skipped_events: 0,
             interruption: None,
@@ -999,6 +1003,7 @@ mod tests {
             response_chunks,
             held: None,
             diagnostics: None,
+            thinking_diagnostics: None,
             message_id: None,
             skipped_events: 0,
             interruption: None,
@@ -1935,6 +1940,30 @@ mod tests {
                 "{source:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_request_row_files_the_thinking_beta_source_apart_from_the_diagnostics_source() {
+        let mut a = Assembler::new(clock());
+        a.observe(observed("r1", Some("k")));
+        a.observe(selected("r1", 1, "a", 1_010));
+        a.observe(head("r1", 1, 200, AttemptOutcome::Succeeded, 1_060));
+        let Event::RequestComplete(mut done) =
+            complete_with_source("r1", Some(DiagnosticsSource::Client))
+        else {
+            unreachable!()
+        };
+        done.thinking_diagnostics = Some(DiagnosticsSource::Router);
+        let records = a.observe(Event::RequestComplete(done));
+        let request = request_of(&records);
+        assert_eq!(
+            (
+                request.diagnostics_source.as_deref(),
+                request.thinking_diagnostics_source.as_deref()
+            ),
+            (Some("client"), Some("router")),
+            "each source files under its own column"
+        );
     }
 
     #[test]

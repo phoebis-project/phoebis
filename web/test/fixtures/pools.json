@@ -82,6 +82,7 @@
           }
         },
         "cache_diagnostics": false,
+        "thinking_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
         "created_at": 1791721000000,
@@ -479,6 +480,7 @@
           }
         },
         "cache_diagnostics": false,
+        "thinking_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 0,
         "created_at": 1791721000000,

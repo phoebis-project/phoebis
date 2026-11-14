@@ -221,6 +221,9 @@ pub struct RelayOutcome {
     /// Whether that member's `previous_message_id` named a message. A null `diagnostics` member in the answer reads
     /// `none` only then, since a member that named no message gave the upstream nothing to compare.
     pub diagnostics_named: bool,
+    /// The source of the thinking-binding beta on the answering leg's head, `None` for an answer the relay built
+    /// before any leg and for a leg whose head went without it.
+    pub thinking_diagnostics: Option<DiagnosticsSource>,
     /// The obstacle the keepalive holds a probe's agent on rather than pausing it as an exhausted pool, `None`
     /// otherwise.
     pub obstacle: Option<ProbeObstacle>,
@@ -868,6 +871,7 @@ impl Trace {
                 .as_ref()
                 .and_then(|h| serde_json::to_string(h).ok()),
             diagnostics: outcome.diagnostics,
+            thinking_diagnostics: outcome.thinking_diagnostics,
             message_id,
             skipped_events,
             interruption,
@@ -964,6 +968,7 @@ impl Drop for CompletionGuard {
                 .held()
                 .and_then(|h| serde_json::to_string(&h).ok()),
             diagnostics: None,
+            thinking_diagnostics: None,
             message_id: None,
             skipped_events: 0,
             interruption: None,
@@ -1146,6 +1151,25 @@ fn restore_with<'a>(
 /// edit.
 fn latches(trace: &Trace) -> bool {
     trace.kind == Kind::Inference
+}
+
+/// Whether the caller's `anthropic-beta` list names `beta`, read off the lines the head builder merges (the recorded
+/// head where one stands, else the map) and split as it splits them, so a token the builder leaves as sent reads as
+/// the caller's.
+fn caller_lists_beta(caller: &HeaderMap, original: Option<&OriginalHead>, beta: &str) -> bool {
+    let names = |line: &str| line.split(',').any(|token| token.trim() == beta);
+    match original {
+        Some(head) => head
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+            .any(|(_, line)| names(line)),
+        None => caller
+            .get_all("anthropic-beta")
+            .iter()
+            .filter_map(|line| line.to_str().ok())
+            .any(names),
+    }
 }
 
 /// The TTL a renewal names when neither a rewrite nor a marker of the client's own says one.
@@ -1904,6 +1928,20 @@ impl Relay {
         // The same raw lookup `insert_diagnostics` makes, so the recorded source and the edit never disagree.
         let client_diagnostics =
             trace.kind != Kind::CountTokens && members.object_member_span("diagnostics").is_some();
+        // The markers and the tools gate the cache member alone, so this gate reads neither.
+        let thinking_diagnostics = pool.is_some_and(|p| p.thinking_diagnostics)
+            && trace.kind != Kind::CountTokens
+            && facts
+                .shape
+                .thinking_type
+                .as_deref()
+                .is_some_and(|kind| kind != "disabled");
+        // A count's caller is read too, since a token it sent is the client's on any request.
+        let client_thinking_diagnostics = caller_lists_beta(
+            &parts.headers,
+            original,
+            Injected::ThinkingBindingBeta.wire_name(),
+        );
         let portable = facts.portable;
         let target = parts
             .uri
@@ -1935,6 +1973,7 @@ impl Relay {
             client_diagnostics,
             client_gzip,
             client_hash,
+            client_thinking_diagnostics,
             client_version,
             deadline,
             diagnostics,
@@ -1955,6 +1994,7 @@ impl Relay {
             retry_in_place: Duration::from_secs(failover.retry_in_place_seconds),
             subagent,
             target: &target,
+            thinking_diagnostics,
             trace: &trace,
             turn,
             wait_bound: deadline
@@ -2577,6 +2617,9 @@ impl Relay {
             if admitted.diagnostics && !skip.contains(&Injected::CacheDiagnosisBeta) {
                 inject_betas.push(Injected::CacheDiagnosisBeta);
             }
+            if admitted.thinking_diagnostics && !skip.contains(&Injected::ThinkingBindingBeta) {
+                inject_betas.push(Injected::ThinkingBindingBeta);
+            }
             if ttl == Some(CacheTtl::OneHour) {
                 inject_betas.push(Injected::ExtendedTtlBeta);
             }
@@ -2729,6 +2772,15 @@ impl Relay {
                     &["diagnostics", "previous_message_id"],
                 )
                 .is_some();
+            // The head builder appends the beta only where the caller's list lacks it, so the two sources never meet,
+            // and a pass rebuilt after a strip of the beta asks for it no more and reads none.
+            let thinking_diagnostics = if head.injected.contains(&Injected::ThinkingBindingBeta) {
+                Some(DiagnosticsSource::Router)
+            } else if admitted.client_thinking_diagnostics {
+                Some(DiagnosticsSource::Client)
+            } else {
+                None
+            };
             // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
             admitted.trace.on_leg(*attempt, &account.id);
             let responding = Responding {
@@ -2760,6 +2812,7 @@ impl Relay {
                 replayed,
                 selection,
                 seq,
+                thinking_diagnostics,
                 ticket,
             };
             let request = RawRequest {
@@ -2947,6 +3000,7 @@ impl Relay {
         outcome.overage_in_use = reading.unified.as_ref().and_then(|u| u.overage_in_use);
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
+        outcome.thinking_diagnostics = ctx.thinking_diagnostics;
         // The drop guard takes the word only at `Responding::answers`, since the leg may still retry or fail over past
         // this head.
         outcome.judged = ctx.selection.judged;
@@ -4166,9 +4220,10 @@ impl Relay {
             ctx.cache_ttl_ms,
         );
         // The upstream compared this leg's body before the account left, so the canceled completion names the
-        // member's source as the head's outcome does.
+        // member's source as the head's outcome does, and the beta's beside it.
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
+        outcome.thinking_diagnostics = ctx.thinking_diagnostics;
         outcome.judged = ctx.selection.judged;
         self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, outcome)
             .await
@@ -4579,6 +4634,8 @@ struct Responding<'a> {
     /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
     /// leg answers under it.
     seq: u32,
+    /// The source of the thinking-binding beta on this pass's head, read for the completion event.
+    thinking_diagnostics: Option<DiagnosticsSource>,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
 }
@@ -4931,6 +4988,8 @@ struct Admitted<'a> {
     client_gzip: bool,
     /// The client stamped a hash the drift check verified, which every leg re-signs (`NativeEdit::client_hash`).
     client_hash: bool,
+    /// The caller's `anthropic-beta` list carries the thinking-binding beta, which the head builder leaves as sent.
+    client_thinking_diagnostics: bool,
     client_version: Option<String>,
     /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
@@ -4978,6 +5037,10 @@ struct Admitted<'a> {
     /// answer under it that stops with `end_turn` ends the agent.
     subagent: bool,
     target: &'a str,
+    /// Whether a leg asks for the thinking-binding beta, resolved at admission: the pool's `thinking_diagnostics`
+    /// switch is on, the request is not a `count_tokens` request, and the body's `thinking.type` is a string other
+    /// than `disabled`.
+    thinking_diagnostics: bool,
     trace: &'a Trace,
     /// The request's class is a turn's, `main` or `subagent`, read once at admission and carried to every leg's
     /// renewal: a client stream's end under it is the turn's end the router notes for the classifier call that follows.
@@ -5053,6 +5116,7 @@ fn relay_outcome(
         usage_based: false,
         diagnostics: None,
         diagnostics_named: false,
+        thinking_diagnostics: None,
         obstacle: None,
         held: trace.held(),
         judged: None,

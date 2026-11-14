@@ -1199,6 +1199,157 @@ async fn count_tokens_gets_neither_the_member_nor_the_beta_under_the_switch() {
     up.shutdown().await;
 }
 
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+const REFUSED_THINKING_BETA: &str = r#"{"type":"error","error":{"type":"invalid_request_error","message":"Unexpected value(s) `thinking-binding-controls-2026-08-01` for the `anthropic-beta` header."}}"#;
+
+fn carries_the_thinking_beta(r: &fake_upstream::RecordedRequest) -> bool {
+    beta_list(r).iter().any(|t| t == THINKING_BINDING_BETA)
+}
+
+/// `request_for`'s turn under `session` with its body's `thinking` set to `{"type": kind}`.
+async fn thinking_turn(kind: &str, session: &str) -> Request<Body> {
+    let (parts, body) = request_for(KEY, SONNET, session).into_parts();
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&body.collect().await.unwrap().to_bytes()).unwrap();
+    value["thinking"] = serde_json::json!({ "type": kind });
+    Request::from_parts(parts, Body::from(serde_json::to_vec(&value).unwrap()))
+}
+
+/// One OAuth account answering 200 under a pool whose thinking switch is on and whose cache switch is off.
+async fn under_the_thinking_switch(up: &FakeUpstream, bus: Bus) -> Harness {
+    harness_with_bus(
+        up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec {
+            thinking_diagnostics: true,
+            ..Default::default()
+        },
+        bus,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn an_adaptive_turn_under_the_thinking_switch_alone_leaves_with_the_thinking_beta_and_no_cache_diagnostics(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = under_the_thinking_switch(&up, bus).await;
+    let (_, complete) = completed_turn(&h, &mut sub, thinking_turn("adaptive", "s1").await).await;
+    let sent = &up.requests()[0];
+    assert!(
+        carries_the_thinking_beta(sent),
+        "the router adds the beta: {:?}",
+        beta_header(sent)
+    );
+    assert!(
+        !carries_the_beta(sent) && !has_diagnostics(&sent.body),
+        "the cache switch is off, so neither its beta nor its member goes out"
+    );
+    assert_eq!(
+        complete.thinking_diagnostics,
+        Some(DiagnosticsSource::Router)
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_disabled_turn_under_the_thinking_switch_leaves_without_the_thinking_beta() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = under_the_thinking_switch(&up, bus).await;
+    let (_, complete) = completed_turn(&h, &mut sub, thinking_turn("disabled", "s1").await).await;
+    assert!(
+        !carries_the_thinking_beta(&up.requests()[0]),
+        "a turn that does not think gets no beta"
+    );
+    assert_eq!(complete.thinking_diagnostics, None);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_400_naming_the_thinking_beta_strips_it_alone_retries_once_on_the_same_account_and_latches(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_THINKING_BETA));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            thinking_diagnostics: true,
+            ..Default::default()
+        },
+        bus,
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, SONNET, "s1"))
+        .await
+        .unwrap();
+    let status = resp.status();
+    resp.into_body().collect().await.unwrap();
+    let sent = up.requests();
+    assert!(
+        carries_the_thinking_beta(&sent[0]),
+        "the first pass carries the router's beta"
+    );
+    assert_eq!(status, 200);
+    assert_eq!(sent.len(), 2, "the strip retries once");
+    assert_eq!(
+        sent[0].credential(),
+        sent[1].credential(),
+        "both passes went out on the same account"
+    );
+    assert!(
+        !carries_the_thinking_beta(&sent[1]),
+        "the retry carries no thinking beta"
+    );
+    assert!(
+        carries_the_beta(&sent[1]) && has_diagnostics(&sent[1].body),
+        "the cache beta and its member stand on the retry"
+    );
+    let complete = drain_until_complete(&mut sub)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .expect("the request completed");
+    assert_eq!(
+        (complete.diagnostics, complete.thinking_diagnostics),
+        (Some(DiagnosticsSource::Router), None),
+        "the answering pass carried the router's member and no thinking beta"
+    );
+
+    completed_turn(&h, &mut sub, request_for(KEY, SONNET, "s1")).await;
+    let sent = up.requests();
+    assert_eq!(
+        sent.len(),
+        3,
+        "the latch skips straight to one upstream request"
+    );
+    assert!(!carries_the_thinking_beta(&sent[2]));
+    up.shutdown().await;
+}
+
 /// A probe replays its recipe's member, which from a chain's second probe on names a message older than the upstream
 /// keeps, so no probe names one, whether the recipe carried the client's member or the router inserts it.
 #[tokio::test]

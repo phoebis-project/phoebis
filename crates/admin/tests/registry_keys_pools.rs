@@ -2028,6 +2028,57 @@ async fn a_null_diagnostics_switch_is_refused_and_the_stored_one_stands() {
 }
 
 #[tokio::test]
+async fn a_pool_created_with_the_thinking_switch_on_keeps_the_cache_switch_off_and_refuses_a_null_patch(
+) {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let switches = |pool: &serde_json::Value| {
+        (
+            pool["thinking_diagnostics"].as_bool(),
+            pool["cache_diagnostics"].as_bool(),
+        )
+    };
+    let created = json(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"thinking","label":"Thinking","thinking_diagnostics":true}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        switches(&created),
+        (Some(true), Some(false)),
+        "the create stored the thinking switch alone: {created}"
+    );
+    let refused = patch(
+        &app,
+        "/admin/pools/thinking",
+        r#"{"thinking_diagnostics":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 400, "a patch sending null is refused");
+    assert_eq!(
+        json(refused).await["error"],
+        "thinking_diagnostics must be true or false"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    assert_eq!(
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["id"].as_str().unwrap(), switches(p)))
+            .collect::<Vec<_>>(),
+        [("thinking", (Some(true), Some(false)))],
+        "the refused patch left the stored switches as they were"
+    );
+}
+
+#[tokio::test]
 async fn a_member_with_an_unknown_field_is_refused_rather_than_silently_dropped() {
     let (app, _up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;

@@ -79,8 +79,9 @@ impl Classifier {
     }
 }
 
-/// Who put `diagnostics.previous_message_id` on the body the upstream compared: the client's own member, or the
-/// relay's insertion under the pool's `cache_diagnostics` switch.
+/// Who put a diagnostics feature on the request the upstream answered, the client or the relay: the
+/// `diagnostics.previous_message_id` member under the pool's `cache_diagnostics` switch, and the thinking-binding beta
+/// under its `thinking_diagnostics` switch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DiagnosticsSource {
     Client,
@@ -513,6 +514,10 @@ pub struct RequestComplete {
     /// the gate refused it, the switch is off, a strip after a 400 removed it, the request is a token count, or
     /// no leg answered.
     pub diagnostics: Option<DiagnosticsSource>,
+    /// The source of the thinking-binding beta on the answering leg's head, `None` where the head went without it:
+    /// the gate refused it, the switch is off, a strip after a 400 removed it, or no leg answered. A token count
+    /// reads `Client` where the caller sent the beta.
+    pub thinking_diagnostics: Option<DiagnosticsSource>,
     /// The `id` of the message the committed answer carried (`message_start`, or the JSON document), as the
     /// upstream sent it; `None` for a local answer, a cut before the first event, or an answer without one.
     pub message_id: Option<String>,

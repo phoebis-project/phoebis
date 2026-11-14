@@ -71,6 +71,7 @@ pub enum Injected {
     ExtendedTtlBeta,
     PrevReq,
     PromptId,
+    ThinkingBindingBeta,
 }
 
 impl Injected {
@@ -84,6 +85,7 @@ impl Injected {
             Injected::ExtendedTtlBeta => "extended-cache-ttl-2025-04-11",
             Injected::PrevReq => "cc_prev_req",
             Injected::PromptId => "cc_prompt_id",
+            Injected::ThinkingBindingBeta => "thinking-binding-controls-2026-08-01",
         }
     }
 }

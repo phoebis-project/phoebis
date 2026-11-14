@@ -1,6 +1,7 @@
 //! One struct per ledger table, its fields in the table's column order but for a few members kept beside the ones they
-//! belong with: `RequestRecord`'s truncation flag follows `bodies_captured`, `client_contract` follows `client_drift`
-//! and `classifier` follows `auto_mode`, and `row_to_request` reads each by its column's index.
+//! belong with: `RequestRecord`'s truncation flag follows `bodies_captured`, `client_contract` follows `client_drift`,
+//! `classifier` follows `auto_mode` and `thinking_diagnostics_source` follows `diagnostics_source`, and
+//! `row_to_request` reads each by its column's index.
 //! `RequestRecord::guardrails` is the one member no column holds: its rows live in the child table
 //! `request_guardrails`. `ServingFacts` is the request row's nested block of its serving attempt's columns, read into
 //! the one member `RequestRecord::serving`. `InputTransformation` holds one key's entry of the JSON object the two
@@ -108,6 +109,9 @@ pub struct RequestRecord {
     /// `client` when the client's body carried its own `diagnostics` member, `router` when the relay inserted it,
     /// `None` for a body that went without one and for a row from before the column.
     pub diagnostics_source: Option<String>,
+    /// `client` when the caller's `anthropic-beta` list carried the thinking-binding beta, `router` when the relay
+    /// added it, `None` for a request that went without it and for a row from before the column.
+    pub thinking_diagnostics_source: Option<String>,
     /// The guardrail that blocked the request, `None` where none did and on a row from before the column.
     pub guardrail_id: Option<String>,
     /// Every guardrail that matched, in evaluation order, empty on a row from before the table.

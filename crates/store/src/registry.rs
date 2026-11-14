@@ -261,6 +261,7 @@ pub struct PoolRow {
     pub slow_down: SlowDown,
     pub cache_ttl_json: String,
     pub cache_diagnostics: bool,
+    pub thinking_diagnostics: bool,
     /// Whether the client's server-side auto mode checks travel; off, the relay drops them so the client
     /// falls back to its own classifier requests.
     pub auto_mode_server: bool,
@@ -294,6 +295,7 @@ impl PoolRow {
             slow_down: SlowDown::default(),
             cache_ttl_json: "{}".into(),
             cache_diagnostics: false,
+            thinking_diagnostics: false,
             auto_mode_server: true,
             affinity: Affinity::default(),
             incarnation: 1,
@@ -819,7 +821,7 @@ fn json_text<T: serde::de::DeserializeOwned>(raw: &str, idx: usize) -> rusqlite:
     })
 }
 
-/// The 33 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
+/// The 34 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
 /// them in this order too, so `row_to_pool` indexes each column by its bind.
 macro_rules! pool_columns {
     () => {
@@ -828,7 +830,8 @@ macro_rules! pool_columns {
          load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, \
          overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, \
          subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, \
-         slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds"
+         slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, \
+         thinking_diagnostics"
     };
 }
 
@@ -851,7 +854,7 @@ macro_rules! guardrail_params {
     };
 }
 
-/// The binds `?1` to `?33` the pool insert and the pool update share, in their column order, then each statement's
+/// The binds `?1` to `?34` the pool insert and the pool update share, in their column order, then each statement's
 /// own tail.
 macro_rules! pool_params {
     ($row:ident, $($tail:expr),+ $(,)?) => {
@@ -889,6 +892,7 @@ macro_rules! pool_params {
             $row.slow_down.slow_down_hold_seconds,
             $row.failover.return_to_plan,
             $row.failover.return_to_plan_dwell_seconds,
+            $row.thinking_diagnostics,
             $($tail),+
         ]
     };
@@ -1011,7 +1015,7 @@ impl Store {
                 "INSERT INTO pools (",
                 pool_columns!(),
                 ", created_at, updated_at, incarnation) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?34, ?35)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?35, ?36)"
             ),
             pool_params!(row, now, incarnation as i64),
         )
@@ -2050,7 +2054,7 @@ static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "UPDATE pools SET {set}, updated_at = ?34 WHERE id = ?1 AND updated_at = ?35 AND incarnation = ?36"
+        "UPDATE pools SET {set}, updated_at = ?35 WHERE id = ?1 AND updated_at = ?36 AND incarnation = ?37"
     )
 });
 
@@ -2118,8 +2122,8 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
         body_capture_hours: r.get(9)?,
-        created_at: r.get(33)?,
-        updated_at: r.get(34)?,
+        created_at: r.get(34)?,
+        updated_at: r.get(35)?,
         prefer_subscription: r.get(10)?,
         shedding: Shedding {
             shed_cap: r.get(11)?,
@@ -2144,6 +2148,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         },
         cache_ttl_json: r.get(21)?,
         cache_diagnostics: r.get::<_, bool>(22)?,
+        thinking_diagnostics: r.get(33)?,
         affinity: Affinity {
             mode: r.get(23)?,
             subagent_placement: r.get(24)?,
@@ -2151,7 +2156,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(26)? as u64,
         },
         auto_mode_server: r.get(27)?,
-        incarnation: r.get::<_, i64>(35)? as u64,
+        incarnation: r.get::<_, i64>(36)? as u64,
     })
 }
 
@@ -2260,6 +2265,7 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
         "return_to_plan_dwell_seconds": row.failover.return_to_plan_dwell_seconds,
         "cache_ttl": serde_json::from_str::<serde_json::Value>(&row.cache_ttl_json).unwrap_or(serde_json::Value::Null),
         "cache_diagnostics": row.cache_diagnostics,
+        "thinking_diagnostics": row.thinking_diagnostics,
         "affinity_mode": row.affinity.mode.as_str(),
         "subagent_placement": row.affinity.subagent_placement.as_str(),
         "session_placement": row.affinity.session_placement.as_str(),

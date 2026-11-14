@@ -182,6 +182,7 @@ pub struct PoolSpec {
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
     pub strategy: Strategy,
+    pub thinking_diagnostics: bool,
 }
 
 impl Default for PoolSpec {
@@ -196,6 +197,7 @@ impl Default for PoolSpec {
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
             strategy: Strategy::Priority,
+            thinking_diagnostics: false,
         }
     }
 }
@@ -834,6 +836,7 @@ async fn build(
                     failover: pool.failover,
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
+                    thinking_diagnostics: pool.thinking_diagnostics,
                     auto_mode_server: pool.auto_mode_server,
                     created_at: NOW,
                     updated_at: NOW,

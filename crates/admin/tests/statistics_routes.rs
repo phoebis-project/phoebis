@@ -5011,10 +5011,12 @@ async fn an_empty_filter_field_on_the_request_log_lists_every_request() {
 async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_effort_and_class() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
+    // Each row's thinking source differs from its cache source, so an answer read off the other column shows.
     let planted = [
         (
             "d-client",
             Some("client"),
+            Some("router"),
             Some("high"),
             Some("main"),
             "none",
@@ -5025,25 +5027,30 @@ async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_ef
             Some("router"),
             None,
             None,
+            None,
             "messages_changed",
             None,
         ),
         (
             "d-none",
             None,
+            Some("client"),
             Some("ultra"),
             Some("bad class"),
             "none",
             None,
         ),
     ];
-    for ((id, source, effort, class, reason, dropped), age) in planted.into_iter().zip(1..) {
+    for ((id, source, thinking, effort, class, reason, dropped), age) in
+        planted.into_iter().zip(1..)
+    {
         let mut row = record(id, common::NOW - age * 1_000, "claude-sonnet-5", "s1");
         if let Record::Request {
             request, attempts, ..
         } = &mut row
         {
             request.diagnostics_source = source.map(String::from);
+            request.thinking_diagnostics_source = thinking.map(String::from);
             request.effort = effort.map(String::from);
             request.request_class = class.map(String::from);
             attempts[0].cache_miss_reason = Some(reason.into());
@@ -5061,25 +5068,44 @@ async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_ef
     })
     .await;
     let words = [
-        ("d-client", serde_json::json!("client")),
-        ("d-router", serde_json::json!("router")),
-        ("d-none", serde_json::Value::Null),
+        (
+            "d-client",
+            serde_json::json!("client"),
+            serde_json::json!("router"),
+        ),
+        (
+            "d-router",
+            serde_json::json!("router"),
+            serde_json::Value::Null,
+        ),
+        (
+            "d-none",
+            serde_json::Value::Null,
+            serde_json::json!("client"),
+        ),
     ];
     let listed = json(get(&parts.app, "/admin/requests", Some(&cookie)).await).await;
     let rows = listed["requests"].as_array().unwrap();
     assert_eq!(rows.len(), words.len(), "{listed}");
-    for (row, (id, word)) in rows.iter().zip(&words) {
+    for (row, (id, word, thinking)) in rows.iter().zip(&words) {
         assert_eq!(
-            (row["id"].as_str(), row.get("diagnostics_source")),
-            (Some(*id), Some(word)),
-            "the list answers each row's source"
+            (
+                row["id"].as_str(),
+                row.get("diagnostics_source"),
+                row.get("thinking_diagnostics_source")
+            ),
+            (Some(*id), Some(word), Some(thinking)),
+            "the list answers each row's two sources"
         );
         let shown =
             json(get(&parts.app, &format!("/admin/requests/{id}"), Some(&cookie)).await).await;
         assert_eq!(
-            shown["request"].get("diagnostics_source"),
-            Some(word),
-            "the detail answers {id}'s source as the list does"
+            (
+                shown["request"].get("diagnostics_source"),
+                shown["request"].get("thinking_diagnostics_source")
+            ),
+            (Some(word), Some(thinking)),
+            "the detail answers {id}'s sources as the list does"
         );
     }
     for (query, expected) in [

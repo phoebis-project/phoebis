@@ -230,6 +230,7 @@
         ]
       },
       "diagnostics_source": "router",
+      "thinking_diagnostics_source": null,
       "guardrail_id": null,
       "guardrails": [
         {

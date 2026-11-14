@@ -189,6 +189,11 @@ pub(crate) struct RequestSummary {
     /// null for a body that went without one and on a row from before the column existed.
     #[schema(example = "client")]
     pub diagnostics_source: Option<String>,
+    /// `client` when the caller's `anthropic-beta` list carried `thinking-binding-controls-2026-08-01`, `router` when
+    /// the relay added it under the pool's `thinking_diagnostics` switch, null for a request that went without it and
+    /// on a row from before the column existed.
+    #[schema(example = "router")]
+    pub thinking_diagnostics_source: Option<String>,
     /// The guardrail that blocked the request, null where none did.
     pub guardrail_id: Option<String>,
     /// Every guardrail that matched, in evaluation order, observed or blocking.
@@ -645,6 +650,7 @@ pub(crate) fn request_summary(
             .as_deref()
             .and_then(|h| serde_json::from_str::<Value>(h).ok()),
         diagnostics_source: r.diagnostics_source.clone(),
+        thinking_diagnostics_source: r.thinking_diagnostics_source.clone(),
         guardrail_id: r.guardrail_id.clone(),
         guardrails: r
             .guardrails

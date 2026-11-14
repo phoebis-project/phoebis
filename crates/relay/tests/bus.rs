@@ -914,6 +914,68 @@ async fn the_completion_event_names_the_members_source_and_the_writers_follow_it
     up.shutdown().await;
 }
 
+const THINKING_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+
+#[tokio::test]
+async fn a_thinking_beta_the_caller_sent_leaves_once_and_completes_as_the_clients_on_a_turn_and_a_count(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_turn"));
+    up.push_credential_rule(A, "/v1/messages", json_answer(200, r#"{"input_tokens":7}"#));
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            thinking_diagnostics: true,
+            ..Default::default()
+        },
+        bus,
+    )
+    .await;
+    let mut turn = request_for(KEY, "claude-sonnet-4-5", "s-thinking");
+    let list = format!(
+        "{},{THINKING_BINDING_BETA}",
+        turn.headers()["anthropic-beta"].to_str().unwrap()
+    );
+    set_header(&mut turn, "anthropic-beta", &list);
+    let (status, complete) = completion_of(&h, &mut sub, turn).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        beta_list(&up.requests()[0])
+            .iter()
+            .filter(|token| *token == THINKING_BINDING_BETA)
+            .count(),
+        1,
+        "the caller's beta leaves once"
+    );
+    assert_eq!(
+        complete.thinking_diagnostics,
+        Some(DiagnosticsSource::Client)
+    );
+
+    let count = Request::builder()
+        .method("POST")
+        .uri("/v1/messages/count_tokens")
+        .header("Authorization", format!("Bearer {KEY}"))
+        .header("User-Agent", CLAUDE_CLI_USER_AGENT)
+        .header("anthropic-beta", &list)
+        .header("x-claude-code-session-id", "s-count")
+        .body(Body::from(
+            r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let (status, complete) = completion_of(&h, &mut sub, count).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        complete.thinking_diagnostics,
+        Some(DiagnosticsSource::Client),
+        "a token count whose caller sent the beta reads the client's"
+    );
+    up.shutdown().await;
+}
+
 /// A JSON 200 whose `diagnostics` member is `member`, written as its raw JSON value.
 fn answer_with_diagnostics(id: &str, member: &str) -> Respond {
     json_answer(

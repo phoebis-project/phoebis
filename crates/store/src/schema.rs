@@ -4,7 +4,7 @@
 //! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
 //! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
-//! adds `model_week_hours`.
+//! adds `model_week_hours` and `pools.thinking_diagnostics`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -329,7 +329,9 @@ ALTER TABLE accounts ADD COLUMN limit_resets_read_at INTEGER;
 ALTER TABLE accounts ADD COLUMN limit_resets_epoch INTEGER NOT NULL DEFAULT 0;
 "#;
 
-/// Step 8: the record of the share the router's own requests priced on a model week per clock hour.
+/// Step 8: the record of the share the router's own requests priced on a model week per clock hour. The pool's
+/// switch for the thinking-binding beta is not null with a default, since the pool's read takes a boolean and a pool
+/// stored before the step would read null.
 const V8: &str = r#"
 CREATE TABLE model_week_hours (
     account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -339,6 +341,7 @@ CREATE TABLE model_week_hours (
     share       REAL NOT NULL,
     PRIMARY KEY (account_id, window, hour)
 );
+ALTER TABLE pools ADD COLUMN thinking_diagnostics INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
