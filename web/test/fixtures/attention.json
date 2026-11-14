@@ -158,7 +158,7 @@
           "projection_error": 0.04,
           "setting": [
             "shed_cap",
-            "window_ceiling"
+            "five_hour_ceiling"
           ],
           "walls": 1,
           "windows": [
@@ -166,7 +166,7 @@
           ],
           "setting_values": {
             "shed_cap": 0.2,
-            "window_ceiling": 0.95
+            "five_hour_ceiling": 0.95
           }
         }
       },
@@ -191,13 +191,13 @@
           },
           "moves": 1,
           "setting": [
-            "window_ceiling"
+            "five_hour_ceiling"
           ],
           "windows": [
             "five_hour"
           ],
           "setting_values": {
-            "window_ceiling": 0.95
+            "five_hour_ceiling": 0.95
           }
         }
       },
@@ -222,10 +222,12 @@
           ],
           "rounds": 1,
           "setting": [
-            "window_ceiling"
+            "five_hour_ceiling",
+            "weekly_ceiling"
           ],
           "setting_values": {
-            "window_ceiling": 0.95
+            "five_hour_ceiling": 0.95,
+            "weekly_ceiling": 1.0
           }
         }
       },

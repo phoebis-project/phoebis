@@ -91,7 +91,8 @@ struct Pool {
     subagent_placement: SubagentPlacement,
     session_placement: SessionPlacement,
     min_shared_prefix_tokens: u64,
-    window_ceiling: f64,
+    five_hour_ceiling: f64,
+    weekly_ceiling: f64,
     /// The row's switch, the one source of it: the helper writes it over `shedding.load_shedding`, which a case leaves
     /// alone, so the switch a case sets is the one it runs with.
     load_shedding: bool,
@@ -113,7 +114,10 @@ impl Default for Pool {
             subagent_placement: SubagentPlacement::ByCohort,
             session_placement: SessionPlacement::ByStrategy,
             min_shared_prefix_tokens: 20_000,
-            window_ceiling: 0.95,
+            // A weekly reserve at the 5-hour figure in place of the store's 1.0, so the cases whose figures rest on a
+            // weekly line of 0.95 keep them.
+            five_hour_ceiling: 0.95,
+            weekly_ceiling: 0.95,
             load_shedding: true,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
@@ -202,7 +206,8 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             strategy: pool.strategy,
             affinity_ttl_seconds: pool.affinity,
             overage_policy: pool.policy,
-            window_ceiling: pool.window_ceiling,
+            five_hour_ceiling: pool.five_hour_ceiling,
+            weekly_ceiling: pool.weekly_ceiling,
             prefer_subscription: pool.prefer_subscription,
             shedding: Shedding {
                 load_shedding: pool.load_shedding,
@@ -1320,6 +1325,33 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
             );
         }
     }
+}
+
+#[test]
+fn a_fresh_placement_reads_each_window_against_the_ceiling_of_its_own_kind() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        five_hour_ceiling: 0.95,
+        weekly_ceiling: 1.0,
+        ..Pool::default()
+    });
+    // Nothing burns and the body prices no rewrite, so each runway reads its window's reading against its ceiling: a's
+    // week at 0.97 stands under the weekly 1.0, and b's 5-hour window at 0.97 stands over the 5-hour 0.95.
+    let mut st = priced(Vec::new());
+    st.record_sample("a", sample(0.1, 0.97, T - 500), 0);
+    st.record_sample("b", sample(0.97, 0.1, T - 500), 0);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(
+        (candidate(&d.record, "a").fit, candidate(&d.record, "b").fit),
+        (Some("fits"), Some("least_bad")),
+        "{:?}",
+        d.record.candidates
+    );
 }
 
 #[test]
@@ -14167,7 +14199,7 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
         "the line names the projection the trigger read"
     );
     assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
-    assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
+    assert!((number(fact(shed, "five_hour_ceiling")) - 0.95).abs() < 1e-9);
     assert!(shed.facts.iter().all(|f| f.key != "trigger"));
 }
 
@@ -15394,7 +15426,7 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
         fact(line(&d.record, "move:drain"), "cold"),
         &FactValue::Bool(false)
     );
-    assert!((number(fact(line(&d.record, "move:shed"), "ceiling")) - 0.95).abs() < 1e-9);
+    assert!((number(fact(line(&d.record, "move:shed"), "five_hour_ceiling")) - 0.95).abs() < 1e-9);
     let pin = d.record.pin.as_ref().expect("the live pin's block");
     assert_eq!(
         (pin.found, pin.warmth, pin.warmth_cause, pin.idle_ms),
@@ -15611,7 +15643,7 @@ fn the_shed_line_names_the_projection_and_horizon_of_every_window_the_trigger_re
         fact(shed, "horizon_seven_day"),
         &FactValue::Int(T + 5 * HOUR)
     );
-    assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
+    assert!((number(fact(shed, "weekly_ceiling")) - 0.95).abs() < 1e-9);
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("seven_day".into()));
     assert!(number(fact(shed, "excess")) > 0.0);
     assert!(number(fact(shed, "target")) > 0.0);
@@ -21126,7 +21158,7 @@ fn a_renewal_names_no_window_whose_projection_reads_the_ceiling_exactly() {
     let at_horizon = 0.5 + (100.0 / 10_000_000.0) * 18_000.0;
     let s = tiered(Pool {
         members: vec![("a", 0), ("b", 1)],
-        window_ceiling: at_horizon,
+        five_hour_ceiling: at_horizon,
         ..Pool::default()
     });
     let renew = |input: f64| {
@@ -21328,7 +21360,7 @@ fn a_five_hour_round_fires_on_the_projection_over_the_wall_and_marks_until_the_r
     assert_eq!(fact(shed, "trigger"), &FactValue::Text("five_hour".into()));
     assert!((number(fact(shed, "projection_five_hour")) - 1.27).abs() < 1e-9);
     assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
-    assert!((number(fact(shed, "ceiling")) - 0.95).abs() < 1e-9);
+    assert!((number(fact(shed, "five_hour_ceiling")) - 0.95).abs() < 1e-9);
     assert!((number(fact(shed, "excess")) - 0.27).abs() < 1e-9);
     assert!((number(fact(shed, "target")) - 0.21).abs() < 1e-9);
     assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
@@ -22330,7 +22362,7 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     holds_allowance(&at_70.record);
     let shed = line(&at_70.record, "move:shed");
     assert_eq!(shed.verdict, "no");
-    let ceiling = number(fact(shed, "ceiling"));
+    let ceiling = number(fact(shed, "five_hour_ceiling"));
     let projection = number(fact(shed, "projection_five_hour"));
     let expected = used_by(70)
         + (five_hour_rate(OPUS, SUBAGENT_READS) + 2.0 * five_hour_rate(FABLE, FABLE_READS))
@@ -25412,7 +25444,7 @@ fn a_return_to_full_speed_inside_the_wait_continues_the_ramp_from_the_spans_star
 #[test]
 fn a_window_at_or_past_the_ceiling_takes_its_full_factor_at_once() {
     let (off, on) = paced_pools(120, AVERAGE_MS);
-    let ceiling = on.pool("p").expect("the pool").window_ceiling;
+    let ceiling = on.pool("p").expect("the pool").five_hour_ceiling;
     // s1 on a ten-second cycle with a at `five_hour` and no stamp: its main turn at T + 20 s is the first read.
     let first_read = |five_hour: f64| {
         let mut st = rounding(vec![burning("s1", "a", 7.5, true, T)]);

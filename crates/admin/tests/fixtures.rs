@@ -168,8 +168,8 @@ const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
 /// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
 /// engine's with its in-flight cap, and the model rule count's.
-/// The burn average, the shed dwell, the slow-down's stretch and hold, the window ceiling and the shed cap are probed
-/// at both edges of their bounds. A probe that sends another field beside the probed one names it under `with`, so a
+/// The burn average, the shed dwell, the slow-down's stretch and hold, the two ceilings and the shed cap are probed at
+/// both edges of their bounds. A probe that sends another field beside the probed one names it under `with`, so a
 /// replay sends the same body. An admitted probe is written back at once from the list read taken before the probes,
 /// so each probe meets the seeded pool, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
@@ -240,7 +240,8 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         }
     }
     for (field, values) in [
-        ("window_ceiling", [0.5, 0.49, 1.0, 1.01]),
+        ("five_hour_ceiling", [0.5, 0.49, 1.0, 1.01]),
+        ("weekly_ceiling", [0.5, 0.49, 1.0, 1.01]),
         ("shed_cap", [0.1, 0.09, 1.0, 1.01]),
     ] {
         for value in values {
@@ -2376,7 +2377,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 j!({
                     "early_ms": null,
                     "projection_error": 0.04,
-                    "setting": ["shed_cap", "window_ceiling"],
+                    "setting": ["shed_cap", "five_hour_ceiling"],
                     "walls": 1,
                     "windows": ["five_hour"],
                 }),
@@ -2390,7 +2391,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 j!({
                     "fits": { "rewrite_only": 1 },
                     "moves": 1,
-                    "setting": ["window_ceiling"],
+                    "setting": ["five_hour_ceiling"],
                     "windows": ["five_hour"],
                 }),
             ),
@@ -2400,7 +2401,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "main",
                 Some("main"),
                 hour_ago + 5 * 60_000,
-                j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
+                j!({
+                    "accounts": ["business"],
+                    "rounds": 1,
+                    "setting": ["five_hour_ceiling", "weekly_ceiling"],
+                }),
             ),
             condition(
                 phoebis_ledger::RoutingKind::MeterDrift,

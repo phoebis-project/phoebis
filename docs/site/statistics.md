@@ -874,32 +874,34 @@ the two points runs from the instant the wall was announced, from the stored ins
 from the reset's passing for a wall that goes on past its reset. The ledger folds the four routing conditions from its
 events once an hour and at start into one table, which the gauge and `GET /admin/attention` read, so a condition clears
 at the first fold whose trailing day holds none of its events. The subject is the account, and the item dates from the
-oldest wall of the day. The detail counts the walls, names their windows and the settings `shed_cap` and
-`window_ceiling` with the values of the pool the account sits in at the read, and names one figure by the trigger of the
-newest shedding round on the wall's window within that window's length before the wall: after a projection round the
-projection error, one less the round's projection, after a slow-down round the time the wall arrived before the reset (0
-at or after it), and neither with no round. The ledger also keeps each account's longest early wall of the hour under a
-slow-down round, so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on
-the account's spent windows since the condition began. A holding wall's detail also carries `reset` (`clears`, `grant`
-and `label`) while the usage poll reads the account, a limit reset of the account is usable now and one of the windows
-it clears reads at its limit in the account's newest usage reading. The member is joined at each read and never folded,
-so it leaves at the read after the reset was used. The dashboard's line then adds `, a reset can clear it` and opens the
-account's card on the [Quota](console.md#quota) view in place of the routing log.
+oldest wall of the day. The detail counts the walls, names their windows and the settings `shed_cap` and the ceiling of
+each listed window's kind, `five_hour_ceiling` for `five_hour` and `weekly_ceiling` for any other window, with the
+values of the pool the account sits in at the read, and names one figure by the trigger of the newest shedding round on
+the wall's window within that window's length before the wall: after a projection round the projection error, one less
+the round's projection, after a slow-down round the time the wall arrived before the reset (0 at or after it), and
+neither with no round. The ledger also keeps each account's longest early wall of the hour under a slow-down round, so
+the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on the account's spent
+windows since the condition began. A holding wall's detail also carries `reset` (`clears`, `grant` and `label`) while
+the usage poll reads the account, a limit reset of the account is usable now and one of the windows it clears reads at
+its limit in the account's newest usage reading. The member is joined at each read and never folded, so it leaves at the
+read after the reset was used. The dashboard's line then adds `, a reset can clear it` and opens the account's card on
+the [Quota](console.md#quota) view in place of the routing log.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent
 event. It is folded as `wall_reached` is. The subject is the destination account, and the item dates from the oldest
 such move. The detail counts the moves, gives their destination fits with a count each and names the spent windows and
-the setting `window_ceiling` with the value of the pool the account sits in at the read. The item opens the routing log
-on the account's moves and spent windows since the condition began.
+the ceiling of each one's kind, as `wall_reached` names them, with the value of the pool the account sits in at the
+read. The item opens the routing log on the account's moves and spent windows since the condition began.
 
 **`shed_no_runway`** holds while a shedding round of the pool marked nothing for want of a destination with runway (the
 outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. A round stops
 counting once an event on its account that refunds its window follows it: a `window_reset`, `window_cleared` or
 `window_dropped` event on that window, or a `limit_reset_claimed` event whose `cleared` list names it. It is folded as
 `wall_reached` is. The subject is the pool, and the item dates from the oldest round that still counts. The detail
-counts those rounds and names the accounts they ran on and the setting `window_ceiling` with the pool's value. The item
-opens the routing log on the pool's shedding rounds since the condition began.
+counts those rounds and names the accounts they ran on and the settings `five_hour_ceiling` and `weekly_ceiling` with
+the pool's values, since a round reads its siblings' runway over windows of both kinds. The item opens the routing log
+on the pool's shedding rounds since the condition began.
 
 **`slowed_long`** holds while the time the slow-down held the account's requests over the last 24 hours passes twice the
 pool's `slow_down_stretch_seconds`, at least an hour (five hours at the default of 9000, the hour on a pool set to move
@@ -911,12 +913,12 @@ stands open: the spans name the pool and the start, the threshold the newest spa
 held time with no span in the day raises nothing. It is folded as `wall_reached` is. The slow-down holds an account's
 requests for as long as its demand runs ahead of its window, and the threshold is how long the operator lets it hold
 before a round moves sessions, so two thresholds' worth of held time in a day says the pool's load exceeds that
-account's windows, which is the pool's membership, its ceiling or its threshold and not one turn, while an account
-slowed for ten minutes at the end of a window is working as intended and raises nothing. The subject is the account, and
-the item dates from the start of the oldest span counted. The detail gives the held time, the requests held, the bar,
-whether a span is open and the count of spans, and names the setting `slow_down_stretch_seconds` with the pool's value,
-which the dashboard's line words under the condition's label. The item opens the routing log on the account's slow-down
-starts and ends since the condition began ([Slow-down](routing.md#slow-down)).
+account's windows, which is the pool's membership, its 5-hour ceiling or its threshold and not one turn, while an
+account slowed for ten minutes at the end of a window is working as intended and raises nothing. The subject is the
+account, and the item dates from the start of the oldest span counted. The detail gives the held time, the requests
+held, the bar, whether a span is open and the count of spans, and names the setting `slow_down_stretch_seconds` with the
+pool's value, which the dashboard's line words under the condition's label. The item opens the routing log on the
+account's slow-down starts and ends since the condition began ([Slow-down](routing.md#slow-down)).
 
 **`keepalive_cap`** holds while one of the keepalive engine's caps, its live sessions, its agent records or its retained
 prompts' bytes, stands at 90 percent of its max or more, each cap a series of its own. At a max the engine refuses what

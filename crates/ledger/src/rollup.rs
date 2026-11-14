@@ -1376,13 +1376,36 @@ const SPENT_AFTER_MOVE_MS: i64 = HOUR_MS;
 // adds a pool's value of each setting a row names.
 pub const SHED_CAP_SETTING: &str = "shed_cap";
 pub const SLOW_DOWN_STRETCH_SETTING: &str = "slow_down_stretch_seconds";
-pub const WINDOW_CEILING_SETTING: &str = "window_ceiling";
+pub const FIVE_HOUR_CEILING_SETTING: &str = "five_hour_ceiling";
+pub const WEEKLY_CEILING_SETTING: &str = "weekly_ceiling";
 
 /// The settings each condition names, the ones an operator reads the condition against. The attention reader fills
-/// a cleared condition's `setting` from the same lists.
-pub const CEILING_SETTING: &[&str] = &[WINDOW_CEILING_SETTING];
-pub const WALL_SETTINGS: &[&str] = &[SHED_CAP_SETTING, WINDOW_CEILING_SETTING];
+/// a cleared condition's `setting` from the same lists. A pool's round reads a sibling's runway over windows of both
+/// kinds, so `shed_no_runway` names both ceilings. A wall and a spent destination name the ceiling of the kind of
+/// each window they list, after `WALL_SETTINGS` on a wall.
+pub const CEILING_SETTINGS: &[&str] = &[FIVE_HOUR_CEILING_SETTING, WEEKLY_CEILING_SETTING];
+pub const WALL_SETTINGS: &[&str] = &[SHED_CAP_SETTING];
 pub const SLOW_SETTINGS: &[&str] = &[SLOW_DOWN_STRETCH_SETTING];
+
+/// `lead`, then `five_hour_ceiling` where `windows` lists the 5-hour window and `weekly_ceiling` where it lists any
+/// other, each once. The kinds are told as `window_length_ms` tells them, the rule the router's ceiling reads, so a
+/// model week names the weekly ceiling.
+fn window_settings(lead: &[&'static str], windows: &BTreeSet<&str>) -> Vec<&'static str> {
+    let mut names = lead.to_vec();
+    if windows
+        .iter()
+        .any(|window| window_length_ms(window) != WEEK_MS)
+    {
+        names.push(FIVE_HOUR_CEILING_SETTING);
+    }
+    if windows
+        .iter()
+        .any(|window| window_length_ms(window) == WEEK_MS)
+    {
+        names.push(WEEKLY_CEILING_SETTING);
+    }
+    names
+}
 
 /// The kind of a condition the fold writes, stored as its `as_str` word.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -1603,7 +1626,7 @@ pub fn fold_routing_conditions(
                 detail: serde_json::json!({
                     "accounts": accounts,
                     "rounds": count,
-                    "setting": setting(CEILING_SETTING),
+                    "setting": setting(CEILING_SETTINGS),
                 }),
             },
         );
@@ -1678,7 +1701,7 @@ pub fn fold_routing_conditions(
                 detail: serde_json::json!({
                     "fits": fits,
                     "moves": count,
-                    "setting": setting(CEILING_SETTING),
+                    "setting": window_settings(&[], &windows),
                     "windows": windows,
                 }),
             },
@@ -1720,7 +1743,7 @@ pub fn fold_routing_conditions(
                 detail: serde_json::json!({
                     "early_ms": early_ms(round.as_ref(), detail, newest),
                     "projection_error": projection.map(|p| 1.0 - p),
-                    "setting": setting(WALL_SETTINGS),
+                    "setting": window_settings(WALL_SETTINGS, &windows),
                     "walls": count,
                     "windows": windows,
                 }),

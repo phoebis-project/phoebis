@@ -106,7 +106,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     let parts = common::admin_parts_full().await;
     let app = &parts.app;
     let cookie = login(app, "admin-secret").await;
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","shed_cap":0.3,"window_ceiling":0.9,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","shed_cap":0.3,"five_hour_ceiling":0.9,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
     post(
         app,
         "/admin/pools",
@@ -213,7 +213,11 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
                 "pool",
                 "main",
                 Some("main"),
-                j!({ "accounts": ["business"], "rounds": 1, "setting": ["window_ceiling"] }),
+                j!({
+                    "accounts": ["business"],
+                    "rounds": 1,
+                    "setting": ["five_hour_ceiling", "weekly_ceiling"],
+                }),
             ),
             condition(
                 phoebis_ledger::RoutingKind::DestinationSpent,
@@ -223,7 +227,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
                 j!({
                     "fits": { "rewrite_only": 1 },
                     "moves": 1,
-                    "setting": ["window_ceiling"],
+                    "setting": ["five_hour_ceiling"],
                     "windows": ["five_hour"],
                 }),
             ),
@@ -234,7 +238,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
                 None,
                 j!({
                     "projection_error": null,
-                    "setting": ["shed_cap", "window_ceiling"],
+                    "setting": ["shed_cap", "five_hour_ceiling"],
                     "walls": 1,
                     "windows": ["five_hour"],
                 }),
@@ -338,11 +342,11 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             "detail": {
                 "accounts": ["business"],
                 "rounds": 1,
-                "setting": ["window_ceiling"],
-                "setting_values": { "window_ceiling": 0.9 },
+                "setting": ["five_hour_ceiling", "weekly_ceiling"],
+                "setting_values": { "five_hour_ceiling": 0.9, "weekly_ceiling": 1.0 },
             },
         }),
-        "a pool's condition carries the pool's ceiling beside the setting it names"
+        "a pool's condition carries the pool's ceilings beside the settings it names"
     );
     assert_eq!(
         (
@@ -353,7 +357,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         (
             &j!({ "page": "accounts", "id": "business" }),
             &j!(["main"]),
-            Some(&j!({ "shed_cap": 0.3, "window_ceiling": 0.9 }))
+            Some(&j!({ "shed_cap": 0.3, "five_hour_ceiling": 0.9 }))
         ),
         "an account's condition opens the account and names its settings with the values of the account's pool"
     );

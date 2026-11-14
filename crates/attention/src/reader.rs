@@ -9,8 +9,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{
-    asked, polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTING, SHED_CAP_SETTING,
-    SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, WALL_SETTINGS, WINDOW_CEILING_SETTING,
+    asked, polled, RoutingCondition, RoutingKind, UnpricedModel, CEILING_SETTINGS,
+    FIVE_HOUR_CEILING_SETTING, SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS,
+    WALL_SETTINGS, WEEKLY_CEILING_SETTING,
 };
 use phoebis_oauth::{grant_states, resets_left, Grant, GrantStatus, LimitResets, UsageService};
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
@@ -977,7 +978,8 @@ fn routing_conditions(
                         SLOW_DOWN_STRETCH_SETTING => {
                             json!(pool.slow_down.slow_down_stretch_seconds)
                         }
-                        WINDOW_CEILING_SETTING => json!(pool.window_ceiling),
+                        FIVE_HOUR_CEILING_SETTING => json!(pool.five_hour_ceiling),
+                        WEEKLY_CEILING_SETTING => json!(pool.weekly_ceiling),
                         _ => return None,
                     };
                     Some((name.to_string(), value))
@@ -1006,7 +1008,7 @@ fn routing_conditions(
             held.map(|r| r.since),
             detail_of(
                 held,
-                json!({ "accounts": [], "rounds": 0, "setting": CEILING_SETTING }),
+                json!({ "accounts": [], "rounds": 0, "setting": CEILING_SETTINGS }),
                 None,
             ),
         ));
@@ -1028,7 +1030,7 @@ fn routing_conditions(
         ),
         (
             Kind::DestinationSpent,
-            json!({ "fits": {}, "moves": 0, "setting": CEILING_SETTING, "windows": [] }),
+            json!({ "fits": {}, "moves": 0, "setting": [], "windows": [] }),
         ),
         (
             Kind::SlowedLong,

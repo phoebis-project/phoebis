@@ -73,14 +73,18 @@ pub(crate) struct AttentionItem {
     /// `shed_no_runway` with `rounds` and `accounts`, and `slowed_long` with `spans` (the slow-down spans counted),
     /// `held_ms` (the slow-down's waits of the day's requests, summed), `held` (the requests held), `bar_ms` (the bar
     /// the held time passed, twice the stretch threshold of the newest counted span's start and at least an hour) and
-    /// `open` (whether a span still stands). `shed_no_runway` and `slowed_long` add `setting_values` (the pool's value
-    /// of each setting `setting` names, present only for a pool the registry still holds). `wall_reached` and
-    /// `destination_spent` add it with the values of the pool the account sits in at the read, present only where the
-    /// account sits in exactly one pool that the registry holds. `keepalive_bus_gaps` carries `gaps` (the engine's gaps
-    /// since the start) and `last_at` (the last gap's instant), `keepalive_cap` carries `cap` (`sessions`, `agents` or
-    /// `retained`), `count`, `max` and `pct` (`count` over `max` as a fraction, 0 where `max` is 0), and
-    /// `expired_between_turns` carries `expired` (the cache entries that expired between turns in the trailing 24 hours
-    /// on a pool whose keepalive policy is on, under a key that holds the `keepalive` permission).
+    /// `open` (whether a span still stands). `shed_no_runway` names `five_hour_ceiling` and `weekly_ceiling`, since a
+    /// round reads its siblings' runway over windows of both kinds. `wall_reached` names `shed_cap` and then, as
+    /// `destination_spent` does, the ceiling of the kind of each window it lists, `five_hour_ceiling` for `five_hour`
+    /// and `weekly_ceiling` for any other window. `slowed_long` names `slow_down_stretch_seconds`. `shed_no_runway`
+    /// and `slowed_long` add `setting_values` (the pool's value of each setting `setting` names, present only for a
+    /// pool the registry still holds). `wall_reached` and `destination_spent` add it with the values of the pool the
+    /// account sits in at the read, present only where the account sits in exactly one pool that the registry holds.
+    /// `keepalive_bus_gaps` carries `gaps` (the engine's gaps since the start) and `last_at` (the last gap's instant),
+    /// `keepalive_cap` carries `cap` (`sessions`, `agents` or `retained`), `count`, `max` and `pct` (`count` over `max`
+    /// as a fraction, 0 where `max` is 0), and `expired_between_turns` carries `expired` (the cache entries that
+    /// expired between turns in the trailing 24 hours on a pool whose keepalive policy is on, under a key that holds
+    /// the `keepalive` permission).
     #[schema(value_type = Object)]
     pub detail: Value,
 }

@@ -1206,11 +1206,16 @@ pub struct HeadMark {
     pub at: i64,
 }
 
-/// The utilization of `window` on `pool` above which no move or placement lands and a round fires on the window. The
-/// row holds one fraction for every plan window, read through this one function, so a ceiling per window is one
-/// column and one arm here.
-pub fn ceiling(pool: &PoolRow, _window: &str) -> f64 {
-    pool.window_ceiling
+/// The utilization of `window` on `pool` above which no move or placement lands and a round fires on the window:
+/// `five_hour_ceiling` for the 5-hour window and `weekly_ceiling` for every other name, the 7-day window and each
+/// model week, as `window_length_ms` tells the two kinds, so a week added to `MODEL_WINDOWS` takes the weekly
+/// fraction with no edit.
+pub fn ceiling(pool: &PoolRow, window: &str) -> f64 {
+    if window == FIVE_HOUR {
+        pool.five_hour_ceiling
+    } else {
+        pool.weekly_ceiling
+    }
 }
 
 /// The share of an account's burn one shedding round removes at most.

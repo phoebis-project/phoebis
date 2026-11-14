@@ -10114,7 +10114,8 @@ async fn a_heals_event_names_the_wall_at_the_windows_reset_and_the_pools_ceiling
     use phoebis_routing::RouterEvent;
     let store = shedding_store(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
-    pool.window_ceiling = 0.8;
+    pool.five_hour_ceiling = 0.8;
+    pool.weekly_ceiling = 0.8;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     for pin in [
         marked(stored_pin(&store, "s1", "a", 1, 0.0), AT - 60_000),
@@ -13223,6 +13224,10 @@ async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_o
 ) {
     let store = shedding_store(&["a"]);
     with_tier(&store, "a");
+    // A weekly reserve at the 5-hour figure, so the week's line stands at 0.95.
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.weekly_ceiling = 0.95;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     store
         .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
         .unwrap();

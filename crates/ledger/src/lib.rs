@@ -106,11 +106,11 @@ pub use rollup::{
     open_cooldown_remainders, read_account_rollups, read_expired_between_turns,
     read_overview_rollups, read_rollups, read_rollups_paged, trailing_day_hours, AccountRollupRow,
     CostSplit, ExpiredBetweenTurns, FoldRules, KeySelector, OverviewRollupRow, RollupRow,
-    RollupSelect, RoutingKind, BILLED_FUNDING, CEILING_SETTING, DIMENSION_MAX_BYTES,
-    EXPIRED_BETWEEN_TURNS, FAST_FUNDING, KEY_RANGE_PREDICATE, LONG_BAND, NO_CLASS, OTHER_DIMENSION,
-    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, SHED_CAP_SETTING, SLOW_DOWN_STRETCH_SETTING,
-    SLOW_SETTINGS, STANDARD_BAND, UNATTRIBUTED, USAGE_BASED_FUNDING, WALL_SETTINGS,
-    WINDOW_CEILING_SETTING,
+    RollupSelect, RoutingKind, BILLED_FUNDING, CEILING_SETTINGS, DIMENSION_MAX_BYTES,
+    EXPIRED_BETWEEN_TURNS, FAST_FUNDING, FIVE_HOUR_CEILING_SETTING, KEY_RANGE_PREDICATE, LONG_BAND,
+    NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, SHED_CAP_SETTING,
+    SLOW_DOWN_STRETCH_SETTING, SLOW_SETTINGS, STANDARD_BAND, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    WALL_SETTINGS, WEEKLY_CEILING_SETTING,
 };
 /// The type `LedgerDb::read` and `read_blocking` lend a closure, so a caller can name it in a signature.
 pub use rusqlite::Connection;

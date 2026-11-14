@@ -378,10 +378,10 @@ pub(crate) struct DecisionRecord {
     pub pin_reason: Option<String>,
     /// The values that entered the decision, each named by the `PoolRow` field it is read from: `strategy`,
     /// `prefer_subscription`, `overage_policy`, `affinity_ttl_seconds`, `affinity_mode`, `session_placement`,
-    /// `min_shared_prefix_tokens`, `subagent_placement`, `window_ceiling`, `load_shedding`, `migrate_when_spent`,
-    /// `overage_move_grace_minutes`, `wind_down_minutes`, `return_to_plan`, `return_to_plan_dwell_seconds`,
-    /// `shed_cap`, `burn_average_seconds`, `shed_dwell_seconds`, `warm_sessions`, `slow_down`,
-    /// `slow_down_stretch_seconds`, `slow_down_hold_seconds`, `in_flight_cap`, `retry_in_place_seconds`,
+    /// `min_shared_prefix_tokens`, `subagent_placement`, `five_hour_ceiling`, `weekly_ceiling`, `load_shedding`,
+    /// `migrate_when_spent`, `overage_move_grace_minutes`, `wind_down_minutes`, `return_to_plan`,
+    /// `return_to_plan_dwell_seconds`, `shed_cap`, `burn_average_seconds`, `shed_dwell_seconds`, `warm_sessions`,
+    /// `slow_down`, `slow_down_stretch_seconds`, `slow_down_hold_seconds`, `in_flight_cap`, `retry_in_place_seconds`,
     /// `pool_updated_at`. Null for a refusal whose key or pool the registry no longer holds.
     #[schema(value_type = Option<Object>)]
     pub settings: Option<Value>,

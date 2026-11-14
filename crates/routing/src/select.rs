@@ -4326,7 +4326,9 @@ fn move_of<'a>(
         facts.push(Fact::int("age_five_hour", age).unit("ms"));
         facts.push(Fact::int("hold_five_hour", hold_ms).unit("ms"));
     }
-    facts.push(Fact::number("ceiling", ceiling(pool, FIVE_HOUR)).unit("percent"));
+    // The line tests windows of both kinds, so it carries both ceilings.
+    facts.push(Fact::number("five_hour_ceiling", pool.five_hour_ceiling).unit("percent"));
+    facts.push(Fact::number("weekly_ceiling", pool.weekly_ceiling).unit("percent"));
     let stretch_waits = over_since.filter(|since| now - since < SLOW_DOWN_WAIT_MS);
     // A decision inside the safety wait says how long the stretch has read over the threshold.
     if let Some(since) = stretch_waits {
@@ -4936,14 +4938,15 @@ struct Waiting {
 /// burn_average_ms)`, `wall` being the wall instant, where the projection's burn reaches 1.0 as `wall_of` reads it now,
 /// and the wait the cap alone while no burn reaches it, so a burst toward a near wall instant fires early, a slow climb
 /// waits, and one large turn's charge, which moves the prediction before the burn average has absorbed it, fires no
-/// round at the selection it lands on. The stamp stays the first reading over the ceiling, so a window that crosses the
-/// wall at an end or a reset horizon has spent the part of its wait it read between the two lines, which confirms the
-/// climb as the wait would. Replayed over the recorded projection at the default burn average, with the ceiling as the
-/// line at every horizon, this wait fires 12 rounds while the window reads under the ceiling (2 on a window still under
-/// it at the horizon) where a quarter of the time to the horizon capped at the dwell fires 56 (33), falsely fires on 1
-/// window of 32 against 11, costs 170,044 tokens of rewrites and missed wall instants against 6,990,451, and fires 2
-/// minutes before a wall instant the horizon's quarter misses and 159 minutes before another. A window inside its wait
-/// yields to the next.
+/// round at the selection it lands on. The stamp stays the first reading over the window's own ceiling, so a window
+/// that crosses the wall at an end or a reset horizon has spent the part of its wait it read between the two lines,
+/// which confirms the climb as the wait would. On a weekly window at a ceiling of 1.0 the two lines are one, so its
+/// wait runs whole from the crossing. Replayed over the recorded projection at the default burn average, with the
+/// ceiling as the line at every horizon, this wait fires 12 rounds while the window reads under the ceiling (2 on a
+/// window still under it at the horizon) where a quarter of the time to the horizon capped at the dwell fires 56 (33),
+/// falsely fires on 1 window of 32 against 11, costs 170,044 tokens of rewrites and missed wall instants against
+/// 6,990,451, and fires 2 minutes before a wall instant the horizon's quarter misses and 159 minutes before another. A
+/// window inside its wait yields to the next.
 ///
 /// A 5-hour window whose age `young` names, under twice the pool's burn average, fires under neither test and yields to
 /// the next window as a waiting one does, since the burn average still carries the previous window's burst over the
@@ -8508,7 +8511,7 @@ mod banded_tests {
         let tier = "default_claude_max_20x";
         let mut pool = PoolRow::for_tests("p");
         pool.slow_down.slow_down = true;
-        pool.window_ceiling = 0.9;
+        pool.five_hour_ceiling = 0.9;
         let snapshot = RegistrySnapshot::from_load(
             RegistryLoad {
                 accounts: vec![AccountRow::for_tests("b", AccountKind::Oauth)],

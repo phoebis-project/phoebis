@@ -66,7 +66,8 @@ outside its bound gets:
 | `subagent_placement` | `by_strategy` | `by_cohort`, `by_strategy` or `with_main`: `subagent_placement must be by_cohort, by_strategy, or with_main`. See Selection |
 | `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`: `session_placement must be by_strategy or by_warm_prefix`. See Selection |
 | `min_shared_prefix_tokens` | `20000` | a whole number, 0 or more. See Selection |
-| `window_ceiling` | `0.95` | 0.5 to 1: `window_ceiling is between 0.5 and 1.0`. See Selection and Moves |
+| `five_hour_ceiling` | `0.95` | 0.5 to 1: `five_hour_ceiling is between 0.5 and 1.0`. The 5-hour window's ceiling. See The projection under Selection |
+| `weekly_ceiling` | `1.0` | 0.5 to 1: `weekly_ceiling is between 0.5 and 1.0`. The ceiling of the 7-day window and each model week. See The projection under Selection |
 | `model_rules` | empty | an ordered list of `{pattern, not}`, at most 256: `model_rules holds at most 256 entries`. See Model rules |
 | `load_shedding` | `true` | a switch: off, no round runs. See Moves |
 | `shed_cap` | `0.5` | 0.1 to 1: `shed_cap is between 0.1 and 1.0`. See Moves |
@@ -347,7 +348,7 @@ The upstream shares no cached prefix across those, so an entry of another lane i
 deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
 request carries or receives a cache marker, the entry's estimate (the relay's, from the request's bytes) is above zero,
 the shared prefix is at least `min_shared_prefix_tokens` for a main conversation, and the account is not at its cap,
-without runway for the request (its rewrite and the burn of its sessions would take a window over `window_ceiling`
+without runway for the request (its rewrite and the burn of its sessions would take a window over its own ceiling
 before the window's horizon, or its worst live rate-limit bucket is full for an API-key account, see [The windows the
 router works from](#the-windows-the-router-works-from)), or winding down. The threshold binds a main conversation alone:
 a subagent cohort lands together on any shared prefix above zero, and an entry with a zero estimate places nothing for
@@ -505,17 +506,22 @@ week's, is the earliest of five hours from now, its reset and the end, so a week
 most. A 5-hour reading past its reset with no new reset looks five hours ahead too, since the window opens with the next
 request. A shedding round and the heal of a standing mark test the projection at the horizon against the line the
 horizon sets: the wall, 1.0, where the horizon is the account's end or the window's own reset, since the quota left at
-either instant is lost, and `window_ceiling` where it is the five-hour bound, since no reset is known at that instant
-and the quota reads on. The runways of moves and placements read the ceiling whatever the horizon. A projection's wall
-instant is the instant the burn it implies over the time to its horizon takes the prediction to the wall, past the
-horizon where the projection reads under the wall there, and a projection with no burn names none (see **Shed**, below).
-`burn_average_seconds` (default 1800) is the time constant of each session's burn average, the figure the projection
-carries forward (see **Burn**, below). A burn the cost model cannot price adds nothing, so an account whose plan the
-cost model does not price (a free organization, a Team or Enterprise organization whose tier the cost model does not
-hold, or a tier the profile has not named) projects its prediction alone. An API-key account has no plan window and no
-projection, and neither has a usage-based seat, so the plan readings a seat kept from before it converted project
-nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request, since its agent sends no new
-turn, while the pin and its cache stay.
+either instant is lost, and the window's own ceiling where it is the five-hour bound, since no reset is known at that
+instant and the quota reads on. A pool holds a ceiling for each kind of window, since a margin costs differently on
+them. The 5-hour window meters a rate inside the week, so the share `five_hour_ceiling` (0.95 by default) leaves at a
+reset can be drawn in the next window from the same week, and the margin keeps the account off a wall that would send
+every session pinned to it to an account where its cache is cold. A weekly window meters the allowance the plan sells,
+so a share left under `weekly_ceiling` at its reset is never drawn, and the default is 1.0. A pool whose accounts have
+extra usage on or are used outside the router lowers it. The runways of moves and placements read the window's ceiling
+whatever the horizon. A projection's wall instant is the instant the burn it implies over the time to its horizon takes
+the prediction to the wall, past the horizon where the projection reads under the wall there, and a projection with no
+burn names none (see **Shed**, below). `burn_average_seconds` (default 1800) is the time constant of each session's burn
+average, the figure the projection carries forward (see **Burn**, below). A burn the cost model cannot price adds
+nothing, so an account whose plan the cost model does not price (a free organization, a Team or Enterprise organization
+whose tier the cost model does not hold, or a tier the profile has not named) projects its prediction alone. An API-key
+account has no plan window and no projection, and neither has a usage-based seat, so the plan readings a seat kept from
+before it converted project nothing. A pin whose agent ended (see **Shed**, below) adds no burn until its next request,
+since its agent sends no new turn, while the pin and its cache stay.
 
 **The demand** What the slow-down holds back is still wanted: a session held before each request burns less than it asks
 to, and the moment the hold lifts it burns at its own pace again, so the router keeps two readings of a session's burn.
@@ -533,18 +539,18 @@ the demand is the achieved burn. A placement's own read leaves the session's own
 of the fit and the Pace score, while every other read keeps it.
 
 A session's runway on an account is the time until that account's projection, with the session's cold rewrite (its last
-prompt as one cache write) added now and its burn added to the account's, reaches `window_ceiling`: none when the
-rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
-decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
-figure against the horizon and the strategy's tie-break ranks by it. A move reads its runway to the ceiling less half
-the session's own burn over the time to the horizon, so the line that admits a moved session sits under the line that
-sheds one. A session's burn average under-reads the burn its window then takes by more than half often enough that a
-destination whose room covers that burn with less than half of it to spare would fill before the horizon, and the next
-round would shed the session back. A fresh placement reads the ceiling. The session fits the account when the runway
-reaches the horizon on every window its model draws that the account's window set holds, `five_hour` where the set has
-it, `seven_day` and the model's own week where it has one, so an approved Ultra account is judged on its 7-day window
-and the model week alone. An API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based
-seat fits as an API-key account does: with no bucket to read, it has room.
+prompt as one cache write) added now and its burn added to the account's, reaches the ceiling of a window's kind,
+`five_hour_ceiling` or `weekly_ceiling`: none when the rewrite alone takes a window there, unbounded when nothing burns,
+and unbounded on the Sessions route and in the decision record's fit table where it reaches past the window's next
+reset, while the fit's verdict reads the computed figure against the horizon and the strategy's tie-break ranks by it. A
+move reads its runway to the ceiling less half the session's own burn over the time to the horizon, so the line that
+admits a moved session sits under the line that sheds one. A session's burn average under-reads the burn its window then
+takes by more than half often enough that a destination whose room covers that burn with less than half of it to spare
+would fill before the horizon, and the next round would shed the session back. A fresh placement reads the ceiling. The
+session fits the account when the runway reaches the horizon on every window its model draws that the account's window
+set holds, `five_hour` where the set has it, `seven_day` and the model's own week where it has one, so an approved Ultra
+account is judged on its 7-day window and the model week alone. An API-key account fits while its worst live rate-limit
+bucket reads under 1.0. A usage-based seat fits as an API-key account does: with no bucket to read, it has room.
 
 A move or a placement books its rewrite and its burn, on the windows its model draws that the destination's set holds,
 as a reservation, which the destination's prediction and burn count until the request's usage replaces it, the request
@@ -568,25 +574,26 @@ neither the spent nor the overage rule, since it draws usage credits and no plan
 
 Every rule takes its destination through one gate, the destination gate. It leaves out the source, the siblings the
 rule's own test refuses and every sibling inside `wind_down_minutes` of its subscription end (see **Subscription end**,
-below). It reads the moving session's fit on each sibling left (see **The projection**, above), its runway read to the
-ceiling less half its own burn over the time to the horizon, the margin a move keeps, and each sibling's burn read as
-its demand (see **The demand**, above), and sorts them into three orders: the siblings the session fits, else the
-siblings where its rewrite lands under the ceiling but its burn runs out before a horizon, those with the longest runway
-among them with every tie kept, else the rest, the least bad. The rule answers the first order that holds a sibling.
-Among the siblings the session fits, the pool's strategy ranks them and the one with the longest runway on the binding
-window takes it among the strategy's ties: under Pace the ties are the siblings at the best score, so the runway rarely
-speaks and the session moves to the fitting sibling with the most spare rate, under Priority the whole best tier, so the
-runway takes the place of the random draw inside it, and under round robin none, since the cursor picks the turn. Where
-none fits, the one rewrite-only sibling with the longest runway takes the move, a tie left to the strategy, and the
-least bad otherwise. A sibling at the pool's `in_flight_cap` stays out of the first two orders, so a move does not pick
-a full account while a free fitting one exists. A move's fit reads the windows the destination's window set holds, so a
-window the set lacks is no window. A sibling without a reading of a window the model draws that its set holds, or whose
-tier the profile has not named, reads least bad for a move, since its rewrite cannot be priced there. A placement reads
-such an account as untouched instead: an OAuth account without a tier fits with an unbounded runway, so of its windows
-only a spent one keeps a fresh session off it, however high its utilization reads. The shed rule moves a marked pin only
-to a destination it fits, in the same order, the strategy first and the longest runway among its ties, and keeps the
-mark otherwise. The decision record names the order the gate took, lists every sibling it read with its projection,
-rewrite, runway and verdict, and names the siblings the runway kept where it narrowed the strategy's tie.
+below). It reads the moving session's fit on each sibling left (see **The projection**, above), its runway read to each
+window's ceiling less half its own burn over the time to the horizon, the margin a move keeps, and each sibling's burn
+read as its demand (see **The demand**, above), and sorts them into three orders: the siblings the session fits, else
+the siblings where its rewrite lands under each window's ceiling but its burn runs out before a horizon, those with the
+longest runway among them with every tie kept, else the rest, the least bad. The rule answers the first order that holds
+a sibling. Among the siblings the session fits, the pool's strategy ranks them and the one with the longest runway on
+the binding window takes it among the strategy's ties: under Pace the ties are the siblings at the best score, so the
+runway rarely speaks and the session moves to the fitting sibling with the most spare rate, under Priority the whole
+best tier, so the runway takes the place of the random draw inside it, and under round robin none, since the cursor
+picks the turn. Where none fits, the one rewrite-only sibling with the longest runway takes the move, a tie left to the
+strategy, and the least bad otherwise. A sibling at the pool's `in_flight_cap` stays out of the first two orders, so a
+move does not pick a full account while a free fitting one exists. A move's fit reads the windows the destination's
+window set holds, so a window the set lacks is no window. A sibling without a reading of a window the model draws that
+its set holds, or whose tier the profile has not named, reads least bad for a move, since its rewrite cannot be priced
+there. A placement reads such an account as untouched instead: an OAuth account without a tier fits with an unbounded
+runway, so of its windows only a spent one keeps a fresh session off it, however high its utilization reads. The shed
+rule moves a marked pin only to a destination it fits, in the same order, the strategy first and the longest runway
+among its ties, and keeps the mark otherwise. The decision record names the order the gate took, lists every sibling it
+read with its projection, rewrite, runway and verdict, and names the siblings the runway kept where it narrowed the
+strategy's tie.
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
 for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while
@@ -630,39 +637,41 @@ readings project nothing (see **The projection**, above). The windows are tested
 then each model week a pin of the pool on the account draws, and the first that crosses fires and is the round's window.
 A weekly window, and the 5-hour window of a pool whose `slow_down` is off, crosses when the account's projection on it
 at the window's horizon reads over the line that horizon sets (see **The projection**, above), the wall where the
-horizon is the account's end or the window's own reset and `window_ceiling` at the five-hour bound, at a pinned
-selection and still reads over it at a pinned selection a wait later. The 5-hour window's horizon is its reset wherever
-its reading names one, so on a pool whose `slow_down` is off that window sheds only once its projection at the reset
-passes the wall. The wait is a quarter of the time from the first reading over `window_ceiling` to the window's wall
-instant as that selection reads it, and at most twice `burn_average_seconds` (an hour at the default), the cap alone
-while the projection's burn reads nothing. A burst toward a near wall instant fires early and a slow climb waits, and
-one large turn's charge, which moves the prediction before the burn average has absorbed it, fires no round at the
-selection it lands on, since the wait starts there. Where the line is the wall, the time a window reads between the
-ceiling and the wall counts toward its wait, since the wait runs from the first reading over the ceiling. The routing
-log's record of the selection names each projected window's wall instant beside its horizon, `wall_seven_day` beside
-`horizon_seven_day` for the week, and none where the window's burn reads nothing. The wait's stamp, the first reading
-over the ceiling, belongs to the window whose reset it was set under, so a reading whose reset lies an hour or more from
-that one, earlier or later, opens a new window whose wait starts at that reading, while a smaller move is the upstream's
-drift inside one window. The wait holds the round back and nothing else: the request is served as before, a mark already
-standing moves at its pin's next request, and a window inside its wait yields to the next in the order. The 5-hour
-window of a pool whose `slow_down` is on crosses when the stretch the slow-down reads has stood over
-`slow_down_stretch_seconds` for its safety wait, and the round's horizon moves earlier by the threshold (see
-[Slow-down](#slow-down), below). No 5-hour round fires while the window is younger than twice `burn_average_seconds` (an
-hour at the default), whatever fired the trigger, because each session's burn average still carries the previous
-window's last half hour over the reset and the projection would apply that rate to a horizon of up to five hours. While
-the hold runs, the routing log's record of the selection reads the shed rule `no` with the window's age
-(`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a weekly window past its
-wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take no hold, since the
-same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's horizon lies five
-hours ahead at most, so a weekly wall is shed only in its last five hours, when the gate also stops placing new sessions
-there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at most. The
-excess is the burn that, removed now, lands the fired window's projection at its horizon on the line it crossed, the
-wall or `window_ceiling`, and under the slow-down the demand's projection at the moved horizon on the ceiling. The
-round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn of the round's pins on that window,
-so the excess sets the amount and the cap bounds it.
+horizon is the account's end or the window's own reset and the window's own ceiling at the five-hour bound, which on a
+weekly window at the default `weekly_ceiling` of 1.0 is the wall too, at a pinned selection and still reads over it at a
+pinned selection a wait later. The 5-hour window's horizon is its reset wherever its reading names one, so on a pool
+whose `slow_down` is off that window sheds only once its projection at the reset passes the wall. The wait is a quarter
+of the time from the first reading over the window's ceiling to the window's wall instant as that selection reads it,
+and at most twice `burn_average_seconds` (an hour at the default), the cap alone while the projection's burn reads
+nothing. A burst toward a near wall instant fires early and a slow climb waits, and one large turn's charge, which moves
+the prediction before the burn average has absorbed it, fires no round at the selection it lands on, since the wait
+starts there. Where the line is the wall, the time a window reads between the ceiling and the wall counts toward its
+wait, since the wait runs from the first reading over the ceiling, which holds for the 5-hour window and for a weekly
+window of a pool that sets `weekly_ceiling` under 1.0. The routing log's record of the selection names each projected
+window's wall instant beside its horizon, `wall_seven_day` beside `horizon_seven_day` for the week, and none where the
+window's burn reads nothing. The wait's stamp, the first reading over the ceiling, belongs to the window whose reset it
+was set under, so a reading whose reset lies an hour or more from that one, earlier or later, opens a new window whose
+wait starts at that reading, while a smaller move is the upstream's drift inside one window. The wait holds the round
+back and nothing else: the request is served as before, a mark already standing moves at its pin's next request, and a
+window inside its wait yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when
+the stretch the slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon
+moves earlier by the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger
+than twice `burn_average_seconds` (an hour at the default), whatever fired the trigger, because each session's burn
+average still carries the previous window's last half hour over the reset and the projection would apply that rate to a
+horizon of up to five hours. While the hold runs, the routing log's record of the selection reads the shed rule `no`
+with the window's age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a
+weekly window past its wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take
+no hold, since the same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's
+horizon lies five hours ahead at most, so at the default `weekly_ceiling` of 1.0 a weekly round fires where the window
+would reach its wall inside the next five hours, near its reset or days from it, when the gate also stops placing new
+sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at
+most. The excess is the burn that, removed now, lands the fired window's projection at its horizon on the line it
+crossed, the wall or the window's own ceiling, and under the slow-down the demand's projection at the moved horizon on
+`five_hour_ceiling`. The round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn of the
+round's pins on that window, so the excess sets the amount and the cap bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
-next request, which renews the pin in place. The destination gate, the reservations and `window_ceiling` on every move
+next request, which renews the pin in place. The destination gate, the reservations and the two ceilings on every move
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
 The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
@@ -723,8 +732,8 @@ it is. A pin on an account cooling for the session's model, marked or not, is re
 another account moves the session, its mark clearing as `moved`. The round on the account still runs, since a cooldown
 can hold one model alone. An unmarked pin never moves for utilization. A mark holds until the pin moves, is released or
 expires, or its account heals: when the account's projection on the marked window reads under the line its horizon sets
-(the wall at the account's end or the window's own reset, `window_ceiling` at the five-hour bound) at the pin's next
-request, or, for a mark the stretch made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark
+(the wall at the account's end or the window's own reset, the window's own ceiling at the five-hour bound) at the pin's
+next request, or, for a mark the stretch made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark
 clears and the pin stays. A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus
 has two roles, the pause between two rounds on one account and the time a shed session keeps off the account that shed
 it. The marks live on the pins' rows in the registry, beside each account's last round, so a restart neither forgets a
@@ -778,9 +787,9 @@ and a failover's move adds its `cause`: for a cooldown its `scope` (`account`, `
 its `reason` (the cooldown row's own word, such as `rate_limit`) and its `window`, and for a mark the account's `state`
 and the state's `cause`. A failover with neither, a 401 whose refresh failed with a transient error the request could
 not wait out, carries none. A mark that clears records `mark_cleared` with the reason `healed` (the account's projection
-on the marked window read under its line again, the wall at the window's reset or the account's end and the ceiling at
-the five-hour bound, which the event names as `limit`, or its stretch under the threshold for a mark the stretch made),
-`moved` or `released`. A reservation that leaves without the usage that would have replaced it records
+on the marked window read under its line again, the wall at the window's reset or the account's end and the window's own
+ceiling at the five-hour bound, which the event names as `limit`, or its stretch under the threshold for a mark the
+stretch made), `moved` or `released`. A reservation that leaves without the usage that would have replaced it records
 `reservation_expired`, with the relay's word for a request that ended without usage (`canceled`, `exhausted`, `refused`
 or `transport_error`) or `timeout` for a booking an hour old. A pin released without a move records `pin_expired` with
 `reasons`, every fact the selection found against the account: `attempted`, `budget` (the pinned member has reached one
@@ -807,10 +816,10 @@ on one is placed afresh and its placement names no source.
 ### Slow-down
 
 With the pool's `slow_down` on, the router holds a slowed account's sessions before each request, so the account's
-5-hour window reaches its reset under `window_ceiling` instead of hitting it. At every selection of a pinned request on
-a subscription account whose plan the cost model prices and whose 5-hour window has a reading, the router reads the
-window's stretch: the time between the instant the account's unheld demand would pass the ceiling and the reset,
-`R - (ceiling - U) / B` for the time `R` to the window's horizon, the window's prediction `U` and the demand `B` of the
+5-hour window reaches its reset under `five_hour_ceiling` instead of hitting it. At every selection of a pinned request
+on a subscription account whose plan the cost model prices and whose 5-hour window has a reading, the router reads the
+window's stretch: the time between the instant the account's unheld demand would pass the ceiling and the reset, `R -
+(ceiling - U) / B` for the time `R` to the window's horizon, the window's prediction `U` and the demand `B` of the
 pool's sessions on it (see **The demand**, above), the demand's in-band hours weighed at one over the band factor where
 a base-regime span crosses a band edge, as the projection's are. A stretch at or under zero is nothing to do, and a
 window already at the ceiling reads a stretch of at least the time to its reset. The stretch is the time the slow-down
@@ -870,15 +879,15 @@ The handover to the round: with `load_shedding` on as well, the 5-hour window's 
 projection. The round fires when the stretch has read over `slow_down_stretch_seconds` at a pinned selection and still
 reads over at a pinned selection two minutes or more later, the safety wait, during which the slow-down already runs at
 the factor the stretch implies, so the wait costs no overrun and keeps one large turn's charge from firing a round on
-its own. The round's horizon is the reset less the threshold, and its excess is the demand's projection over the ceiling
-at that horizon, the burn whose removal brings the remaining sessions' stretch to the threshold exactly: the round
-removes only what the slow-down cannot cover, the slow-down covers the rest, and the pins that stay are slowed at the
-account's speed. When the reset is nearer than the threshold the moved horizon lies in the past, so no round fires
-however long the stretch reads and the slow-down alone holds the window to its reset. At the default threshold a round
-moves sessions only when the demand would pass the ceiling two and a half hours before the reset, so inside a window's
-last two and a half hours the slow-down alone holds the account, and a shorter threshold, one that moves sessions
-earlier, is a pool's own setting. A mark the stretch made heals when the stretch reads at or under the threshold at the
-pin's next request. The weekly windows keep the projection trigger on the achieved burn.
+its own. The round's horizon is the reset less the threshold, and its excess is the demand's projection over
+`five_hour_ceiling` at that horizon, the burn whose removal brings the remaining sessions' stretch to the threshold
+exactly: the round removes only what the slow-down cannot cover, the slow-down covers the rest, and the pins that stay
+are slowed at the account's speed. When the reset is nearer than the threshold the moved horizon lies in the past, so no
+round fires however long the stretch reads and the slow-down alone holds the window to its reset. At the default
+threshold a round moves sessions only when the demand would pass the ceiling two and a half hours before the reset, so
+inside a window's last two and a half hours the slow-down alone holds the account, and a shorter threshold, one that
+moves sessions earlier, is a pool's own setting. A mark the stretch made heals when the stretch reads at or under the
+threshold at the pin's next request. The weekly windows keep the projection trigger on the achieved burn.
 
 The two switches are independent. With `slow_down` on and `load_shedding` off no round runs on any window and the
 slow-down holds the line to the cap, where the ceiling's margin absorbs what the cap cannot. The chain of last resorts
@@ -1268,5 +1277,6 @@ the upstream refuses the dead credential, so the session's next request fails ov
 
 An end that falls before a window's horizon becomes that horizon ([The windows the router works
 from](#the-windows-the-router-works-from)). Such a window sheds only once the account's projection at the end passes the
-wall, 1.0, in place of `window_ceiling`, since the quota left at the end is lost, and a standing mark on it heals once
-the projection there reads under the wall ([Moves](#moves)). A move's fit and a placement keep reading the ceiling.
+wall, 1.0, in place of the window's own ceiling, since the quota left at the end is lost, and a standing mark on it
+heals once the projection there reads under the wall ([Moves](#moves)). A move's fit and a placement keep reading the
+window's ceiling.

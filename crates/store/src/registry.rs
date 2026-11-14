@@ -236,9 +236,13 @@ impl Default for Affinity {
     }
 }
 
-/// The `window_ceiling` a pool is created with: a margin below every window's wall for a stale reading or a large
+/// The `five_hour_ceiling` a pool is created with: a margin below the 5-hour wall for a stale reading or a large
 /// turn, while a session rarely moves off a window it would have finished warm.
-pub const DEFAULT_WINDOW_CEILING: f64 = 0.95;
+pub const DEFAULT_FIVE_HOUR_CEILING: f64 = 0.95;
+
+/// The `weekly_ceiling` a pool is created with: the wall itself, since a share of a week left at its reset is never
+/// drawn.
+pub const DEFAULT_WEEKLY_CEILING: f64 = 1.0;
 
 #[derive(Clone, Debug)]
 pub struct PoolRow {
@@ -248,9 +252,11 @@ pub struct PoolRow {
     pub strategy: Strategy,
     pub affinity_ttl_seconds: u64,
     pub overage_policy: OveragePolicy,
-    /// One fraction for every plan window: the shedding trigger's ceiling and the runway ceiling of every move and
-    /// placement.
-    pub window_ceiling: f64,
+    /// The 5-hour window's fraction: the shedding trigger's ceiling and the runway ceiling of every move and
+    /// placement on that window.
+    pub five_hour_ceiling: f64,
+    /// The same fraction for the 7-day window and each model week.
+    pub weekly_ceiling: f64,
     pub model_rules: Vec<ModelRule>,
     pub keepalive_json: String,
     pub body_capture_hours: u32,
@@ -285,7 +291,8 @@ impl PoolRow {
             strategy: Strategy::Pace,
             affinity_ttl_seconds: 3600,
             overage_policy: OveragePolicy::PreferPlan,
-            window_ceiling: DEFAULT_WINDOW_CEILING,
+            five_hour_ceiling: DEFAULT_FIVE_HOUR_CEILING,
+            weekly_ceiling: DEFAULT_WEEKLY_CEILING,
             model_rules: Vec::new(),
             keepalive_json: "{}".into(),
             body_capture_hours: 0,
@@ -821,17 +828,17 @@ fn json_text<T: serde::de::DeserializeOwned>(raw: &str, idx: usize) -> rusqlite:
     })
 }
 
-/// The 34 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
+/// The 35 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
 /// them in this order too, so `row_to_pool` indexes each column by its bind.
 macro_rules! pool_columns {
     () => {
-        "id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, window_ceiling, model_rules_json, \
+        "id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, five_hour_ceiling, model_rules_json, \
          keepalive_json, body_capture_hours, prefer_subscription, shed_cap, burn_average_seconds, shed_dwell_seconds, \
          load_shedding, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, \
          overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, \
          subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, \
          slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, \
-         thinking_diagnostics"
+         thinking_diagnostics, weekly_ceiling"
     };
 }
 
@@ -854,7 +861,7 @@ macro_rules! guardrail_params {
     };
 }
 
-/// The binds `?1` to `?34` the pool insert and the pool update share, in their column order, then each statement's
+/// The binds `?1` to `?35` the pool insert and the pool update share, in their column order, then each statement's
 /// own tail.
 macro_rules! pool_params {
     ($row:ident, $($tail:expr),+ $(,)?) => {
@@ -865,7 +872,7 @@ macro_rules! pool_params {
             $row.strategy,
             $row.affinity_ttl_seconds as i64,
             $row.overage_policy,
-            $row.window_ceiling,
+            $row.five_hour_ceiling,
             serde_json::to_string(&$row.model_rules)?,
             $row.keepalive_json,
             $row.body_capture_hours,
@@ -893,6 +900,7 @@ macro_rules! pool_params {
             $row.failover.return_to_plan,
             $row.failover.return_to_plan_dwell_seconds,
             $row.thinking_diagnostics,
+            $row.weekly_ceiling,
             $($tail),+
         ]
     };
@@ -1015,7 +1023,7 @@ impl Store {
                 "INSERT INTO pools (",
                 pool_columns!(),
                 ", created_at, updated_at, incarnation) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?35, ?36)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?36, ?37)"
             ),
             pool_params!(row, now, incarnation as i64),
         )
@@ -2054,7 +2062,7 @@ static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "UPDATE pools SET {set}, updated_at = ?35 WHERE id = ?1 AND updated_at = ?36 AND incarnation = ?37"
+        "UPDATE pools SET {set}, updated_at = ?36 WHERE id = ?1 AND updated_at = ?37 AND incarnation = ?38"
     )
 });
 
@@ -2118,12 +2126,13 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         strategy: r.get(3)?,
         affinity_ttl_seconds: r.get::<_, i64>(4)? as u64,
         overage_policy: r.get(5)?,
-        window_ceiling: r.get(6)?,
+        five_hour_ceiling: r.get(6)?,
+        weekly_ceiling: r.get(34)?,
         model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
         body_capture_hours: r.get(9)?,
-        created_at: r.get(34)?,
-        updated_at: r.get(35)?,
+        created_at: r.get(35)?,
+        updated_at: r.get(36)?,
         prefer_subscription: r.get(10)?,
         shedding: Shedding {
             shed_cap: r.get(11)?,
@@ -2156,7 +2165,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(26)? as u64,
         },
         auto_mode_server: r.get(27)?,
-        incarnation: r.get::<_, i64>(36)? as u64,
+        incarnation: r.get::<_, i64>(37)? as u64,
     })
 }
 
@@ -2244,7 +2253,8 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
         "strategy": row.strategy.as_str(),
         "affinity_ttl_seconds": row.affinity_ttl_seconds,
         "overage_policy": row.overage_policy.as_str(),
-        "window_ceiling": row.window_ceiling,
+        "five_hour_ceiling": row.five_hour_ceiling,
+        "weekly_ceiling": row.weekly_ceiling,
         "model_rules": row.model_rules,
         "body_capture_hours": row.body_capture_hours,
         "prefer_subscription": row.prefer_subscription,

@@ -55,7 +55,6 @@ struct Allowance {
 
 #[derive(Serialize)]
 struct PoolView {
-    ceiling: f64,
     pinning: &'static str,
     strategy: &'static str,
 }
@@ -86,6 +85,8 @@ struct WindowView {
     burn_per_hour: f64,
     demand_per_hour: f64,
     projected_at_horizon: f64,
+    /// The line `runway_minutes` reads to, so a reader needs no rule for which of the pool's ceilings a window takes.
+    ceiling: f64,
     runway_minutes: Option<u64>,
 }
 
@@ -158,7 +159,6 @@ async fn allowance(
             protocol: PROTOCOL,
             now: stamp(now),
             pool: PoolView {
-                ceiling: pool.window_ceiling,
                 // A zero TTL keeps no pin past its request, whatever the mode reads.
                 pinning: if pool.affinity_ttl_seconds == 0 {
                     "off"
@@ -236,14 +236,15 @@ fn account_view(
         .windows
         .into_iter()
         .map(|(window, w)| {
-            let runway = runway_minutes(w.predicted, w.burn, ceiling(pool, &window), now, w.wall);
+            let line = ceiling(pool, &window);
             let view = WindowView {
                 utilization: w.predicted,
                 horizon_at: w.wall.map(stamp),
                 burn_per_hour: w.burn,
                 demand_per_hour: w.demand,
                 projected_at_horizon: w.projection,
-                runway_minutes: runway,
+                ceiling: line,
+                runway_minutes: runway_minutes(w.predicted, w.burn, line, now, w.wall),
             };
             (window, view)
         })

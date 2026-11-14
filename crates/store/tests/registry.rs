@@ -87,10 +87,13 @@ fn rename(
 }
 
 /// The eighth step taken back on a file this build wrote, which every case that takes a file back past version 8
-/// runs first, since the step refuses its table and its pool column as duplicates on reopen.
+/// runs first, since on reopen the step refuses its table and its two new pool columns as duplicates and finds no
+/// `window_ceiling` to rename.
 fn eighth_step_taken_back(conn: &rusqlite::Connection) {
     conn.execute_batch(
-        "DROP TABLE model_week_hours;
+        "ALTER TABLE pools DROP COLUMN weekly_ceiling;
+         ALTER TABLE pools RENAME COLUMN five_hour_ceiling TO window_ceiling;
+         DROP TABLE model_week_hours;
          ALTER TABLE pools DROP COLUMN thinking_diagnostics;",
     )
     .unwrap();
@@ -403,7 +406,8 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
 }
 
 #[test]
-fn a_registry_before_the_eighth_step_lists_its_stored_pool_with_the_thinking_switch_off() {
+fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_off_and_a_weekly_ceiling_of_one_unless_another_ceiling_was_chosen(
+) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
     let path = dir.path().join("router.sqlite");
@@ -418,8 +422,19 @@ fn a_registry_before_the_eighth_step_lists_its_stored_pool_with_the_thinking_swi
                 "test",
             )
             .unwrap();
+        store
+            .insert_pool(
+                &PoolRow {
+                    label: "Low".into(),
+                    five_hour_ceiling: 0.9,
+                    ..PoolRow::new("low")
+                },
+                "test",
+            )
+            .unwrap();
     }
-    // The file as a version-7 build left it: the pool stored, the eighth step taken back and the marker at 7.
+    // The file as a version-7 build left it: the pools stored, the eighth step taken back, which leaves each pool's
+    // one ceiling in `window_ceiling`, and the marker at 7.
     let conn = rusqlite::Connection::open(&path).unwrap();
     eighth_step_taken_back(&conn);
     conn.execute_batch("UPDATE meta SET value = '7' WHERE key = 'schema_version';")
@@ -433,8 +448,22 @@ fn a_registry_before_the_eighth_step_lists_its_stored_pool_with_the_thinking_swi
             .iter()
             .map(|p| (p.id.as_str(), p.thinking_diagnostics))
             .collect::<Vec<_>>(),
-        [("main", false)],
+        [("low", false), ("main", false)],
         "a pool stored before the step reads the switch off"
+    );
+    let ceilings = |id: &str| {
+        let pool = store.pool(id).unwrap().expect("the stored pool");
+        (pool.five_hour_ceiling, pool.weekly_ceiling)
+    };
+    assert_eq!(
+        ceilings("main"),
+        (0.95, 1.0),
+        "a pool at the old default keeps it for the 5-hour window and reads the wall for its weeks"
+    );
+    assert_eq!(
+        ceilings("low"),
+        (0.9, 0.9),
+        "a pool at another ceiling keeps it for both kinds of window"
     );
 }
 
@@ -1371,7 +1400,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
             &PoolRow {
                 body_capture_hours: 24,
                 strategy: Strategy::Pace,
-                window_ceiling: 0.8,
+                five_hour_ceiling: 0.8,
                 model_rules: pool_rules.clone(),
                 ..pool("main")
             },
@@ -1398,7 +1427,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
         (
             updated.body_capture_hours,
             updated.strategy,
-            updated.window_ceiling,
+            updated.five_hour_ceiling,
             updated.model_rules.clone(),
             updated_key.body_capture_hours,
             updated_key.model_rules.clone(),
@@ -1423,7 +1452,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
             .pools
             .iter()
             .find(|p| p.id == "main")
-            .map(|p| (p.strategy, p.window_ceiling)),
+            .map(|p| (p.strategy, p.five_hour_ceiling)),
         Some((Strategy::Pace, 0.8)),
         "and the load every reader starts from reads both back"
     );

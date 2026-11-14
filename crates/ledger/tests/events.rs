@@ -948,8 +948,8 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
     let rows = db
         .read_blocking(phoebis_ledger::routing_conditions)
         .unwrap();
-    let ceiling = serde_json::json!(["window_ceiling"]);
-    let wall_settings = serde_json::json!(["shed_cap", "window_ceiling"]);
+    let ceiling = serde_json::json!(["five_hour_ceiling"]);
+    let wall_settings = serde_json::json!(["shed_cap", "five_hour_ceiling"]);
     assert_eq!(
         rows.iter()
             .map(|r| (
@@ -1028,7 +1028,11 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
                 "windows": ["five_hour"],
             }),
             drift.clone(),
-            serde_json::json!({ "accounts": ["a"], "rounds": 1, "setting": ceiling }),
+            serde_json::json!({
+                "accounts": ["a"],
+                "rounds": 1,
+                "setting": ["five_hour_ceiling", "weekly_ceiling"],
+            }),
             serde_json::json!({
                 "early_ms": null,
                 "projection_error": 1.0 - 0.97,
@@ -1053,6 +1057,45 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
         [("meter_drift", "g", t + HOUR, &drift)],
         "a day later the trailing 24 hours hold none of the events, so every condition they fed clears, while the \
          drift reads the reconciled windows"
+    );
+}
+
+#[test]
+fn a_wall_names_the_ceiling_of_its_windows_kind_beside_the_shed_cap() {
+    const HOUR: i64 = 3_600_000;
+    let t = 1_000 * HOUR;
+    let spent = |account: &str, window: &str| EventRecord {
+        at: t,
+        kind: "window_spent".into(),
+        account_id: Some(account.into()),
+        detail: Some(serde_json::json!({ "window": window, "source": "poll" }).to_string()),
+        ..Default::default()
+    };
+    let db = LedgerDb::open_in_memory().unwrap();
+    for row in [spent("a", "five_hour"), spent("b", "seven_day_fable")] {
+        db.insert_event(&row).unwrap();
+    }
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, t + HOUR)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.kind.as_str() == "wall_reached")
+            .map(|r| (r.subject_id.as_str(), r.detail["setting"].clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("a", serde_json::json!(["shed_cap", "five_hour_ceiling"])),
+            ("b", serde_json::json!(["shed_cap", "weekly_ceiling"])),
+        ],
+        "a model week reads the weekly ceiling as the 7-day window does: {rows:?}"
     );
 }
 

@@ -14,7 +14,8 @@
         "subagent_placement": "by_strategy",
         "session_placement": "by_strategy",
         "min_shared_prefix_tokens": 20000,
-        "window_ceiling": 0.95,
+        "five_hour_ceiling": 0.95,
+        "weekly_ceiling": 1.0,
         "model_rules": [
           {
             "pattern": "claude-haiku-*",
@@ -419,7 +420,8 @@
         "subagent_placement": "by_strategy",
         "session_placement": "by_strategy",
         "min_shared_prefix_tokens": 20000,
-        "window_ceiling": 0.95,
+        "five_hour_ceiling": 0.95,
+        "weekly_ceiling": 1.0,
         "model_rules": [],
         "load_shedding": true,
         "shed_cap": 0.5,

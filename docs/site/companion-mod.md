@@ -130,13 +130,12 @@ a turn that felt slow. It proposes no model or effort change and names no accoun
 The answer is the key's pool as the router reads it at that instant. The protocol page lists every field with its type
 ([The companion routes](relay.md#the-companion-routes)). This section says what the model learns from each part.
 
-`pool` carries the pool's `ceiling`, the share of a window the pool fills an account to, its `pinning` mode and its
-`strategy`. `accounts` holds one entry per active account of the pool under its pseudonym `id`, with its `funding`
-(`plan`, `usage_based` or `api_key`), its rate-limit `tier`, the `obstacle` the selector holds against it at that
-instant (`cooldown`, `budget`, `spent` and the other words the routing log uses, or `null` where the selector would
-place on it), its `pace_score`, the spare rate Pace scores it by, the `slow_down` in force on it or `null`, its
-`windows`, and its `spend`, one row per spend budget the ledger has reported for the account, with the period, the
-dollars spent, the budget and the period's end.
+`pool` carries the pool's `pinning` mode and its `strategy`. `accounts` holds one entry per active account of the pool
+under its pseudonym `id`, with its `funding` (`plan`, `usage_based` or `api_key`), its rate-limit `tier`, the `obstacle`
+the selector holds against it at that instant (`cooldown`, `budget`, `spent` and the other words the routing log uses,
+or `null` where the selector would place on it), its `pace_score`, the spare rate Pace scores it by, the `slow_down` in
+force on it or `null`, its `windows`, and its `spend`, one row per spend budget the ledger has reported for the account,
+with the period, the dollars spent, the budget and the period's end.
 
 `windows` holds one entry per plan window the account has a reading of, keyed by the window id (`five_hour`,
 `seven_day`, or a model's own week, as [The windows the router works from](routing.md#the-windows-the-router-works-from)
@@ -144,9 +143,11 @@ names them), and is empty for an API-key account. `utilization` is the share use
 `burn_per_hour` is the share the account's sessions burn in an hour, and `demand_per_hour` what they would burn with no
 slow-down holding them. `horizon_at` is the window's reset, or the account's subscription end when that comes first, and
 `null` where neither is known. `projected_at_horizon` is the predicted share at the earlier of `horizon_at` and five
-hours from now. `runway_minutes` is the whole minutes until the share reaches the pool's ceiling at the current burn:
-`0` at or above the ceiling, a number while the burn would reach the ceiling before the window resets, and `null` where
-nothing bounds the runway, because nothing burns or because the window resets first.
+hours from now. `ceiling` is the share of the window the pool fills an account to, the pool's 5-hour ceiling on
+`five_hour` and its weekly ceiling on the other windows. `runway_minutes` is the whole minutes until the share reaches
+the pool's ceiling at the current burn: `0` at or above the ceiling, a number while the burn would reach the ceiling
+before the window resets, and `null` where nothing bounds the runway, because nothing burns or because the window resets
+first.
 
 `pins` holds one entry per pin of this session under the key: the `agent` (`main` or the subagent's id), the `model`,
 the `account` by its pseudonym, when the pin was placed and last used, `warm` and `warm_until` for its cache entry, its

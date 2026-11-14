@@ -2,7 +2,6 @@
   "protocol": 1,
   "now": "1970-01-01T00:16:40Z",
   "pool": {
-    "ceiling": 0.95,
     "pinning": "always",
     "strategy": "priority"
   },
@@ -38,6 +37,7 @@
           "burn_per_hour": 0.0,
           "demand_per_hour": 0.0,
           "projected_at_horizon": 0.25,
+          "ceiling": 0.95,
           "runway_minutes": null
         },
         "seven_day": {
@@ -46,6 +46,7 @@
           "burn_per_hour": 0.0,
           "demand_per_hour": 0.0,
           "projected_at_horizon": 0.4,
+          "ceiling": 1.0,
           "runway_minutes": null
         }
       },

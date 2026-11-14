@@ -280,29 +280,55 @@
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "window_ceiling",
+        "field": "five_hour_ceiling",
         "value": 0.5,
         "status": 200
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "window_ceiling",
+        "field": "five_hour_ceiling",
         "value": 0.49,
         "status": 400,
-        "error": "window_ceiling is between 0.5 and 1.0"
+        "error": "five_hour_ceiling is between 0.5 and 1.0"
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "window_ceiling",
+        "field": "five_hour_ceiling",
         "value": 1.0,
         "status": 200
       },
       {
         "route": "PATCH /admin/pools/{id}",
-        "field": "window_ceiling",
+        "field": "five_hour_ceiling",
         "value": 1.01,
         "status": 400,
-        "error": "window_ceiling is between 0.5 and 1.0"
+        "error": "five_hour_ceiling is between 0.5 and 1.0"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "weekly_ceiling",
+        "value": 0.5,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "weekly_ceiling",
+        "value": 0.49,
+        "status": 400,
+        "error": "weekly_ceiling is between 0.5 and 1.0"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "weekly_ceiling",
+        "value": 1.0,
+        "status": 200
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "weekly_ceiling",
+        "value": 1.01,
+        "status": 400,
+        "error": "weekly_ceiling is between 0.5 and 1.0"
       },
       {
         "route": "PATCH /admin/pools/{id}",

@@ -7265,13 +7265,13 @@ fn round_rates(
     Some(burn.input / 1_000.0 * per_hour / 3_600.0)
 }
 
-/// `sessions_harness_with` with the router pricing the pins' burn through `round_rates`, the pool's ceiling at 0.95
-/// and its burn average at 1,800 seconds.
+/// `sessions_harness_with` with the router pricing the pins' burn through `round_rates`, the pool's 5-hour ceiling at
+/// 0.95, its weekly ceiling at the default 1.0 and its burn average at 1,800 seconds.
 async fn sessions_harness_rated(pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>) -> common::Full {
     use common::{generation, login, post};
     let seed = common::admin_parts_full().await;
     let seeding = login(&seed.app, "admin-secret").await;
-    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","window_ceiling":0.95,"burn_average_seconds":1800,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
     post(
         &seed.app,
         "/admin/keys",
@@ -7335,7 +7335,7 @@ async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_bur
     use common::{login, wait_json, NOW};
     const HOUR: i64 = 3_600_000;
     // One pin on `business` burning five points of its 5-hour window an hour, the window at 0.80 and resetting in four
-    // hours, under the pool's ceiling of 0.95: the account reaches the ceiling in (0.95 - 0.80) / 0.05 = 3 hours.
+    // hours, under the pool's 5-hour ceiling of 0.95: the account reaches it in (0.95 - 0.80) / 0.05 = 3 hours.
     // `fit_of`'s arithmetic for a destination would add the pin's burn a second time and its cold rewrite, which the
     // rig prices at none, so it would read (0.15 - 0) / 0.10 = 1.5 hours.
     let parts = sessions_harness_rated(|generation| {
@@ -7347,7 +7347,8 @@ async fn a_pinned_sessions_runway_reads_its_accounts_own_projection_with_its_bur
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
     // Read first with the 5-hour window resetting in two hours, before its three hours to the ceiling, and the week's
-    // (0.95 - 0.30) / 0.002 = 325 hours past its reset 50 hours out: each window resets before the ceiling is reached.
+    // (1.0 - 0.30) / 0.002 = 350 hours to its weekly ceiling past its reset 50 hours out: each window resets before its
+    // ceiling is reached.
     read_windows_at(
         &parts,
         "business",
@@ -7632,7 +7633,7 @@ async fn slow_down_harness(slow_down: bool) -> common::Full {
         .unwrap();
     let seeding = login(&seed.app, "admin-secret").await;
     let pool = format!(
-        r#"{{"id":"main","label":"Main","strategy":"priority","window_ceiling":0.95,"burn_average_seconds":1800,"slow_down":{slow_down},"slow_down_stretch_seconds":600,"slow_down_hold_seconds":60,"members":[{{"account_id":"business","priority":0}},{{"account_id":"direct","priority":1}}]}}"#
+        r#"{{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"slow_down":{slow_down},"slow_down_stretch_seconds":600,"slow_down_hold_seconds":60,"members":[{{"account_id":"business","priority":0}},{{"account_id":"direct","priority":1}}]}}"#
     );
     assert_eq!(
         post(&seed.app, "/admin/pools", &pool, Some(&seeding))

@@ -604,7 +604,6 @@ one instant.
 
 | Field | Value |
 | --- | --- |
-| `ceiling` | The pool's `window_ceiling`, the share of a window the router fills an account to ([Pools](routing.md#pools)) |
 | `pinning` | The pool's affinity mode, `always` or `when_cached`, or `off` when the pool's affinity TTL is zero, which keeps no pin past its request |
 | `strategy` | `pace`, `priority` or `round_robin` ([Pools](routing.md#pools)) |
 
@@ -633,7 +632,8 @@ Each window:
 | `burn_per_hour` | The share the account's sessions burn an hour on the window |
 | `demand_per_hour` | The share they would burn an hour with no slow-down holding them |
 | `projected_at_horizon` | The predicted share at the earlier of `horizon_at` and five hours from now |
-| `runway_minutes` | The whole minutes until the share reaches the pool's ceiling at `burn_per_hour`: `0` at or above the ceiling, and `null` where nothing burns or where the window resets before the ceiling is reached |
+| `ceiling` | The share of the window the router fills an account to: the pool's `five_hour_ceiling` on `five_hour` and its `weekly_ceiling` on the 7-day window and each model week ([Pools](routing.md#pools)) |
+| `runway_minutes` | The whole minutes until the share reaches the window's `ceiling` at `burn_per_hour`: `0` at or above it, and `null` where nothing burns or where the window resets before it is reached |
 
 Each spend row:
 
@@ -655,7 +655,7 @@ Each spend row:
 | `last_used_at` | When a request last used it |
 | `warm` | Whether the pin's cache entry is alive at `now`, by the selector's own reading |
 | `warm_until` | The first instant `warm` reads false: the last refresh, or the last use for a pin only auxiliary requests have used since its placement, plus the cache TTL |
-| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling on the window that binds among those the pin's model draws, `null` where no window bounds it |
+| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling of the window that binds among those the pin's model draws, `null` where no window bounds it |
 | `binding_window` | The window the runway reads, `null` unless the runway is bounded |
 | `slow_down` | `null` without an entry in force on the account, else `factor` and `speed` |
 
@@ -674,7 +674,7 @@ session's main agent is pinned to:
 {
   "protocol": 1,
   "now": "1970-01-01T00:16:40Z",
-  "pool": { "ceiling": 0.95, "pinning": "always", "strategy": "priority" },
+  "pool": { "pinning": "always", "strategy": "priority" },
   "accounts": [
     {
       "id": "aaaaaaaa", "funding": "api_key", "tier": null, "obstacle": null, "pace_score": 1.0,
@@ -686,9 +686,11 @@ session's main agent is pinned to:
       "pace_score": 0.008333333333333333, "slow_down": null,
       "windows": {
         "five_hour": { "utilization": 0.25, "horizon_at": "1970-01-01T02:16:40Z", "burn_per_hour": 0.0,
-                       "demand_per_hour": 0.0, "projected_at_horizon": 0.25, "runway_minutes": null },
+                       "demand_per_hour": 0.0, "projected_at_horizon": 0.25, "ceiling": 0.95,
+                       "runway_minutes": null },
         "seven_day": { "utilization": 0.4, "horizon_at": "1970-01-04T00:16:40Z", "burn_per_hour": 0.0,
-                       "demand_per_hour": 0.0, "projected_at_horizon": 0.4, "runway_minutes": null }
+                       "demand_per_hour": 0.0, "projected_at_horizon": 0.4, "ceiling": 1.0,
+                       "runway_minutes": null }
       },
       "spend": []
     }

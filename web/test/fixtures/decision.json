@@ -39,7 +39,7 @@
       },
       "attempted": [],
       "holds": [],
-      "registry_revision": 68,
+      "registry_revision": 72,
       "body_tokens": 0
     },
     "pin": {
@@ -74,7 +74,8 @@
       "session_placement": "by_warm_prefix",
       "min_shared_prefix_tokens": 20000,
       "subagent_placement": "by_strategy",
-      "window_ceiling": 0.95,
+      "five_hour_ceiling": 0.95,
+      "weekly_ceiling": 1.0,
       "load_shedding": true,
       "migrate_when_spent": true,
       "overage_move_grace_minutes": 30,
@@ -90,7 +91,7 @@
       "slow_down_hold_seconds": 120,
       "in_flight_cap": 16,
       "retry_in_place_seconds": 60,
-      "pool_updated_at": 1791721000061
+      "pool_updated_at": 1791721000063
     },
     "candidates": [
       {

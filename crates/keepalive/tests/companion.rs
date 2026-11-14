@@ -524,15 +524,21 @@ async fn a_weekly_windows_runway_runs_to_its_reset_past_the_five_hour_horizon() 
     read_window(&r, "a", SEVEN_DAY, 0.4, NOW + 24 * HOUR_MS).await;
     let answer = get(&app, Some(SESSION), Some(KEY)).await;
     let week = &answer.body["accounts"][0]["windows"][SEVEN_DAY];
-    // 0.55 of the week left to the 0.95 ceiling at 0.1 an hour is 5.5 hours, past the five-hour horizon and inside
-    // the reset a day out.
+    // 0.6 of the week left to the weekly ceiling of 1.0 at 0.1 an hour is 6 hours, past the five-hour horizon and
+    // inside the reset a day out.
     assert_eq!(
         (
             week["burn_per_hour"].clone(),
+            week["ceiling"].clone(),
             week["runway_minutes"].clone(),
             week["horizon_at"].clone()
         ),
-        (json!(0.1), json!(330), json!("1970-01-02T00:16:40Z")),
+        (
+            json!(0.1),
+            json!(1.0),
+            json!(360),
+            json!("1970-01-02T00:16:40Z")
+        ),
         "{}",
         answer.text
     );
@@ -557,11 +563,11 @@ async fn a_pins_runway_reads_the_routers_milliseconds_as_whole_minutes() {
     r.observe("main").await;
     read_window(&r, "a", SEVEN_DAY, 0.4, NOW + 24 * HOUR_MS).await;
     let answer = get(&app, Some(SESSION), Some(KEY)).await;
-    // The router's runway on the week is 0.55 to the 0.95 ceiling at 0.1 an hour, 19,800,000 ms inside the reset a day
-    // out: 330 minutes.
+    // The router's runway on the week is 0.6 to the weekly ceiling of 1.0 at 0.1 an hour, 21,600,000 ms inside the
+    // reset a day out: 360 minutes.
     assert_eq!(
         answer.body["pins"][0]["runway_minutes"],
-        json!(330),
+        json!(360),
         "{}",
         answer.text
     );

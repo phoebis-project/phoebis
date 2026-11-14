@@ -1312,11 +1312,11 @@ async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_i
             &json!({
                 "accounts": ["business"],
                 "rounds": 1,
-                "setting": ["window_ceiling"],
-                "setting_values": { "window_ceiling": 0.95 },
+                "setting": ["five_hour_ceiling", "weekly_ceiling"],
+                "setting_values": { "five_hour_ceiling": 0.95, "weekly_ceiling": 1.0 },
             })
         ),
-        "the condition dates from the round, opens the pool's card and carries the pool's ceiling beside its name"
+        "the condition dates from the round, opens the pool's card and carries the pool's ceilings beside their names"
     );
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(status, 200);
@@ -1337,7 +1337,7 @@ async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_i
         (
             false,
             None,
-            &json!({ "accounts": [], "rounds": 0, "setting": ["window_ceiling"] })
+            &json!({ "accounts": [], "rounds": 0, "setting": ["five_hour_ceiling", "weekly_ceiling"] })
         ),
         "the condition clears once the trailing day holds no such round"
     );
@@ -1349,7 +1349,7 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
     let (attention, _arm) = rig.attention(None);
     // The pool's own ceiling, so the value the condition carries beside the setting is the case's.
     let mut pool = rig.store.pool("main").unwrap().unwrap();
-    pool.window_ceiling = 0.85;
+    pool.five_hour_ceiling = 0.85;
     rig.store
         .update_pool_with_members_and_guardrails(&pool, pool.updated_at, None, None, "test")
         .unwrap();
@@ -1394,8 +1394,8 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
             &json!({
                 "fits": { "fits": 1 },
                 "moves": 1,
-                "setting": ["window_ceiling"],
-                "setting_values": { "window_ceiling": 0.85 },
+                "setting": ["five_hour_ceiling"],
+                "setting_values": { "five_hour_ceiling": 0.85 },
                 "windows": ["five_hour"],
             })
         ),
@@ -1421,7 +1421,7 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
         (
             false,
             None,
-            &json!({ "fits": {}, "moves": 0, "setting": ["window_ceiling"], "windows": [] })
+            &json!({ "fits": {}, "moves": 0, "setting": [], "windows": [] })
         ),
         "the condition clears once the trailing day holds no such move"
     );
@@ -1465,7 +1465,7 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
     // The pool's own values, so the values the condition carries beside its settings are the case's.
     let mut pool = rig.store.pool("main").unwrap().unwrap();
     pool.shedding.shed_cap = 0.3;
-    pool.window_ceiling = 0.9;
+    pool.five_hour_ceiling = 0.9;
     rig.store
         .update_pool_with_members_and_guardrails(&pool, pool.updated_at, None, None, "test")
         .unwrap();
@@ -1515,8 +1515,8 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
             &json!({
                 "early_ms": null,
                 "projection_error": 1.0 - 0.97,
-                "setting": ["shed_cap", "window_ceiling"],
-                "setting_values": { "shed_cap": 0.3, "window_ceiling": 0.9 },
+                "setting": ["shed_cap", "five_hour_ceiling"],
+                "setting_values": { "shed_cap": 0.3, "five_hour_ceiling": 0.9 },
                 "walls": 1,
                 "windows": ["five_hour"],
             })
@@ -1546,7 +1546,7 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
             &json!({
                 "early_ms": null,
                 "projection_error": null,
-                "setting": ["shed_cap", "window_ceiling"],
+                "setting": ["shed_cap"],
                 "walls": 0,
                 "windows": [],
             })
