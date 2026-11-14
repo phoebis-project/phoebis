@@ -33,7 +33,9 @@ use crate::errors::{
 };
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
-use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
+use crate::messages::{
+    cut_code, upstream_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR,
+};
 use crate::observe::{answer_from_json, close_miss_reason, is_tool_use_delta, Answer};
 use crate::sse::{SkippingParser, SseEvent};
 
@@ -136,7 +138,10 @@ pub(crate) enum BodyRead {
         /// `Limits.max_request_bytes`, so the usage of any answer the router would accept as a request is read.
         bound: usize,
     },
-    /// Nothing is read: a rejection that is no event stream, or a JSON answer past the bound.
+    /// The first `MAX_BUFFERED_BODY` bytes of the decoded copy of a rejection that is no event stream, which the
+    /// completion reads the upstream's error type off.
+    Rejection(Vec<u8>),
+    /// Nothing is read: a JSON answer past the bound.
     Unread,
 }
 
@@ -465,6 +470,11 @@ impl Publish {
                 body.extend_from_slice(&text);
             }
         }
+        // The prefix is kept past the bound, since the textual scan reads a type off a cut body.
+        if let BodyRead::Rejection(body) = &mut self.read {
+            let room = MAX_BUFFERED_BODY.saturating_sub(body.len());
+            body.extend_from_slice(&text[..text.len().min(room)]);
+        }
         let phases = self.phases(&text, waiting);
         self.emit_phases(text, phases);
         self.fire_pending_hook().await;
@@ -505,7 +515,7 @@ impl Publish {
         loop {
             let event = match &mut self.read {
                 BodyRead::Events(parser) => parser.next_event(),
-                BodyRead::Json { .. } | BodyRead::Unread => None,
+                BodyRead::Json { .. } | BodyRead::Rejection(_) | BodyRead::Unread => None,
             };
             let Some(event) = event else {
                 break;
@@ -605,7 +615,7 @@ impl Publish {
                     self.outcome.diagnostics_named,
                 )),
             ),
-            BodyRead::Unread => (None, (0, 0), None),
+            BodyRead::Rejection(_) | BodyRead::Unread => (None, (0, 0), None),
         };
         if let Some(event) = last {
             if let Some(phase) = self.phase_of(&event, waiting) {
@@ -721,6 +731,12 @@ impl Publish {
             ),
             None => false,
         };
+        // An event stream keeps no copy: its `error` event names the type under the override above.
+        let copy = match &self.read {
+            BodyRead::Rejection(body) => Some(body.as_slice()),
+            BodyRead::Events(_) | BodyRead::Json { .. } | BodyRead::Unread => None,
+        };
+        let upstream = upstream_code(self.status, copy);
         self.trace
             .complete(
                 &self.outcome,
@@ -731,6 +747,7 @@ impl Publish {
                 Some(self.bytes),
                 Some(self.index),
                 outcome,
+                upstream,
                 self.message_id.clone(),
                 skipped,
                 interruption,

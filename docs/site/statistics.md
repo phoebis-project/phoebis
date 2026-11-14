@@ -14,14 +14,14 @@ as `landed_through`, at most the read's `to` where it names one, unless the read
 `fixed_end`, which lets `landed_through` pass `to` so a row received before the end and landed after it is read once.
 The Requests view's auto reload polls a preset range by that stamp with no `to`, so the route reads to its own clock.
 The relay waits for the ledger's queue when it must, so a row is never lost to a busy moment. A request whose client
-leaves before the head lands as a canceled request with the code `client_gone`, keeping the attempts it reached. A
-request the router's own shutdown ends past its drain window, after the head or before one, lands the same way under the
-code `router_shutdown`. The analytics count a client's cancel among the requests and apart from the failures and the
-error codes, while a cancel under `router_shutdown` or `account_canceled` and a probe's cancel stay failures. Captured
-bodies are the one best-effort part, since a stream may outrun its recorder, and a capture whose chunks were lost is
-stored as truncated with a `ledger_gap` event naming the request. Once a request finishes, it is folded into the hour's
-rollup in the same transaction as its rows, which is what the analytics routes report, so a long range costs one row per
-hour rather than one per request.
+leaves before the head or while its answer streams lands as a canceled request with the code `client_gone`, keeping the
+attempts it reached. A request the router's own shutdown ends past its drain window, after the head or before one, lands
+the same way under the code `router_shutdown`. The analytics count a client's cancel among the requests and apart from
+the failures and the error codes, while a cancel under `router_shutdown` or `account_canceled` and a probe's cancel stay
+failures. Captured bodies are the one best-effort part, since a stream may outrun its recorder, and a capture whose
+chunks were lost is stored as truncated with a `ledger_gap` event naming the request. Once a request finishes, it is
+folded into the hour's rollup in the same transaction as its rows, which is what the analytics routes report, so a long
+range costs one row per hour rather than one per request.
 
 Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
 decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
@@ -46,25 +46,27 @@ status and outcome (`canceled`, which counts apart from the failures where the c
 `incomplete` for a 200 answer whose body ended before its end, `rejected`, `succeeded`), and the error code
 (`stream_cut`, `stream_incomplete`, `stream_stalled` or `stream_undecodable` under `incomplete`, and `stream_cut`,
 `stream_stalled` or `stream_undecodable` under `failed` for a forwarded answer of another status whose body was cut,
-went silent or did not decode). It carries the time to first byte and to first token, the duration, the bytes sent and
-received, whether the response was served kept warm, and whether its body was captured. It names the client's user agent
-and class (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent type, the compaction and
-context-compacted markers, and the summed tool durations of the turn before), the turn origin off its attribution line,
-and its auto-mode standing as admission read it: a server-side check asked for under an on setting, the `safeguards`
-member carried under an off setting, which the dispatch drops, or a refusal for the body's shape before any upstream saw
-it. It names its classifier standing, `client` for the client's own auto-mode classifier call (the class `auxiliary`
-with the beta), `client_off` for one whose committed attempt ran off its judged turn's account, or one with no turn to
-judge, and the item a `client_contract` refusal named. The request's shape is recorded as the effort, the thinking mode
-and budget, the output limit, the tool, system-block and message counts, the context edits, the temperature, and the
-requested speed and service tier. The row also names a session that branched from another conversation: that
-conversation's root and the matched depth. The session the row names is the client's own, and the Sessions view groups a
-row by it. The request row records who put the cache diagnostics member on the body the upstream compared: the client,
-the router, or none. It records whether the body carried a `cache_control` marker or the pool's cache TTL policy added
-one, so the hit ratio can leave out a request that could not read a cache. The request row carries its serving
-attempt's account, speed, outcome and token counts, written when the request lands. A row an earlier version wrote fills
-in slices of up to 10,000 rows, the newest first. Each start fills one slice, and its log line names the rows it filled
-and the rows left. While the router runs, the hourly purge fills the rest, slice after slice, each ending after the row
-in progress once a write is waiting, and a log line names the rows it filled once no row is left.
+went silent or did not decode). Any other forwarded answer of 400 or more files the upstream's `error.type` as its code,
+or `upstream_<status>` where the body names none the router takes, and a forwarded failure an earlier version stored has
+no code. It carries the time to first byte and to first token, the duration, the bytes sent and received, whether the
+response was served kept warm, and whether its body was captured. It names the client's user agent and class
+(`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted
+markers, and the summed tool durations of the turn before), the turn origin off its attribution line, and its auto-mode
+standing as admission read it: a server-side check asked for under an on setting, the `safeguards` member carried under
+an off setting, which the dispatch drops, or a refusal for the body's shape before any upstream saw it. It names its
+classifier standing, `client` for the client's own auto-mode classifier call (the class `auxiliary` with the beta),
+`client_off` for one whose committed attempt ran off its judged turn's account, or one with no turn to judge, and the
+item a `client_contract` refusal named. The request's shape is recorded as the effort, the thinking mode and budget, the
+output limit, the tool, system-block and message counts, the context edits, the temperature, and the requested speed and
+service tier. The row also names a session that branched from another conversation: that conversation's root and the
+matched depth. The session the row names is the client's own, and the Sessions view groups a row by it. The request row
+records who put the cache diagnostics member on the body the upstream compared: the client, the router, or none. It
+records whether the body carried a `cache_control` marker or the pool's cache TTL policy added one, so the hit ratio can
+leave out a request that could not read a cache. The request row carries its serving attempt's account, speed, outcome
+and token counts, written when the request lands. A row an earlier version wrote fills in slices of up to 10,000 rows,
+the newest first. Each start fills one slice, and its log line names the rows it filled and the rows left. While the
+router runs, the hourly purge fills the rest, slice after slice, each ending after the row in progress once a write is
+waiting, and a log line names the rows it filled once no row is left.
 
 The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
 id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it

@@ -1760,6 +1760,70 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
     up.shutdown().await;
 }
 
+/// A 502 or a 503 is forwarded by the body task, so its code comes from the copy that task keeps.
+#[tokio::test]
+async fn a_forwarded_failure_completes_with_the_upstreams_error_type_or_upstream_and_its_status() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        json_answer(
+            503,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"busy"}}"#,
+        ),
+    );
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 502,
+            headers: vec![("Content-Type".into(), "text/html".into())],
+            body: b"<html><body><h1>502 Bad Gateway</h1></body></html>".to_vec(),
+        },
+    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let (status, complete) =
+        completion_of(&h, &mut sub, request_for(KEY, "claude-sonnet-4-5", "s1")).await;
+    assert_eq!(
+        (status, complete.outcome, complete.error_code.as_deref()),
+        (503, Outcome::Failed, Some("overloaded_error"))
+    );
+    let (status, complete) =
+        completion_of(&h, &mut sub, request_for(KEY, "claude-sonnet-4-5", "s2")).await;
+    assert_eq!(
+        (status, complete.outcome, complete.error_code.as_deref()),
+        (502, Outcome::Failed, Some("upstream_502")),
+        "a page that is no JSON names no type"
+    );
+    up.shutdown().await;
+}
+
+/// The code becomes a key of the Analytics `errors` map and a value of the Requests filter, so a type with a space
+/// files the fallback.
+#[tokio::test]
+async fn a_forwarded_error_type_that_is_no_filed_word_completes_with_upstream_and_its_status() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_answer(
+            503,
+            r#"{"type":"error","error":{"type":"overloaded error","message":"busy"}}"#,
+        ),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let (status, complete) =
+        completion_of(&h, &mut sub, request_for(KEY, "claude-sonnet-4-5", "s1")).await;
+    assert_eq!(
+        (status, complete.outcome, complete.error_code.as_deref()),
+        (503, Outcome::Failed, Some("upstream_503"))
+    );
+    up.shutdown().await;
+}
+
 /// Chunks keep the drop-and-count behavior a subscriber that never reads cannot hold up; the completion is a
 /// fact rather than a chunk, so it waits for the room the same subscriber has to give back before the stream
 /// the client reads can close.
@@ -2292,6 +2356,36 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
         credentials_seen(&up),
         vec!["sk-ant-api03-AAAA".to_string()],
         "the probe never reached b"
+    );
+    up.shutdown().await;
+}
+
+/// The keepalive reads a probe's relay outcome for the relay's own words, so the upstream's word for a forwarded
+/// rejection stays on the completion.
+#[tokio::test]
+async fn a_probe_answered_a_forwarded_rejection_reads_no_code_on_its_relay_outcome() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_answer(
+            400,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad"}}"#,
+        ),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .relay
+        .probe(
+            phoebis_relay::Probe {
+                key_id: "desktop".into(),
+                key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+            },
+            request_for(KEY, "claude-sonnet-4-5", "s1"),
+        )
+        .await;
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).error_code),
+        (400, None)
     );
     up.shutdown().await;
 }

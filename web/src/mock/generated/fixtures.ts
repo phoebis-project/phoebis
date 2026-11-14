@@ -1249,7 +1249,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_usd": 0.07617500000000002,
           "errors": {
             "stream_incomplete": 1,
-            "upstream_error": 1
+            "upstream_502": 1
           },
           "refused": 2,
           "refusals": {
@@ -2196,7 +2196,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_usd": 0.06902500000000002,
           "errors": {
             "stream_incomplete": 1,
-            "upstream_error": 1
+            "upstream_502": 1
           },
           "refused": 0,
           "refusals": {},
@@ -4536,7 +4536,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_usd": 0.07617500000000002,
           "errors": {
             "stream_incomplete": 1,
-            "upstream_error": 1
+            "upstream_502": 1
           },
           "refused": 2,
           "refusals": {
@@ -8165,7 +8165,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "cost_usd": 0.01375,
               "errors": {
-                "upstream_error": 1
+                "upstream_502": 1
               },
               "refused": 0,
               "refusals": {},
@@ -11080,7 +11080,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "cost_usd": 0.01015,
               "errors": {
-                "upstream_error": 1
+                "upstream_502": 1
               },
               "refused": 0,
               "refusals": {},
@@ -12723,7 +12723,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "billed_24h": 0.0178,
       "equivalent_24h": null,
       "error_rate_24h": 0.1,
-      "top_error_code": "upstream_error",
+      "top_error_code": "upstream_502",
       "refused_24h": 2,
       "top_refusal_code": "guardrail_blocked",
       "hourly": [
@@ -16605,7 +16605,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "fork_depth": null,
           "status": 502,
           "outcome": "failed",
-          "error_code": "upstream_error",
+          "error_code": "upstream_502",
           "client_drift": "hash",
           "client_contract": null,
           "ttfb_ms": 120,

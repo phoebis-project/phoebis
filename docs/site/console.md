@@ -1111,7 +1111,8 @@ muted dash in its Error rate cell, as the head's `{pct}` reads a dash where the 
 router refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card,
 a guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
 outcome columns, the error rate, the cache figures or the latency. A request whose client left before its answer ended
-counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out.
+counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out. The
+bars of Errors by code carry the upstream's own error types beside the router's words.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply

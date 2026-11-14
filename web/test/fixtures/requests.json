@@ -441,7 +441,7 @@
         "fork_depth": null,
         "status": 502,
         "outcome": "failed",
-        "error_code": "upstream_error",
+        "error_code": "upstream_502",
         "client_drift": "hash",
         "client_contract": null,
         "ttfb_ms": 120,

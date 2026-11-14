@@ -1230,7 +1230,7 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.deepEqual([failover.attempts[1].accountKind, failover.attempts[1].overageInUse], ['oauth', null], "the serving attempt's account kind and its unread overage flag");
   assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
-  assert.equal(failed.errorCode, 'upstream_error');
+  assert.equal(failed.errorCode, 'upstream_502');
   assert.equal(failed.clientDrift, 'hash');
   assert.equal(failed.outcome, 'failed');
   assert.equal(d.decodeRequest(fixture('request').request).id, 'r-failover');
@@ -1492,7 +1492,7 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.tokens.thinking, desktopWire.tokens.thinking);
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
   assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
-  assert.equal(desktop.errors.upstream_error, 1);
+  assert.equal(desktop.errors.upstream_502, 1);
   assert.equal(desktop.probes.held, 0, 'the captured group counts no held probe');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   const row = fixture('analytics_breakdown').rows[0];

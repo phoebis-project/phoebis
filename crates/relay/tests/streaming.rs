@@ -1602,7 +1602,7 @@ async fn a_forwarded_error_stream_closed_without_its_stop_keeps_the_heads_failur
     assert_eq!((status, cut), (500, false));
     assert_eq!(
         (complete.outcome, complete.error_code.as_deref()),
-        (phoebis_bus::Outcome::Failed, None),
+        (phoebis_bus::Outcome::Failed, Some("upstream_500")),
         "a missing stop on an error answer is no incomplete message"
     );
 }

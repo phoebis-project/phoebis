@@ -1219,7 +1219,11 @@ async fn a_forwarded_rejection_publishes_one_completion_and_no_client_gone_after
             .iter()
             .map(|c| (c.status, c.outcome, c.error_code.as_deref()))
             .collect::<Vec<_>>(),
-        [(400, phoebis_bus::Outcome::Failed, None)],
+        [(
+            400,
+            phoebis_bus::Outcome::Failed,
+            Some("invalid_request_error")
+        )],
         "the forwarded answer's own completion, and no other"
     );
     stays_for(HELD_FOR, || no_completion_queued(&mut sub, &request_id)).await;

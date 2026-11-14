@@ -43,7 +43,7 @@
         "cost_usd": 0.07617500000000002,
         "errors": {
           "stream_incomplete": 1,
-          "upstream_error": 1
+          "upstream_502": 1
         },
         "refused": 2,
         "refusals": {

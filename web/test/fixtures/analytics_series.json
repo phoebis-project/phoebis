@@ -1551,7 +1551,7 @@
             },
             "cost_usd": 0.01375,
             "errors": {
-              "upstream_error": 1
+              "upstream_502": 1
             },
             "refused": 0,
             "refusals": {},

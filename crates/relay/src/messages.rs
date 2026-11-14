@@ -57,8 +57,8 @@ use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
-    classify, error_message, is_rate_limit_event, refused_injected, Cooldown, HeadContext, Scope,
-    Verdict,
+    classify, error_message, error_type, is_rate_limit_event, refused_injected, Cooldown,
+    HeadContext, Scope, Verdict,
 };
 use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
@@ -76,8 +76,8 @@ use crate::facts::{
 use crate::headers::{outbound_headers, starts_with_ignoring_case, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 use crate::identity::{
-    client_of, climb, contract_gap, identify, restores_prev_req, PendingReports, RequestIdentity,
-    PENDING_REPORT_WAIT,
+    client_of, climb, contract_gap, identify, is_filed_word, restores_prev_req, PendingReports,
+    RequestIdentity, PENDING_REPORT_WAIT,
 };
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
@@ -822,7 +822,9 @@ impl Trace {
 
     /// The last event of a request. `status` is what the client was answered with, which is the upstream's
     /// only for a forwarded answer; `end` overrides the outcome derived from the `RelayOutcome` for a body that
-    /// ended other than cleanly, and `error` names the cause when the override has one.
+    /// ended other than cleanly, and `error` names the cause when the override has one. `upstream` is a forwarded
+    /// failure's own word (`upstream_code`), the code only where the override and the outcome name none. It stays
+    /// off `outcome`, whose code the keepalive reads for the relay's own words.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn complete(
         &self,
@@ -834,6 +836,7 @@ impl Trace {
         response_bytes: Option<u64>,
         response_chunks: Option<u32>,
         end: Option<(Outcome, Option<String>)>,
+        upstream: Option<String>,
         message_id: Option<String>,
         skipped_events: u32,
         interruption: Option<Interruption>,
@@ -846,6 +849,7 @@ impl Trace {
             Some((o, code)) => (o, code.or_else(|| outcome.error_code.clone())),
             None => (outcome_of(outcome), outcome.error_code.clone()),
         };
+        let error_code = error_code.or(upstream);
         self.publish_fact(Event::RequestComplete(RequestComplete {
             request_id: self.request_id.clone(),
             key_id: outcome.key_id.clone(),
@@ -1103,6 +1107,17 @@ fn outcome_of(outcome: &RelayOutcome) -> Outcome {
         None if outcome.upstream_status < 400 => Outcome::Succeeded,
         None => Outcome::Failed,
     }
+}
+
+/// The upstream's word for an answer forwarded with its `status`, `None` below 400: the `error.type` that `body`
+/// names where it passes `is_filed_word`, else `upstream_<status>`. The word becomes a map key and a filter value,
+/// so a type outside that bound files the fallback.
+pub(crate) fn upstream_code(status: u16, body: Option<&[u8]>) -> Option<String> {
+    (status >= 400).then(|| {
+        body.and_then(error_type)
+            .filter(|word| is_filed_word(word))
+            .unwrap_or_else(|| format!("upstream_{status}"))
+    })
 }
 
 /// The attempt outcome the verdict on a head implies. `rate_limit_event` is a held stream whose first event is a
@@ -4117,6 +4132,7 @@ impl Relay {
                 None,
                 None,
                 None,
+                None,
                 0,
                 None,
                 (self.clock)(),
@@ -4398,12 +4414,12 @@ impl Relay {
                 credits: self.credits.clone(),
                 read: match parser {
                     Some(parser) => BodyRead::Events(parser),
-                    // A committed JSON answer is inspected for its usage block, and a rejection is not.
+                    // A committed JSON answer is inspected for its usage block, and a rejection for its error type.
                     None if head.status == 200 => BodyRead::Json {
                         body: Vec::new(),
                         bound: self.limits.max_request_bytes,
                     },
-                    None => BodyRead::Unread,
+                    None => BodyRead::Rejection(Vec::new()),
                 },
                 held,
                 on_error,
@@ -4527,6 +4543,7 @@ impl Relay {
                 Some(payload.len() as u64),
                 Some(1),
                 None,
+                upstream_code(head.status, Some(&payload)),
                 // An error document carries no message `id`.
                 None,
                 0,
