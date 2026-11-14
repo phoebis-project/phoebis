@@ -2040,6 +2040,50 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`no record reads a fresh placement over a pin the day's earlier rows left live on another account, at ${at}`, async () => {
+    const s = await story;
+    // A request's first record, since the router's record after a failover reads no pin by its own rule.
+    const first = new Map();
+    for (const r of await decisionsOf(s)) if (!first.has(r.requestId) || r.seq < first.get(r.requestId).seq) first.set(r.requestId, r);
+    // The router keys a pin by the model it resolved the request to.
+    const keyOf = (keyId, sessionId, agentId, model) => `${keyId}|${sessionId}|${agentId}|${model}`;
+    // A request's detail lists every event of its window, so one release reaches several details.
+    const releases = [...new Map(s.events.filter((e) => e.kind === 'pin_expired').map((e) => [`${e.at}|${e.accountId}|${keyOf(e.keyId, e.sessionId, e.detail?.agent_id, e.model)}`, e])).values()].sort(
+      (x, y) => Date.parse(x.at) - Date.parse(y.at),
+    );
+    const pins = new Map();
+    const fresh = [];
+    let released = 0;
+    let seen = 0;
+    for (const r of [...s.requests].sort((x, y) => Date.parse(x.at) - Date.parse(y.at))) {
+      const head = r.attempts[0];
+      if (r.sessionId === null || head === undefined) continue;
+      const ttl = affinityOf(s, r);
+      if (ttl === 0) continue;
+      const start = Date.parse(head.startedAt);
+      for (; released < releases.length && Date.parse(releases[released].at) <= start; released += 1) {
+        const e = releases[released];
+        const key = keyOf(e.keyId, e.sessionId, e.detail?.agent_id, e.model);
+        if (pins.get(key)?.accountId === e.accountId) pins.delete(key);
+      }
+      const key = keyOf(r.keyId, r.sessionId, r.agentId, r.canonicalModel);
+      const held = pins.get(key);
+      const live = held !== undefined && start - held.at <= ttl ? held : undefined;
+      const drawn = !s.lib.STORY_IDS.has(r.id) && !s.lib.UNSEEDED_IDS.has(r.id);
+      if (drawn && live !== undefined) seen += 1;
+      if (drawn && live !== undefined && live.accountId !== head.accountId && first.get(r.id)?.pin?.found === 'none') fresh.push(`${r.id}: placed on ${head.accountId} over the pin on ${live.accountId}`);
+      // A classifier call holds no pin of its own.
+      if (r.classifier !== null) continue;
+      // A cooling answer deletes the pin, and a token count renews a live one and creates none.
+      const last = r.attempts[r.attempts.length - 1];
+      if (last.cooldownSet !== null || last.upstreamStatus === 429) pins.delete(key);
+      else if (live?.accountId === last.accountId) pins.set(key, { ...live, at: Date.parse(last.startedAt) });
+      else if (r.kind !== 'count_tokens') pins.set(key, { accountId: last.accountId, at: Date.parse(last.startedAt) });
+    }
+    assert.ok(seen > 0, 'a drawn row finds a live pin');
+    assert.deepEqual(fresh, []);
+  });
+
   test(`a scripted pick comes from the highest tier that holds an eligible member, and every record's instant follows its request's, at ${at}`, async () => {
     const s = await story;
     const records = await decisionsOf(s);

@@ -1754,6 +1754,68 @@ export function landedAt(row: RequestLog): number {
 // after the revocation is refused as an unknown key and uses nothing.
 for (const k of keyById.values()) if (k.lastUsedAt === null) k.lastUsedAt = REQUESTS.find((r) => r.keyId === k.id && r.errorCode !== 'auth_unknown')?.at ?? null;
 
+/** Whether an account serves the model: secondary serves Sonnet 4.5 alone. */
+const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCOUNT || model === 'claude-sonnet-4-5';
+
+/** The pin a request's first selection found live: the account it stood on and when it landed there. */
+interface LivePin {
+  accountId: string;
+  createdAt: number;
+}
+
+/**
+ * Walks the requests oldest first, handing `visit` the pin each one's first selection found live: where the pin's last
+ * use left it within the pool's affinity window. A request leaves its pin on its last attempt's account unless that
+ * answer cooled the account, which releases the pin. A token count renews a live pin and creates none. The pin moves
+ * after the visit, so an attempt the visit moves takes the pin along.
+ */
+function walkLivePins(visit: (r: RequestLog, live: LivePin | undefined) => void) {
+  const pins = new Map<string, LivePin & { at: number }>();
+  for (const r of [...REQUESTS].sort((x, y) => Date.parse(x.at) - Date.parse(y.at))) {
+    const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
+    const first = r.attempts[0] as Attempt | undefined;
+    if (ttl === 0 || r.sessionId === null || first === undefined) continue;
+    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const held = pins.get(key);
+    const live = held !== undefined && Date.parse(first.startedAt) - held.at <= ttl ? held : undefined;
+    visit(r, live && { accountId: live.accountId, createdAt: live.createdAt });
+    const last = r.attempts[r.attempts.length - 1];
+    const at = Date.parse(last.startedAt);
+    if (failsOver(last)) pins.delete(key);
+    else if (live?.accountId === last.accountId) pins.set(key, { ...live, at });
+    else if (r.kind !== 'count_tokens') pins.set(key, { accountId: last.accountId, at, createdAt: at });
+  }
+}
+
+/**
+ * The drawn requests moved onto the pin their first selection found live on another account, by id, each with the
+ * account its draw had chosen. The router renews a live pin on an account that can take the request ahead of any
+ * placement, so the request's one attempt lands there with the answer it drew. A request whose answer cooled its
+ * account keeps its draw, since that cooldown and the failover after it belong to the drawn account. The move runs
+ * ahead of nightly's overage instant and the live pins below, which read the moved attempts.
+ */
+export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
+  const renewed = new Map<string, string>();
+  walkLivePins((r, live) => {
+    const head = r.attempts[0];
+    if (!drawnRow(r) || live === undefined || live.accountId === head.accountId || r.attempts.length > 1 || head.cooldownSet !== null) return;
+    const to = live.accountId;
+    const at = Date.parse(head.startedAt);
+    if (!serves(to, r.canonicalModel) || !holdableAt(r, to, at)) return;
+    const kind = kindOf(to);
+    const moved: Attempt = { ...head, accountId: to, accountKind: kind, overageInUse: kind === 'oauth' ? false : null, tier: accountTier(to), usageBased: usageBasedOf(to), windows: oauthWindows(to, at, () => SERVED_FACTOR) };
+    r.accountId = to;
+    // The cache comparison follows the account's kind, since an API key answers without the beta.
+    if (kind === head.accountKind) r.attempts = [moved];
+    else {
+      r.attempts = diagnosed([{ ...moved, cacheMissReason: null }], r.kind);
+      r.diagnosticsSource = sourceOf(r.attempts, r.keyId ?? '');
+    }
+    renewed.set(r.id, head.accountId);
+  });
+  return renewed;
+})();
+
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
  * at 11:30:12, or a minute past the raise where the draws sent none. The account's own overage reads from it.
@@ -1768,33 +1830,16 @@ if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);
 for (const a of REQUESTS.flatMap((r) => r.attempts)) if (a.accountId === 'nightly' && Date.parse(a.startedAt) >= OVERAGE_FROM) a.overageInUse = true;
 
 /**
- * The pin each request's first selection found live, by request id: where the pin's last use left it within the
- * pool's affinity window, and when it landed there, so a renewal or a move rests on a request the day holds. A
- * request leaves its pin on its last attempt's account unless that answer cooled the account, which releases the pin.
- * A token count renews a live pin and creates none.
+ * The pin each request's first selection found live, by request id, so a renewal or a move rests on a request the day
+ * holds.
  */
-const LIVE_PIN: Map<string, { accountId: string; createdAt: number }> = (() => {
-  const out = new Map<string, { accountId: string; createdAt: number }>();
-  const pins = new Map<string, { accountId: string; at: number; createdAt: number }>();
-  for (const r of [...REQUESTS].sort((x, y) => Date.parse(x.at) - Date.parse(y.at))) {
-    const ttl = (poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) * 1_000;
-    const first = r.attempts[0] as Attempt | undefined;
-    if (ttl === 0 || r.sessionId === null || first === undefined) continue;
-    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
-    const held = pins.get(key);
-    const live = held !== undefined && Date.parse(first.startedAt) - held.at <= ttl ? held : undefined;
-    if (live) out.set(r.id, { accountId: live.accountId, createdAt: live.createdAt });
-    const last = r.attempts[r.attempts.length - 1];
-    const at = Date.parse(last.startedAt);
-    if (failsOver(last)) pins.delete(key);
-    else if (live?.accountId === last.accountId) pins.set(key, { ...live, at });
-    else if (r.kind !== 'count_tokens') pins.set(key, { accountId: last.accountId, at, createdAt: at });
-  }
+const LIVE_PIN: Map<string, LivePin> = (() => {
+  const out = new Map<string, LivePin>();
+  walkLivePins((r, live) => {
+    if (live) out.set(r.id, live);
+  });
   return out;
 })();
-
-/** Whether an account serves the model: secondary serves Sonnet 4.5 alone. */
-const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCOUNT || model === 'claude-sonnet-4-5';
 
 /**
  * The move rule that takes a pin on `from` to the row's account in the engine's order, or null where none would. The
@@ -2042,6 +2087,12 @@ function traceRequests() {
       const first = i === 0 && moved === undefined;
       const drawnRenewal = first && h.chance(0.55);
       if (first && (pool?.affinityTtlSeconds ?? 0) > 0 && LIVE_PIN.get(r.id)?.accountId === a.accountId) {
+        // A request moved onto its live pin takes the draws its drawn placement took, so every later row keeps its own.
+        const drawnOn = RENEWED_ON_PIN.get(r.id);
+        if (drawnOn !== undefined && !drawnRenewal) {
+          for (const id of members) if (id !== drawnOn) h.weighted(OBSTACLE_DRAWS);
+          cohortHoldOf(p, w, r, placementOf(p, r), drawnOn);
+        }
         return { ...a, selection: { cacheRead, cohortHold: null, moved: null, placement: null, renewed: true, skipped: [], strategy, tier: null } };
       }
       if (drawnRenewal) return { ...a, selection: undrawnTrace(r, a, i === all.length - 1) };

@@ -16,7 +16,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, CLIENTS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
@@ -1866,10 +1866,11 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const replaced = replacedOn === null ? undefined : { accountId: replacedOn, reasons: releasedReasons(expired) };
     const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : undefined;
     const live = kind === 'renewed' || kind === 'moved' || failover !== undefined || reasons !== undefined;
-    // A probe and a token count leave the pin's warmth untouched. A written row takes no draw: its live pin is the row
-    // its session's last turn wrote, whose idle age the Pin step reads.
+    // A probe and a token count leave the pin's warmth untouched. A written row takes no draw, and neither does a drawn
+    // row moved onto its live pin, whose drawn placement took none: its live pin is the row its session's last turn
+    // wrote, whose idle age the Pin step reads.
     const untouched = r.kind === 'probe' || r.kind === 'count_tokens';
-    const pinSpec: Spec['pin'] = live && pinning ? { cause: r.kind === 'probe' ? 'probe' : r.kind === 'count_tokens' ? 'count' : 'continues_pin', idleMs: UNSEEDED_IDS.has(r.id) ? 0 : 20_000 + inFlightRng.int(0, 280) * 1_000, warmth: untouched ? 'untouched' : 'refresh' } : noPin;
+    const pinSpec: Spec['pin'] = live && pinning ? { cause: r.kind === 'probe' ? 'probe' : r.kind === 'count_tokens' ? 'count' : 'continues_pin', idleMs: UNSEEDED_IDS.has(r.id) || RENEWED_ON_PIN.has(r.id) ? 0 : 20_000 + inFlightRng.int(0, 280) * 1_000, warmth: untouched ? 'untouched' : 'refresh' } : noPin;
     const prefix: Spec['prefix'] = {};
     const rung = s?.placement ?? null;
     if (rung && rung.rung !== 'with_main') {
