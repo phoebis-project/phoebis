@@ -224,7 +224,7 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey
     // The full list stays beside the lines: the causes of a session without a line read every record, and a session
     // whose lines the mod all released still holds records, so it is no session without a recipe.
     const lines = sessionLines(session, agents);
-    const finished = isFinished(session, lines);
+    const finished = isFinished(lines);
     return {
       agentCount: agentCount(lines),
       agents,

@@ -1016,8 +1016,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of rows) assert.deepEqual([r.cause, r.state, r.nextProbeAt, r.deadline, r.wakeAt], ['agent_released', 'ended', null, null, null], `${r.agentId} reads as a released agent`);
     const row = s.sessions.find((x) => !x.historical && x.keyId === rows[0].keyId && x.sessionId === rows[0].sessionId);
     assert.ok(row !== undefined, 'the session keeps its row');
-    // The engine's session view takes the cause off main's record, which the release set.
-    assert.equal(row.keepalive.cause, 'agent_released', "the row reads main's cause");
+    // The engine's session view takes its cause off an agent that holds a recipe, and the release left none that does.
+    assert.equal(row.keepalive.cause, null, 'the row reads no cause, since no agent holds a recipe');
     const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === row.keyId && r.sessionId === row.sessionId);
     assert.equal(own.length, 1, 'the ledger holds the one request the session routed');
     assert.deepEqual([row.pinned, row.spend.requests, row.lastRequestAt], [true, 1, own[0].at], 'the row reads that request as its activity');
@@ -1034,7 +1034,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   test(`one session the mod ended reads main ended with it and every other line released, each with its probe facts, at ${at}`, async () => {
     const s = await story;
     const recipes = await s.api.listKeepaliveRecipes();
-    const ended = s.sessions.filter((x) => !x.historical && x.keepalive.cause === 'session_ended');
+    const ended = s.sessions.filter((x) => !x.historical && recipes.some((r) => r.keyId === x.keyId && r.sessionId === x.sessionId && r.agentId === 'main' && r.cause === 'session_ended'));
     assert.equal(ended.length, 1, 'one session the mod ended');
     const [row] = ended;
     const lines = recipes.filter((r) => r.keyId === row.keyId && r.sessionId === row.sessionId);
@@ -1044,6 +1044,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(others.length > 0, 'the session holds subagents');
     for (const r of others) assert.deepEqual([r.agentState, r.cause, r.state, r.nextProbeAt], ['released', 'agent_released', 'ended', null], `${r.agentId} reads as a released agent`);
     for (const r of lines) assert.ok(r.lastProbeAt !== null && r.probesToday > 0, `${r.agentId} keeps its probe facts`);
+  });
+
+  test(`a session whose main holds no recipe reads the cause of the subagent that holds one, at ${at}`, async () => {
+    const s = await story;
+    const recipes = await s.api.listKeepaliveRecipes();
+    // Main's record under `unsupported_shape` keeps no recipe, while `affinity_too_short` holds the subagent's prompt.
+    // The finder asks for main's record, since a session with none answers its subagent's cause under either pick.
+    const own = (x) => recipes.filter((r) => r.keyId === x.keyId && r.sessionId === x.sessionId);
+    const row = s.sessions.find((x) => !x.historical && own(x).some((r) => r.agentId === 'main' && r.cause === 'unsupported_shape') && own(x).some((r) => r.agentId !== 'main' && r.cause === 'affinity_too_short'));
+    assert.ok(row !== undefined, 'a session whose main reads unsupported_shape beside a subagent held on affinity_too_short');
+    assert.equal(row.keepalive.cause, 'affinity_too_short', "the row reads the held subagent's cause");
   });
 
   test(`every released line dates its release inside its pool's longest cache TTL, past which the router lists it no more, at ${at}`, async () => {

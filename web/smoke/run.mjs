@@ -24877,7 +24877,7 @@ await forView('/sessions', async () => {
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
-  const finished = listed.find((s) => !s.historical && s.keepalive.cause === 'session_ended');
+  const finished = listed.find((s) => !s.historical && recipes.some((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentId === 'main' && r.cause === 'session_ended'));
   const twoHours = api.sessions.find((s) => s.sessionId === TWO_HOURS_ID);
   const companionRow = (s) => s.companion === 'reporting' || s.companion === 'silent';
   const chipsOn = (page) => [...page.container.querySelectorAll('.chip--filter')].map((c) => c.textContent?.trim() ?? '');

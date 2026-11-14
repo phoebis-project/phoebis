@@ -238,13 +238,11 @@ function isReleasedLine(line: Pick<SessionLine, 'lifecycle'>): boolean {
 }
 
 /**
- * A session the engine is done with: the row's recipe summary reads the cause `session_ended`, which drops every
- * recipe of the session, or every line it draws is a released one. Such a session keeps its lines, so its probe facts
- * stay in view once it is shown.
+ * A session the engine is done with: it draws a line and every line it draws is a released one. Such a session keeps
+ * its lines, so its probe facts stay in view once it is shown.
  */
-export function isFinished(session: Pick<Session, 'keepalive'>, lines: readonly Pick<SessionLine, 'lifecycle'>[]): boolean {
-  const { cause } = session.keepalive;
-  return cause === 'session_ended' || (lines.length > 0 && lines.every(isReleasedLine));
+export function isFinished(lines: readonly Pick<SessionLine, 'lifecycle'>[]): boolean {
+  return lines.length > 0 && lines.every(isReleasedLine);
 }
 
 /** A row's or a line's Status word: a lifecycle word, `finished` for a session the engine is done with, `unreported`

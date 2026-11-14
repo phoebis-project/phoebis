@@ -121,12 +121,10 @@ test('requestsRange picks the narrowest range that covers the last request, with
   assert.equal(d.requestsRange(null, NOW), null);
 });
 
-test('isFinished reads a session whose main ended with it, or whose every line the mod released', () => {
-  const session = (cause) => ({ keepalive: { cause, nextProbeAt: null } });
-  assert.equal(d.isFinished(session('session_ended'), [{ agentId: 'main', lifecycle: 'idle' }, { agentId: '3e', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('agent_released'), [{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
-  assert.equal(d.isFinished(session('probing'), [{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
-  assert.equal(d.isFinished(session('scheduled'), []), false);
+test('a session that draws a line is finished once every line it draws is released', () => {
+  assert.equal(d.isFinished([{ agentId: 'main', lifecycle: 'released' }, { agentId: '3e', lifecycle: 'released' }]), true);
+  assert.equal(d.isFinished([{ agentId: 'main', lifecycle: 'busy' }, { agentId: '3e', lifecycle: 'released' }]), false);
+  assert.equal(d.isFinished([]), false);
 });
 
 test("expiryOf reads a row no companion reports as listed until the lesser limit after its latest instant, and a companion row as never dropped", () => {

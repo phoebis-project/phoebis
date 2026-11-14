@@ -671,16 +671,21 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   });
 });
 
+/** Whether a mock recipe row holds a recipe as the router's session view reads one: a ready observation. */
+const holdsRecipe = (r: (typeof RECIPES)[number]): boolean => (r.state === 'held' || r.state === 'paused' || r.state === 'retained') && r.cause !== 'awaiting_selection';
+
 /**
  * A session's summary as the admin route reads it off the session's recipes. Its next probe is the soonest its agents
  * have scheduled: an agent awaiting cache evidence contributes no time even though it is armed, so a session left with
- * only those reads as pending rather than unscheduled. Its cause is main's recipe's, else the one of the other agent
- * with the newest request, so a session whose main holds no recipe still reads the one a subagent holds.
+ * only those reads as pending rather than unscheduled. Its cause is main's recipe's where main holds one, else the one
+ * of the other agent with the newest request among those that hold one, else none, so a session whose main holds no
+ * recipe still reads the one a subagent holds.
  */
 const summaryOf = (sessionId: string): Session['keepalive'] => {
   const own = RECIPES.filter((r) => r.sessionId === sessionId);
   const scheduled = own.flatMap((r) => (r.nextProbeAt === null ? [] : [r.nextProbeAt])).sort();
-  const summary = own.find((r) => r.agentId === 'main') ?? [...own].sort((a, b) => (b.lastRequestAt === null ? 0 : Date.parse(b.lastRequestAt)) - (a.lastRequestAt === null ? 0 : Date.parse(a.lastRequestAt)))[0];
+  const holding = own.filter(holdsRecipe);
+  const summary = holding.find((r) => r.agentId === 'main') ?? [...holding].sort((a, b) => (b.lastRequestAt === null ? 0 : Date.parse(b.lastRequestAt)) - (a.lastRequestAt === null ? 0 : Date.parse(a.lastRequestAt)))[0];
   return { cause: summary?.cause ?? null, nextProbeAt: scheduled[0] ?? null };
 };
 

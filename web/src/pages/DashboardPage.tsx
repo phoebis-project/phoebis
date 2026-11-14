@@ -426,7 +426,7 @@ function SessionsSummary({ activePins, busGaps, expired, keepalive, now, recipes
     const bySession = groupInto(recipeData, (r) => `${r.keyId}:${r.sessionId}`);
     const live = sessions.flatMap((session) => {
       const lines = sessionLines(session, session.historical ? [] : (bySession.get(`${session.keyId}:${session.sessionId}`) ?? []));
-      return isFinished(session, lines) ? [] : [{ lines }];
+      return isFinished(lines) ? [] : [{ lines }];
     });
     return lineTotals(live);
   }, [sessions, recipeData]);
