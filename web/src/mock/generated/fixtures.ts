@@ -13438,6 +13438,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "status": 200,
           "cache_read_tokens": 500,
           "input_tokens": 1000,
+          "cache_write_tokens": 200,
           "promised_tokens": 31200,
           "hit": true,
           "held_ms": null,

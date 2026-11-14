@@ -6886,6 +6886,7 @@ async fn a_decision_record_answers_record_v3_with_its_completion() {
             "status": 200,
             "cache_read_tokens": 700,
             "input_tokens": 2_000,
+            "cache_write_tokens": 0,
             "promised_tokens": null,
             "hit": true,
             "held_ms": null,

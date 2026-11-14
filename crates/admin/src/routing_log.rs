@@ -446,15 +446,15 @@ pub(crate) struct DecisionRecord {
     /// the decision's account at or after the decision's own and before the request's next decision, so a retry
     /// in place reads the pass that answered, and a decision the request moved past on the same attempt (a
     /// credential failure that fails over before dispatching) reads no answer, its fields null. It carries
-    /// `status`, `cache_read_tokens` and `input_tokens` (null until the attempt has usage), `promised_tokens` (the
-    /// matched rung's prefix, null without a rung), `hit` (as `GET /admin/analytics/placements` counts it: a
-    /// `content` rung reads up to its promise, any other decision reads anything, null until the attempt has
-    /// usage), `held_ms` (every wait of the request, for a slot, a reset or the slow-down, summed, null for a request
-    /// never held), `freed` (whether the request waited on the account this decision placed on, so its wait ended in
-    /// that slot), `cache_map_written` (the cache-map entries the answer wrote, each `tier`, `depth`,
-    /// `prefix_tokens`, `ttl_ms`, `account_id`, null until the answer ends), `completed_at`, and
-    /// `input_transformations` (the blocks the answer dropped, as the attempt's `response` answers them on the request
-    /// routes, null until the answer ends).
+    /// `status`, `cache_read_tokens` and `input_tokens` (null until the attempt has usage), `cache_write_tokens` (the
+    /// attempt's 5-minute and 1-hour cache writes summed, null until the attempt has usage), `promised_tokens` (the
+    /// matched rung's prefix, null without a rung), `hit` (as `GET /admin/analytics/placements` counts it: a `content`
+    /// rung reads up to its promise, any other decision reads anything, null until the attempt has usage), `held_ms`
+    /// (every wait of the request, for a slot, a reset or the slow-down, summed, null for a request never held),
+    /// `freed` (whether the request waited on the account this decision placed on, so its wait ended in that slot),
+    /// `cache_map_written` (the cache-map entries the answer wrote, each `tier`, `depth`, `prefix_tokens`, `ttl_ms`,
+    /// `account_id`, null until the answer ends), `completed_at`, and `input_transformations` (the blocks the answer
+    /// dropped, as the attempt's `response` answers them on the request routes, null until the answer ends).
     #[schema(value_type = Object)]
     pub outcome: Value,
 }

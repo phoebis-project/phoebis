@@ -1850,6 +1850,10 @@ pub fn decision_record(
             "status": answered.status,
             "cache_read_tokens": cache.as_ref().map(|c| c.read_tokens),
             "input_tokens": cache.as_ref().map(|c| c.input_tokens),
+            "cache_write_tokens": cache.as_ref().map(|_| {
+                answered.cache_write_5m_tokens.unwrap_or(0)
+                    + answered.cache_write_1h_tokens.unwrap_or(0)
+            }),
             "promised_tokens": summary["rung"]["prefix_tokens"].as_u64(),
             "hit": cache.as_ref().map(|c| c.hit),
             "held_ms": held["held_ms"].clone(),

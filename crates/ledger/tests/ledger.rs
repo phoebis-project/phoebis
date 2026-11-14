@@ -9056,7 +9056,11 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
         "r1",
         &[
             logged_attempt("r1", 1, 429, None),
-            logged_attempt("r1", 2, 200, Some(600)),
+            AttemptRecord {
+                cache_write_5m_tokens: Some(100),
+                cache_write_1h_tokens: Some(27_246),
+                ..logged_attempt("r1", 2, 200, Some(600))
+            },
         ],
         Some(r#"{"waited_on":["a"],"cohort":null,"held_ms":1250}"#),
     );
@@ -9071,6 +9075,7 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
         "status": 200,
         "cache_read_tokens": 600,
         "input_tokens": 1_000,
+        "cache_write_tokens": 27_346,
         "promised_tokens": 500,
         "hit": true,
         "held_ms": 1_250,
