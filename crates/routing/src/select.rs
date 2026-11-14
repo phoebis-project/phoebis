@@ -917,10 +917,16 @@ fn prompt_size(
     }
 }
 
-/// The thinking sums a selection writes on the session's row from the row it stood on, each entry at zero for a
-/// compacted request, whose prompt holds no earlier block.
+/// Whether the selection sets the session's thinking sums to zero: a compacted request's prompt holds no earlier
+/// block. A probe replays the header of the request it keeps warm, whose answer has added its thinking since.
+pub(crate) fn zeroes_sums(request: &SelectRequest) -> bool {
+    request.context_compacted && !request.probe
+}
+
+/// The thinking sums a selection writes on the session's row from the row it stood on, each entry at zero where
+/// `zeroes_sums` reads the request.
 pub(crate) fn handed_sums(row: &PinRow, request: &SelectRequest) -> BTreeMap<String, u64> {
-    if request.context_compacted {
+    if zeroes_sums(request) {
         row.thinking_sums
             .keys()
             .map(|account| (account.clone(), 0))
@@ -2620,6 +2626,12 @@ fn run(
         let epoch = state.fresh_epoch();
         // A failover's landing carries the row its source lost and remembers the source as a shed move does.
         let failed_over = request.failed_over.as_ref();
+        let moving = moving.as_ref().or(failed_over.map(|f| &f.row));
+        // A live row released off its account, or one idle past the TTL or left behind by its pool, is the session's
+        // too, so the thinking it carries follows the session onto the new row.
+        let replaced = moving
+            .or(pin.as_ref().map(|(row, _)| row))
+            .or(expired.as_ref().and_then(|key| state.pin(key)));
         let row = fresh_pin(
             request,
             session,
@@ -2629,7 +2641,8 @@ fn run(
                 .clone()
                 .map(|from| (from, SHED_ROUND.to_string()))
                 .or_else(|| failed_over.map(|f| (f.from_account_id.clone(), f.reason.to_string()))),
-            moving.as_ref().or(failed_over.map(|f| &f.row)),
+            moving,
+            replaced,
         );
         rec.pin_written = Some(PinWritten {
             action: if migrated.is_some() {
@@ -2729,9 +2742,10 @@ fn replace_expired(
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
 /// and the word a shed move or a failover's landing stamps. `moving` is the row a move takes off its source or a
-/// failover took off its account, whose burn averages, the classifier copy's model, the last prompt and the thinking
-/// sums the new row carries, so the destination's projection counts the pin from the moment it lands, the copy keeps
-/// its price and a later move prices its rewrite from a figure.
+/// failover took off its account, whose burn averages, the classifier copy's model and the last prompt the new row
+/// carries, so the destination's projection counts the pin from the moment it lands, the copy keeps its price and a
+/// later move prices its rewrite from a figure. `replaced` is any row of the pin the placement replaces, `moving`
+/// among them, whose thinking sums the new row carries.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
@@ -2739,6 +2753,7 @@ fn fresh_pin(
     chosen: &Candidate,
     shed: Option<(String, String)>,
     moving: Option<&PinRow>,
+    replaced: Option<&PinRow>,
 ) -> PinRow {
     let mut row = PinRow {
         key_id: request.key_id.clone(),
@@ -2780,7 +2795,9 @@ fn fresh_pin(
         auxiliary_only: placed_auxiliary_only(request),
         effort: request.effort.clone(),
         ended: false,
-        thinking_sums: moving.map(|m| handed_sums(m, request)).unwrap_or_default(),
+        thinking_sums: replaced
+            .map(|r| handed_sums(r, request))
+            .unwrap_or_default(),
     };
     stamp_hashes(&mut row, request);
     row

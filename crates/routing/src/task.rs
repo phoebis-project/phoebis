@@ -27,8 +27,8 @@ use crate::record::{
 use crate::select::{
     budget_facts, burn_unit, decide, handed_sums, lane_is_fast, mark_cleared_of, move_cost,
     move_word, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
-    slow_down_ramp, standing_request, BurnRead, Decided, FailedOver, Obstacle, Refusal,
-    SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    slow_down_ramp, standing_request, zeroes_sums, BurnRead, Decided, FailedOver, Obstacle,
+    Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -4830,13 +4830,19 @@ impl Task {
     }
 
     /// Opens the observation of a selection that landed the session under `key` on another account than the row it
-    /// stood on, where that row's sum for the account it left is above zero, in place of the key's open one.
+    /// stood on, where that row's sum for the account it left is above zero, in place of the key's open one. A
+    /// selection that sets the sums to zero drops the key's open observation, landing or not.
     fn observe_landing(
         &mut self,
         key: &PinKey,
         stood_on: Option<&PinRow>,
         request: &SelectRequest,
     ) {
+        // A compacted prompt holds no earlier block, so its answer would close an earlier landing's observation with
+        // a false `kept`, or with a false bound where it carries no member.
+        if zeroes_sums(request) {
+            self.observations.remove(key);
+        }
         let (Some(stood_on), Some(landed)) = (stood_on, self.state.pin(key)) else {
             return;
         };

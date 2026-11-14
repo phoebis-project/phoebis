@@ -16694,6 +16694,215 @@ async fn a_compacted_move_opens_no_observation_so_its_answer_leaves_its_pair_unl
     assert!(close(booked, 0.006), "{booked:?}");
 }
 
+#[tokio::test]
+async fn a_probe_of_a_compacted_request_keeps_the_thinking_its_answer_added() {
+    let store = thinking_store(&["a", "b"], &[("a", "b", true)]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "a", 1, 10.0)], &now).await;
+    let compacted = |request_id: &str, probe: bool| SelectRequest {
+        request_id: request_id.into(),
+        probe,
+        context_compacted: true,
+        ..turn_of(&handle, "s1", "main", SONNET, AT)
+    };
+    assert_eq!(
+        landed_on(
+            handle
+                .select(compacted("r-compacted", false))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None)
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            60_000,
+            Some(20_000),
+            None,
+        ))
+        .await;
+    // The keepalive replays the compacted request, its header among the rest.
+    assert_eq!(
+        landed_on(handle.select(compacted("r-probe", true)).await.unwrap()),
+        ("a".into(), None)
+    );
+    a_spent(&handle, &["a", "b"], AT).await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT)).await;
+    // 60,000 less the 20,000 the compacted request's answer produced on a.
+    assert_eq!(account, "b");
+    assert!(close(booked, 0.004), "{booked:?}");
+}
+
+#[tokio::test]
+async fn a_compacted_request_after_a_landing_without_usage_teaches_the_pair_nothing() {
+    let store = thinking_store(&["a", "b", "c"], &[("a", "c", true)]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let pins = [
+        stored_pin(&store, "s1", "a", 1, 10.0),
+        stored_pin(&store, "s2", "a", 2, 10.0),
+    ];
+    let handle = thinking_router(&store, &pins, &now).await;
+    a_spent(&handle, &["a", "b", "c"], AT).await;
+    let landing = turn_of(&handle, "s1", "main", SONNET, AT);
+    let landing_id = landing.request_id.clone();
+    assert_eq!(spent_move(&handle, landing).await.0, "b");
+    // The landing's answer brought its head and no usage, so the session's next request renews the landed row.
+    handle
+        .report(Report::Head {
+            request_id: landing_id,
+            attempt: 1,
+            at: AT,
+        })
+        .await;
+    let compacted = SelectRequest {
+        request_id: "r-compacted".into(),
+        context_compacted: true,
+        ..turn_of(&handle, "s1", "main", SONNET, AT)
+    };
+    assert_eq!(
+        landed_on(handle.select(compacted).await.unwrap()),
+        ("b".into(), None)
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            30_000,
+            None,
+            Some(DROPPED_PREFIX),
+        ))
+        .await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    // a and b hold no fact, and a and c bound make it the model's first drop: 100,000 less 40,000.
+    assert_eq!(account, "b");
+    assert!(close(booked, 0.006), "{booked:?}");
+}
+
+#[tokio::test]
+async fn a_placement_that_releases_the_pin_off_a_cooled_account_hands_its_sums_on() {
+    let store = thinking_store(&["a", "b"], &[("a", "b", true)]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "a", 1, 10.0)], &now).await;
+    handle.report(windows("a", 0.3, 0.1, AT)).await;
+    handle.report(windows("b", 0.3, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    // Another session's answer cools a, so s1's next request releases its pin there and lands on b.
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: CooldownScope::Account,
+                until: AT + 30_000,
+                set_at: AT,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    assert_eq!(
+        landed_on(
+            handle
+                .select(turn_of(&handle, "s1", "main", SONNET, AT))
+                .await
+                .unwrap()
+        )
+        .0,
+        "b"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            120_000,
+            Some(10_000),
+            None,
+        ))
+        .await;
+    let later = AT + 60_000;
+    now.store(later, Ordering::SeqCst);
+    handle.report(windows("a", 0.1, 0.1, later)).await;
+    handle.report(windows("b", 1.0, 0.3, later)).await;
+    handle.samples().await.unwrap();
+    let (account, booked) =
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, later)).await;
+    // 120,000 less b's 10,000 plus a's 40,000.
+    assert_eq!(account, "a");
+    assert!(close(booked, 0.015), "{booked:?}");
+}
+
+#[tokio::test]
+async fn a_start_drops_a_loaded_pins_sum_of_an_account_the_registry_no_longer_holds() {
+    let store = thinking_store(&["a", "b", "c"], &[]);
+    store
+        .upsert_pin(&PinRow {
+            thinking_sums: std::collections::BTreeMap::from([
+                ("a".to_string(), 40_000),
+                ("c".to_string(), 5_000),
+            ]),
+            ..stored_pin(&store, "s1", "a", 1, 10.0)
+        })
+        .unwrap();
+    store.delete_account("c", "test").unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    let pin = handle.pins().await.unwrap().pop().expect("s1's pin");
+    assert_eq!(
+        pin.thinking_sums,
+        std::collections::BTreeMap::from([("a".to_string(), 40_000)])
+    );
+}
+
+#[tokio::test]
+async fn a_later_observation_replaces_the_fact_its_pair_held() {
+    let store = thinking_store(&["a", "b"], &[]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let pins = [
+        stored_pin(&store, "s1", "a", 1, 10.0),
+        stored_pin(&store, "s2", "a", 2, 10.0),
+        stored_pin(&store, "s3", "a", 3, 10.0),
+    ];
+    let handle = thinking_router(&store, &pins, &now).await;
+    a_spent(&handle, &["a", "b"], AT).await;
+    assert_eq!(
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT))
+            .await
+            .0,
+        "b"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            100_000,
+            None,
+            Some(DROPPED_FOR_ACCOUNT),
+        ))
+        .await;
+    assert_eq!(
+        spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT))
+            .await
+            .0,
+        "b"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s2").await,
+            100_000,
+            None,
+            Some(DROPPED_PREFIX),
+        ))
+        .await;
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s3", "main", SONNET, AT)).await;
+    // s1's answer taught a and b bound and s2's taught them kept, so the move prices the whole 100,000.
+    assert_eq!(account, "b");
+    assert!(close(booked, 0.01), "{booked:?}");
+}
+
 /// The 5-hour share `s2`'s move from `a` to `b` books once `s1`'s move over the same pair was answered with a prompt of
 /// `prompt` tokens and `dropped` as its member's one key.
 async fn second_move_after(prompt: u64, dropped: Option<&str>) -> Option<f64> {
@@ -16789,13 +16998,11 @@ async fn an_answer_without_the_member_teaches_its_pair_bound_where_its_prompt_sh
 
 #[tokio::test]
 async fn a_pair_reads_its_own_fact_else_its_models_first_drop_and_never_another_models() {
-    let store = thinking_store(
-        &["a", "b", "c", "d"],
-        &[("a", "b", false), ("a", "c", true)],
-    );
+    let store = thinking_store(&["a", "b", "c", "d"], &[("a", "c", true)]);
     let now = Arc::new(AtomicI64::new(AT));
     let opus = "claude-opus-5";
     let pins = [
+        stored_pin(&store, "s0", "a", 4, 10.0),
         stored_pin(&store, "s1", "a", 1, 10.0),
         stored_pin(&store, "s2", "a", 2, 10.0),
         PinRow {
@@ -16806,6 +17013,21 @@ async fn a_pair_reads_its_own_fact_else_its_models_first_drop_and_never_another_
     ];
     let handle = thinking_router(&store, &pins, &now).await;
     a_spent(&handle, &["a", "b", "c", "d"], AT).await;
+    // s0's answer on b lists the client's prefix entry alone, which teaches a and b kept beside a and c bound.
+    assert_eq!(
+        spent_move(&handle, turn_of(&handle, "s0", "main", SONNET, AT))
+            .await
+            .0,
+        "b"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s0").await,
+            70_000,
+            None,
+            Some(DROPPED_PREFIX),
+        ))
+        .await;
     let kept = spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT)).await;
     assert_eq!(kept.0, "b");
     assert!(

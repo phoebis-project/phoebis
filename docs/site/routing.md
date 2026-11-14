@@ -820,16 +820,17 @@ session still carries from an earlier stay there again, so the prompt the destin
 larger by the other.
 
 The router learns the binding per model and unordered pair of accounts. Each pin keeps, per account, the thinking tokens
-that account's answers reported for the session (`output_tokens_details.thinking_tokens`), and a request that carries
-`x-claude-code-context-compacted` sets each sum to zero, since its compacted prompt holds no earlier block. The sums
-travel with the session: a move keeps them, and the landing after a failover takes the lost pin's. When a selection
-lands a session on another account than its pin stood on, and the pin holds thinking of the account it leaves, the
-first answer with usage on the new account settles the pair. Its `input_transformations` member reads the pair bound
-where it lists a block dropped as `end_user_binding_mismatch` or `organization_binding_mismatch`, and kept where it
-lists neither, since the client's standing `prefix_binding_mismatch` entry is no drop the move caused. An answer
-without the member reads the pair bound where its prompt is smaller than the last prompt before the move, and settles
-nothing otherwise. The newest answer replaces what the pair held, and the registry keeps each pair's fact across a
-restart, while a move whose answer has not come yet is forgotten. A pair with no fact of its own reads bound once the
+that account's answers reported for the session (`output_tokens_details.thinking_tokens`), and a client's request that
+carries `x-claude-code-context-compacted` sets each sum to zero, since its compacted prompt holds no earlier block. The
+sums travel with the session: a move keeps them, and so does each placement that replaces the session's pin, whether a
+failover took the pin, or it was released off its account, idle past its TTL or left behind by its pool. When a
+selection lands a session on another account than its pin stood on, and the pin holds thinking of the account it
+leaves, the first answer with usage on the new account settles the pair. Its `input_transformations` member reads the
+pair bound where it lists a block dropped as `end_user_binding_mismatch` or `organization_binding_mismatch`, and kept
+where it lists neither, since the client's standing `prefix_binding_mismatch` entry is no drop the move caused. An
+answer without the member reads the pair bound where its prompt is smaller than the last prompt before the move, and
+settles nothing otherwise. The newest answer replaces what the pair held, and the registry keeps each pair's fact across
+a restart, while a move whose answer has not come yet is forgotten. A pair with no fact of its own reads bound once the
 model holds a bound pair, and unobserved otherwise.
 
 A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
