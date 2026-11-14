@@ -664,10 +664,32 @@ test("a re-pair of a held account clears the row's limit resets and moves the re
   const after = (await api.readLimitResets('nightly')).limitResets.revision;
   assert.notEqual(after, before, 'the next read answers a revision no token from before the pairing matches');
   // Secondary's poll waits out a backoff that ends minutes past the story's clock, so the route answers the stored
-  // block, which the pairing cleared.
-  await repair('secondary');
-  const held = await api.readLimitResets('secondary');
-  assert.deepEqual([held.limitResets, (await storyAccount(api, 'secondary')).limitResets], [null, null], 'a read inside the backoff answers no member and stores none');
+  // block, which the pairing cleared. The case holds the clock the mock reads a minute inside that backoff, so a slow
+  // run cannot carry the read past its end.
+  const next = Date.parse((await storyAccount(api, 'secondary')).usage.poll.nextAttemptAt);
+  const wall = Date.now;
+  Date.now = () => next - 60_000;
+  try {
+    await repair('secondary');
+    const held = await api.readLimitResets('secondary');
+    assert.deepEqual([held.error, held.limitResets, (await storyAccount(api, 'secondary')).limitResets], ['the account is waiting out a rate limit', null, null], "a read inside the backoff answers the backoff's error and no member, and stores none");
+  } finally {
+    Date.now = wall;
+  }
+});
+
+test("a second re-pair of legacy after its disconnect and a confirm confirms, since the confirm stored a credential under the key in use", async () => {
+  const api = await signedIn();
+  const repair = async () => {
+    const started = await api.startPairing({ accountId: 'legacy' });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    return api.confirmPairing(started.id);
+  };
+  // The disconnect deletes the credential the story sealed under an earlier storage key, so the first re-pair
+  // confirms and stores the tokens it exchanged.
+  await api.disconnectAccount('legacy');
+  await repair();
+  assert.equal((await repair()).status, 'confirmed', 'the next re-pair confirms over the credential the last one stored');
 });
 
 test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {

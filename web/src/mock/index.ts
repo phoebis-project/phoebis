@@ -875,9 +875,10 @@ export class MockApi implements Api {
     this.pairings.delete(pairingId);
     if (pairing === undefined) throw new ApiError(404, PAIRING_NOT_FOUND, null);
     // The story seals legacy's stored credential under an earlier storage key, so the route refuses a re-pair's confirm
-    // until a disconnect deletes that credential.
+    // until a disconnect deletes that credential. A credential a later pairing stored is sealed under the key in use,
+    // so the refusal holds only while the row carries the seed's end.
     const held = pairing.label === undefined ? this.accounts.find((a) => a.id === pairing.accountId) : undefined;
-    if (held?.id === 'legacy' && held.credential.refreshTokenExpiresAt !== null) throw new ApiError(409, `${held.label} holds a credential sealed under another storage key, so disconnect it before pairing again`, 'sealed_under_another_key');
+    if (held?.id === 'legacy' && held.credential.refreshTokenExpiresAt === accountById.get('legacy')?.credential.refreshTokenExpiresAt) throw new ApiError(409, `${held.label} holds a credential sealed under another storage key, so disconnect it before pairing again`, 'sealed_under_another_key');
     // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
     const tokens = { accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) };
     if (pairing.label !== undefined) {
