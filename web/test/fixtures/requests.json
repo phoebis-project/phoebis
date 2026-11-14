@@ -311,7 +311,7 @@
         "duration_ms": 900,
         "request_bytes": null,
         "response_bytes": null,
-        "cache_marker": true,
+        "cache_marker": false,
         "kept_warm": false,
         "captured_bodies": true,
         "response_truncated": false,
@@ -338,21 +338,21 @@
           "tool_count": 12
         },
         "usage": {
-          "cache_read": 500,
+          "cache_read": 0,
           "cache_write_1h": 0,
-          "cache_write_5m": 200,
+          "cache_write_5m": 0,
           "input": 1000,
           "output": 100,
           "thinking": 40,
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.00355,
+        "cost_usd": 0.003,
         "cost_shares": {
-          "five_hour": 8.8125e-6,
-          "seven_day": 2.35e-6
+          "five_hour": 7.5e-6,
+          "seven_day": 2e-6
         },
-        "cost_equivalent": 0.0000235,
+        "cost_equivalent": 0.00002,
         "share_reason": null,
         "tier": "default_claude_max_20x",
         "phases": {
@@ -391,7 +391,7 @@
             ],
             "overage_in_use": null,
             "usage_based": false,
-            "estimated_usd": 0.00355,
+            "estimated_usd": 0.003,
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -875,21 +875,21 @@
           "tool_count": 12
         },
         "usage": {
-          "cache_read": 500,
+          "cache_read": 9000,
           "cache_write_1h": 0,
-          "cache_write_5m": 200,
-          "input": 1000,
+          "cache_write_5m": 0,
+          "input": 100,
           "output": 100,
           "thinking": 40,
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.00355,
+        "cost_usd": 0.0021000000000000003,
         "cost_shares": {
-          "five_hour": 8.8125e-6,
-          "seven_day": 2.35e-6
+          "five_hour": 4.125e-6,
+          "seven_day": 1.1e-6
         },
-        "cost_equivalent": 0.0000235,
+        "cost_equivalent": 0.000011,
         "share_reason": null,
         "tier": "default_claude_max_20x",
         "phases": {
@@ -928,7 +928,7 @@
             ],
             "overage_in_use": null,
             "usage_based": false,
-            "estimated_usd": 0.00355,
+            "estimated_usd": 0.0021000000000000003,
             "selection": null,
             "response": {
               "cleared_input_tokens": null,

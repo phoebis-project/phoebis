@@ -310,16 +310,16 @@
         "user_agent": "claude-cli/2.1.310 (external, cli)",
         "spend": {
           "requests": 6,
-          "usd": 0.021350000000000004,
+          "usd": 0.019350000000000003,
           "billed_usd": {
             "api_key": 0.00355,
             "fast": 0.00355
           },
-          "equivalent": 0.000094,
+          "equivalent": 0.000078,
           "shares": {
             "business": {
-              "five_hour": 0.00003525,
-              "seven_day": 9.4e-6
+              "five_hour": 0.00002925,
+              "seven_day": 7.8e-6
             }
           },
           "probes": {
@@ -340,12 +340,12 @@
             "other": 3,
             "subagent": 3
           },
-          "usd": 0.021350000000000004,
+          "usd": 0.019350000000000003,
           "billed_usd": {
             "api_key": 0.00355,
             "fast": 0.00355
           },
-          "equivalent": 0.000094
+          "equivalent": 0.000078
         },
         "pinned": true,
         "burn": 0.00104,
@@ -448,15 +448,15 @@
             "last_request_at": 1791720940000,
             "spend": {
               "requests": 3,
-              "usd": 0.01065,
+              "usd": 0.008650000000000001,
               "billed_usd": {
                 "fast": 0.00355
               },
-              "equivalent": 0.000047,
+              "equivalent": 0.000031,
               "shares": {
                 "business": {
-                  "five_hour": 0.000017625,
-                  "seven_day": 4.7e-6
+                  "five_hour": 0.000011625000000000001,
+                  "seven_day": 3.1e-6
                 }
               },
               "probes": {

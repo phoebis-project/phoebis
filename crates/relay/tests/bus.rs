@@ -1105,13 +1105,16 @@ async fn an_attempt_whose_answer_never_came_keeps_a_null_reason() {
     up.shutdown().await;
 }
 
-/// Sends `request`, reads its 200 to the end and returns the serving attempt the ledger files from the request's
-/// events.
-async fn served_attempt_of(
+/// Sends `request`, reads its 200 to the end and returns the request row and the attempts the ledger files from the
+/// request's events.
+async fn served_records_of(
     h: &Harness,
     sub: &mut Subscriber,
     request: Request<Body>,
-) -> phoebis_ledger::AttemptRecord {
+) -> (
+    phoebis_ledger::RequestRecord,
+    Vec<phoebis_ledger::AttemptRecord>,
+) {
     let resp = h.app.clone().oneshot(request).await.unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.into_body().collect().await;
@@ -1121,10 +1124,88 @@ async fn served_attempt_of(
         .into_iter()
         .flat_map(|event| assembler.observe(event))
         .find_map(|record| match record {
-            phoebis_ledger::Record::Request { mut attempts, .. } => attempts.pop(),
+            phoebis_ledger::Record::Request {
+                request, attempts, ..
+            } => Some((request, attempts)),
             _ => None,
         })
-        .expect("the request's ledger row with its attempt")
+        .expect("the request's ledger row with its attempts")
+}
+
+/// Sends `request`, reads its 200 to the end and returns the serving attempt the ledger files from the request's
+/// events.
+async fn served_attempt_of(
+    h: &Harness,
+    sub: &mut Subscriber,
+    request: Request<Body>,
+) -> phoebis_ledger::AttemptRecord {
+    served_records_of(h, sub, request)
+        .await
+        .1
+        .pop()
+        .expect("the request's serving attempt")
+}
+
+/// The first answer reports 1,200 prompt tokens, all uncached, which the pin row keeps as the session's last size.
+#[tokio::test]
+async fn a_second_turn_on_its_pins_account_files_the_first_answers_prompt_size_on_its_attempt() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        json_answer(
+            200,
+            r#"{"id":"msg_first","type":"message","content":[],"usage":{"input_tokens":1200,"output_tokens":1}}"#,
+        ),
+    );
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_second"));
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let turn = || request_for(KEY, "claude-sonnet-4-5", "s-sized");
+    served_attempt_of(&h, &mut sub, turn()).await;
+    wait_for_async(Duration::from_secs(5), || async {
+        let pins = h.router.pins().await.ok()?;
+        pins.iter()
+            .any(|pin| pin.last_input_tokens == 1_200)
+            .then_some(())
+    })
+    .await;
+    let second = served_attempt_of(&h, &mut sub, turn()).await;
+    assert_eq!(second.previous_input_tokens, Some(1_200));
+    up.shutdown().await;
+}
+
+/// The fixture body carries its own cache breakpoints, and the same body stripped of them carries none, which the
+/// pool's TTL policy, off by default, adds none to.
+#[tokio::test]
+async fn the_request_row_keeps_whether_the_body_marked_a_cache_breakpoint() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let (marked, _) = served_records_of(
+        &h,
+        &mut sub,
+        request_for(KEY, "claude-sonnet-4-5", "s-marked"),
+    )
+    .await;
+    let mut unmarked = request_from_fixture(
+        inference_head(FixtureKind::OauthNonFirstParty),
+        &without_markers(body(BodyFixture::Oauth)),
+        KEY,
+    );
+    set_header(&mut unmarked, "x-claude-code-session-id", "s-unmarked");
+    let (unmarked, _) = served_records_of(&h, &mut sub, unmarked).await;
+    assert_eq!(
+        (marked.cache_marker, unmarked.cache_marker),
+        (Some(true), Some(false))
+    );
+    up.shutdown().await;
 }
 
 #[tokio::test]

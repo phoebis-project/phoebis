@@ -18,28 +18,28 @@
         "attempts": 18,
         "failovers": 1,
         "incomplete": 1,
-        "cache_hits": 17,
+        "cache_hits": 16,
         "cache_misses": 0,
-        "uncached": 0,
-        "uncacheable": 0,
+        "uncached": 1,
+        "uncacheable": 1,
         "expired_between_turns": 1,
         "tokens": {
-          "cache_read": 9000,
+          "cache_read": 17000,
           "cache_write_1h": 0,
-          "cache_write_5m": 3600,
+          "cache_write_5m": 3200,
           "output": 1800,
           "thinking": 720,
-          "uncached_input": 18000,
+          "uncached_input": 17100,
           "web_fetch": 0,
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.001025,
-          "cache_write": 0.010000000000000002,
-          "input": 0.04000000000000001,
+          "cache_read": 0.0018249999999999998,
+          "cache_write": 0.009000000000000003,
+          "input": 0.03820000000000001,
           "output": 0.020000000000000004
         },
-        "cost_usd": 0.071025,
+        "cost_usd": 0.06902500000000002,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1
@@ -51,7 +51,9 @@
           "not_returned": 1,
           "pending": 1
         },
-        "cache_miss_reason_hits": {},
+        "cache_miss_reason_hits": {
+          "none": 1
+        },
         "input_transformations": {
           "thinking.prefix_binding_mismatch": 1
         },

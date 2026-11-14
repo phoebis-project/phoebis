@@ -1296,6 +1296,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         request: RequestRecord {
             bodies_captured: true,
             diagnostics_source: Some("client".into()),
+            // The captured body below holds no cache breakpoint, so the request could read no cache.
+            cache_marker: Some(false),
             ..request(
                 key_generation,
                 "r-captured",
@@ -1306,9 +1308,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "succeeded",
             )
         },
-        // Pending beside the other rows' `none`, so the capture carries both words the relay reads from the member.
+        // Pending beside the other rows' `none`, so the capture carries both words the relay reads from the member. With
+        // no breakpoint the answer read and wrote no cache.
         attempts: vec![AttemptRecord {
             cache_miss_reason: Some("pending".into()),
+            cache_read_tokens: Some(0),
+            cache_write_5m_tokens: Some(0),
             ..attempt("r-captured", 1, "business", 200, "succeeded", now - 60_000)
         }],
         bodies: Some(BodyRecord {
@@ -1358,14 +1363,21 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "incomplete",
             )
         },
-        attempts: vec![attempt(
-            "r-incomplete",
-            1,
-            "business",
-            200,
-            "upstream_error",
-            hour_ago + 600,
-        )],
+        // The session's prefix stands warm on business since the failover's answer, so this answer read nearly all of
+        // its prompt back and counts as a hit under its reason.
+        attempts: vec![AttemptRecord {
+            input_tokens: Some(100),
+            cache_read_tokens: Some(9_000),
+            cache_write_5m_tokens: None,
+            ..attempt(
+                "r-incomplete",
+                1,
+                "business",
+                200,
+                "upstream_error",
+                hour_ago + 600,
+            )
+        }],
         bodies: None,
     });
     // A row whose serving attempt carries a placement, so the placements route has a rung to answer rather

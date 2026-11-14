@@ -3153,7 +3153,7 @@ mod tests {
                 d.cache_miss_reasons.get("expired_between_turns")
             ),
             (Some(&1), None, None),
-            "a comparison still running is counted under its own word and expired nothing"
+            "a comparison still running is counted under its own word, and with no previous size it expired nothing"
         );
         let d = one_delta(
             &request("canceled", Some(503), Some("k")),
@@ -3203,8 +3203,13 @@ mod tests {
     }
 
     #[test]
-    fn a_token_count_under_half_stays_out_of_the_expired_count() {
-        assert_eq!(expired_after("count_tokens", None, 100), None);
+    fn a_probe_or_a_token_count_under_half_stays_out_of_the_expired_count() {
+        assert_eq!(
+            expired_after("count_tokens", None, 100),
+            None,
+            "a token count"
+        );
+        assert_eq!(expired_after("probe", None, 100), None, "a probe");
     }
 
     /// The `messages_changed/hit` count of a request whose one attempt sent `input` uncached tokens, wrote `write` and

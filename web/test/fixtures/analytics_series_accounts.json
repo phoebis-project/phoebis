@@ -590,22 +590,22 @@
             "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
-              "cache_read": 6500,
+              "cache_read": 15000,
               "cache_write_1h": 0,
-              "cache_write_5m": 2600,
+              "cache_write_5m": 2400,
               "output": 1300,
               "thinking": 520,
-              "uncached_input": 13000,
+              "uncached_input": 12100,
               "web_fetch": 0,
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0007000000000000001,
-              "cache_write": 0.006,
-              "input": 0.024,
+              "cache_read": 0.00155,
+              "cache_write": 0.005500000000000001,
+              "input": 0.022200000000000004,
               "output": 0.012
             },
-            "cost_usd": 0.0427,
+            "cost_usd": 0.04125000000000001,
             "errors": {
               "stream_incomplete": 1
             },
@@ -615,7 +615,9 @@
               "none": 11,
               "not_returned": 1
             },
-            "cache_miss_reason_hits": {},
+            "cache_miss_reason_hits": {
+              "none": 1
+            },
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,
@@ -1012,15 +1014,15 @@
             "wasted_probe_usd": 0.0,
             "wasted_probe_reasons": {},
             "cost_shares": {
-              "five_hour": 0.00008812500000000001,
-              "seven_day": 0.0000235
+              "five_hour": 0.00008343750000000002,
+              "seven_day": 0.00002225
             },
             "plan_requests": 11,
             "plan_output_tokens": 1100,
-            "cost_equivalent": 0.000235,
+            "cost_equivalent": 0.0002225,
             "cache_equivalent": {
-              "read": 1.6666666666666667e-6,
-              "write": 0.000033333333333333335
+              "read": 4.500000000000001e-6,
+              "write": 0.00003
             },
             "probe_equivalent": {
               "cost": 0.0,
@@ -1036,9 +1038,9 @@
               "output": 0.002
             },
             "equivalent_split": {
-              "input": 0.00013333333333333334,
-              "cache_read": 1.6666666666666667e-6,
-              "cache_write": 0.000033333333333333335,
+              "input": 0.00012133333333333335,
+              "cache_read": 4.500000000000001e-6,
+              "cache_write": 0.00003,
               "output": 0.00006666666666666667
             }
           },
@@ -2456,15 +2458,15 @@
             "attempts": 4,
             "failovers": 0,
             "incomplete": 0,
-            "cache_hits": 4,
+            "cache_hits": 3,
             "cache_misses": 0,
-            "uncached": 0,
-            "uncacheable": 0,
+            "uncached": 1,
+            "uncacheable": 1,
             "expired_between_turns": 1,
             "tokens": {
-              "cache_read": 2000,
+              "cache_read": 1500,
               "cache_write_1h": 0,
-              "cache_write_5m": 800,
+              "cache_write_5m": 600,
               "output": 400,
               "thinking": 160,
               "uncached_input": 4000,
@@ -2472,12 +2474,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0002,
-              "cache_write": 0.0015,
+              "cache_read": 0.00015000000000000001,
+              "cache_write": 0.001,
               "input": 0.006,
               "output": 0.003
             },
-            "cost_usd": 0.010700000000000001,
+            "cost_usd": 0.01015,
             "errors": {
               "upstream_error": 1
             },

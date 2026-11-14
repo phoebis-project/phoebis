@@ -2,9 +2,9 @@
   "route": "GET /admin/dashboard",
   "body": {
     "requests_24h": 20,
-    "tokens_24h": 37800,
-    "tokens_cached_24h": 10500,
-    "cost_24h": 0.08172499999999999,
+    "tokens_24h": 44500,
+    "tokens_cached_24h": 18500,
+    "cost_24h": 0.07972499999999999,
     "billed_24h": 0.0178,
     "equivalent_24h": null,
     "error_rate_24h": 0.1,
@@ -235,22 +235,22 @@
       {
         "at": 1791716400000,
         "billed": 0.0142,
-        "cost": 0.0498,
-        "equivalent": 0.000235,
+        "cost": 0.04834999999999999,
+        "equivalent": 0.0002225,
         "errors": 1,
         "refused": 2,
         "requests": 14,
-        "tokens": 27000
+        "tokens": 34400
       },
       {
         "at": 1791720000000,
         "billed": 0.0036,
-        "cost": 0.0143,
+        "cost": 0.013749999999999998,
         "equivalent": null,
         "errors": 1,
         "refused": 0,
         "requests": 5,
-        "tokens": 9000
+        "tokens": 8300
       }
     ],
     "sessions": {
