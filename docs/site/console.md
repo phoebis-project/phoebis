@@ -542,16 +542,31 @@ view, as does a Wall reached row whose words carry `, a reset can clear it`.
 
 The serving table lists who serves next: Tier (`P{n}`, or `plan P{n}`, `overage P{n}` and `metered P{n}` where the pool
 prefers subscription accounts, the metered tier holding the API-key accounts and the usage-based seats), Account,
-Standing and Pins. Standing reads `next` for the member a fresh session lands on, `eligible`, `after plan quota` for a
-member in overage ranked after the plan-funded ones, `winding down {left}` (on hover `Winding down to the plan's end at
-{time}`) for a member that serves only as the last resort, and for a member passed over `cooldown {left}` (on hover `In
-a cooldown that ends {time}`), `overage until {time}` (`overage` where the reset is unknown), `spend cap until {time}`
-(`spend cap reached` where the reset is unknown), `at budget` or `at budget until {time}` with the spend against the
-budget, `budget unknown` while the ledger is degraded, `subscription ended` for a member whose subscription ended,
-`unavailable` with the account's status on hover, and `unknown` (on hover
-`The router has not loaded this member, or does not answer`) for a member the router answers no reading of. On a card
-whose pool has the slow-down on, Standing carries the speed chip of a slowed member, `0.5x` with the Quota view's hover
-where the account is loaded. The caption names the strategy, `Pace`, `Priority, then random` or `Round robin`, with
+Standing and Pins. A tier's members stand in the order of the fit a fresh session reads on each, the order the router
+lands one by: the members that fit, then `rewrite only`, `least bad`, `winding down` and `window spent`, the longer
+runway first among the `rewrite only` and among the `least bad` members, and the strategy's order after that. Standing
+reads `next` alone for the member a fresh session lands on, `eligible`, `after plan quota` for a member in overage
+ranked after the plan-funded ones, `winding down {left}` (on hover `Winding down to the plan's end at {time}`) for a
+member inside the pool's wind-down, and for a member passed over `cooldown {left}` (on hover `In a cooldown that ends
+{time}`), `overage until {time}` (`overage` where the reset is unknown), `spend cap until {time}` (`spend cap reached`
+where the reset is unknown) for a usage-based seat at its spend cap, `at budget` or `at budget until {time}` with the
+spend against the budget, `budget unknown` while the ledger is degraded, `subscription ended` for a member whose
+subscription ended, `unavailable` with the account's status on hover, and `unknown` (on hover `The router has not loaded
+this member, or does not answer`) for a member the router answers no reading of. After the standing word, a member on
+which a fresh session's burn would carry a shared window past its ceiling before the window resets reads `rewrite only`,
+titled "A fresh session's burn would carry a shared window past its ceiling before it resets", and a member whose shared
+window stands at or past its ceiling reads `least bad`, titled "A shared window stands at or past its ceiling", both in
+the warning tone. A member whose 5-hour or 7-day window stands at 100 % or more reads `window spent` in the same place
+in the serious tone, titled "A shared window has no allowance left", a ground of its own beside a seat's spend cap. The
+row's hover reads "{label}: {word}, taken only once no account fits a fresh session" for `rewrite only` and `least bad`,
+"{label}: winding down, taken only once no other account can take a fresh session" for a member inside its wind-down,
+and "{label}: window spent, taken only once no other account has allowance left" for a spent one. `next` stands on the
+best of these rungs that an eligible member reaches. On the rung of the members that fit, of `winding down` or of
+`window spent`, it is the lead member of the first tier that holds one, so a pool whose eligible members all read
+`window spent` still names one. On the rung of `rewrite only` or of `least bad`, it is the member of that rung with the
+longest runway across the pool, whatever its tier, and the first tier's lead where several share it. On a card whose
+pool has the slow-down on, Standing carries the speed chip of a slowed member, `0.5x` with the Quota view's hover where
+the account is loaded. The caption names the strategy, `Pace`, `Priority, then random` or `Round robin`, with
 `subscription accounts first` appended where the pool prefers subscription accounts, and its hover notes "A request for
 a Fable model is placed on the Fable window instead, which this card does not draw." Pins reads the member's active
 pins, one per agent and model as the card's Active pins fact counts them, a muted `0` for none. Then "Traffic, 24h"

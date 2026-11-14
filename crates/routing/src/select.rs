@@ -1107,7 +1107,7 @@ impl<'a> Figures<'a> {
 /// `pin_figures`. The key-to-pool filter of `in_pool` leaves out a pin a former pool left on a member, as the
 /// projections leave it out of the standing burn, so another pool's sessions shape no placement of this one. The rows
 /// come in no order, since `median` sorts the rates it reads.
-fn fresh_prior(
+pub(crate) fn fresh_prior(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
@@ -1161,11 +1161,15 @@ fn holds_allowance(
     if snapshot.usage_based(account_id) {
         return true;
     }
-    allowance_windows(window).all(|name| {
-        !state
-            .predicted(account_id, name, now)
-            .is_some_and(|r| r.utilization >= 1.0)
-    })
+    allowance_windows(window).all(|name| !window_spent(state, account_id, name, now))
+}
+
+/// Whether the account's prediction on the plan window `window` stands at 1.0 or past it, so the window has no
+/// allowance left.
+fn window_spent(state: &RoutingState, account_id: &str, window: &str, now: i64) -> bool {
+    state
+        .predicted(account_id, window, now)
+        .is_some_and(|r| r.utilization >= 1.0)
 }
 
 /// The plan windows `holds_allowance` reads for a request judged in `window`: the model's own week where `window` is
@@ -3510,6 +3514,10 @@ pub(crate) struct FitRead {
     pub rewrite: BTreeMap<String, f64>,
     pub reserved: BTreeMap<String, f64>,
     pub end: Option<i64>,
+    /// The word of each window the read holds a reading of, by three tests in order: `spent` at a prediction of 1.0
+    /// or more, `ending` inside the account's wind-down, else `fits`, `rewrite_only` or `least_bad` on the window's own
+    /// runway. A paid source and, on a placement, an untiered account give each window the read's verdict.
+    pub words: BTreeMap<String, &'static str>,
 }
 
 /// How `fit_of` reads a window with no reading and an account with no tier. `Move` reads either gap as least bad: a
@@ -3555,12 +3563,30 @@ pub(crate) fn fit_of(
         rewrite: BTreeMap::new(),
         reserved: BTreeMap::new(),
         end: None,
+        words: BTreeMap::new(),
+    };
+    // The answers ahead of the window loop word each window the model draws that the account holds a reading of.
+    let held = || {
+        state
+            .plan_windows_held(candidate, &request.canonical_model)
+            .filter(move |window| state.predicted(candidate, window, now).is_some())
     };
     // An account inside the wind-down is no destination: the operator's `wind_down_minutes` is the one rule before
     // the end, and the same test keeps a fresh session off the account and drains its cold pins.
     if winding_down(snapshot, pool, candidate, now) {
         read.end = account_end(snapshot, candidate, now);
         read.verdict = "ending";
+        // A spent window reads `spent` ahead of the wind-down, so the member ranks behind the ones that only end.
+        read.words = held()
+            .map(|window| {
+                let word = if window_spent(state, candidate, window, now) {
+                    "spent"
+                } else {
+                    "ending"
+                };
+                (window.to_string(), word)
+            })
+            .collect();
         return read;
     }
     if paid_source(snapshot, candidate) {
@@ -3576,6 +3602,9 @@ pub(crate) fn fit_of(
             read.wall_runway_ms = Some(0);
             read.wall_shown_ms = Some(0);
         }
+        read.words = held()
+            .map(|window| (window.to_string(), read.verdict))
+            .collect();
         return read;
     }
     // An unnamed tier, or a plan the cost model does not price, prices neither the rewrite nor the burn, so for a move
@@ -3583,6 +3612,9 @@ pub(crate) fn fit_of(
     let tier = snapshot.priced_tier(candidate);
     if tier.is_none() && judge == Judge::Placement {
         read.verdict = "fits";
+        read.words = held()
+            .map(|window| (window.to_string(), read.verdict))
+            .collect();
         return read;
     }
     let (rewrite, pin_burn, pin_regime) = tier
@@ -3680,6 +3712,16 @@ pub(crate) fn fit_of(
         } else {
             burn.time_to(line - predicted - rewrite)
         };
+        let word = if window_spent(state, candidate, window, now) {
+            "spent"
+        } else if !lands {
+            "least_bad"
+        } else if runway_ms.is_some_and(|runway_ms| runway_ms < span) {
+            "rewrite_only"
+        } else {
+            "fits"
+        };
+        read.words.insert(window.to_string(), word);
         let Some(runway_ms) = runway_ms else {
             continue;
         };
@@ -3712,6 +3754,72 @@ pub(crate) fn fit_of(
         "least_bad"
     };
     read
+}
+
+/// The fit a fresh placement reads on `candidate` at `now` for a request on `model` that prices no rewrite, over the
+/// pool's fresh prior `prior` (`fresh_prior`'s rows, read once for the pool): what the pools route answers for a
+/// member. The request carries no pin, no body, no failover entry, no classifier, probe, count or fast mark and no
+/// candidates, so the read is the gate's own for a fresh session on the windows `model` draws.
+pub(crate) fn fresh_fit(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    prior: &[PinRow],
+    candidate: &str,
+    model: &str,
+    now: i64,
+) -> FitRead {
+    // Every member is written out, as `standing_request` writes them, so a member the type gains states its value here.
+    let request = SelectRequest {
+        request_id: String::new(),
+        attempt: 0,
+        seq: 0,
+        key_id: String::new(),
+        key_generation: 0,
+        agent_id: String::new(),
+        session_id: String::new(),
+        canonical_model: model.to_string(),
+        folded_model: model.to_string(),
+        candidates: Vec::new(),
+        portable: false,
+        credit_account: None,
+        attempted: Vec::new(),
+        now,
+        received_at: now,
+        fallback_ms: 0,
+        revision: 0,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        boundaries: Arc::from([]),
+        client: ClientClass::Other,
+        entrypoint: None,
+        static_boundaries: Arc::from([]),
+        marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
+        failed_over: None,
+        dialed: false,
+        held_out: false,
+        lane: String::new(),
+        fast: false,
+        classifier: false,
+        body_tokens: 0,
+        effort: None,
+    };
+    fit_of(
+        state,
+        snapshot,
+        pool,
+        &request,
+        Figures::Fresh(prior),
+        candidate,
+        &[],
+        now,
+        Judge::Placement,
+        None,
+    )
 }
 
 /// The binding window among `runways` with its runway: the shortest of those short of their horizon, else the
@@ -9109,6 +9217,7 @@ mod runway_tests {
             rewrite: BTreeMap::new(),
             reserved: BTreeMap::new(),
             end: None,
+            words: BTreeMap::new(),
         }
     }
 

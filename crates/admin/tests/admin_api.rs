@@ -8110,6 +8110,173 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
     );
 }
 
+/// The pool `main` from the body `pool` behind key `desktop`, over the OAuth accounts `members` on a priced tier, those
+/// of `ending` canceled to end ten minutes after the rig's clock, inside the pool's default wind-down of 30 minutes,
+/// and `pins` seeded, handed to a second harness whose router prices a pin's burn through `round_rates`.
+async fn fit_harness(
+    pool: &str,
+    members: &[&str],
+    ending: &[&str],
+    pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
+) -> common::Full {
+    use common::{generation, login, post, NOW};
+    let seed = common::admin_parts_full().await;
+    for id in members {
+        seed.store
+            .insert_account(&phoebis_store::AccountRow::for_tests(
+                id,
+                phoebis_store::AccountKind::Oauth,
+            ))
+            .unwrap();
+        name_the_tier(&seed.store, id, "default_claude_max_20x");
+    }
+    for id in ending {
+        seed.store
+            .set_canceled(
+                id,
+                phoebis_store::Cancellation::On {
+                    ends_at: Some(NOW + 600_000),
+                },
+            )
+            .unwrap();
+    }
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", pool, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    for pin in pins(generation(&seed.store, "desktop")) {
+        seed.store.upsert_pin(&pin).unwrap();
+    }
+    common::admin_parts_full_on_rated(seed.store.clone(), round_rates).await
+}
+
+#[tokio::test]
+async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runway_its_rung_ranks_by(
+) {
+    use common::{login, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    let members = ["roomy", "short", "high", "ending", "spent", "ending-spent"];
+    // One pin on `roomy` burning five points of the 5-hour window an hour and two tenths of a point of the 7-day
+    // window. It is the pool's one warm pin, so a fresh session's prior burns as much on every member, and `roomy`
+    // burns its own pin's share beside it.
+    let parts = fit_harness(
+        r#"{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"members":[{"account_id":"roomy","priority":0},{"account_id":"short","priority":0},{"account_id":"high","priority":0},{"account_id":"ending","priority":0},{"account_id":"spent","priority":0},{"account_id":"ending-spent","priority":0}]}"#,
+        &members,
+        &["ending", "ending-spent"],
+        |generation| {
+            vec![phoebis_store::PinRow {
+                model: "claude-opus-5-5".into(),
+                ..burning_opus_pin("s1", "roomy", generation, NOW, 1_000.0, 1_000.0)
+            }]
+        },
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Each 5-hour window resets in four hours and each 7-day window in fifty.
+    for (account, five_hour, seven_day) in [
+        ("roomy", 0.10, 0.10),
+        ("short", 0.80, 0.10),
+        ("high", 0.97, 0.10),
+        ("ending", 0.10, 0.10),
+        ("spent", 0.10, 1.0),
+        ("ending-spent", 0.10, 1.0),
+    ] {
+        read_windows(
+            &parts,
+            account,
+            &[
+                (phoebis_routing::FIVE_HOUR, five_hour, Some(NOW + 4 * HOUR)),
+                (phoebis_routing::SEVEN_DAY, seven_day, Some(NOW + 50 * HOUR)),
+            ],
+        )
+        .await;
+    }
+    let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        pool_member(v, "ending-spent")["burn"].is_number()
+    })
+    .await;
+    let read = |account: &str| {
+        let member = pool_member(&pools, account);
+        (member["fit"].clone(), member["runway_ms"].clone())
+    };
+    let null = serde_json::Value::Null;
+    // `roomy` burns ten points an hour, so it reaches the ceiling in (0.95 - 0.10) / 0.10 = 8.5 hours, past its reset.
+    // `short` reaches it in (0.95 - 0.80) / 0.05 = 3 hours, short of its reset. `high` stands past the ceiling and
+    // reaches 1.0 in (1.0 - 0.97) / 0.05 = 0.6 hours. `spent` alone would read least bad, its 7-day reading at the
+    // weekly ceiling of 1.0, and `ending-spent` is inside its wind-down with a spent window.
+    assert_eq!(
+        members.map(read),
+        [
+            (serde_json::json!("fits"), serde_json::json!(30_600_000)),
+            (
+                serde_json::json!("rewrite_only"),
+                serde_json::json!(10_800_000)
+            ),
+            (serde_json::json!("least_bad"), serde_json::json!(2_160_000)),
+            (serde_json::json!("ending"), null.clone()),
+            (serde_json::json!("spent"), null.clone()),
+            (serde_json::json!("spent"), null),
+        ],
+        "{pools}"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_members_fit_reads_its_worst_shared_window_and_no_model_week() {
+    use common::{login, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    // The weekly ceiling stands under 1.0, so a 7-day reading of 0.95 is past the ceiling with allowance left.
+    let parts = fit_harness(
+        r#"{"id":"main","label":"Main","weekly_ceiling":0.9,"members":[{"account_id":"weekly","priority":0},{"account_id":"model-week","priority":0}]}"#,
+        &["weekly", "model-week"],
+        &[],
+        |_| Vec::new(),
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let five_hour = (phoebis_routing::FIVE_HOUR, 0.10, Some(NOW + 4 * HOUR));
+    read_windows(
+        &parts,
+        "weekly",
+        &[
+            five_hour,
+            (phoebis_routing::SEVEN_DAY, 0.95, Some(NOW + 50 * HOUR)),
+        ],
+    )
+    .await;
+    read_windows(
+        &parts,
+        "model-week",
+        &[
+            five_hour,
+            (phoebis_routing::SEVEN_DAY, 0.10, Some(NOW + 50 * HOUR)),
+            (phoebis_routing::SEVEN_DAY_FABLE, 1.0, Some(NOW + 50 * HOUR)),
+        ],
+    )
+    .await;
+    let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        pool_member(v, "model-week")["burn"].is_number()
+    })
+    .await;
+    assert_eq!(
+        (
+            &pool_member(&pools, "weekly")["fit"],
+            &pool_member(&pools, "model-week")["fit"]
+        ),
+        (
+            &serde_json::json!("least_bad"),
+            &serde_json::json!("fits")
+        ),
+        "a 7-day window past its ceiling after a 5-hour window that fits reads least bad, and a spent Fable week moves \
+         no member's word: {pools}"
+    );
+}
+
 #[tokio::test]
 async fn a_pool_member_with_a_fable_hour_answers_its_fable_reservation_and_a_paid_member_answers_null(
 ) {

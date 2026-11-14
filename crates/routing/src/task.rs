@@ -25,10 +25,11 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    budget_facts, burn_unit, decide, handed_sums, lane_is_fast, mark_cleared_of, move_read,
-    move_word, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
-    slow_down_ramp, standing_move_read, standing_request, zeroes_sums, BurnRead, Decided,
-    FailedOver, MoveRead, Obstacle, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    budget_facts, burn_unit, decide, fresh_fit, fresh_prior, handed_sums, lane_is_fast,
+    mark_cleared_of, move_read, move_word, obstacle, pace_of, passes_reset, projection_of,
+    projections_of, release_reasons, slow_down_ramp, standing_move_read, standing_request,
+    zeroes_sums, BurnRead, Decided, FailedOver, FitRead, MoveRead, Obstacle, Refusal,
+    SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -39,6 +40,7 @@ use crate::state::{
     RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
     WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
+use crate::windows::MODEL_WINDOWS;
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
@@ -1372,8 +1374,9 @@ impl LoadCounts {
     }
 }
 
-/// One account's projection per plan window, read under the state lock at one instant, and its Pace score, all with the
-/// settings of the pool the ask named.
+/// One account's projection per plan window, read under the state lock at one instant, its Pace score, and the fit a
+/// fresh placement reads on it over the pool's fresh prior with the runway its rung ranks by, all with the settings of
+/// the pool the ask named.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AccountProjection {
     pub account_id: String,
@@ -1392,6 +1395,16 @@ pub struct AccountProjection {
     /// What the selector holds against the account for a request on no model in particular, with no account tried
     /// and the fast lane off, `None` where it would place on the account at the ask's instant.
     pub obstacle: Option<Obstacle>,
+    /// The worst word over the member's shared plan windows, by the order `fits`, `rewrite_only`, `least_bad`,
+    /// `ending`, `spent`, for a request that prices no rewrite on a model with no week of its own: `spent` where a
+    /// shared window's prediction stands at 1.0 or past it, else `ending` inside the account's wind-down. A paid
+    /// source, a member with no priced tier and a member with no reading of a shared window read the verdict of the
+    /// fit read itself, `fits` or `least_bad` for the first two.
+    pub fit: &'static str,
+    /// The runway the ladder ranks the member's rung by, over the shared windows: to the ceiling under `fits` and
+    /// `rewrite_only`, to 1.0 under `least_bad`, where a paid source with a full bucket reads 0. None for an unbounded
+    /// runway and for `ending` and `spent`.
+    pub runway_ms: Option<i64>,
     /// The member's budgets with the spend the ledger last reported over each, as a selection's facts list them.
     pub budget: Vec<BudgetFacts>,
 }
@@ -1436,6 +1449,11 @@ pub struct WindowProjection {
     /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it, the room
     /// on `seven_day` less the Fable reservation where one applies.
     pub spare_rate: f64,
+    /// The fit a fresh placement reads on the window for a request that prices no rewrite: `spent`, `ending`,
+    /// `fits`, `rewrite_only` or `least_bad`. A model week reads it on a request for a model that draws the week, a
+    /// member with no priced tier reads `fits`, and a window the account's set no longer holds reads the member's
+    /// `fit`.
+    pub fit: &'static str,
 }
 
 /// A pin with its burn decayed to now and its runway on its account: the time until the account's projection reaches
@@ -2809,7 +2827,10 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 /// so each window is built once per read, with `pace_of`'s spare rate on each, the score and the Fable reservation
 /// from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its own, the slow-down entry in
 /// force, which the last pinned selection on the account wrote, the selector's obstacle on the account and the
-/// member's budgets. Empty for a pool the snapshot does not hold.
+/// member's budgets. The fit a fresh placement reads on each member comes from `fresh_fit` over the pool's
+/// `fresh_prior`, read once for the pool: one read on a request whose model draws no week of its own gives the
+/// member's word, its runway and the words of the shared windows, and each model week the account holds a reading of
+/// takes its word from a read on that week's model. Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2827,6 +2848,7 @@ fn projections(
         .collect();
     members.sort();
     members.dedup_by(|a, b| a.0 == b.0);
+    let prior = fresh_prior(state, snapshot, pool, now);
     members
         .into_iter()
         .map(|(account_id, priority)| {
@@ -2857,6 +2879,26 @@ fn projections(
                 BurnRead::Demand,
                 None,
             );
+            // The empty id names no model family, so the read draws the shared windows alone and a model week moves
+            // neither the member's word nor its runway.
+            let shared = fresh_fit(state, snapshot, pool, &prior, account_id, "", now);
+            let fit = member_fit(&shared);
+            let runway_ms = match fit {
+                "fits" | "rewrite_only" => shared.rank_runway_ms,
+                "least_bad" => shared.wall_runway_ms,
+                _ => None,
+            };
+            let mut words = shared.words;
+            // A week's family is a model id that `model_week` matches to that week, so the read draws it.
+            for &(family, week) in MODEL_WINDOWS {
+                if !achieved.contains_key(week) {
+                    continue;
+                }
+                let read = fresh_fit(state, snapshot, pool, &prior, account_id, family, now);
+                if let Some(&word) = read.words.get(week) {
+                    words.insert(week.to_string(), word);
+                }
+            }
             let windows = all_plan_windows()
                 .filter_map(|window| {
                     let projection = achieved.get(window)?;
@@ -2872,6 +2914,9 @@ fn projections(
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
                             spare_rate: pace.score,
+                            // A window the reads walk past, one the account's set no longer holds, takes the
+                            // member's word.
+                            fit: words.get(window).copied().unwrap_or(fit),
                         },
                     ))
                 })
@@ -2906,10 +2951,25 @@ fn projections(
                     fallback_ms,
                     false,
                 ),
+                fit,
+                runway_ms,
                 budget: budget_facts(state, snapshot, pool_id, account_id),
             }
         })
         .collect()
+}
+
+/// The fit words from best to worst, the order the ladder lands a fresh session by.
+const FIT_ORDER: [&str; 5] = ["fits", "rewrite_only", "least_bad", "ending", "spent"];
+
+/// A member's word: the worst word of its shared windows by `FIT_ORDER`, else the read's own verdict, which a member
+/// with no reading of a shared window answers. A paid source and an untiered member give each window that verdict.
+fn member_fit(read: &FitRead) -> &'static str {
+    [FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .filter_map(|window| read.words.get(window).copied())
+        .max_by_key(|word| FIT_ORDER.iter().position(|w| w == word))
+        .unwrap_or(read.verdict)
 }
 
 /// Each of `pins` with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool

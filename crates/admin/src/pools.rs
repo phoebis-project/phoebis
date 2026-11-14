@@ -1162,11 +1162,24 @@ fn warnings_of(row: &PoolRow, cache_ttl: &CacheTtlPolicy, cohort: usize) -> Vec<
 pub(crate) struct PoolMemberView {
     pub account_id: String,
     pub priority: u32,
-    /// `budget`, `budget_unknown`, `cooldown`, `eligible`, `overage`, `spent`, `subscription_ended` (past the saved
-    /// end of a canceled subscription), `unavailable` (deleted, paused or unready), or `unknown` (no projection: the
-    /// router has not loaded the member, or does not answer).
+    /// `budget`, `budget_unknown`, `cooldown`, `eligible`, `overage`, `spent` (a usage-based seat at its spend cap),
+    /// `subscription_ended` (past the saved end of a canceled subscription), `unavailable` (deleted, paused or
+    /// unready), or `unknown` (no projection: the router has not loaded the member, or does not answer).
     #[schema(example = "budget")]
     pub eligible: String,
+    /// The fit a fresh session's first request reads on the member, for a model with no week of its own: the worst
+    /// word over its 5-hour and 7-day windows in the order `fits`, `rewrite_only`, `least_bad`, `ending` (inside the
+    /// pool's wind-down before the subscription's end) and `spent` (a shared plan window at 1.0 or past it), the
+    /// order the router lands a fresh session by. A model week moves no member's word. An api_key member and a
+    /// usage-based seat read `fits` with room and `least_bad` without, and a member with no priced tier reads `fits`.
+    /// Null while the router does not answer.
+    #[schema(example = "rewrite_only")]
+    pub fit: Option<String>,
+    /// The runway in milliseconds the router ranks the member by among the members of its word: to the pool's
+    /// ceiling under `fits` and `rewrite_only`, to 1.0 under `least_bad`, 0 for an api_key member or a usage-based
+    /// seat with no room. Null for an unbounded runway, under `ending` and `spent`, and while the router does not
+    /// answer.
+    pub runway_ms: Option<i64>,
     /// The account's `oauth` or `api_key`.
     #[schema(example = "oauth")]
     pub kind: Option<String>,
@@ -1261,6 +1274,8 @@ fn member_json(
         account_id: m.account_id.clone(),
         priority: m.priority,
         eligible: eligible.to_string(),
+        fit: projection.map(|p| p.fit.to_string()),
+        runway_ms: projection.and_then(|p| p.runway_ms),
         kind,
         budget_daily_usd: m.budget_daily_usd,
         budget_monthly_usd: m.budget_monthly_usd,
