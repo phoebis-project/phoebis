@@ -694,12 +694,12 @@ inside the wait the stamp and the wait (`over_since_fable_reservation`, `wait_fa
 fires `trigger` `seven_day` and `fired_by` `fable_reservation`, with no `excess`, which a window's trigger alone names.
 
 The round orders the pool's pins on the account, cold ones first, those whose move drops no thinking by burn and then
-the others by burn over the thinking they drop, then warm ones by burn over their move's size. A move's size is the
-prompt it rewrites on the destination the gate finds for it before the walk plans any move, as [What a move
-drops](#what-a-move-drops) sizes it (for a pin no call has renewed with usage yet, the body of the request the round
-runs on for that request's own pin and nothing for any other pin), plus the thinking the move drops at the weight of
-output: the cost model's share of a token as output over its share as a cache write at the pin's TTL. A pin whose burn
-the cost model cannot price follows every priced pin of its group. Each burn is read from the pin's average decayed with
+the others by burn over the thinking they drop at the weight of output, then warm ones by burn over their move's size. A
+move's size is the prompt it rewrites on the destination the gate finds for it before the walk plans any move, as [What
+a move drops](#what-a-move-drops) sizes it (for a pin no call has renewed with usage yet, the body of the request the
+round runs on for that request's own pin and nothing for any other pin), plus the weighted drop, the thinking times the
+cost model's share of a token as output over its share as a cache write at the pin's TTL. A pin whose burn the cost
+model cannot price follows every priced pin of its group. Each burn is read from the pin's average decayed with
 `burn_average_seconds`, and as its demand under a round the stretch fired, so the round's pins add up to its excess.
 `warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
 ones, and `always` orders every pin by burn over its move's size, cold or warm. A pin a former pool left on the account

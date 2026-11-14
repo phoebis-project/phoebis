@@ -2056,6 +2056,13 @@ fn run(
     // failed-over request, never for a fresh session.
     let mut reads: Vec<(String, FitRead)> = Vec::new();
     if let Some((mut current, current_key)) = pin.take() {
+        // The move rules, the booking and the row a move takes off read the session's thinking sums as this selection
+        // writes them, so a compacted request prices no drop of blocks its prompt no longer holds.
+        let as_written = |row: PinRow| PinRow {
+            thinking_sums: handed_sums(&row, request),
+            ..row
+        };
+        current = as_written(current);
         let mut moved_off = false;
         let ended = subscription_ended(snapshot, &current.account_id, request.now);
         if request.count || ended {
@@ -2129,7 +2136,7 @@ fn run(
             // the move takes off the account is read again with its mark.
             if rec.shed_round.is_some() {
                 if let Some(fresh) = state.pin(&current_key).cloned() {
-                    current = fresh;
+                    current = as_written(fresh);
                 }
             }
             // Ahead of the move's own writes, so the store holds the marks before the pin write that spends one.
@@ -5448,8 +5455,8 @@ pub(crate) fn move_read(
     };
     let dropped_thinking_tokens = bound_destination(state, pin, destination)
         .map(|_| pin.thinking_sums.get(&pin.account_id).copied().unwrap_or(0));
-    // A share of zero is a weight the cost model does not give, and a drop sized at zero would have the order divide a
-    // burn by it.
+    // An output share of zero weighs the drop at nothing, so the read answers none there: the pin stays in the first
+    // part of the cold group, and no zero reaches `move_drop_size` or the order's division.
     let weighed = dropped_thinking_tokens
         .filter(|count| *count > 0)
         .and_then(|count| {
@@ -5787,22 +5794,35 @@ fn shed_round(
     let pins: Vec<RoundPin> = pins
         .into_iter()
         .map(|p| {
-            let req = pin_request(request, &p.row, is_current(&p.row));
+            // The request's own row holds its sums as the caller handed them, which this selection writes, so the
+            // order, the pick, the plan and the record read one row.
+            let current_row = is_current(&p.row);
+            let row = if current_row {
+                PinRow {
+                    thinking_sums: current.thinking_sums.clone(),
+                    ..p.row
+                }
+            } else {
+                p.row
+            };
+            let req = pin_request(request, &row, current_row);
             let destination = destination_of(
                 state,
                 snapshot,
                 pool,
                 &req,
                 eligible,
-                &p.row,
+                &row,
                 &[],
                 now,
                 fallback_ms,
             )
             .map(|(account_id, _)| account_id);
             RoundPin {
-                read: move_read(state, &req, &p.row, now, destination.as_deref()),
-                ..p
+                read: move_read(state, &req, &row, now, destination.as_deref()),
+                row,
+                burn: p.burn,
+                share: p.share,
             }
         })
         .collect();

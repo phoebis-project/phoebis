@@ -247,17 +247,14 @@ pub(crate) struct AgentContext {
     /// The figure a shedding round's pick compares for this pin, as the row's `move_cost`, the dropped thinking's share
     /// included. Null where neither the rewrite nor the dropped thinking is priced above zero.
     pub move_cost: Option<f64>,
-    /// The size a shedding round's order divides the pin's burn by while the pin is warm, in tokens: the prompt its
-    /// move would rewrite on the destination a round would plan for it, plus the thinking the move would drop at the
-    /// weight of output. The destination is the one of a round that the pin's own request fires. Null on a row with no
-    /// pin and where the pin holds no prompt size.
+    /// The size a shedding round's order divides this pin's burn by while the pin is warm, as the row's `move_size`.
+    /// Null where the pin holds no prompt size.
     pub move_size: Option<f64>,
-    /// The thinking the pin's move would drop, at the weight of output and in tokens: the size a round's order divides
-    /// a cold pin's burn by. Null on a row with no pin, where the move would drop no thinking and where the cost model
-    /// answers no weight.
+    /// The thinking this pin's move would drop at the weight of output, as the row's `move_drop_size`. Null where the
+    /// move would drop no thinking and where the cost model answers no weight.
     pub move_drop_size: Option<f64>,
-    /// The share of the dropped thinking as output on the window `move_cost` reads: the cost a round's pick compares
-    /// for a cold pin. Null where `move_drop_size` is.
+    /// The share of the dropped thinking as output that a round's pick compares for this pin while it is cold, as the
+    /// row's `move_drop_cost`. Null where `move_drop_size` is.
     pub move_drop_cost: Option<f64>,
     /// The agent's lifecycle word from the keepalive engine's record: `busy`, `idle`, `parked`, `registered`,
     /// `released` or `unknown`, where `registered` is an agent busy awaiting a real request since the mod registered it

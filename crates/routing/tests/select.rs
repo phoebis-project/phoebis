@@ -15321,6 +15321,48 @@ fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
 }
 
 #[test]
+fn a_compacted_requests_own_pin_drops_no_thinking_in_its_round_and_its_move_books_the_whole_last_prompt(
+) {
+    // Two pins burning 0.03 of the 5-hour window an hour on Sonnet's bound pair of a and b: `compacted` holds 40,000 of
+    // a's thinking in a last prompt of 100,000, and `warm` rewrites 50,000 and drops nothing. a at 0.967 projects 1.027
+    // at its reset, a target of 0.027 that either covers. The compaction leaves no earlier block in the prompt, so its
+    // pin's move drops nothing and costs nothing while it is cold, where the stored 40,000 would cost 160,000 tokens of
+    // cache write at an output weight of 4, over warm's 50,000.
+    let (s, mut st) = thinking_state(
+        vec![
+            thinking_pin("compacted", 3.0, true, 100_000, 40_000),
+            thinking_pin("warm", 3.0, true, 50_000, 0),
+        ],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.967,
+    );
+    let request = SelectRequest {
+        context_compacted: true,
+        ..main_turn(&s, "compacted", T)
+    };
+    let Decided {
+        result, shed_round, ..
+    } = decide(&mut st, &s, &request, &mut rng());
+    let round = shed_round.expect("the round ran").facts;
+    let (own, warm) = (round_pin(&round, "compacted"), round_pin(&round, "warm"));
+    assert_eq!(
+        (own.dropped_thinking_tokens, own.marked, warm.marked),
+        (Some(0), true, false),
+        "the request's own pin reads the sums its selection writes: {round:?}"
+    );
+    assert_eq!(landed(result), ("b".into(), Some(MigrateReason::Shed)));
+    let booked = st
+        .reservation("r-1")
+        .expect("the move books on its destination")
+        .clone();
+    assert!(
+        close(booked.rewrite[FIVE_HOUR], 100_000.0 / 10_000_000.0),
+        "the whole last prompt as one five-minute write: {booked:?}"
+    );
+}
+
+#[test]
 fn a_fast_pin_leaves_a_plan_quota_round_and_stays_in_a_dollar_round() {
     let fast_lane = lane_key("claude-sonnet-5", "fast", "none", "-");
     let pins = || {
@@ -27523,22 +27565,42 @@ fn thinking_pin(session: &str, burn: f64, warm: bool, prompt: u64, own: u64) -> 
 }
 
 /// The round that a request of `small`, a warm pin burning 0.001 of the 5-hour window an hour over 10,000 tokens, fires
-/// on `a` beside `pins` under `output_pricer(ratio)`, with each `(model, bound)` of `facts` stored for the pair of `a`
-/// and `b` as a router loads it at its start. `a` reads `five_hour` on its 5-hour window with the reset an hour out,
-/// and `b` reads 0.1 on both windows, which fits each pin of these cases.
+/// on `a` beside `pins` in `thinking_state`.
 fn thinking_round(
     pins: Vec<PinRow>,
     facts: &[(&str, bool)],
     ratio: u64,
     five_hour: f64,
 ) -> phoebis_routing::ShedRoundFacts {
-    let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let small = PinRow {
         last_input_tokens: 10_000,
         ..burning("small", "a", 0.1, true, T)
     };
+    let (s, mut st) = thinking_state(
+        pins.into_iter().chain([small]).collect(),
+        facts,
+        ratio,
+        five_hour,
+    );
+    decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng())
+        .shed_round
+        .expect("the round ran")
+        .facts
+}
+
+/// A Pace pool over `a` and `b` with `pins` on `a` under `output_pricer(ratio)`, and each `(model, bound)` of `facts`
+/// stored for the pair of `a` and `b` as a router loads it at its start. `a` reads `five_hour` on its 5-hour window
+/// with the reset an hour out, past the round's wait, and `b` reads 0.1 on both windows, which fits each pin of these
+/// cases.
+fn thinking_state(
+    pins: Vec<PinRow>,
+    facts: &[(&str, bool)],
+    ratio: u64,
+    five_hour: f64,
+) -> (RegistrySnapshot, RoutingState) {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
     let mut st = RoutingState::from_load(RoutingLoad {
-        pins: pins.into_iter().chain([small]).collect(),
+        pins,
         thinking_bindings: facts
             .iter()
             .map(|(model, bound)| ThinkingBindingRow {
@@ -27559,10 +27621,7 @@ fn thinking_round(
     );
     st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
-    decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng())
-        .shed_round
-        .expect("the round ran")
-        .facts
+    (s, st)
 }
 
 /// The sessions of a round's rows in the round's order.
