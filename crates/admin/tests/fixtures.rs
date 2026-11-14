@@ -2480,6 +2480,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // capture, and waited for, so the grant's `used_at` and the `written` figure of `system.json` count it.
     parts.ledger.record(phoebis_ledger::limit_reset_claimed(
         "reset-used",
+        parts
+            .store
+            .account("reset-used")
+            .unwrap()
+            .expect("the seed inserted `reset-used`")
+            .incarnation,
         "admin",
         "rg-used-1",
         &phoebis_oauth::Claim {

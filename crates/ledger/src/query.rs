@@ -1086,21 +1086,25 @@ pub fn recent_gaps(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// One limit reset's newest use: the `at` of the newest `limit_reset_claimed` event of the account and the grant
-/// whose detail reads `outcome` `used`.
+/// One limit reset's newest use under one holder: the `at` of the newest `limit_reset_claimed` event whose detail
+/// reads `outcome` `used`, per account, grant and the detail's `incarnation`. `incarnation` is `None` for the events
+/// written without the key, which group together.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LimitResetUsed {
     pub account_id: String,
     pub at: i64,
     pub grant_id: String,
+    pub incarnation: Option<u64>,
 }
 
-/// Every limit reset's newest use the ledger holds, in one seek of `events_kind_at`.
+/// Every limit reset's newest use per holder the ledger holds, in one seek of `events_kind_at`: one per account, grant
+/// and incarnation, and one per account and grant for the uses written without an incarnation.
 pub fn limit_reset_uses(conn: &Connection) -> Result<Vec<LimitResetUsed>, LedgerError> {
     let mut stmt = conn.prepare_cached(
-        "SELECT account_id, json_extract(detail, '$.grant_id'), MAX(at) FROM events \
+        "SELECT account_id, json_extract(detail, '$.grant_id'), json_extract(detail, '$.incarnation'), MAX(at) \
+         FROM events \
          WHERE kind = ?1 AND json_extract(detail, '$.outcome') = ?2 AND account_id IS NOT NULL \
-         GROUP BY 1, 2",
+         GROUP BY 1, 2, 3",
     )?;
     let rows = stmt.query_map(
         params![LIMIT_RESET_CLAIMED, ClaimOutcome::Used.as_str()],
@@ -1108,7 +1112,8 @@ pub fn limit_reset_uses(conn: &Connection) -> Result<Vec<LimitResetUsed>, Ledger
             Ok(LimitResetUsed {
                 account_id: row.get(0)?,
                 grant_id: row.get(1)?,
-                at: row.get(2)?,
+                incarnation: opt_u64(row, 2)?,
+                at: row.get(3)?,
             })
         },
     )?;

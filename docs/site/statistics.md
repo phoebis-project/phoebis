@@ -225,11 +225,14 @@ bounds, so a longer retention shows more weeks.
 
 Every use of a limit reset that reached the upstream writes a `limit_reset_claimed` event on the account, whatever the
 upstream answered and where it answered nothing. Its detail carries the grant's id and label, the request id the claim
-sent, the upstream's `result` and `reason` as sent, the router's `outcome` (`refused`, `unsettled` or `used`), the
-windows the answer cleared, the count of resets left, the cooldown's end and the weekly reset instant where the answer
-names them, and the HTTP status or the transport error. A `window_cleared` after a use ([The windows the router works
+sent, the `incarnation` of the account row that held the id when the use was sent, the upstream's `result` and `reason`
+as sent, the router's `outcome` (`refused`, `unsettled` or `used`), the windows the answer cleared, the count of resets
+left, the cooldown's end and the weekly reset instant where the answer names them, and the HTTP status or the transport
+error. A `window_cleared` after a use ([The windows the router works
 from](routing.md#the-windows-the-router-works-from)) therefore has its cause in the routing log. A use the router
-refused, or whose request never left, writes no event.
+refused, or whose request never left, writes no event. An account's grant shows the newest use whose event names the
+account row's `incarnation`, or names none and is not older than the row, so an account deleted and created again under
+the same id does not show the earlier holder's use.
 
 ## Pricing
 

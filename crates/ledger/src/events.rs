@@ -577,11 +577,18 @@ fn plan_event(
 }
 
 /// `limit_reset_claimed` on the account whose limit reset an operator's use sent to the upstream, at the instant the
-/// answer arrived or the request failed, detail {cleared, cooldown_until, error, grant_id, label, outcome, reason,
-/// request_id, resets_left, result, status, weekly_resets_at}: every key on every row, null where the claim has no
-/// such fact, and `cleared` an empty array where the claim has no parsed answer. The row's `request_id` column stays
-/// null, since it names a relayed request.
-pub fn limit_reset_claimed(account_id: &str, actor: &str, grant_id: &str, claim: &Claim) -> Record {
+/// answer arrived or the request failed, detail {cleared, cooldown_until, error, grant_id, incarnation, label, outcome,
+/// reason, request_id, resets_left, result, status, weekly_resets_at}: every key on every row, null where the claim
+/// has no such fact, and `cleared` an empty array where the claim has no parsed answer. `incarnation` is that of the
+/// account row that held the id when the use was sent, so a later holder of the id does not read the use as its own.
+/// The row's `request_id` column stays null, since it names a relayed request.
+pub fn limit_reset_claimed(
+    account_id: &str,
+    incarnation: u64,
+    actor: &str,
+    grant_id: &str,
+    claim: &Claim,
+) -> Record {
     let answer = claim.answer();
     Record::Event(EventRecord {
         at: claim.at,
@@ -594,6 +601,7 @@ pub fn limit_reset_claimed(account_id: &str, actor: &str, grant_id: &str, claim:
                 "cooldown_until": answer.and_then(|answer| answer.cooldown_until),
                 "error": claim.error(),
                 "grant_id": grant_id,
+                "incarnation": incarnation,
                 "label": claim.label,
                 "outcome": claim.outcome.as_str(),
                 "reason": answer.and_then(|answer| answer.reason.as_deref()),

@@ -1911,6 +1911,27 @@ fn claimed(result: &str, outcome: phoebis_oauth::ClaimOutcome, at: i64) -> phoeb
     }
 }
 
+/// The claim's event `record` with no `incarnation` in its detail, as an event written before the key reads.
+fn without_holder(record: phoebis_ledger::Record) -> phoebis_ledger::Record {
+    let phoebis_ledger::Record::Event(mut event) = record else {
+        panic!("the claim's writer builds an event");
+    };
+    let mut detail: serde_json::Value = serde_json::from_str(
+        event
+            .detail
+            .as_deref()
+            .expect("the claim's event has a detail"),
+    )
+    .unwrap();
+    detail
+        .as_object_mut()
+        .expect("the claim's detail is an object")
+        .shift_remove("incarnation")
+        .expect("the claim's detail names its holder");
+    event.detail = Some(detail.to_string());
+    phoebis_ledger::Record::Event(event)
+}
+
 /// `reset_grant` with no reset left, as a block reads one that was used.
 fn spent_grant(id: &str) -> serde_json::Value {
     let mut grant = reset_grant(id);
@@ -2747,12 +2768,17 @@ async fn a_later_answer_never_moves_the_use() {
         &h.store,
         serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1")]}),
     );
+    let incarnation = h.store.account("business").unwrap().unwrap().incarnation;
     for claim in [
         claimed("reset", ClaimOutcome::Used, common::NOW + 1_000),
         claimed("already_used", ClaimOutcome::Refused, common::NOW + 2_000),
     ] {
         h.ledger.record(phoebis_ledger::limit_reset_claimed(
-            "business", "admin", "rg-b-1", &claim,
+            "business",
+            incarnation,
+            "admin",
+            "rg-b-1",
+            &claim,
         ));
     }
     // The routing log reads up to the clock, which then stands at the later event.
@@ -2777,14 +2803,17 @@ async fn a_use_from_before_the_row_was_created_is_not_read() {
         &h.store,
         serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1"), spent_grant("rg-b-2")]}),
     );
+    let incarnation = h.store.account("business").unwrap().unwrap().incarnation;
     // `business` was created at the rig's clock.
     for (grant, at) in [("rg-b-1", common::NOW - 1), ("rg-b-2", common::NOW)] {
-        h.ledger.record(phoebis_ledger::limit_reset_claimed(
-            "business",
-            "admin",
-            grant,
-            &claimed("reset", ClaimOutcome::Used, at),
-        ));
+        h.ledger
+            .record(without_holder(phoebis_ledger::limit_reset_claimed(
+                "business",
+                incarnation,
+                "admin",
+                grant,
+                &claimed("reset", ClaimOutcome::Used, at),
+            )));
     }
     claimed_rows(&h.app, &cookie, |rows| rows.len() == 2).await;
     let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
@@ -2796,6 +2825,45 @@ async fn a_use_from_before_the_row_was_created_is_not_read() {
             &serde_json::json!(1_791_721_000_000_i64)
         ),
         "a use dated before the row was created is an earlier holder's: {account}"
+    );
+}
+
+#[tokio::test]
+async fn a_use_under_an_earlier_holder_of_the_id_is_not_read() {
+    use common::{get, json, login};
+    use phoebis_oauth::ClaimOutcome;
+    let h = common::admin_parts_polled().await;
+    let cookie = login(&h.app, "admin-secret").await;
+    let earlier = h.store.account("business").unwrap().unwrap();
+    h.ledger.record(phoebis_ledger::limit_reset_claimed(
+        "business",
+        earlier.incarnation,
+        "admin",
+        "rg-b-1",
+        &claimed("reset", ClaimOutcome::Used, common::NOW),
+    ));
+    claimed_rows(&h.app, &cookie, |rows| rows.len() == 1).await;
+    // The id is deleted and inserted again inside the clock tick the use is dated at, so the new row's `created_at`
+    // is the use's instant.
+    h.store.delete_account("business", "test").unwrap();
+    h.store
+        .insert_account(&phoebis_store::AccountRow {
+            lifecycle_generation: earlier.lifecycle_generation + 1,
+            ..earlier.clone()
+        })
+        .unwrap();
+    store_limit_resets(
+        &h.store,
+        serde_json::json!({"eligible": true, "grants": [spent_grant("rg-b-1")]}),
+    );
+    let later = h.store.account("business").unwrap().unwrap().incarnation;
+    let account = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let grant = &account["limit_resets"]["grants"][0];
+    assert_eq!(
+        (&grant["state"], &grant["used_at"]),
+        (&serde_json::json!("used"), &serde_json::Value::Null),
+        "a use recorded under incarnation {} is not incarnation {later}'s: {account}",
+        earlier.incarnation
     );
 }
 
@@ -2815,9 +2883,11 @@ async fn a_use_of_the_same_grant_on_another_account_is_not_read() {
     let read = "/admin/accounts/business/limit-resets/read";
     let used_at =
         |answer: &serde_json::Value| answer["limit_resets"]["grants"][0]["used_at"].clone();
-    // A promotion gives its grant the same id on every account.
+    // A promotion gives its grant the same id on every account. The rig holds no row `other`, so its use names the
+    // first incarnation an id takes.
     h.ledger.record(phoebis_ledger::limit_reset_claimed(
         "other",
+        1,
         "admin",
         "rg-b-1",
         &claimed("reset", ClaimOutcome::Used, common::NOW + 2_000),
@@ -2826,6 +2896,7 @@ async fn a_use_of_the_same_grant_on_another_account_is_not_read() {
     let elsewhere = json(post(&h.app, read, "", Some(&cookie)).await).await;
     h.ledger.record(phoebis_ledger::limit_reset_claimed(
         "business",
+        h.store.account("business").unwrap().unwrap().incarnation,
         "admin",
         "rg-b-1",
         &claimed("reset", ClaimOutcome::Used, common::NOW + 1_000),

@@ -941,7 +941,7 @@ async fn limit_resets_read(
 fn current_limit_resets(
     state: &AdminState,
     row: &AccountRow,
-    uses: &BTreeMap<String, i64>,
+    uses: &ResetUses,
 ) -> Result<Option<AccountLimitResets>, StoreError> {
     let extras = state.store.account_extras_of(&row.id)?.unwrap_or_default();
     Ok(limit_resets_view(
@@ -953,9 +953,9 @@ fn current_limit_resets(
     ))
 }
 
-/// One account's uses of a limit reset by grant id, for a route that answers that account alone. A ledger read that
-/// fails answers none, as the account list's falls back, so the member still goes out, with no `used_at`.
-async fn reset_uses_of(state: &AdminState, account_id: &str) -> BTreeMap<String, i64> {
+/// One account's uses of a limit reset by grant id and holder, for a route that answers that account alone. A ledger
+/// read that fails answers none, as the account list's falls back, so the member still goes out, with no `used_at`.
+async fn reset_uses_of(state: &AdminState, account_id: &str) -> ResetUses {
     match state
         .ledger
         .db()
@@ -970,16 +970,20 @@ async fn reset_uses_of(state: &AdminState, account_id: &str) -> BTreeMap<String,
     }
 }
 
-/// The ledger's uses of the limit resets by account id, then by grant id.
-fn uses_by_account(
-    uses: Vec<phoebis_ledger::LimitResetUsed>,
-) -> BTreeMap<String, BTreeMap<String, i64>> {
-    let mut by_account: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+/// One account's uses of its limit resets: by grant id, then by the incarnation of the row each use was recorded
+/// under, `None` for the uses recorded without one, each the newest use's instant.
+type ResetUses = BTreeMap<String, BTreeMap<Option<u64>, i64>>;
+
+/// The ledger's uses of the limit resets by account id, then by grant id and holder.
+fn uses_by_account(uses: Vec<phoebis_ledger::LimitResetUsed>) -> BTreeMap<String, ResetUses> {
+    let mut by_account: BTreeMap<String, ResetUses> = BTreeMap::new();
     for used in uses {
         by_account
             .entry(used.account_id)
             .or_default()
-            .insert(used.grant_id, used.at);
+            .entry(used.grant_id)
+            .or_default()
+            .insert(used.incarnation, used.at);
     }
     by_account
 }
@@ -1099,7 +1103,13 @@ async fn claim_and_record(
         }
     };
     // The send that waits for room: a claim that left always leaves its row.
-    let event = phoebis_ledger::limit_reset_claimed(&row.id, accounts::ACTOR, &grant, &claim);
+    let event = phoebis_ledger::limit_reset_claimed(
+        &row.id,
+        row.incarnation,
+        accounts::ACTOR,
+        &grant,
+        &claim,
+    );
     state.ledger.record_request(event).await;
     // A stop waits for the claim up to here. It does not wait for the reads below: they finish while the listeners'
     // drain still holds this route's answer, and the next start's poll takes what a stop cuts.
@@ -1224,7 +1234,11 @@ async fn claim_response(
     let mut uses = reset_uses_of(state, &row.id).await;
     // The claim's event is handed to the ledger's writer before this answer and may not be written yet.
     if claim.outcome == ClaimOutcome::Used {
-        let at = uses.entry(grant.to_string()).or_insert(claim.at);
+        let at = uses
+            .entry(grant.to_string())
+            .or_default()
+            .entry(Some(row.incarnation))
+            .or_insert(claim.at);
         *at = (*at).max(claim.at);
     }
     let limit_resets = current_limit_resets(state, row, &uses).unwrap_or_else(|error| {
@@ -2372,8 +2386,9 @@ pub(crate) struct AccountContext {
     /// The router's samples per account as the poll or a head reported them, no charge added and no reset rolled:
     /// the readings an account's windows draw.
     pub reported: BTreeMap<String, UtilizationSample>,
-    /// Each account's uses of a limit reset by grant id: the instant of the newest claim the upstream answered `reset`.
-    pub reset_uses: BTreeMap<String, BTreeMap<String, i64>>,
+    /// Each account's uses of a limit reset by grant id and holder: the instant of the newest claim the upstream answered
+    /// `reset` under each incarnation of the account's id, and under none for the claims recorded without one.
+    pub reset_uses: BTreeMap<String, ResetUses>,
     /// The router's spend window per usage-based account, at its clock.
     pub spend_windows: BTreeMap<String, SpendWindow>,
     pub week: BTreeMap<String, u64>,
@@ -2832,7 +2847,9 @@ pub(crate) struct AccountLimitResetGrant {
     pub starts_at: i64,
     /// `blocked`, `cooldown`, `ended`, `paused`, `usable`, `used` or `waiting`.
     pub state: String,
-    /// Epoch milliseconds: the use through this router, null on a grant with a reset left and on one used elsewhere.
+    /// Epoch milliseconds: the use through this router, null on a grant with a reset left and on one used elsewhere. The
+    /// use is the newest `limit_reset_claimed` row whose `incarnation` is the account row's, or that carries no
+    /// `incarnation` and is not older than the account row, so a use by an earlier holder of the id does not show.
     pub used_at: Option<i64>,
 }
 
@@ -3286,15 +3303,15 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     }
 }
 
-static NO_USES: BTreeMap<String, i64> = BTreeMap::new();
+static NO_USES: ResetUses = BTreeMap::new();
 
 /// The row's `limit_resets` member at `now`: null for an account the poll does not ask and for one with no stored
-/// block. `uses` is the account's uses by grant id.
+/// block. `uses` is the account's uses by grant id and holder.
 fn limit_resets_view(
     state: &AdminState,
     row: &AccountRow,
     extras: &AccountExtras,
-    uses: &BTreeMap<String, i64>,
+    uses: &ResetUses,
     now: i64,
 ) -> Option<AccountLimitResets> {
     // Nothing refreshes the block of an account the poll does not ask, so no card offers a reset from it.
@@ -3309,11 +3326,22 @@ fn limit_resets_view(
         .into_iter()
         .zip(states)
         .map(|(grant, state)| {
-            // A use dated before the row was created belongs to an earlier holder of the id.
+            // A grant with no reset left shows the newest use recorded under the row's incarnation, or under none and
+            // not older than the row's `created_at`. A use under another incarnation, whatever its instant, and one
+            // under none dated before the row was created belong to an earlier holder of the id.
             let used_at = uses
                 .get(&grant.id)
-                .copied()
-                .filter(|at| grant.resets_left == 0 && *at >= extras.created_at);
+                .filter(|_| grant.resets_left == 0)
+                .and_then(|holders| {
+                    holders
+                        .iter()
+                        .filter(|(incarnation, at)| match incarnation {
+                            Some(incarnation) => *incarnation == row.incarnation,
+                            None => **at >= extras.created_at,
+                        })
+                        .map(|(_, at)| *at)
+                        .max()
+                });
             AccountLimitResetGrant {
                 blocking: grant.blocking,
                 clears: grant.clears,

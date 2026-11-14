@@ -426,8 +426,9 @@ pub(crate) struct Event {
     ///   usage, or why it cannot.
     /// - `ledger_gap`: a request whose record never reached the ledger, with the reason.
     /// - `limit_reset_claimed`: an operator's use of a limit reset reached the upstream, with the grant, the request
-    ///   id, the upstream's `result` and `reason` as sent, the router's `outcome` (`refused`, `unsettled` or `used`),
-    ///   the windows it cleared, the count left and, for a claim with no answer, the status or the transport error.
+    ///   id, the `incarnation` of the account row that held the id when the use was sent where the event carries one,
+    ///   the upstream's `result` and `reason` as sent, the router's `outcome` (`refused`, `unsettled` or `used`), the
+    ///   windows it cleared, the count left and, for a claim with no answer, the status or the transport error.
     /// - `mark_cleared`: a shedding mark left a pin, with the pin's `agent_id`, the `reason` (`healed` where the heal
     ///   check found the window back under its test at the pin's request, `moved` where the pin left the account the
     ///   mark was made on, or `released` where it left without a move or asked while its pool's load shedding was off),
