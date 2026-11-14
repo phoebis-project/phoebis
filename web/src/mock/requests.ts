@@ -21,7 +21,7 @@ import { leadOf, leftPerHour, paceDeadline } from './lead';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { round } from './round';
-import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES } from './samples';
+import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE, TABLES, tablesFor } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
@@ -342,13 +342,20 @@ function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null 
   return keyId === 'laptop' ? 'router' : 'client';
 }
 
+/** The instant the story's reading of secondary's 7-day window first reads over all's ceiling, inside the hour before
+ *  the renewal of 14:02:10. */
+export const SECONDARY_WEEK_OVER_AT = clock(13, 3);
+
 /**
  * The story's own readings of a window where the walk back's even climb would not tell it, per account and window.
  * Nightly's 5-hour window, fresh at its 13:11 reset, climbs fast enough that a fresh session no longer fits there by
  * 14:00, so the hour's placements are Pace's to make between primary and secondary. Secondary's 5-hour window opens at
  * 09:55 and reads 70% from the 640k-token conversation's placement at 10:52:30, too far along for its rewrite but with
  * room for the two sessions placed just before 11:00, then runs hot, so it leads its pace by the pool's 0.9 margin
- * through the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11.
+ * through the 11:00 shedding round and the shed move after it, and reads spent from the head of 14:02:11. Its 7-day
+ * window holds all's ceiling of 0.75 from the walk back's last reading there at 11:46:20 until `SECONDARY_WEEK_OVER_AT`,
+ * and reads the walk back's figures from then on: a week over the ceiling with no burn waits an hour before it fires,
+ * so the renewal of 14:02:10 reads it inside that wait.
  */
 const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; utilization: number }[]>>> = {
   nightly: {
@@ -367,6 +374,16 @@ const STORY_READINGS: Record<string, Partial<Record<WindowId, { at: number; util
       { at: clock(11, 8, 30), utilization: 0.99 },
       { at: clock(14, 2, 10), utilization: 0.99 },
       { at: clock(14, 2, 11), utilization: 1 },
+    ],
+    // The walk back reads 0.78 from 12:54:32, 0.79 from 13:28:38 and 0.80 from 14:02:44.
+    '7d': [
+      { at: clock(11, 46, 20), utilization: 0.75 },
+      { at: SECONDARY_WEEK_OVER_AT - 1_000, utilization: 0.75 },
+      { at: SECONDARY_WEEK_OVER_AT, utilization: 0.78 },
+      { at: clock(13, 28, 37), utilization: 0.78 },
+      { at: clock(13, 28, 38), utilization: 0.79 },
+      { at: clock(14, 2, 43), utilization: 0.79 },
+      { at: clock(14, 2, 44), utilization: 0.8 },
     ],
   },
 };
@@ -1013,11 +1030,12 @@ interface StorySeed {
   tier?: 'priority';
   /**
    * A story row the routing log derives its records for, as it does a drawn row's, that takes no draw from the streams
-   * the drawn rows read and none of the events the story seats on a drawn row, so it keeps its written class and
-   * instants and every drawn figure stays where it was: the contract seat's rows on fleet, the approved Ultra's rows on
-   * bench, the last turns of the desktop session the mod ended, the one turn of story 4's Explore subagent, the
-   * classifier call its judged account could not take, the turn whose placement replaced an expired row and the two
-   * turns of the conversation the Overflow workspace's lapse moves.
+   * the drawn rows read, so it keeps its written class and instants and every drawn figure stays where it was: the
+   * contract seat's rows on fleet, the approved Ultra's rows on bench, the last turns of the desktop session the mod
+   * ended, the one turn of story 4's Explore subagent, the classifier call its judged account could not take, the turn
+   * whose placement replaced an expired row, the two turns of the conversation the Overflow workspace's lapse moves,
+   * the two subagent turns the laptop session's classifier calls judge, the first turn of the subagent `f2c8` that the
+   * 11:00 round reads and the turn the upstream answered 400.
    */
   unseeded?: true;
   usage?: Partial<Usage>;
@@ -1091,6 +1109,12 @@ const LAPSED_SESSION_ID = 'e8c3a6f1-2d94-4b57-9a1e-6f0d3c7b2a85';
 const LAPSED_TURN_ID = 'req_5f2a9c64-b18';
 /** That conversation's next turn, whose placement moves the pin off the workspace with its state as the cause. */
 const CAUSED_MOVE_ID = 'req_c7e41d93-a26';
+/**
+ * The first turn of a desktop conversation that the upstream answered 400, so the router released the pin its
+ * placement created as the request ended, the release's reason `client_error`.
+ */
+export const CLIENT_ERROR_TURN_ID = 'req_c1e40a95-b28';
+const CLIENT_ERROR_SESSION_ID = 'f40a2c7e-9b31-4d58-8e06-1a7c3b5d9e24';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
@@ -1171,7 +1195,8 @@ function storyRow(seed: StorySeed): RequestLog {
   const status = seed.headless ? null : (seed.status ?? last?.status ?? 429);
   return {
     ...REQUEST_SAMPLE,
-    accountId: answered ? last.accountId : null,
+    // The account whose answer the request ended on, a refusal's as much as a success's, as a drawn row reads it.
+    accountId: last?.accountId ?? null,
     agentId: seed.agentId,
     agentType: seed.agentId === null || seed.agentId === 'main' ? null : (storyAgentsOf(sessionId).find((a) => a.id === seed.agentId)?.type ?? 'general-purpose'),
     at: iso(seed.at),
@@ -1347,6 +1372,10 @@ function storySeeds(): StorySeed[] {
     { agentId: 'e90b', at: t(10, 59, 30), attempts: [{ accountId: 'secondary', at: t(10, 59, 30), ms: 900, status: 200 }], id: 'req_0b7c2d94-e61', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, output: 1 } },
     { agentId: 'e90b', at: t(10, 59, 10), attempts: [{ accountId: 'secondary', at: t(10, 59, 10), ms: 7_000, status: 200 }], id: 'req_f3b6d218-85a', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 2_600, output: 1_300 } },
     { agentId: 'e90b', at: t(10, 58, 59), attempts: [{ accountId: 'secondary', at: t(10, 58, 59), ms: 3_000, status: 200 }], id: 'req_e5a1c093-4d7', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheWrite5m: 40_800, input: 1_500, output: 700 } },
+    // The first turn of the session's subagent f2c8, placed on secondary in the minute before the 11:00 round and still
+    // running through it, so the round reads its pin with no prompt size and no burn. It reads no cache, so the rollups'
+    // draws for the hour stay where they were.
+    { agentId: 'f2c8', at: t(10, 59, 40), attempts: [{ accountId: 'secondary', at: t(10, 59, 40), ms: 30_000, status: 200 }], id: 'req_f2c8d417-a60', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'subagent', session: '407dd39b', unseeded: true, usage: { cacheWrite5m: 24_300, input: 1_900, output: 1_150 } },
     { agentId: 'main', at: t(12, 40, 58), attempts: [{ accountId: 'research', at: t(12, 40, 58), ms: 9_000, status: 200 }], id: BUDGET_CROSSING_ID, keyId: 'ci', model: HAIKU, requestClass: 'main', session: 'cd9a5904', usage: { input: 6_200, output: 2_900 } },
     {
       agentId: 'main',
@@ -1532,6 +1561,11 @@ function storySeeds(): StorySeed[] {
     // The failed-over session's next turn inside the window, which renews the pin the failover landed on primary and
     // reads the source the landing left on it.
     { agentId: 'main', at: t(14, 13, 5), attempts: [{ accountId: 'primary', at: t(14, 13, 5), ms: 6_100, status: 200 }], id: 'req_e2c7a4f9-d13', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheRead: 56_700, cacheWrite1h: 1_300, input: 1_500, output: 760 } },
+    // The two subagent turns the classifier calls below judge, on primary, each ending before its call: a5e1's before
+    // 12:41:08 and d8f3's between that call and its own at 12:41:10, so each call's last ended turn is its own agent's.
+    // They read no cache, so the rollups' draws for the hour stay where they were.
+    { agentId: 'a5e1', at: t(12, 40, 52), attempts: [{ accountId: 'primary', at: t(12, 40, 52), ms: 15_000, status: 200 }], id: JUDGED_TURN_IDS[0], keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: FORK_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 18_400, input: 2_100, output: 640 } },
+    { agentId: 'd8f3', at: t(12, 40, 56), attempts: [{ accountId: 'primary', at: t(12, 40, 56), ms: 13_000, status: 200 }], id: JUDGED_TURN_IDS[1], keyId: 'laptop', model: HAIKU, requestClass: 'subagent', session: FORK_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 16_900, input: 1_800, output: 520 } },
     // Two auto-mode classifier calls of the laptop session the summary forks run in, each judging a subagent's tool
     // call on primary's plan. They read no cache, so the rollups' draws for the hour stay where they were.
     { agentId: 'a5e1', at: t(12, 41, 8), attempts: [{ accountId: 'primary', at: t(12, 41, 8), ms: 1_100, status: 200 }], classifier: 'client', id: 'req_4d9a1e6b-c20', keyId: 'laptop', model: 'claude-sonnet-5', requestClass: 'auxiliary', session: FORK_SESSION_ID, usage: { input: 3_400, output: 14 } },
@@ -1586,6 +1620,8 @@ function storySeeds(): StorySeed[] {
     // nightly's overage under all's preference for a plan, and lands on primary, which holds its plan tier, writing the
     // conversation's prefix there afresh.
     { agentId: 'main', at: t(13, 21, 39), attempts: [{ accountId: 'primary', at: t(13, 21, 39), ms: 6_800, status: 200 }], id: REPLACED_PIN_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: RESET_HELD_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 42_600, input: 1_500, output: 900 } },
+    // A new conversation's first turn, which primary's upstream answered 400.
+    { agentId: 'main', at: t(12, 58, 14), attempts: [{ accountId: 'primary', at: t(12, 58, 14), ms: 640, status: 400 }], errorCode: 'invalid_request_error', id: CLIENT_ERROR_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: CLIENT_ERROR_SESSION_ID, unseeded: true },
     // A new conversation the Overflow workspace takes with the plan accounts full, while its balance still holds.
     { agentId: 'main', at: t(11, 27, 40), attempts: [{ accountId: 'overflow', at: t(11, 27, 40), ms: 9_200, status: 200 }], id: LAPSED_TURN_ID, keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite5m: 36_400, input: 1_900, output: 1_100 } },
     // Its next turn 210 s on, after the balance ran out at 11:30:12 and before the workspace's funding retry falls due
@@ -1598,6 +1634,8 @@ const storyRequests = () => storySeeds().map(storyRow);
 
 /** The laptop session whose subagent the client forks every 30 seconds for a status line. */
 const FORK_SESSION_ID = '9e4c2b7a-5d31-4f86-a0b9-3c7e1d5f2a48';
+/** That session's two subagent turns the client's two classifier calls judge, `a5e1`'s and `d8f3`'s. */
+export const JUDGED_TURN_IDS = ['req_a5e17c42-d19', 'req_d8f3b6e0-a74'] as const;
 /** The desktop session whose summary forks the key's own guardrail refused. */
 export const BLOCKED_SESSION_ID = '2b8f5e1c-7a46-4d93-b1e0-6c9a3f4d7e25';
 /** The pool's guardrail matched first, at its pool position, and the key's own refused the request. */
@@ -1880,6 +1918,10 @@ function storyEvents(): Map<string, RequestEvent[]> {
   // the router's order: the idle row, and nightly's overage under all's preference for a plan.
   const replaced = requestById.get(REPLACED_PIN_ID);
   if (replaced) out.set(replaced.id, [{ ...pinFieldsOf(replaced), accountId: 'nightly', at: replaced.at, detail: { agent_id: replaced.agentId, reasons: ['expired', 'overage'] }, kind: 'pin_expired' }]);
+  // The release of the pin the 400's placement created, which the router writes once the answer ends the request.
+  const refused = requestById.get(CLIENT_ERROR_TURN_ID);
+  const refusedEnd = refused?.attempts[refused.attempts.length - 1];
+  if (refused && refusedEnd) out.set(refused.id, [{ ...pinFieldsOf(refused), accountId: refusedEnd.accountId, at: iso(attemptEnd(refusedEnd)), detail: { agent_id: refused.agentId, reasons: ['client_error'] }, kind: 'pin_expired' }]);
   // The move the workspace's state forced, which carries the live pin's whole list and takes its word from it.
   const caused = requestById.get(CAUSED_MOVE_ID);
   if (caused) out.set(caused.id, [{ ...pinFieldsOf(caused), accountId: 'primary', at: caused.at, detail: { agent_id: caused.agentId, epoch: 0, from_account: 'overflow', reason: 'funding_required', reasons: ['funding_required'] }, kind: 'pin_migrated' }]);
@@ -1920,7 +1962,6 @@ const OBSTACLE_DRAWS: { value: string; weight: number }[] = [
   { value: 'winding_down', weight: 1 },
 ];
 
-const pinOf = (r: RequestLog) => `${r.keyId}|${r.sessionId}|${r.canonicalModel}`;
 /** An event's pin fields. A declaration, since `REQUEST_EVENTS` above reads it at load. */
 function pinFieldsOf(r: RequestLog): Pick<RequestEvent, 'keyId' | 'model' | 'sessionId'> {
   return { keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId };
@@ -1954,30 +1995,8 @@ const cohortHoldOf = (p: Rng, w: Rng, r: RequestLog, placement: Placement | null
   placement !== null && r.agentId !== 'main' && p.chance(0.5) ? slotHold(placement.rung === 'with_main' ? null : accountId, w.int(180, 4_000), [accountId]) : null;
 
 /**
- * The drawer's shed move and the two newer release reasons, each on a pin no other event touches, so the checks
- * that look for an unmoved request beside a moved one still find one.
- */
-function addStoryEvents() {
-  const busy = new Set([...REQUEST_EVENTS.keys(), ...STORY_IDS].flatMap((id) => { const r = requestById.get(id); return r ? [pinOf(r)] : []; }));
-  const owed: ((r: RequestLog, from: string) => RequestEvent)[] = [];
-  const shedMoved = [...REQUEST_EVENTS.values()].some((events) => events.some((e) => e.detail?.reason === 'shed'));
-  if (!shedMoved) owed.push((r, from) => ({ ...pinFieldsOf(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason: 'shed' }, kind: 'pin_migrated' }));
-  owed.push((r) => ({ ...pinFieldsOf(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['client_error'] }, kind: 'pin_expired' }));
-  owed.push((r) => ({ ...pinFieldsOf(r), accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, reasons: ['subscription_ended'] }, kind: 'pin_expired' }));
-  for (const r of REQUESTS) {
-    const lane = LANES.find((l) => l.keyId === r.keyId);
-    const next = owed[0];
-    if (!next) break;
-    const from = lane?.accountIds.find((id) => id !== r.accountId);
-    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || !drawnRow(r)) continue;
-    REQUEST_EVENTS.set(r.id, [next(r, from)]);
-    busy.add(pinOf(r));
-    owed.shift();
-  }
-}
-
-/**
- * The trace of a row outside the seeded streams: the strategy's pick in its account's tier, with nobody passed over.
+ * The trace of a row outside the seeded streams: the strategy's pick in its account's tier. The members it passed over
+ * are the ones its decision's record holds out or ranked, which the routing log fills in once it builds that record.
  */
 function undrawnTrace(r: RequestLog, a: Attempt, last: boolean): SelectionTrace {
   const pool = poolById.get(r.poolId ?? '');
@@ -2197,10 +2216,11 @@ function freeCall(classifier: string | null, serving: Parameters<typeof fundingO
 export const freedPart = (r: Pick<HourlyRollup, 'classifier' | 'funding'>): boolean => freesPlanShare(r.classifier) && r.funding === 'plan';
 
 /**
- * A row's Pro-week figure and its shares of its account's windows, as the request route answers them: null for a
- * request no subscription window paid, else the figure at the request's completion, null for a model without a weight
- * of its own, and a share on each window of the account's set and each week the model applies to, under the account's
- * tier, a window the cost model cannot price carried as null and an account without a tier an empty share map. A
+ * A row's Pro-week figure and its shares of its account's windows, as the request route answers them, priced under the
+ * regime the row's client label names: null for a request no subscription window paid, else the figure at the
+ * request's completion, null for a model without a weight of its own, and a share on each window of the account's set
+ * and each week the model applies to, under the account's tier, a window the cost model cannot price carried as null
+ * and an account without a tier an empty share map. A
  * classifier call `freeCall` frees reads zero, on each such window the tier sizes, with the share reason, while
  * any other classifier call and one billed in dollars carry no reason, as the route answers them.
  */
@@ -2210,19 +2230,20 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
   const tier = accountById.get(serving.accountId)?.subscription?.rateLimitTier;
   const finishedMs = Date.parse(r.at) + (r.durationMs ?? 0);
   const windows = shareWindowsOf(serving.accountId, r.canonicalModel);
+  const tables = tablesFor(r.client);
   if (freeCall(r.classifier, serving)) {
     const zeros = (sizing: string) =>
       Object.fromEntries(
         windows.filter((w) => {
-          const priced = pricedWindow(TABLES, w);
-          return priced !== null && tierCapacity(TABLES, sizing, priced.priced) !== null;
+          const priced = pricedWindow(tables, w);
+          return priced !== null && tierCapacity(tables, sizing, priced.priced) !== null;
         }).map((w) => [w, 0]),
       );
     return { costEquivalent: 0, costShares: tier === undefined ? {} : zeros(tier), shareReason: 'client_classifier' };
   }
   const inside = bandAt(r.canonicalModel, finishedMs);
-  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, inside === null ? null : shareIn(TABLES, w, tier, r.canonicalModel, r.usage, inside)]));
-  return { costEquivalent: inside === null ? null : equivalentIn(TABLES, r.canonicalModel, r.usage, inside), costShares: shares, shareReason: null };
+  const shares: CostShares = tier === undefined ? {} : Object.fromEntries(windows.map((w) => [w, inside === null ? null : shareIn(tables, w, tier, r.canonicalModel, r.usage, inside)]));
+  return { costEquivalent: inside === null ? null : equivalentIn(tables, r.canonicalModel, r.usage, inside), costShares: shares, shareReason: null };
 }
 
 /**
@@ -2261,7 +2282,6 @@ function phaseRequests() {
   }
 }
 
-addStoryEvents();
 traceRequests();
 seedDrawerBranches();
 seedHolds();
@@ -2354,17 +2374,19 @@ const fundingKey = (r: RequestLog): HourlyRollup['funding'] => {
  * shares read, which are null on every request the plan did not fund. A figure or a window any request prices null
  * reads null, a model without a weight of its own prices nothing, a request with no token prices nothing, and the
  * shares, keyed by the windows the account's set has and the model's weeks, read nothing for an account without a tier.
+ * The hour's rows share one client label, whose regime prices them.
  */
-function hourShares(accountId: string, model: string, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalent' | 'shares'> {
+function hourShares(accountId: string, model: string, client: string | null, priced: { at: number; usage: Usage }[]): Pick<HourlyRollup, 'equivalent' | 'shares'> {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
   const windows = shareWindowsOf(accountId, model);
+  const tables = tablesFor(client);
   const shares: Record<string, number | null> = Object.fromEntries(windows.map((w) => [w, 0]));
   let equivalent: number | null = 0;
   for (const { at, usage } of priced) {
     if (tokensTotal(usage) === 0) continue;
     const inside = bandAt(model, at);
-    equivalent = plus(equivalent, inside === null ? null : equivalentIn(TABLES, model, usage, inside));
-    if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], inside === null ? null : shareIn(TABLES, w, tier, model, usage, inside));
+    equivalent = plus(equivalent, inside === null ? null : equivalentIn(tables, model, usage, inside));
+    if (tier !== undefined) for (const w of windows) shares[w] = plus(shares[w], inside === null ? null : shareIn(tables, w, tier, model, usage, inside));
   }
   return { equivalent, shares };
 }
@@ -2497,7 +2519,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cost: freed ? sumSplit([]) : sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
         // At each answer's completion, the instant its own shares price it at. A part of freed classifier calls prices
         // nothing and reads zero.
-        ...hourShares(accountId, partRows[0].canonicalModel, freed ? [] : partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
+        ...hourShares(accountId, partRows[0].canonicalModel, client, freed ? [] : partRows.map((r) => ({ at: Date.parse(r.at) + (r.durationMs ?? 0), usage: r.usage }))),
         tier: accountTier(accountId),
         histograms: histogramsOf(served),
         keptWarm: { requests: keptHere.length, tokens1h: sumOf(keptHere, (r) => keptOf(r).tokens1h), tokens5m: sumOf(keptHere, (r) => keptOf(r).tokens5m) },
@@ -2645,7 +2667,7 @@ function historicalRollups(): HourlyRollup[] {
         cost: costSplitOf(model, usage, fast, t),
         // A synthesized hour holds no request of its own, so its tokens price as one answer at the hour, as its dollars
         // do.
-        ...hourShares(accountId, model, [{ at: t, usage }]),
+        ...hourShares(accountId, model, CLIENTS[lane.keyId] ?? null, [{ at: t, usage }]),
         tier: accountTier(accountId),
         histograms: {
           durationMs: histogramOf(duration),
@@ -2701,7 +2723,7 @@ function historicalRollups(): HourlyRollup[] {
           uncached: 0,
           costUsd: probeCost,
           cost: costSplitOf(model, probeUsage, false, t),
-          ...hourShares(accountId, model, [{ at: t, usage: probeUsage }]),
+          ...hourShares(accountId, model, CLIENTS[lane.keyId] ?? null, [{ at: t, usage: probeUsage }]),
           tier: accountTier(accountId),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
           keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },
@@ -2765,7 +2787,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       uncached: 0,
       costUsd,
       cost: costSplitOf(r.model, usage, false, at),
-      ...hourShares(r.accountId, r.canonicalModel, [{ at, usage }]),
+      ...hourShares(r.accountId, r.canonicalModel, r.client, [{ at, usage }]),
       tier: accountTier(r.accountId),
       histograms: { durationMs: histogramOf([600]), outputTps: emptyHistogram(), ttfbMs: histogramOf([320]), ttftMs: emptyHistogram() },
       keptWarm: { requests: 0, tokens1h: 0, tokens5m: 0 },

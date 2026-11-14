@@ -83,4 +83,5 @@ export { partitionsOf, placementFactOf, stretchTriggerOf } from '@/mock/routingL
 export { PRIOR_BURN, rewriteOf, runwayTiesOf } from '@/mock/routingLog';
 export { budgetsAt, obstacleOf } from '@/mock/routingLog';
 export { STORY_PINS } from '@/mock/routingLog';
+export { tablesFor } from '@/mock/samples';
 export { fakeClock } from '../smoke/clock';

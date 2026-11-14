@@ -363,6 +363,16 @@ const barPhrases = (bars, account, at, compact) =>
  * bar its reset and then its phrase, and a bar whose window carries none reads its reset alone.
  */
 const barsOff = (read) => read.filter((r) => r.reset === null || r.text !== (r.want === null ? r.reset : r.compact ? r.want : `${r.reset}, ${r.want}`));
+/**
+ * The whole minutes from the clock's origin to the instant a window's projected burn spends it, which its "spent in"
+ * phrase counts down to, null for a window with no projection or no burn.
+ */
+const wallMinutes = (w) => (!w || w.projection === null || !w.burn ? null : Math.round((Date.parse(w.horizon) - ((w.projection - 1) / w.burn) * 3_600_000 - CLOCK_ORIGIN) / 60_000));
+/**
+ * primary's 5-hour seed reads 62% on a burn of 22.4% an hour (`web/src/mock/accounts.ts`), so the window is spent
+ * (1 - 0.62) / 0.224 hours, 1 h 42 min, past the story's start, 32 min before its reset.
+ */
+const PRIMARY_5H_WALL_MINUTES = 102;
 const sessionCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.sessions-table > thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
@@ -805,13 +815,13 @@ await forView('/', async () => {
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
-    // The expiries between turns rank last: 50 of the day's 51 sit on a pool that warms caches under a key the
+    // The expiries between turns rank last: 53 of the day's 54 sit on a pool that warms caches under a key the
     // keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's rows).
     [
-      'Expired between turns: 50 in 24h',
+      'Expired between turns: 53 in 24h',
       'badge--warning',
       '/sessions',
-      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 50'],
+      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 53'],
     ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -1281,9 +1291,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 51 · bus gaps 3',
+    line: 'expired between turns 54 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 51', title: null, warning: true },
+      { text: 'expired between turns 54', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '225 ok (76%) of 295',
@@ -1471,10 +1481,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     return a ? barPhrases([...card.querySelectorAll('.wbar:not(.wbar--spend)')], a, at, true).map((r) => ({ account: a.id, ...r })) : [];
   });
   const primary = read.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
+  const primaryWall = wallMinutes(accounts.find((a) => a.id === 'primary')?.windows.find((w) => w.id === '5h'));
   results.push({
-    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour 19% left at reset",
-    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary === '19% left at reset',
-    missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary'],
+    name: "/ each account card's window bars read the compact projection in the reset's place, primary's 5-hour spent 1 h 42 min past the story's start",
+    ok: read.some((r) => r.want !== null) && barsOff(read).length === 0 && primary.startsWith('spent in ') && primaryWall === PRIMARY_5H_WALL_MINUTES,
+    missing: [...barsOff(read).map((r) => JSON.stringify(r)), primary || 'no 5h bar on primary', `primary's wall at ${primaryWall} min`],
   });
   page.unmount();
 }
@@ -2285,12 +2296,13 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   // 2 h 6 min before the reset: 1 h 35 min after the story's start, plus the moment the mock took to load.
   const nightly = wOf('nightly', '5h');
   const spentIn = nightly === null ? null : Date.parse(nightly.horizon) - ((nightly.projection - 1) / nightly.burn) * 3_600_000 - at;
+  const primaryWall = wallMinutes(wOf('primary', '5h'));
   results.push({
-    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's 19% left at the reset and its 7-day window 56% left in the span to its horizon",
+    name: "/quota nightly's 5-hour window reads spent in the 1 h 35 min its forecast leaves from the story's start, primary's spent 1 h 42 min past it and its 7-day window 56% left in the span to its horizon",
     ok:
       spentIn !== null && spentIn > 85 * 60_000 && spentIn < 95 * 60_000 &&
       story.nightly5h.endsWith(`, spent in ${minuteSpan(spentIn)}`) &&
-      story.primary5h.endsWith(', 19% left at the reset') &&
+      /, spent in .+$/.test(story.primary5h) && primaryWall === PRIMARY_5H_WALL_MINUTES &&
       weekly !== null &&
       projectionWords(weekly, at)?.startsWith('56% left in ') === true &&
       story.primary7d.endsWith(`, ${projectionWords(weekly, at)}`),
@@ -2300,7 +2312,7 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   const offBurn = burned.filter((r) => !r.title.endsWith(`, ${burnWords(r.w)}`));
   results.push({
     name: "/quota the reset label's hover names the burn the sessions on the account run the window at",
-    ok: burned.length > 0 && offBurn.length === 0 && cellOf('primary', '5h').title.endsWith(', the sessions on this account burn 8.5% an hour'),
+    ok: burned.length > 0 && offBurn.length === 0 && cellOf('primary', '5h').title.endsWith(', the sessions on this account burn 22.4% an hour'),
     missing: [...offBurn.map((r) => `${r.account} ${r.name}: ${JSON.stringify(r.title)}`), `primary 5h ${JSON.stringify(cellOf('primary', '5h').title)}`],
   });
   // studio's 7-day window under the override is one no router has read since, so it carries no projection and no burn.
@@ -3729,10 +3741,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const detail = primary ? barPhrases([...(page.container.querySelector('.detail .wbars--3')?.querySelectorAll('.wbar') ?? [])], primary, at, false) : [];
   const rowText = rows.find((r) => r.account === 'primary' && r.label === '5h')?.text ?? '';
   const detailText = detail.find((r) => r.label === '5-hour')?.text ?? '';
+  const primaryWall = wallMinutes(primary?.windows.find((w) => w.id === '5h'));
   results.push({
-    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour 19% left at reset",
-    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText === '19% left at reset',
-    missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary'],
+    name: "/accounts each row's window bars read the compact projection in the reset's place, primary's 5-hour spent 1 h 42 min past the story's start",
+    ok: rows.some((r) => r.want !== null) && barsOff(rows).length === 0 && rowText.startsWith('spent in ') && primaryWall === PRIMARY_5H_WALL_MINUTES,
+    missing: [...barsOff(rows).map((r) => JSON.stringify(r)), rowText || 'no 5h bar on primary', `primary's wall at ${primaryWall} min`],
   });
   const opus = primary?.windows.find((w) => w.id === 'seven_day_opus') ?? null;
   const opusText = detail.find((r) => r.label === 'seven_day_opus')?.text ?? 'no seven_day_opus bar on the detail';
@@ -3742,8 +3755,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     missing: [opusText, JSON.stringify(opus)],
   });
   results.push({
-    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour 19% left at the reset",
-    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, 19% left at the reset$/.test(detailText),
+    name: "/accounts the detail card's window bars read the whole projection after the reset, primary's 5-hour spent 1 h 42 min past the story's start",
+    ok: detail.length === 4 && barsOff(detail).length === 0 && /^resets in .+, spent in .+$/.test(detailText) && primaryWall === PRIMARY_5H_WALL_MINUTES,
     missing: [...barsOff(detail).map((r) => JSON.stringify(r)), detailText || 'no 5-hour bar on the detail'],
   });
   page.unmount();
@@ -7173,9 +7186,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         JSON.stringify(balanced) === '[["50","900","1800"],[true,true,true]]',
       missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), String(customHint), JSON.stringify(balanced)],
     });
-    // At the mock's clock primary projects 81 % at its 5-hour reset, secondary 100 % and nightly 104 %, all past all's
-    // 75 %, and every sibling of each is over it too or out of the rotation. Under a ceiling of 100 nightly alone
-    // crosses, and primary has runway for its pins.
+    // At the mock's clock primary projects 112 % at its 5-hour reset, secondary 100 % and nightly 104 %, all past all's
+    // 75 %, and every sibling of each is over it too or out of the rotation. Under a ceiling of 100 nightly and primary
+    // still cross, and neither has a sibling with runway.
     const stored = preview();
     await type(ceilingField(), '100');
     const raised = preview();
@@ -7195,13 +7208,13 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: "/pools the shedding preview replays the trigger over every member's windows and the round's marks from the served figures",
       ok:
         stored === '3 members project over the ceiling: nightly, primary, secondary. No sibling has runway for them, so nothing would be marked.' &&
-        /^1 member projects over the ceiling: nightly\. A round there would mark 1 session \(0 warm\), \d+\.\d %\/h of the excess, to move to a sibling with runway\.$/.test(raised),
+        raised === '2 members project over the ceiling: nightly, primary. No sibling has runway for them, so nothing would be marked.',
       missing: [stored, raised],
     });
     results.push({
       name: '/pools with the switch off the preview opens with its off line, a preset leaves the switch as it is, and the cap, the average and the dwell stay editable under Custom',
       ok:
-        offRaised === 'Load shedding is off: no round runs. 1 member projects over the ceiling: nightly.' &&
+        offRaised === 'Load shedding is off: no round runs. 2 members project over the ceiling: nightly, primary.' &&
         offLine === 'Load shedding is off: no round runs. 3 members project over the ceiling: nightly, primary, secondary.' &&
         JSON.stringify(afterPreset) === '["false",[true,true,true]]' &&
         JSON.stringify(customOff) === '[false,false,false]' &&
@@ -10592,7 +10605,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     ok:
       (dlg?.textContent ?? '').includes('Effective list') &&
       JSON.stringify(answer.map((r) => [r.level, r.pattern])) === JSON.stringify([...own.map((r) => ['key', r.pattern]), ...(await poolRules('all')).map((r) => ['pool', r.pattern])]) &&
-      own.length === 3 &&
+      // laptop's own list, four models allowed and the closing deny (`web/src/mock/pools.ts`).
+      own.length === 5 &&
       answer.some((r) => cooling(r) > 0) &&
       JSON.stringify(drawn) === JSON.stringify(expected),
     missing: [JSON.stringify(drawn), JSON.stringify(expected)],
@@ -19719,8 +19733,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // `req_8c41f2d7-a93`, which answered on its second attempt, the contract seat's three rows on fleet, the approved
   // Ultra's two rows on bench, the four turns of the desktop session the mod ended, story 4's Explore turn, the
   // classifier call that ran on primary, `req_7c2e9f41-d03`, the held conversation's turn that replaced its expired
-  // row, `req_6f3e1b84-d29`, and the two turns of the conversation the Overflow workspace's lapse moved,
-  // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, each answered.
+  // row, `req_6f3e1b84-d29`, the two turns of the conversation the Overflow workspace's lapse moved,
+  // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, the two subagent turns the laptop session's classifier calls judge,
+  // `req_a5e17c42-d19` and `req_d8f3b6e0-a74`, and the first turn of the subagent f2c8, `req_f2c8d417-a60`, each
+  // answered. Desktop's Failed and the line's errors count the turn the upstream answered 400, `req_c1e40a95-b28`.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -19731,9 +19747,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   results.push({
     name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
     ok:
-      JSON.stringify(keys) === JSON.stringify([['desktop', '15', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
+      JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '228 requests, 16.2% errors',
+      line === '232 requests, 16.4% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -23486,10 +23502,11 @@ await forView('/analytics', async () => {
     const low = read(page, 'Traffic by model');
     page.unmount();
     const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
-    // The day's Sonnet 4.5 rows fail 8 of 73 and its Sonnet 5.5 rows 7 of 64, so the two sit apart by a hair.
+    // The day's Sonnet 5.5 rows fail 8 of 65, the turn the upstream answered 400 among them, and its Sonnet 4.5 rows 8
+    // of 74.
     const want = {
-      high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-4-5', 'claude-sonnet-5-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
-      low: shown('up', [...ZERO, 'claude-sonnet-5-5', 'claude-sonnet-4-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
+      high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
+      low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
     };
     results.push({ name, ok: JSON.stringify({ high, low }) === JSON.stringify(want), missing: [`high ${JSON.stringify(high)}`, `low ${JSON.stringify(low)}`] });
   }

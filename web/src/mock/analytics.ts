@@ -21,7 +21,7 @@ import { bandAt, freedPart, requestsIn, sumEach, sumOf, sumSplit, tokensIn } fro
 import { createRng } from './rng';
 import { round } from './round';
 import { forcedReasons, readingPairAt, type EventSeed } from './routingLog';
-import { TABLES } from './samples';
+import { TABLES, tablesFor } from './samples';
 import { DAY, HOUR, MINUTE, NOW, clock, hourCeil, iso, startOfHour } from './time';
 
 /**
@@ -209,16 +209,18 @@ const pricedRows = new WeakMap<HourlyRollup, Record<keyof CostSplit | 'keptRead'
 const fiveHourRows = new WeakMap<HourlyRollup, number | null>();
 
 /**
- * A row's Pro-week figures at the row's hour: its four token kinds, and the kept-warm credit's cache read and cache
- * writes. The band is read once where the model has a 7-day weight, and a figure is null where the weight or the
- * band's reading is missing. A row of freed classifier calls reads zero on each figure, as the route answers it.
+ * A row's Pro-week figures at the row's hour, under the regime its client label names: its four token kinds, and the
+ * kept-warm credit's cache read and cache writes. The band is read once where the model has a 7-day weight, and a
+ * figure is null where the weight or the band's reading is missing. A row of freed classifier calls reads zero on each
+ * figure, as the route answers it.
  */
 function figuresOf(r: HourlyRollup): Record<keyof CostSplit | 'keptRead' | 'keptWrite', number | null> {
   if (freedPart(r)) return { cacheRead: 0, cacheWrite: 0, input: 0, keptRead: 0, keptWrite: 0, output: 0 };
   const known = pricedRows.get(r);
   if (known) return known;
   const inside = bandAt(r.model, Date.parse(r.hour));
-  const figure = (part: Usage) => (inside === null ? null : equivalentIn(TABLES, r.model, part, inside));
+  const tables = tablesFor(r.client);
+  const figure = (part: Usage) => (inside === null ? null : equivalentIn(tables, r.model, part, inside));
   const usage = usageOf(r);
   const kept = keptUsageOf(r);
   const figures = {
@@ -470,14 +472,15 @@ const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, ca
 
 /**
  * A plan row's Pro 5-hour figure, which a rollup row does not store: the share of the anchor tier's 5-hour window its
- * usage spends under the band at its hour, as the route bands a rollup row, on the table's base rows as the stored
- * Pro-week figure is. A freed classifier part reads zero, and a model without a weight null.
+ * usage spends under the band at its hour, as the route bands a rollup row, on the rows of the regime its client label
+ * names as the stored Pro-week figure is. A freed classifier part reads zero, and a model without a weight null.
  */
 const fiveHourEquivalentOf = (r: HourlyRollup): number | null => {
   if (freedPart(r)) return 0;
   if (fiveHourRows.has(r)) return fiveHourRows.get(r) ?? null;
   const inside = bandAt(r.model, Date.parse(r.hour));
-  const figure = inside === null ? null : shareIn(TABLES, 'five_hour', anchorTier(TABLES), r.model, usageOf(r), inside);
+  const tables = tablesFor(r.client);
+  const figure = inside === null ? null : shareIn(tables, 'five_hour', anchorTier(tables), r.model, usageOf(r), inside);
   fiveHourRows.set(r, figure);
   return figure;
 };
@@ -623,10 +626,11 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
 /**
  * The account rollups' moves into each account by reason and by the destination's fit, with the cache the first
  * request after each one wrote again, and beside them the moves an account's state forced among the ledger's `events`,
- * each under its own word and fit in its hour's bucket. A cause filed under a turn would tell a lapse the story holds
- * nowhere, so no cause joins the turns. `moves` is each reason's sum over its fits, as the route answers it. The held
- * time per bucket folds the request rows as the ledger folds the completions, since no account rollup the console
- * reads carries it: the slow-down waits of the bucket's requests summed, and the requests that waited one.
+ * each under its own word and fit in its hour's bucket with the cache its request wrote. A cause filed under a turn
+ * would tell a lapse the story holds nowhere, so no cause joins the turns. `moves` is each reason's sum over its fits,
+ * as the route answers it. The held time per bucket folds the request rows as the ledger folds the completions, since
+ * no account rollup the console reads carries it: the slow-down waits of the bucket's requests summed, and the
+ * requests that waited one.
  */
 export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], events: readonly RoutingEvent[], range: Range): RewritesAnswer {
   const { slotOf, starts } = bucketsOf(range);
@@ -659,10 +663,14 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
     }
     return { at: iso(at), rewriteTokens };
   });
-  // The ledger files a move in its hour's row, so the range keeps it wherever it keeps that hour's synthetic moves.
+  // The ledger files a move in its hour's row, so the range keeps it wherever it keeps that hour's synthetic moves. The
+  // move's word stands in its serving attempt's trace, so the ledger books that attempt's cache write as rewrite tokens.
   for (const e of events) {
-    if (forcedReasons(e) === null || starts[slotOf(startOfHour(Date.parse(e.at)))] === undefined) continue;
+    const slot = slotOf(startOfHour(Date.parse(e.at)));
+    if (forcedReasons(e) === null || starts[slot] === undefined) continue;
     addMove(typeof e.detail.reason === 'string' ? e.detail.reason : 'unknown', typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown', 1);
+    const served = requests.find((r) => r.keyId === e.keyId && r.sessionId === e.sessionId && r.canonicalModel === e.model && r.at === e.at);
+    if (served) points[slot].rewriteTokens += served.usage.cacheWrite5m + served.usage.cacheWrite1h;
   }
   const moves = Object.fromEntries(Object.entries(movesByReasonAndFit).map(([reason, fits]) => [reason, Object.values(fits).reduce((n, x) => n + x, 0)]));
   const held = starts.map((at, i): HeldPoint => ({ at: iso(at), heldMs: sumOf(slowedMs[i], (x) => x), requests: slowedMs[i].length }));

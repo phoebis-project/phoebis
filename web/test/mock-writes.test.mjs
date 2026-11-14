@@ -110,9 +110,10 @@ test('a new pool reads each member the way the pool route does', async () => {
   const ended = await verdicts('ended', 'never');
   assert.equal(ended.sunset, 'subscription_ended', 'the flagged half alone: a plan-ended account with its cancel cleared reads its subscription ended');
   assert.equal(ended.reserve, 'subscription_ended', 'the canceled half alone: an unflagged account canceled past its saved end reads its subscription ended');
-  // Funded again, overflow serves. The account the router reads in overage is an obstacle only under a policy that
-  // admits none.
+  // Funded again and resumed from the pause its lapse led to, overflow serves. The account the router reads in overage
+  // is an obstacle only under a policy that admits none.
   await api.clearFunding('overflow');
+  await api.resumeAccount('overflow');
   await api.pauseAccount('primary');
   const second = await verdicts('second', 'never');
   assert.deepEqual([second.overflow, second.nightly, second.primary], ['eligible', 'overage', 'unavailable'], 'a paused account is unavailable like a flagged one');
@@ -187,16 +188,19 @@ test('the story reads a member at its budget as the route does, and a member hal
     [half.spends.map((s) => [s.period, s.spentUsd]), half.budgetDailyUsd, half.budgetMonthlyUsd, half.budgetUntil, half.eligible],
     [[['day', 1.1], ['month', 25]], 5, 50, null, 'unavailable'],
   );
-  // The mock reads each member's verdict once, from the story's accounts as it is built, so the flag is cleared on the
-  // story's account before a second mock reads it, and restored for the cases after this one.
+  // The mock reads each member's verdict once, from the story's accounts as it is built, so the flag is cleared and
+  // the operator's pause lifted on the story's account before a second mock reads it, and both are restored for the
+  // cases after this one.
   const seed = d.ACCOUNTS.find((a) => a.id === 'overflow');
-  const flagged = seed.status;
+  const [flagged, paused] = [seed.status, seed.routingEnabled];
   seed.status = 'ready';
+  seed.routingEnabled = true;
   try {
     const cleared = (await (await signedIn()).listPools()).find((p) => p.id === 'all').members.find((m) => m.accountId === 'overflow');
     assert.deepEqual([cleared.budgetUntil, cleared.eligible], [null, 'eligible'], 'without the flag, a member under both its budgets is eligible');
   } finally {
     seed.status = flagged;
+    seed.routingEnabled = paused;
   }
   const spent = member('jobs', 'research');
   const [day] = spent.spends;
@@ -705,7 +709,8 @@ test('a model-scoped cooldown reads its window from its reason, not a fixed mode
   const api = await signedIn();
   const primary = api.accounts.find((a) => a.id === 'primary');
   const sample = primary.cooldowns[0];
-  // laptop's rules allow both models ahead of their closing deny, and primary is a member of laptop's pool.
+  // laptop's rules allow both models among the four ahead of their closing deny, and primary is a member of laptop's
+  // pool.
   primary.cooldowns = [...primary.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-sonnet-4-5' }];
   const { rules } = await api.getKeyModels('laptop');
   const windowOn = (pattern) => rules.find((r) => r.pattern === pattern && !r.not)?.cooldowns.find((c) => c.accountId === 'primary')?.window;

@@ -291,8 +291,11 @@ test('an hour of two requests in different bands sums the per-request shares at 
   await api.login('admin');
   const costs = (await api.getSettings()).subscriptionCosts;
   const tierOf = new Map(d.ACCOUNTS.map((a) => [a.id, a.subscription?.rateLimitTier]));
-  // A plan-funded inference the cost model prices, as the template the two rows are written from.
-  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && tierOf.get(r.accountId ?? '') !== undefined && d.fundingOf(r.attempts[0]) === 'plan' && d.weightedWindows(costs, r.canonicalModel).length > 0);
+  // A plan-funded inference the cost model prices, as the template the two rows are written from, on an account whose
+  // set holds the 5-hour window and under a client whose tables shrink that window inside the band, so the two bands
+  // price it apart.
+  const fiveHour = new Set(d.ACCOUNTS.filter((a) => a.windows.some((w) => w.id === '5h')).map((a) => a.id));
+  const template = [...d.requestById.values()].find((r) => r.kind === 'inference' && r.status === 200 && r.attempts.length === 1 && tierOf.get(r.accountId ?? '') !== undefined && fiveHour.has(r.accountId) && d.fundingOf(r.attempts[0]) === 'plan' && d.weightedWindows(costs, r.canonicalModel).length > 0 && d.tablesFor(r.client).peak.capacityFactor.fiveHour < 1);
   assert.ok(template, 'the story holds a priced plan-funded answer');
   const tier = tierOf.get(template.accountId);
   // The band's next edge after the early hours of a Wednesday, read off the table the mock prices with.

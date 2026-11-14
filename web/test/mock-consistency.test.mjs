@@ -1524,6 +1524,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     let seen = 0;
     for (const r of await decisionsOf(s)) {
       if (!['placed', 'moved'].includes(r.outcome.kind) || r.settings?.strategy !== 'pace' || r.outcome.rung !== null) continue;
+      // A placement a fallback credit or a judged turn directed went ahead of the strategy, which picked nothing.
+      const pick = r.walk.find((w) => w.step === 'pick');
+      if (pick?.facts.some((f) => f.key === 'reason' && ['classifier', 'credit'].includes(f.value))) continue;
       const id = `${r.requestId}/${r.seq}`;
       const winner = r.candidates.find((c) => c.accountId === r.outcome.accountId);
       // A move picks among its destinations and a placement among the eligible members, each past the partitions.
@@ -1994,10 +1997,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       }
       if (e.detail.kind === 'account_updated') {
         const pairs = pairsOf(e, ACCOUNT_DIFF_MEMBERS);
-        assert.equal(e.detail.diff.secret_replaced, true, `${e.id}: the edit staged a secret, which reads as the flag alone`);
         const account = s.accounts.find((x) => x.id === e.detail.target);
-        assert.equal(account?.kind, 'api_key', `${e.id}: only an API-key account holds a secret`);
-        assert.ok(!('canceled' in pairs) && !('subscription_ends_at' in pairs), `${e.id}: an API-key account has no end`);
+        if ('secret_replaced' in e.detail.diff) {
+          assert.equal(e.detail.diff.secret_replaced, true, `${e.id}: the edit staged a secret, which reads as the flag alone`);
+          assert.equal(account?.kind, 'api_key', `${e.id}: only an API-key account holds a secret`);
+          assert.ok(!('canceled' in pairs) && !('subscription_ends_at' in pairs), `${e.id}: an API-key account has no end`);
+        } else {
+          // An operator's pause writes the switch's pair alone, the one diff `set_enabled` stores.
+          assert.deepEqual(e.detail.diff, { enabled: { from: true, to: false } }, `${e.id}: a pause stores the switch's pair alone`);
+        }
         // The story's one edit of the account is its last, so each new value is the one the account holds.
         const held = { enabled: account.routingEnabled, label: account.label };
         for (const [field, change] of Object.entries(pairs)) if (field in held) assert.deepEqual(change.to, held[field], `${e.id}: ${field} reads the account's value`);
@@ -2284,6 +2292,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const pick = r.walk.find((w) => w.step === 'pick' && w.verdict === 'chosen');
       if (!pick) continue;
       const id = `${r.requestId}/${r.seq}`;
+      // A pick a judged turn or a fallback credit directed names its account and its reason, and the strategy drew
+      // nothing.
+      if (pick.facts.some((f) => f.key === 'reason')) {
+        assert.deepEqual(drawOf(pick), [undefined, undefined, undefined, undefined], `${id}: a directed pick's draw`);
+        continue;
+      }
       const [ties, kept, drawn, turn] = drawOf(pick);
       seen.add(r.settings.strategy);
       // The round-robin pool holds research alone, so its cursor names the one turn and leaves no draw.
@@ -2311,14 +2325,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of records) {
       const id = `${r.requestId}/${r.seq}`;
       // An exhausted record's pick names none and writes the strategy alone, so the chosen picks are the ones carrying
-      // the tier.
+      // the tier, but a directed one, which the strategy ranked nothing for.
       const pick = r.walk.find((s) => s.step === 'pick' && s.verdict === 'chosen');
       if (pick) {
         picked += 1;
+        const directed = pick.facts.some((f) => f.key === 'reason');
         const tiers = pick.facts.filter((f) => f.key === 'tier').map((f) => f.value);
-        assert.equal(tiers.length, 1, `${id}: one tier fact`);
+        assert.equal(tiers.length, directed ? 0 : 1, `${id}: ${directed ? 'no' : 'one'} tier fact`);
         const [tier] = tiers;
-        assert.ok(Array.isArray(tier) && tier.length === 3 && tier.every((x) => typeof x === 'string' && /^\d+$/.test(x)), `${id}: the tier ${JSON.stringify(tier)}`);
+        if (!directed) assert.ok(Array.isArray(tier) && tier.length === 3 && tier.every((x) => typeof x === 'string' && /^\d+$/.test(x)), `${id}: the tier ${JSON.stringify(tier)}`);
       }
       const joined = r.walk.flatMap((s) => s.facts.flatMap((f) => (Array.isArray(f.value) ? f.value : [f.value]).filter((x) => typeof x === 'string' && triple.test(x)).map((x) => `${s.step} ${f.key} ${x}`)));
       assert.deepEqual(joined, [], `${id}: a slash-joined triple`);
@@ -2648,7 +2663,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     // Each round's burn sum, the priced burn its marks leave and whether an unpriced pin stands unmarked, off the seeds
     // in mock/routingLog.ts, each left figure at least a tenth of its sum: the Fable session's 0.03 of
     // `FABLE_WEEK_BURN`, the 0.0052 and 0.0071 `ROUND_PINS` leave of their 0.0299, the 0.002, 0.026, 0.0206 and 0.025
-    // `STRETCH_PINS` leave of their 0.1286, and the 0.033 of the one priced pin of `NO_RUNWAY_PINS`, which an unpriced
+    // `STRETCH_PINS` leave of their 0.1286, and the 0.224 of the one priced pin of `NO_RUNWAY_PINS`, which an unpriced
     // pin stands beside. The afternoon round lists the pin of the session the mod released whole under `ended` with no
     // burn, so its sum is its priced pin's alone.
     assert.deepEqual(
@@ -2667,10 +2682,44 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
           ['req_3e7a5c19-f84', 0.03, 0.03, false],
           ['req_1eaa9bc1-a18', 0.0299, 0.0123, false],
           ['req_9f2e7c5a-c49', 0.1286, 0.0736, false],
-          ['req_6e1f3b98-a24', 0.033, 0.033, true],
+          ['req_6e1f3b98-a24', 0.224, 0.224, true],
         ],
       },
     );
+  });
+
+  test(`a story round's burn sum is the burn its account's row reads on the trigger's window, the demand there for a round the stretch fired, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    // The router's projection sums the burn of the pool's pins on the account and of its bookings in flight, and the
+    // round sums the same pins, so the two read one figure where the record holds no booking on the window.
+    const read = rounds.flatMap((e) => {
+      const r = records.find((x) => x.requestId === e.requestId && x.request.at === e.at);
+      const source = r.candidates.find((c) => c.accountId === e.accountId);
+      const window = source.windows[e.detail.window];
+      if ((window?.reserved ?? 0) !== 0) return [];
+      return [[e.requestId, e.detail.burn_sum, e.detail.trigger === 'slow_down' ? window.demand : source.burn[e.detail.window]]];
+    });
+    assert.ok(read.length > 0, 'a round whose record holds no booking in flight');
+    for (const [id, sum, burn] of read) assert.equal(sum, burn, `${id}: a burn sum of ${sum} against a burn of ${burn}`);
+  });
+
+  test(`a shed line reads within_dwell only with a round inside the pool's dwell before it, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round');
+    let within = 0;
+    for (const r of records) {
+      const line = r.walk.find((w) => w.step === 'move:shed');
+      if (line?.facts.find((f) => f.key === 'round')?.value !== 'within_dwell') continue;
+      within += 1;
+      const at = Date.parse(r.request.at);
+      const dwell = r.settings.shedDwellSeconds * 1_000;
+      const round = rounds.find((e) => e.accountId === r.pin?.accountId && e.poolId === r.request.poolId && Date.parse(e.at) <= at && at - Date.parse(e.at) < dwell);
+      assert.ok(round, `${r.requestId}/${r.seq}: within_dwell on ${r.pin?.accountId} with no round in the ${dwell / 1_000} s before it`);
+    }
+    assert.ok(within > 0, 'a shed line inside a dwell');
   });
 
   test(`a round leaves a pin out on the fast lane only under window share, where the pin's stored lane is fast, and never the current pin of a standard request, at ${at}`, async () => {
@@ -2845,23 +2894,26 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(next(moved)?.pin?.shed, { at: moved.request.at, from: 'secondary', reason: 'round' }, "the shed move's session");
     assert.deepEqual(next(failedOver)?.pin?.shed, { at: failedOver.request.at, from: 'secondary', reason: 'cooldown' }, 'the failed-over session');
     // Every stamp names the move or the failover landing on its pin that wrote it, by the round or the failover's word.
+    // A landing writes its row afresh, so the writer is the record of the stamp's instant that wrote the pin off the
+    // stamp's source.
     for (const r of records.filter((x) => x.pin?.shed)) {
-      const w = records.find((x) => keyOf(x) === keyOf(r) && x.request.at === r.pin.shed.at && x.outcome.fromAccountId === r.pin.shed.from && x.outcome.pinWritten?.action === 'moved');
+      const w = records.find((x) => keyOf(x) === keyOf(r) && x.request.at === r.pin.shed.at && x.outcome.fromAccountId === r.pin.shed.from && x.outcome.pinWritten !== null);
       assert.ok(w, `${r.requestId}/${r.seq} reads a stamp no record of its pin wrote`);
       const word = w.outcome.rule === 'shed' ? 'round' : w.outcome.pinEvents.find((e) => e.kind === 'pin_migrated')?.reason;
       assert.equal(r.pin.shed.reason, word, `${r.requestId}/${r.seq} after ${w.requestId}/${w.seq}`);
     }
   });
 
-  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the two rows the story writes one event on, at ${at}`, async () => {
+  test(`no row the story writes whole carries a placement on an attempt's trace, and none lists a pin event but the three rows the story writes one event on, at ${at}`, async () => {
     const s = await story;
     const details = await Promise.all([...s.lib.UNSEEDED_IDS].map((id) => s.api.getRequest(id)));
     const placed = details.filter((d) => d.request.attempts.some((a) => a.selection?.placement)).map((d) => d.request.id);
     assert.deepEqual(placed, [], 'the written rows whose trace carries a placement');
     // The story seats one event by hand on the replaced pin's row, for what its placement did to the row it found idle,
-    // and one on the turn whose placement moved the pin off the Overflow workspace once its balance ran out.
+    // one on the turn whose placement moved the pin off the Overflow workspace once its balance ran out, and one on the
+    // turn the upstream answered 400, for the release of the pin its placement created.
     const listing = details.map((d) => [d.request.id, d.events.filter((e) => e.kind.startsWith('pin_')).length]).filter(([, n]) => n > 0);
-    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1], ['req_c7e41d93-a26', 1]], 'the written rows that list a pin event, with their counts');
+    assert.deepEqual(listing, [['req_6f3e1b84-d29', 1], ['req_c1e40a95-b28', 1], ['req_c7e41d93-a26', 1]], 'the written rows that list a pin event, with their counts');
   });
 
   test(`a release beside a pin created on another account names the idle row, and a placement names a source where it moved a pin, at ${at}`, async () => {
@@ -3413,12 +3465,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       return out;
     };
     // The cache halves have no per-request figure on a row, so each row's tokens price at its hour as the Pro-week
-    // figure, a client classifier call's at zero.
+    // figure on the tables of the row's client, a client classifier call's at zero.
     const summed = (rows, usage) => {
       let out = 0;
       for (const r of rows) {
         if (tokensOf(r) === 0) continue;
-        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? s.lib.equivalentIn(costs, r.model, usage(r), s.lib.inBand(costs, Date.parse(r.hour))) : null;
+        const figure = r.classifier === 'client' ? 0 : ownWeight(s, r.model) ? s.lib.equivalentIn(s.lib.tablesFor(r.client), r.model, usage(r), s.lib.inBand(costs, Date.parse(r.hour))) : null;
         out = out === null || figure === null ? null : out + figure;
       }
       return out;

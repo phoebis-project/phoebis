@@ -9,9 +9,9 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, expiredBetweenTurns } from './requests';
+import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, expiredBetweenTurns } from './requests';
 import { createRng } from './rng';
-import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
+import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
 
 const rng = createRng(2_024);
@@ -126,7 +126,7 @@ const sessionSpec: ({
   { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
-  // The laptop key allows Haiku 4.5 and Sonnet 4.5 only, so its subagents stay inside that list.
+  // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5.
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' }, cause: 'unsupported_shape', subagentHold: 'affinity_too_short' },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting', noEffort: true },
   // Five of its agents are written, so it holds an agent in each lifecycle word, three of them released. Holding its
@@ -294,20 +294,22 @@ const firstRequestAt = (id: string, sessionCreatedAt: string | null): string | u
 
 /**
  * A pin's burn as the Pro-week figure per hour: the account tier's own share of `window` scaled by the tier's capacity
- * there over the anchor tier's 7-day capacity, the Pro week the figure is a share of.
+ * there over the anchor tier's 7-day capacity, the Pro week the figure is a share of, each capacity the row of the
+ * regime the pin's key's client label names.
  */
-const burnEquivalentOf = (burn: number | null, accountId: string, window: CostWindow): number | null => {
+const burnEquivalentOf = (burn: number | null, accountId: string, window: CostWindow, keyId: string): number | null => {
   const tier = accountById.get(accountId)?.subscription?.rateLimitTier;
-  const own = tier === undefined ? null : tierCapacity(TABLES, tier, window);
-  const anchor = tierCapacity(TABLES, anchorTier(TABLES), 'seven_day');
+  const tables = tablesFor(CLIENTS[keyId] ?? null);
+  const own = tier === undefined ? null : tierCapacity(tables, tier, window);
+  const anchor = tierCapacity(tables, anchorTier(tables), 'seven_day');
   return burn === null || own === null || anchor === null ? null : (burn * own) / anchor;
 };
 /** The window a plan pin's burn is a share of: the 5-hour window where the account's set has it, else the 7-day one. */
 const burnWindowOf = (accountId: string): CostWindow => (sharedWindowsOf(accountId).includes('five_hour') ? 'five_hour' : 'seven_day');
 /** How a pin's burn reads on its account: a window share names its window and its Pro-week figure, dollars neither. */
-const burnReadingOf = (accountId: string, burn: number | null, unit: BurnUnit | null = burnUnitOf(accountId)): Pick<Session, 'burnEquivalent' | 'burnUnit' | 'burnWindow'> => {
+const burnReadingOf = (accountId: string, keyId: string, burn: number | null, unit: BurnUnit | null = burnUnitOf(accountId)): Pick<Session, 'burnEquivalent' | 'burnUnit' | 'burnWindow'> => {
   const window = unit === 'window_share' ? burnWindowOf(accountId) : null;
-  return { burnEquivalent: window === null ? null : burnEquivalentOf(burn, accountId, window), burnUnit: unit, burnWindow: window };
+  return { burnEquivalent: window === null ? null : burnEquivalentOf(burn, accountId, window, keyId), burnUnit: unit, burnWindow: window };
 };
 /**
  * A pin's plan copy in dollars per hour: the dollar burn its row drew, or wrote, beside its share, answered on a plan
@@ -373,13 +375,14 @@ type UndatedLine = Omit<AgentContext, 'createdAt' | 'pinnedAt'> & Partial<Pick<A
  */
 const pinLine = (
   line: Omit<UndatedLine, keyof BurnFigures | 'warm' | 'warmUntil'>,
+  keyId: string,
   served: { burn: number | null; dollars: number | null },
   lastRefreshAt: string | null,
 ): UndatedLine => {
   const unit = burnUnitOf(line.accountId);
   const burn = unit === null ? null : served.burn;
   const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
-  return { ...line, burn, ...burnReadingOf(line.accountId, burn, unit), burnUsd: burnUsdOf(served.dollars, unit, line.model), warm: warmAt(warmUntil), warmUntil };
+  return { ...line, burn, ...burnReadingOf(line.accountId, keyId, burn, unit), burnUsd: burnUsdOf(served.dollars, unit, line.model), warm: warmAt(warmUntil), warmUntil };
 };
 /**
  * The newest use across a row's conversation pins, its display pin's and its lines', which the route answers as the
@@ -471,7 +474,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     pinned,
     burn,
     burnAt: pinned ? burnAtRoll : null,
-    ...burnReadingOf(spec.accountId, burn, unit),
+    ...burnReadingOf(spec.accountId, spec.keyId, burn, unit),
     burnUsd: burnUsdOf(burnUsdRoll, unit, spec.model),
     cacheTtlMs: pinned ? 5 * MINUTE : null,
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
@@ -718,11 +721,11 @@ SESSIONS.forEach((pin, i) => {
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
         const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
-        return [pinLine(line, display, pin.lastRefreshAt)];
+        return [pinLine(line, pin.keyId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
       const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
-      return [pinLine(line, servedBeside(display, line, pin.createdAt), line.lastUsedAt)];
+      return [pinLine(line, pin.keyId, servedBeside(display, line, pin.createdAt), line.lastUsedAt)];
     }),
   );
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
@@ -745,7 +748,7 @@ const writtenRow = (
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
   const display = { burn: row.burn, dollars: burnUnitOf(row.accountId) === 'usd' ? row.burn : (dollars ?? null), lastInputTokens: lines[0].lastInputTokens };
-  const priced = lines.map((l, j) => pinLine(l, j === 0 ? display : servedBeside(display, l, row.createdAt), l.lastUsedAt));
+  const priced = lines.map((l, j) => pinLine(l, row.keyId, j === 0 ? display : servedBeside(display, l, row.createdAt), l.lastUsedAt));
   const line = priced[0];
   const agentContexts = datedLines(row.createdAt, key, priced);
   const seen = ledgered.get(key);

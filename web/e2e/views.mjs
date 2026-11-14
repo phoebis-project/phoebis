@@ -9641,8 +9641,9 @@ async function wideBodyDialog(theme) {
     colorsHeld();
     return;
   }
-  // The story's cut answers sit on every seventh laptop row, so the list is narrowed to that key for the read.
-  await page.goto(`${base}/requests?keys=laptop`);
+  // The story's cut answers sit on every seventh drawn laptop row, so the list is narrowed to that key for the read, on
+  // a page of 50, which reaches past the story's own laptop rows to the newest cut one.
+  await page.goto(`${base}/requests?keys=laptop&rows=50`);
   await booted();
   await advance(LOAD_MS);
   await page.waitForSelector('.requests__table tbody tr', { timeout: 15_000 }).catch(() => {});

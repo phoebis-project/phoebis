@@ -16,12 +16,12 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, FORCED_MOVE_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, CLIENTS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
-import { TABLES } from './samples';
-import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
+import { TABLES, tablesFor } from './samples';
+import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, OVERFLOW_PAUSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
 
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
 const RULES = ['spent', 'overage', 'return_to_plan', 'drain', 'shed'] as const;
@@ -49,10 +49,11 @@ export const rewriteOf = (tokens: number, model: string): Record<string, number>
 const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes('seven_day_fable') ? 'seven_day_fable' : 'seven_day');
 /**
  * A rewrite of `tokens` as the Pro-week figure: the prompt written to the cache again, the Pro tier's share of its
- * 7-day window, which no band weighs. Null for a model without a weight of its own.
+ * 7-day window under the regime the pin's client label names, which no band weighs. Null for a model without a weight
+ * of its own.
  */
-export const proWeekRewriteOf = (tokens: number, model: string): number | null =>
-  weightOf(TABLES, model, 'seven_day') !== null ? shareIn(TABLES, 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
+export const proWeekRewriteOf = (tokens: number, model: string, client: string | null): number | null =>
+  weightOf(TABLES, model, 'seven_day') !== null ? shareIn(tablesFor(client), 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
 /**
  * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock holds no
  * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
@@ -315,6 +316,9 @@ const stateAt = (a: Account, at: number): string => {
   return flagOf(a.status) ?? 'ready';
 };
 
+/** Whether the account's routing was on at `at`: the operator paused the Overflow workspace at 11:33:00. */
+const enabledAt = (a: Account, at: number): boolean => (a.id === 'overflow' ? at < OVERFLOW_PAUSED_AT : a.routingEnabled);
+
 /**
  * The usage credits a fast request draws: nightly's spend cap was raised at 11:30:12, and secondary's plan has
  * none.
@@ -337,7 +341,7 @@ const inOverageAt = (accountId: string, at: number) => accountId === 'nightly' &
 export function obstacleOf(a: Account, pool: PoolSeed, at: number, model: string, fast: boolean, attempted: string[]): RecordCandidate['obstacle'] {
   const plain = (name: string, reason: string | null = null, until: string | null = null) => ({ name, reason, scope: null, until, window: null });
   const state = stateAt(a, at);
-  if (state !== 'ready' || !a.routingEnabled) return plain('operator');
+  if (state !== 'ready' || !enabledAt(a, at)) return plain('operator');
   const endsAt = a.subscription?.endsAt ? Date.parse(a.subscription.endsAt) : null;
   if (endsAt !== null && endsAt <= at) return plain('subscription_ended');
   const live = COOLDOWNS.filter((c) => c.accountId === a.id && c.setAt <= at && at < c.until && holds(c, model, fast));
@@ -388,11 +392,27 @@ const ACCOUNT_BURNS = new Map(
     ) as Record<string, number>,
   ]),
 );
+/** Primary's 5-hour burn before the afternoon round's current session lands there, the burn of the sessions it carries. */
+const PRIMARY_EARLIER_BURN = 0.085;
+/** The placement that lands the afternoon round's current session on primary, read off its row. */
+const CURRENT_SESSION_LANDED_AT = ((): number => {
+  const landing = requestById.get('req_b2bed817-a58');
+  if (!landing) throw new Error('the story lacks the placement of the session the afternoon round reads as current');
+  return Date.parse(landing.at);
+})();
 /**
  * The burns a decision read on an account: the story's hand-written decisions read the sessions the accounts carry, and
- * a drawn decision reads none, so it projects its reading.
+ * a drawn decision reads none, so it projects its reading. The router sums the pins an account holds at the decision,
+ * and a placement reads the sum before its own booking, so primary's 5-hour window reads the round's current session
+ * after its placement alone. A burn the decision writes wins.
  */
-const burnsOf = (spec: Spec, accountId: string): Record<string, number> => (spec.story ? (spec.burns?.[accountId] ?? ACCOUNT_BURNS.get(accountId) ?? {}) : {});
+const burnsOf = (spec: Spec, accountId: string): Record<string, number> => {
+  if (!spec.story) return {};
+  const written = spec.burns?.[accountId];
+  if (written) return written;
+  const row = ACCOUNT_BURNS.get(accountId) ?? {};
+  return accountId === 'primary' && spec.at <= CURRENT_SESSION_LANDED_AT ? { ...row, five_hour: PRIMARY_EARLIER_BURN } : row;
+};
 
 /**
  * The instant a window's projection runs to, and what set it, as the router's `horizon_of` reads them: the 5-hour
@@ -579,7 +599,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       burn,
       cooldowns,
       credits: fast ? creditsAt(a.id, at) : null,
-      enabled: a.routingEnabled,
+      enabled: enabledAt(a, at),
       factor: entry?.factor ?? null,
       fit: null,
       inFlight: spec.inFlight?.[a.id] ?? drawnInFlight,
@@ -847,9 +867,17 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
   // The one trigger: the first plan window, in the windows' order, whose projection at its horizon reads over the line
   // that horizon's bound sets, or on a pool that slows its pins the 5-hour window's stretch past the threshold once the
-  // safety wait has passed, a 5-hour window under the hold yielding to the next. The line names every projection it
-  // read with its horizon and wall, the 5-hour window's age and hold inside the hold, and how long the stretch has read
-  // over while the wait holds.
+  // safety wait has passed, a 5-hour window under the hold yielding to the next. A round the story writes fires past
+  // its window's wait, and so did the round whose dwell a decision stands in, so either reads the first window over its
+  // line as the trigger. Any other window over its line is inside its wait, which holds the round back and yields to
+  // the next window. The line names every projection it read with its horizon, its wall and its wait, the 5-hour
+  // window's age and hold inside the hold, and how long the stretch has read over while the safety wait holds.
+  const newest = newestRound(source.accountId, at);
+  const fires = spec.round !== undefined || (newest !== null && at - newest < pool.shedDwellSeconds * 1_000);
+  const stretch = pool.slowDown ? stretchTriggerOf(source, pool, at) : null;
+  const { fired: trigger, waits } = stretch === null ? triggerOf(source, pool.slowDown ? windows.filter((w) => w !== 'five_hour') : windows, at, pool, fires) : { fired: stretch, waits: [] };
+  // The stretch's safety wait is read apart, so a stretch past it fires a round the story has to write.
+  if (trigger !== null && !fires) throw new Error(`the story writes no round for ${source.accountId}'s ${trigger.window} window at ${iso(at)}, outside any dwell`);
   const facts: WalkFact[] = [];
   for (const w of windows) {
     const x = source.windows[w];
@@ -858,18 +886,19 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
     // The instant the projection's burn takes the window to its wall, in whole milliseconds as the engine stores it,
     // and none where the window burns nothing.
     const burn = source.burn[w] ?? 0;
-    if (burn > 0) facts.push(fact(`wall_${w}`, Math.round(at + ((1 - x.utilization) / burn) * HOUR), 'time'));
+    if (burn > 0) facts.push(fact(`wall_${w}`, wallOf(x, burn, at), 'time'));
+    const wait = waits.find((entry) => entry.window === w);
+    if (wait) facts.push(fact(`over_since_${w}`, wait.overSince, 'time'), fact(`wait_${w}`, wait.waitMs, 'ms'));
   }
   const held = fiveHourHeld(source, pool, at);
   if (held) facts.push(fact('age_five_hour', held.ageMs, 'ms'), fact('hold_five_hour', held.holdMs, 'ms'));
   // The router writes the pool's 5-hour ceiling here at every horizon, whatever line the trigger reads.
   facts.push(fact('ceiling', pool.windowCeiling, 'percent'));
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
-  const waiting = overSince !== null && at - overSince < SLOW_DOWN_WAIT_MS;
-  if (waiting) facts.push(fact('over_ms', at - overSince, 'ms'));
-  const trigger = pool.slowDown ? (stretchTriggerOf(source, pool, at) ?? triggerOf(source, windows.filter((w) => w !== 'five_hour'), at, pool)) : triggerOf(source, windows, at, pool);
+  const stretchWaits = overSince !== null && at - overSince < SLOW_DOWN_WAIT_MS;
+  if (stretchWaits) facts.push(fact('over_ms', at - overSince, 'ms'));
   // The hold holds back the round alone, as a wait does, so a held line goes on to the cooldown and the mark.
-  if (trigger === null && !waiting && held === null) {
+  if (trigger === null && waits.length === 0 && !stretchWaits && held === null) {
     no(4, facts);
     return none;
   }
@@ -924,22 +953,53 @@ export function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: nu
   return hours > 0 && excess > 0 ? { excess, slowed: true, window: 'five_hour' } : null;
 }
 
+/** The instant a window's projected burn takes it to its wall, in whole milliseconds as the engine stores it. */
+const wallOf = (x: Pick<RecordCandidate['windows'][string], 'utilization'>, burn: number, at: number): number => Math.round(at + ((1 - x.utilization) / burn) * HOUR);
+
 /**
- * The window a round on `source` fires on, and the excess per hour that lands its projection on the line its horizon
- * read: the wall at a reset or an end horizon, the pool's ceiling at the five-hour bound. A 5-hour window under the
- * hold yields to the next window in the order.
+ * The instant a window the story projects over its line outside a round's dwell first read over the pool's ceiling,
+ * by account and window: secondary's week, which the story's reading dates.
  */
-function triggerOf(source: RecordCandidate, windows: string[], at: number, pool: PoolSeed): { excess: number; slowed?: true; window: string } | null {
+const OVER_CEILING_SINCE: Readonly<Record<string, Readonly<Record<string, number>>>> = { secondary: { seven_day: SECONDARY_WEEK_OVER_AT } };
+
+/**
+ * The wait of a window over its line that fired no round, as the router's `trigger_of` reads it: a quarter of the
+ * time from its first reading over the ceiling to its wall instant, at most twice the pool's burn average, and the cap
+ * alone where its burn reads nothing. A window the story dates no first reading for, or one past its wait, would fire a
+ * round the story does not write, so the build fails on it.
+ */
+function waitOf(source: RecordCandidate, window: string, reading: Pick<RecordCandidate['windows'][string], 'utilization'>, at: number, pool: PoolSeed): { overSince: number; waitMs: number; window: string } {
+  const overSince = lookup(OVER_CEILING_SINCE[source.accountId] ?? {}, window);
+  if (overSince === undefined) throw new Error(`the story dates no reading over the ceiling for ${source.accountId}'s ${window} window, over its line at ${iso(at)}`);
+  const cap = 2 * pool.burnAverageSeconds * 1_000;
+  const burn = source.burn[window] ?? 0;
+  const waitMs = burn > 0 ? Math.min(Math.floor((wallOf(reading, burn, at) - overSince) / 4), cap) : cap;
+  if (at - overSince >= waitMs) throw new Error(`${source.accountId}'s ${window} window is past its wait at ${iso(at)} with no round the story writes`);
+  return { overSince, waitMs, window };
+}
+
+/**
+ * The window a round on `source` fires on where `fires` holds, and the excess per hour that lands its projection on the
+ * line its horizon read: the wall at a reset or an end horizon, the pool's ceiling at the five-hour bound. Where it does
+ * not hold, each window over its line is inside its wait and yields to the next. A 5-hour window under the hold yields
+ * to the next window in the order.
+ */
+function triggerOf(source: RecordCandidate, windows: string[], at: number, pool: PoolSeed, fires: boolean): { fired: { excess: number; slowed?: true; window: string } | null; waits: ReturnType<typeof waitOf>[] } {
   const held = fiveHourHeld(source, pool, at) !== null;
+  const waits: ReturnType<typeof waitOf>[] = [];
   for (const w of windows) {
     const x = source.windows[w];
     if (x?.projection === null || x?.projection === undefined || x.horizon === null || (w === 'five_hour' && held)) continue;
     const line = lineOf(source, w, pool, at);
     if (x.projection <= line) continue;
+    if (!fires) {
+      waits.push(waitOf(source, w, x, at, pool));
+      continue;
+    }
     const hours = Math.max((Date.parse(x.horizon) - at) / HOUR, 1 / 60);
-    return { excess: round5((x.projection - line) / hours), window: w };
+    return { fired: { excess: round5((x.projection - line) / hours), window: w }, waits };
   }
-  return null;
+  return { fired: null, waits };
 }
 
 /** The skip words of a pin that leaves the round before the walk. */
@@ -1183,18 +1243,30 @@ function markOf(accountId: string, at: number): { at: number; on: string; window
 }
 
 /**
- * The turn each of the story's classifier calls judges, by its agent and model, the account that turn's stream ended
- * on, and where the router sent the call. The two `client` calls of the laptop session judge their own subagents' tool
- * calls on primary and follow them there. The story holds no turn of either subagent, so their model is Haiku 4.5, the
- * one the session's other subagent runs. The `client_off` call judges main's turn that ended on secondary at 14:01:47,
- * whose pin stood there until 14:05:12, and secondary read its 5-hour window spent at 14:02:11, so the call follows
- * neither and the strategy places it.
+ * The turn each of the story's classifier calls judges, the session's turn under the call's key whose stream ended
+ * last before it, and where the router sent the call. The two `client` calls of the laptop session judge their own
+ * subagents' turns on primary and follow them there. The `client_off` call judges main's turn that ended on secondary
+ * at 14:01:47, whose pin stood there until 14:05:12, and secondary read its 5-hour window spent at 14:02:11, so the call
+ * follows neither and the strategy places it.
  */
-const JUDGED_TURNS: Record<string, { account: string; agent: string; direction: 'pin_account' | 'strategy' | 'turn_account'; model: string }> = {
-  'req_4d9a1e6b-c20': { account: 'primary', agent: 'a5e1', direction: 'turn_account', model: HAIKU },
-  'req_63a8d2f5-b17': { account: 'primary', agent: 'd8f3', direction: 'turn_account', model: HAIKU },
-  'req_7c2e9f41-d03': { account: 'secondary', agent: 'main', direction: 'strategy', model: 'claude-sonnet-4-5' },
+const JUDGED_TURNS: Record<string, { direction: 'pin_account' | 'strategy' | 'turn_account'; turn: string }> = {
+  'req_4d9a1e6b-c20': { direction: 'turn_account', turn: JUDGED_TURN_IDS[0] },
+  'req_63a8d2f5-b17': { direction: 'turn_account', turn: JUDGED_TURN_IDS[1] },
+  'req_7c2e9f41-d03': { direction: 'strategy', turn: 'req_c90d3f61-a28' },
 };
+
+/** Whether the decision is a classifier call the router directs to its judged turn's account or that turn's pin's. */
+const directedOf = (spec: Spec): boolean => spec.pin === 'classifier' && JUDGED_TURNS[spec.request.id].direction !== 'strategy';
+
+/** A classifier call's judged agent, model and account, read off its judged turn's row, the account the one its
+ *  stream ended on. */
+function judgedTurnOf(callId: string): { account: string; agent: string; direction: (typeof JUDGED_TURNS)[string]['direction']; model: string } {
+  const { direction, turn } = JUDGED_TURNS[callId];
+  const r = requestById.get(turn);
+  const ended = r?.attempts[r.attempts.length - 1];
+  if (!r || !ended || r.agentId === null) throw new Error(`the classifier call ${callId} judges a turn the story lacks: ${turn}`);
+  return { account: ended.accountId, agent: r.agentId, direction, model: r.canonicalModel };
+}
 
 /**
  * The pin step: the pin the request found, or the reason it read none. A live pin is the one the routing state holds
@@ -1205,7 +1277,7 @@ function pinStepOf(spec: Spec, pool: PoolSeed, pinKey: string): { pin: RecordPin
   const r = spec.request;
   const held = pins.get(pinKey);
   if (spec.pin === 'classifier') {
-    const turn = JUDGED_TURNS[r.id];
+    const turn = judgedTurnOf(r.id);
     const facts = [fact('reason', 'classifier', 'text'), fact('judged_agent', turn.agent, 'text'), fact('judged_model', turn.model, 'text'), fact('judged', turn.account, 'text', turn.account), fact('direction', turn.direction, 'text')];
     return { pin: null, pinReason: 'classifier', steps: [step('pin', 'none', facts)] };
   }
@@ -1299,6 +1371,13 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
     const set = candidates.filter((c) => (movedAmong ? movedAmong.includes(c.accountId) : c.obstacle === null));
     const partitions = narrowed(set, pool, r, movedAmong !== undefined, spec.failover !== undefined);
     steps.push(step('partitions', partitions.left.length > 0 ? 'match' : 'none', partitions.facts));
+    // A classifier call that follows its judged turn goes ahead of the rungs and the strategy, so every station names
+    // the call as its reason and the pick ranks nobody.
+    if (directedOf(spec)) {
+      for (const name of ['rung:content', 'rung:with_main', 'rung:static']) steps.push(step(name, 'none', [fact('reason', 'classifier')]));
+      steps.push(step('pick', 'chosen', [fact('account_id', spec.accountId, null, spec.accountId), fact('reason', 'classifier')]));
+      return { pick, steps, tierSize };
+    }
     const rung = spec.rung ?? null;
     const subagent = r.agentId !== 'main';
     const rungs: [string, Placement['rung']][] = [['rung:content', 'content'], ['rung:with_main', 'with_main'], ['rung:static', 'static']];
@@ -1351,11 +1430,12 @@ function placingWalkOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed
  * The pin a dispatched decision writes back: every renewal, keeping its epoch and its stamp, and a placement or a move
  * with a fresh epoch. A token count creates and moves none, so the session keeps the one it had.
  */
-function pinWriteOf(spec: Spec, pinning: boolean, pin: RecordPin | null, pinKey: string, stamps: { hashes: boolean; refresh: boolean }): RecordOutcome['pinWritten'] {
+function pinWriteOf(spec: Spec, pinning: boolean, pinKey: string, stamps: { hashes: boolean; refresh: boolean }): RecordOutcome['pinWritten'] {
   const r = spec.request;
   if (!isDispatched(spec) || !pinning || (r.kind === 'count_tokens' && spec.kind !== 'renewed')) return null;
-  // A live pin its account's state refused leaves by no rule, so the placement writes its row afresh.
-  const action = spec.kind === 'renewed' ? 'renewed' : (pin?.found === 'live' && spec.reasons === undefined) || spec.failover ? 'moved' : 'created';
+  // A rule's move alone writes `moved`: a failover's landing and a placement the pin's account state forced leave the
+  // pin by no rule, so each writes its row afresh.
+  const action = spec.kind === 'renewed' ? 'renewed' : spec.kind === 'moved' ? 'moved' : 'created';
   const prior = pins.get(pinKey);
   const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
   // The engine stamps the row a shed move or a failover's landing writes with its source, a renewal keeps the row's
@@ -1489,9 +1569,10 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
   const dispatched = isDispatched(spec);
   const attempt = dispatchedAttempt(spec);
   const answered = attempt?.upstreamStatus === 200 && spec.attempt === r.attempts.length;
-  const tier = dispatched && !spec.rung && spec.kind !== 'renewed' ? (chosen?.tier ?? null) : null;
+  // A placement the judged turn directed ranked no tier, as a rung's names none.
+  const tier = dispatched && !spec.rung && spec.kind !== 'renewed' && !directedOf(spec) ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
-  const pinWritten = pinWriteOf(spec, pinning, pin, pinKey, stamps);
+  const pinWritten = pinWriteOf(spec, pinning, pinKey, stamps);
   const usage = r.usage;
   const promised = spec.rung && spec.rung.rung !== 'with_main' ? spec.rung.prefixTokens : null;
   const hasUsage = answered && bodyTokensOf(r) > 0;
@@ -1611,7 +1692,8 @@ function pinEventsOf(spec: Spec, pinning: boolean): RecordOutcome['pinEvents'] {
   const attempt = r.attempts[spec.attempt - 1];
   const moved = attempt && migrationAt(r, attempt);
   if (moved && pinning && (spec.kind === 'placed' || spec.kind === 'moved')) return [{ kind: 'pin_migrated', reason: String(moved.detail?.reason ?? '') }];
-  const expired = spec.seq === 1 ? events.find((e) => e.kind === 'pin_expired') : undefined;
+  // A release the selection made lands at its instant. One the request's end wrote, a 400's, follows the decision.
+  const expired = spec.seq === 1 ? events.find((e) => e.kind === 'pin_expired' && Date.parse(e.at) === spec.at) : undefined;
   const reasons = releasedReasons(expired);
   const created = pinning && r.kind === 'inference' && spec.kind === 'placed' && spec.pin === 'none';
   return [...(expired ? [{ kind: 'pin_expired', reason: reasons[0] ?? null }] : []), ...(created ? [{ kind: 'pin_created', reason: null }] : [])];
@@ -1676,6 +1758,8 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
         const place = reason === 'slow_down' || reason === 'reset' || reason === 'rewrite' ? reason : spec.heldBefore.cohort ? 'cohort' : 'strategy_pick';
         return { by: by('hold', place), fact: [summaryFact('held', spec.heldBefore.heldMs, 'ms')] };
       }
+      // A call the judged turn directed names that, since the strategy ranked nobody.
+      if (directedOf(spec)) return { by: by('strategy', pool.strategy, record.outcome.tier), fact: [summaryFact('pick', 'classifier', 'text')] };
       return { by: record.outcome.rung ? by('rung', record.outcome.rung.rung) : by('strategy', pool.strategy, record.outcome.tier), fact: placementFact() };
     case 'held':
       // A slowed pin's wait names its end and the factor it was sized under: no slot, pick or reset explains it.
@@ -1811,10 +1895,10 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
  * The 11:00 round's four walked pins on secondary in its order: the cold one, then the warm ones by burn over their
  * prompt. Each holds Sonnet 4.5, the one model secondary serves, and burns its share of the 5-hour window per hour,
  * which sum to the account's burn. The first two cover the target under the cap and plan their moves to primary, where
- * they fit, and the walk stops before the current pin. A fifth pin, a subagent's placed on secondary in the minute
- * before the round, reads warm under its fresh five-minute cache and holds no prompt size and no burn while its first
- * request runs, so the walk leaves it out before the order. The round is an earlier build's record, which priced Sonnet
- * 4.5 through its fallback weight, so its burns and marks stand as it stored them.
+ * they fit, and the walk stops before the current pin. A fifth pin, the subagent `f2c8`'s, which its first turn placed
+ * on secondary at 10:59:40, reads warm under its fresh five-minute cache and holds no prompt size and no burn while
+ * that turn runs through the round, so the walk leaves it out before the order. The round is an earlier build's
+ * record, which priced Sonnet 4.5 through its fallback weight, so its burns and marks stand as it stored them.
  */
 const ROUND_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.0034, cold: true, keyId: 'desktop', lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('0d588de5'), skip: null },
@@ -1832,15 +1916,16 @@ const parkedOpus = SESSIONS.find((x) => x.sessionId === SESSION_IDS[3] && x.keyI
 
 /**
  * The afternoon round's pins on primary, cold first. The cold pin holds Sonnet 4.5, which has no weight of its own, so
- * the round prices no burn for it and skips it as unpriced rather than shed a session on a guess. No sibling has
- * runway for the other walked pin, the current one, since nightly projects past the ceiling, secondary is spent and
- * cooling, and the Overflow workspace needs funding. Two pins leave the round before the order: the parked Opus pin
+ * the round prices no burn for it and skips it as unpriced rather than shed a session on a guess. The current pin burns
+ * the climb primary's heads draw on its 5-hour window, 0.62 in the 2 h 46 min since the window opened at 11:44, which is
+ * primary's own 5-hour burn. No sibling has runway for it, since nightly projects past the ceiling, secondary is spent
+ * and cooling, and the Overflow workspace is paused. Two pins leave the round before the order: the parked Opus pin
  * rides the fast lane, so it holds no share of a plan window, and the pin of the session the mod released whole after
  * its one turn at 14:03 belongs to an agent that ended.
  */
 const NO_RUNWAY_PINS: RoundPin[] = [
   { agentId: 'main', burn: null, cold: true, keyId: 'desktop', lastInputTokens: 43_000, marked: false, model: 'claude-sonnet-4-5', note: null, sessionId: sessionId('bcc805b6'), skip: 'unpriced' },
-  { agentId: 'main', burn: 0.033, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
+  { agentId: 'main', burn: 0.224, cold: false, keyId: 'desktop', lastInputTokens: 52_300, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: sessionId('d7167642'), skip: 'no_runway' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: parkedOpus?.lastInputTokens ?? 0, marked: false, model: parkedOpus?.model ?? 'claude-opus-5', note: null, sessionId: SESSION_IDS[3], skip: 'fast_lane' },
   { agentId: 'main', burn: null, cold: false, keyId: 'desktop', lastInputTokens: 18_100, marked: false, model: 'claude-sonnet-5', note: null, sessionId: RELEASED_SESSION_ID, skip: 'ended' },
 ];
@@ -1851,7 +1936,8 @@ const NO_RUNWAY_PINS: RoundPin[] = [
  * target is more than any one pin's burn, so no pin covers it at the cold pin, whose burn is under a tenth of the
  * target, and that pin stays warm as a sliver. The order marks the first warm pin, and the rest is less than each pin
  * left, so the pick marks the covering pin whose move costs least, the cost the pin's own Pro share of its rewrite and
- * the same on every destination, and the walk ends there.
+ * the same on every destination, and the walk ends there. The current pin reads the prompt its turn of 14:03:36 stored,
+ * since the slowed request's own answer lands after the round.
  */
 const STRETCH_PINS: RoundPin[] = [
   { agentId: '3c9a', burn: 0.002, cold: true, keyId: 'notebook', lastInputTokens: 26_000, marked: false, model: HAIKU, note: null, sessionId: OPENING_SESSION_IDS[1], skip: 'sliver' },
@@ -1859,7 +1945,7 @@ const STRETCH_PINS: RoundPin[] = [
   { agentId: 'main', burn: 0.027, cold: false, keyId: 'notebook', lastInputTokens: 40_000, marked: true, model: 'claude-sonnet-5-5', note: 'cheapest', sessionId: MARKED_SESSION_IDS[0], skip: null },
   { agentId: '7b2e', burn: 0.026, cold: false, keyId: 'notebook', lastInputTokens: 61_000, marked: false, model: HAIKU, note: null, sessionId: SLOWED_SESSION_ID, skip: null },
   { agentId: 'main', burn: 0.0206, cold: false, keyId: 'notebook', lastInputTokens: 52_000, marked: false, model: 'claude-sonnet-5-5', note: null, sessionId: OPENING_SESSION_IDS[1], skip: null },
-  { agentId: 'main', burn: 0.025, cold: false, keyId: 'notebook', lastInputTokens: 72_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
+  { agentId: 'main', burn: 0.025, cold: false, keyId: 'notebook', lastInputTokens: 69_000, marked: false, model: 'claude-sonnet-5-5', note: 'current', sessionId: SLOWED_SESSION_ID, skip: null },
 ];
 
 /** The 7-day Fable window's burn on nightly at the round, all the Fable session's, since no other pin draws it. */
@@ -2104,10 +2190,9 @@ function storySpecs(): Spec[] {
     at('req_2c7d9f15-b63', 1, 1, t(13, 45), 'placed', 'primary', { burns: { secondary: { five_hour: 0.032, seven_day: 0.004 } } }),
     // A fresh placement that books its rewrite on primary until the answer's usage replaces it.
     at('req_7a3f0c26-d81', 1, 1, t(13, 41, 15), 'placed', 'primary'),
-    // Primary projects past the wall at its 5-hour reset, so this renewal runs a round, which finds no sibling with
-    // runway. Its 5-hour burn of 0.19 an hour is written for this round's record alone, so the projection reads over
-    // the wall as the round's rule asks. No request of the story accounts for it.
-    at('req_6e1f3b98-a24', 1, 1, t(14, 12, 30), 'renewed', 'primary', { burns: { primary: { ...ACCOUNT_BURNS.get('primary'), five_hour: 0.19 } }, pin: live('continues_pin', 46_000), round: roundOfPins(NO_RUNWAY_PINS) }),
+    // Primary's sessions burn its 5-hour window at 0.224 an hour from its reading of 0.55, so it projects past the wall
+    // at the 16:44 reset and this renewal runs a round, which finds no sibling with runway.
+    at('req_6e1f3b98-a24', 1, 1, t(14, 12, 30), 'renewed', 'primary', { pin: live('continues_pin', 46_000), round: roundOfPins(NO_RUNWAY_PINS) }),
     // A session placed on secondary before its spent edge. Its next turn finds the spent rule's one destination full,
     // so it renews on secondary, whose 429 on the spent 5-hour window fails it over to primary once a slot frees.
     at('req_d2a8f6c1-d50', 1, 1, t(14, 1, 45), 'placed', 'secondary'),
@@ -2216,6 +2301,18 @@ function buildDecisions() {
       const dispatched = summaries.filter((s) => s.requestId === id && s.attempt === i + 1 && s.kind !== 'held').pop();
       const record = dispatched && decisions.get(`${id}/${dispatched.seq}`);
       if (dispatched && record) a.selection = traceOf(record, dispatched, record.outcome.cohortHold);
+    }
+  }
+  // A written row's attempt names every member its selection passed over, out under its obstacle or passed over by the
+  // pick, as the record that dispatched the attempt holds them.
+  for (const id of UNSEEDED_IDS) {
+    const r = requestById.get(id);
+    if (!r) continue;
+    for (const [i, a] of r.attempts.entries()) {
+      const dispatched = summaries.filter((s) => s.requestId === id && s.attempt === i + 1 && s.kind !== 'held').pop();
+      const record = dispatched && decisions.get(`${id}/${dispatched.seq}`);
+      const trace = dispatched && record && a.selection ? traceOf(record, dispatched, a.selection.cohortHold) : null;
+      if (trace && a.selection) a.selection = { ...a.selection, skipped: trace.skipped };
     }
   }
   const pins = story.flatMap((s) => (s.inFlight ? [{ attempt: s.attempt, inFlight: s.inFlight, requestId: s.request.id, seq: s.seq }] : []));
@@ -2367,7 +2464,7 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
     planned.set(chosen.base.accountId, chosen.base);
     // A pin with no prompt size reported yet is unsized, so its rewrite reads nothing, and the Pro-week figure is null
     // on a model without a weight of its own. The engine names the window the pick compared on beside a figure alone.
-    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(p.lastInputTokens, p.model);
+    const figure = p.lastInputTokens === 0 ? null : earlier ? (rewrite[rewriteWindowOf(p.model)] ?? null) : proWeekRewriteOf(p.lastInputTokens, p.model, CLIENTS[p.keyId] ?? null);
     return { planned: chosen.base.accountId, rewrite: figure, runway: chosen.fit.runwayMs, window: figure === null ? null : rewriteWindowOf(p.model) };
   };
   return {
@@ -2900,6 +2997,8 @@ function buildEvents(): RoutingEvent[] {
       detail: { diff: { enabled: { from: false, to: annex.routingEnabled }, label: { from: 'annex', to: annex.label }, secret_replaced: true }, kind: 'account_updated', target: 'annex' },
       kind: 'registry_changed',
     },
+    // The operator's pause of the Overflow workspace after its lapse, which the store records as the switch's pair alone.
+    { accountId: null, actor: 'admin', at: iso(OVERFLOW_PAUSED_AT), detail: { diff: { enabled: { from: true, to: false } }, kind: 'account_updated', target: 'overflow' }, kind: 'registry_changed' },
     // The ci key's revocation, after the last request it reached selection with.
     { accountId: null, actor: 'admin', at: iso(KEY_REVOKED_AT), detail: { diff: {}, kind: 'key_revoked', target: 'ci' }, kind: 'registry_changed' },
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },

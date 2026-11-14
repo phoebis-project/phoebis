@@ -30,6 +30,8 @@ export const clock = (h: number, m: number, s = 0): number => NOW - ((14 - h) * 
 export const NIGHTLY_CAP_RAISED = clock(11, 30, 12);
 /** When the Overflow workspace's credit balance ran out, so it needs funding from then on. */
 export const OVERFLOW_LAPSED_AT = clock(11, 30, 12);
+/** When the operator paused the Overflow workspace's routing, before its funding retry fell due five minutes on. */
+export const OVERFLOW_PAUSED_AT = clock(11, 33);
 /** When research's spend crossed its day's budget. */
 export const RESEARCH_BUDGET_AT = clock(12, 41, 7);
 

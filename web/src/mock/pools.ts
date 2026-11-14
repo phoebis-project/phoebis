@@ -426,8 +426,11 @@ export const KEYS: KeyRow[] = [
     name: 'laptop',
     prefix: 'phoebis-c41d7b09',
     poolId: 'all',
+    // The models its rows run, its lane's and its classifier calls' among them, ahead of the closing deny.
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
+      { not: false, pattern: 'claude-sonnet-5-5' },
+      { not: false, pattern: 'claude-sonnet-5' },
       { not: false, pattern: 'claude-sonnet-4-5' },
       { not: true, pattern: '*' },
     ],

@@ -136,9 +136,9 @@ const SEEDS = [
     status: 'cooldown',
     routingEnabled: true,
     // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
-    // Its sessions burn the 5-hour window fast enough to read 19% left at the reset, so the 81% it projects to use
-    // passes the all pool's ceiling.
-    windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE, 40_000, 0.085), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE, 40_000, 0.006), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
+    // Its sessions burn the 5-hour window at the climb its heads read, 0.62 in the 2 h 46 min since the window opened,
+    // so it projects past its wall at the reset.
+    windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE, 40_000, 0.224), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE, 40_000, 0.006), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
     fastLane: fastLane(1, 0.64, 12 * MINUTE),
@@ -304,7 +304,9 @@ const SEEDS = [
     label: 'Overflow workspace',
     email: null,
     status: 'funding_required',
-    routingEnabled: true,
+    // The operator paused its routing at `OVERFLOW_PAUSED_AT`, inside the five minutes before its funding retry fell
+    // due, so the router admits no retry to it. Its funding flag outranks the pause in its status.
+    routingEnabled: false,
     windows: [],
     fableWindow: null,
     extraUsage: null,

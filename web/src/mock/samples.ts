@@ -1,4 +1,6 @@
 import { decodeAccount, decodeAccountRollups, decodeAnalyticsGroup, decodeAttention, decodeDashboard, decodeKeepaliveOverview, decodeKey, decodePairingSession, decodePool, decodeQuotaHistory, decodeRecipe, decodeRequest, decodeRequestEvent, decodeSession, decodeSettings, decodeSnapshot } from '@/api/decode';
+import type { SubscriptionCosts } from '@/api/types';
+import { withRegime } from '@/lib/costs';
 import { FIXTURES } from './generated/fixtures';
 
 /** The fixture's body, or the named member of it, as the decoder takes it. */
@@ -23,3 +25,16 @@ export const SESSION_SAMPLE = decodeSession(first('sessions', 'sessions'));
 export const SETTINGS_SAMPLE = decodeSettings(body('settings'));
 /** The subscription cost model the harness captured, the shipped one, which every mock share is priced through. */
 export const TABLES = SETTINGS_SAMPLE.subscriptionCosts;
+
+/** The label prefix the ledger strips to read a client's entrypoint, as `entrypoint_of_client` does. */
+const ENTRYPOINT_PREFIX = 'claude-code/';
+
+/** The tables a request prices under: the regime whose client list names the label over the base, as the router
+ *  prices it, and the base for a label no regime names. A regime lists entrypoint tokens such as `cli` while a row's
+ *  label reads `claude-code/cli`, so the helper takes the token off the label and names the regime whose
+ *  `entrypoints` hold it. */
+export const tablesFor = (client: string | null): SubscriptionCosts => {
+  const token = client?.startsWith(ENTRYPOINT_PREFIX) ? client.slice(ENTRYPOINT_PREFIX.length) : null;
+  const regime = token === null ? undefined : Object.keys(TABLES.regimes).find((name) => TABLES.regimes[name].entrypoints.includes(token));
+  return withRegime(TABLES, regime ?? null);
+};
