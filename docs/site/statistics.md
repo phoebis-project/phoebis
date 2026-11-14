@@ -735,7 +735,7 @@ ledger's hourly rollups, holds again at the first read.
 | `meter_drift` | warning | the OAuth account | the newest reconciled window of each kind that ended in the last eight days with a rise of at least 5% reads a ratio inside 0.8 to 1.25 or a priced share under 5%, or no such window remains |
 | `wall_reached` | warning | the account | no window of the account read spent in the last 24 hours |
 | `destination_spent` | warning | the destination account | no move onto the account was followed by a spent window within an hour in the last 24 hours, or a `window_cleared` on the same window followed each such spent window |
-| `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours |
+| `shed_no_runway` | warning | the pool | no round of the pool marked nothing for want of a destination in the last 24 hours, or an event on its account that refunds its window followed each such round |
 | `slowed_long` | warning | the account | the slow-down's held time of the last 24 hours comes to at most twice the pool's `slow_down_stretch_seconds`, at least an hour |
 | `keepalive_cap` | warning | the crossed cap | the count falls under 90 percent of its max |
 | `expired_between_turns` | warning | the keepalive engine | no expiry between turns on a warming pool under a key with the `keepalive` permission stands in the last 24 hours |
@@ -894,10 +894,12 @@ the setting `window_ceiling`. The item opens the routing log on the account's mo
 condition began.
 
 **`shed_no_runway`** holds while a shedding round of the pool marked nothing for want of a destination with runway (the
-outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. It is folded as
-`wall_reached` is. The subject is the pool, and the item dates from the oldest such round. The detail counts the rounds
-and names the accounts they ran on and the setting `window_ceiling` with the pool's value. The item opens the routing
-log on the pool's shedding rounds since the condition began.
+outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. A round stops
+counting once an event on its account that refunds its window follows it: a `window_reset`, `window_cleared` or
+`window_dropped` event on that window, or a `limit_reset_claimed` event whose `cleared` list names it. It is folded as
+`wall_reached` is. The subject is the pool, and the item dates from the oldest round that still counts. The detail
+counts those rounds and names the accounts they ran on and the setting `window_ceiling` with the pool's value. The item
+opens the routing log on the pool's shedding rounds since the condition began.
 
 **`slowed_long`** holds while the time the slow-down held the account's requests over the last 24 hours passes twice the
 pool's `slow_down_stretch_seconds`, at least an hour (five hours at the default of 9000, the hour on a pool set to move

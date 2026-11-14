@@ -1057,6 +1057,123 @@ fn the_three_routing_conditions_fold_from_the_days_events_and_clear_when_the_day
 }
 
 #[test]
+fn a_no_runway_round_stops_counting_once_a_later_event_on_its_account_refunds_its_window() {
+    use phoebis_oauth::{Claim, ClaimOutcome, ClaimReply};
+    const HOUR: i64 = 3_600_000;
+    let t = 1_000 * HOUR;
+    let round = |at: i64, account: &str| EventRecord {
+        at,
+        kind: "shedding_round".into(),
+        account_id: Some(account.into()),
+        pool_id: Some("p".into()),
+        detail: Some(
+            serde_json::json!({
+                "window": "seven_day",
+                "outcome": "nothing_to_mark",
+                "reason": "no_runway",
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    };
+    let reset =
+        |account: &str, window: &str, at: i64| window_reset(account, window, 0.9, at, "sample");
+    // A use whose request got no head, so no answer names a cleared window.
+    let failed_claim = |account: &str, at: i64| {
+        let claim = Claim {
+            at,
+            label: "Launch reset".into(),
+            outcome: ClaimOutcome::Unsettled,
+            reply: ClaimReply::Failed("connection reset".into()),
+            request_id: "claim-1".into(),
+        };
+        let phoebis_ledger::Record::Event(row) =
+            phoebis_ledger::limit_reset_claimed(account, 1, "admin", "rg-1", &claim)
+        else {
+            panic!("an event record")
+        };
+        row
+    };
+    let kept =
+        |since: i64, rounds: u64, accounts: serde_json::Value| vec![(since, rounds, accounts)];
+    let table = [
+        (
+            "a reset of the round's window after it",
+            vec![round(t, "a"), reset("a", "seven_day", t + HOUR)],
+            vec![],
+        ),
+        (
+            "the same reset before the round",
+            vec![reset("a", "seven_day", t - HOUR), round(t, "a")],
+            kept(t, 1, serde_json::json!(["a"])),
+        ),
+        (
+            "a reset of the account's 5-hour window after the round",
+            vec![round(t, "a"), reset("a", "five_hour", t + HOUR)],
+            kept(t, 1, serde_json::json!(["a"])),
+        ),
+        (
+            "a reset on the account of the older of two accounts' rounds",
+            vec![
+                round(t, "a"),
+                round(t + HOUR, "b"),
+                reset("a", "seven_day", t + 2 * HOUR),
+            ],
+            kept(t + HOUR, 1, serde_json::json!(["b"])),
+        ),
+        (
+            "a failed use of a limit reset, its cleared list empty",
+            vec![round(t, "a"), failed_claim("a", t + HOUR)],
+            kept(t, 1, serde_json::json!(["a"])),
+        ),
+        (
+            "a used limit reset whose cleared list names the round's window",
+            vec![round(t, "a"), used_claim("a", &["seven_day"], t + HOUR)],
+            vec![],
+        ),
+        (
+            "a drop of the round's window after it",
+            vec![
+                round(t, "a"),
+                window_dropped("a", "seven_day", 0.95, 0.04, t + DAY, t + HOUR),
+            ],
+            vec![],
+        ),
+    ];
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    let folded = |events: &[EventRecord]| {
+        let db = LedgerDb::open_in_memory().unwrap();
+        for event in events {
+            db.insert_event(event).unwrap();
+        }
+        db.write(|c| {
+            let tx = c.transaction()?;
+            phoebis_ledger::fold_routing_conditions(&tx, &tables, t + 3 * HOUR)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        db.read_blocking(phoebis_ledger::routing_conditions)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.kind.as_str() == "shed_no_runway")
+            .map(|r| (r.since, r.count, r.detail["accounts"].clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        table
+            .iter()
+            .map(|(input, events, _)| (*input, folded(events)))
+            .collect::<Vec<_>>(),
+        table
+            .iter()
+            .map(|(input, _, expected)| (*input, expected.clone()))
+            .collect::<Vec<_>>(),
+        "a round counts until a later refund of its window on its account"
+    );
+}
+
+#[test]
 fn a_window_cleared_after_a_spent_window_ends_its_reach_so_the_move_before_it_holds_no_spent_destination(
 ) {
     const MINUTE: i64 = 60_000;

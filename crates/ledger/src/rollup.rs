@@ -21,8 +21,9 @@ use crate::price::{is_free_classifier, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::{
     hour_ceil, in_list, key_clause, pattern_any, pool_term, ProbeView, COOLDOWN_CLEARED,
-    COOLDOWN_SET, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED, SHEDDING_ROUND,
-    SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_SPENT,
+    COOLDOWN_SET, LIMIT_RESET_CLAIMED, OVERAGE_ENDED, PIN_CREATED, PIN_MIGRATED, ROUTER_STARTED,
+    SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WINDOW_CLEARED, WINDOW_DROPPED,
+    WINDOW_RESET, WINDOW_SPENT,
 };
 use crate::reconcile::{newest_rows, ReconciliationRow};
 use crate::record::{AttemptRecord, EventRecord, KeepaliveDelta, RequestRecord};
@@ -1475,7 +1476,9 @@ struct Held {
 }
 
 /// The five routing conditions, written whole into `routing_conditions`. Four read the trailing 24 hours of events:
-/// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway,
+/// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway, each until a
+/// later event on its account refunds its window: a `window_reset`, `window_cleared` or `window_dropped` naming that
+/// window, or a `limit_reset_claimed` whose `cleared` lists it,
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
 /// with no `window_cleared` on that account and window after it,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per
@@ -1509,7 +1512,7 @@ pub fn fold_routing_conditions(
     let events: Vec<Row> = tx
         .prepare(
             "SELECT at, kind, account_id, pool_id, detail FROM events \
-             WHERE kind IN (?3, ?4, ?5, ?6, ?7, ?8, ?9) AND at >= ?1 AND at <= ?2 \
+             WHERE kind IN (?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) AND at >= ?1 AND at <= ?2 \
              ORDER BY at, rowid",
         )?
         .query_map(
@@ -1522,7 +1525,10 @@ pub fn fold_routing_conditions(
                 WINDOW_CLEARED,
                 ROUTER_STARTED,
                 SLOW_DOWN_ENDED,
-                SLOW_DOWN_STARTED
+                SLOW_DOWN_STARTED,
+                LIMIT_RESET_CLAIMED,
+                WINDOW_DROPPED,
+                WINDOW_RESET
             ],
             |r| {
                 Ok(Row {
@@ -1538,13 +1544,51 @@ pub fn fold_routing_conditions(
     let mut held: BTreeMap<(RoutingKind, &'static str, String), Held> = BTreeMap::new();
     let setting = |names: &[&str]| serde_json::json!(names);
 
+    // A round stops counting once a later event on its account refunds its window. Later is the events' order, as
+    // for a spent window's clear below. Window names compare as stored, since the round, these events and a claim's
+    // list all name the Fable week `seven_day_fable`.
+    let refunds: Vec<(usize, &Row)> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| {
+            matches!(
+                e.kind.as_str(),
+                LIMIT_RESET_CLAIMED | WINDOW_CLEARED | WINDOW_DROPPED | WINDOW_RESET
+            )
+        })
+        .collect();
+    let refunded_after = |index: usize, account: &str, window: &str| {
+        refunds.iter().any(|(position, e)| {
+            *position > index
+                && e.account_id.as_deref() == Some(account)
+                && if e.kind == LIMIT_RESET_CLAIMED {
+                    e.detail["cleared"]
+                        .as_array()
+                        .is_some_and(|cleared| cleared.iter().any(|named| named == window))
+                } else {
+                    e.detail["window"] == window
+                }
+        })
+    };
     let mut rounds: BTreeMap<&str, (i64, u64, BTreeSet<&str>)> = BTreeMap::new();
-    for event in events.iter().filter(|e| e.kind == SHEDDING_ROUND) {
+    for (index, event) in events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.kind == SHEDDING_ROUND)
+    {
         let no_runway =
             event.detail["outcome"] == "nothing_to_mark" && event.detail["reason"] == "no_runway";
         let Some(pool) = event.pool_id.as_deref().filter(|_| no_runway) else {
             continue;
         };
+        if event
+            .account_id
+            .as_deref()
+            .zip(event.detail["window"].as_str())
+            .is_some_and(|(account, window)| refunded_after(index, account, window))
+        {
+            continue;
+        }
         let entry = rounds.entry(pool).or_insert((event.at, 0, BTreeSet::new()));
         entry.1 += 1;
         entry.2.extend(event.account_id.as_deref());
