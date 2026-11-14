@@ -6622,9 +6622,10 @@ fn pace_figures(
 
 /// The share of a member's 7-day room Pace holds back on a `seven_day` request for the member's expected use of the
 /// Fable week until the score's deadline: the pricer's `week_factor` times the smaller of the Fable room and the
-/// stronger of two rates over the score's `hours`, the peak hour of the member's record among the hours that end inside
-/// them and `live`, the pins' demand on the week, each in share of the week per hour. `None` on a request on a model
-/// week, on a member with no Fable reading and where the pricer answers no factor.
+/// stronger of two rates over the score's `hours`, the peak hour of the member's record among the clock hours that
+/// ended within as many hours back as the score looks ahead, the hour still running at its sum so far, and `live`, the
+/// pins' demand on the week, each in share of the week per hour. `None` on a request on a model week, on a member with
+/// no Fable reading and where the pricer answers no factor.
 fn fable_reservation_of(
     state: &RoutingState,
     candidate: &Candidate,

@@ -1133,9 +1133,10 @@ pub(crate) struct PoolMemberView {
     /// The pins under the pool's keys on that member's account, one per agent and model.
     pub active_pins: usize,
     /// The score Pace ranks the member by under this pool's settings, whatever its kind: the spare rate on the 7-day
-    /// window for an OAuth member (the share it can spend an hour until the window resets, less its pins' burn), the
-    /// room its worst live bucket leaves for an api_key member. A member's score reads no model, and the 7-day window
-    /// is the one every model draws. Null while the router does not answer.
+    /// window for an OAuth member (the share it can spend an hour until the window resets, less its pins' burn, where
+    /// for a member that holds a Fable reading the room first loses its Fable reservation and the burn counts its
+    /// non-Fable pins alone), the room its worst live bucket leaves for an api_key member. A member's score reads no
+    /// model, and the 7-day window is the one every model draws. Null while the router does not answer.
     pub pace_score: Option<f64>,
     /// The pins' burn on the member's 7-day window under this pool, in share per hour, null for an api_key member and
     /// a member with no reading of the window.

@@ -1076,6 +1076,46 @@ fn a_member_outside_the_first_tier_carries_no_fable_reservation_and_a_score_that
 }
 
 #[test]
+fn a_member_with_recorded_fable_hours_and_no_fable_reading_takes_no_fable_reservation() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // A tenth of the week read with its reset a day out and no reading of the Fable week, beside a record that holds a
+    // hundredth of it in the hour that just ended. The score is 0.9 over the 24 hours, with nothing held back.
+    let week = UtilizationSample {
+        observed_at: RESERVED_AT,
+        ..Default::default()
+    }
+    .with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: 0.1,
+            reset: Some(RESERVED_AT + 24 * HOUR),
+            observed_at: RESERVED_AT,
+            source: WindowSource::Poll,
+            plan: None,
+            tier: None,
+        },
+    );
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 99, 0.01)],
+        Vec::new(),
+        fable_factor(0.5),
+        vec![("a", week)],
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let pace = candidate(&d.record, "a")
+        .pace
+        .as_ref()
+        .expect("a Pace member's facts");
+    assert_eq!(pace.fable_reservation, None, "{pace:?}");
+    assert!(close(pace.score, 0.9 / 24.0), "{pace:?}");
+}
+
+#[test]
 fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by_its_reset() {
     let mut st = RoutingState::from_load(RoutingLoad::default());
     // `a` would win under all three rules on the shared windows alone: the lowest 5h and the earliest 7d.

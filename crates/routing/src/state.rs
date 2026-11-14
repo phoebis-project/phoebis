@@ -1620,7 +1620,7 @@ struct WeekHours {
 }
 
 /// The clock hour `at` falls in: the instant in milliseconds over `HOUR_MS`, floored.
-pub(crate) fn hour_of(at: i64) -> i64 {
+fn hour_of(at: i64) -> i64 {
     at.div_euclid(HOUR_MS)
 }
 

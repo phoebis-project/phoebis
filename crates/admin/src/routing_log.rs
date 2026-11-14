@@ -395,16 +395,17 @@ pub(crate) struct DecisionRecord {
     /// `reserved` (the live bookings' rewrite the prediction carries)), `allowance_known`, `pace` (`remaining`,
     /// `reset`, `end`, `deadline`, `hours`, `score`, `window` (the window the score read, `seven_day` or the model's
     /// week such as `seven_day_fable`, null for an API key member), `burn` (the burn the score subtracts, share per
-    /// hour), under Pace alone), `budget` (each `period`, `budget_usd`, `spent_usd`, `period_start`,
-    /// `period_end`, `observed_at`), `cooldowns` (each `scope`, `reason`, `window`, `until`, `blocking`),
-    /// `credits` (`enabled`, `disabled_reason`, `utilization`, `observed_at`, `blocked`), `term` (`since`,
-    /// `trial_ends_at`, `canceled`, `ends_at`, `winding_down`, `ended`), `prefix` (per rung the deepest entry the
-    /// walk visited, `content` and `static`, and apart from it the entry the rung accepted, `content_match` and
+    /// hour), `fable_reservation` (the share of the member's 7-day room the score held back for its expected Fable use,
+    /// null where no reservation applies), under Pace alone), `budget` (each `period`, `budget_usd`, `spent_usd`,
+    /// `period_start`, `period_end`, `observed_at`), `cooldowns` (each `scope`, `reason`, `window`, `until`,
+    /// `blocking`), `credits` (`enabled`, `disabled_reason`, `utilization`, `observed_at`, `blocked`), `term` (`since`,
+    /// `trial_ends_at`, `canceled`, `ends_at`, `winding_down`, `ended`), `prefix` (per rung the deepest entry the walk
+    /// visited, `content` and `static`, and apart from it the entry the rung accepted, `content_match` and
     /// `static_match`, each `hash` (64 lowercase hex characters, the boundary as the cache map keys it), `depth`,
-    /// `prefix_tokens`, `written_at`, `ttl_ms`, `live`, `refused_by`, the gate that refused it, and beside the
-    /// four `with_main`), `obstacle` (`name`, `reason` (a cooldown's or a credits refusal's reason, and for
-    /// `budget` the period of the reached budget that ends last, `day` or `month`), `scope` (a cooldown's scope word,
-    /// null elsewhere), `window`, `until`), `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`,
+    /// `prefix_tokens`, `written_at`, `ttl_ms`, `live`, `refused_by`, the gate that refused it, and beside the four
+    /// `with_main`), `obstacle` (`name`, `reason` (a cooldown's or a credits refusal's reason, and for `budget` the
+    /// period of the reached budget that ends last, `day` or `month`), `scope` (a cooldown's scope word, null
+    /// elsewhere), `window`, `until`), `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`,
     /// `source`, `destination`, `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`,
     /// `least_bad` or `rewrite_only`) and `binding` (the request's fit where a move's gate or the `no_fit` partition
     /// read it, the runway null when unbounded), `burn` (the pins' burn by plan window, share per hour), `factor` (the
