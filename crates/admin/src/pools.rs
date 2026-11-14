@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -21,10 +21,10 @@ use utoipa::ToSchema;
 
 use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
-use crate::openapi::{ErrorBody, RegistryUnavailable, StorageFailure};
+use crate::openapi::{query_refusal, ErrorBody, RegistryUnavailable, StorageFailure};
 use crate::routes::{
     double_option, failure, fence_token, parse_object, pool, present, reload_or_no_content,
-    reload_or_refuse, stale_edit, store_failure, CreatedId,
+    reload_or_refuse, stale_edit, store_failure, AdminQuery, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
@@ -1543,8 +1543,6 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
 }
 
 /// `GET /admin/pools/{id}/traffic`'s query.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct TrafficQuery {
@@ -1561,7 +1559,7 @@ pub(crate) struct TrafficQuery {
     params(("id" = String, Path, description = "The pool's id"), TrafficQuery),
     responses(
         (status = 200, description = "The buckets over the range.", body = PoolTraffic),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
@@ -1569,13 +1567,13 @@ pub(crate) struct TrafficQuery {
 pub(crate) async fn traffic(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<TrafficQuery>,
 ) -> Response {
     if let Err(refusal) = pool(&state, &id) {
         return refusal;
     }
     let now = (state.clock)();
-    let (from, to) = match phoebis_ledger::parse_range(q.get("range").map(String::as_str), now) {
+    let (from, to) = match phoebis_ledger::parse_range(q.range.as_deref(), now) {
         Ok(r) => r,
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };

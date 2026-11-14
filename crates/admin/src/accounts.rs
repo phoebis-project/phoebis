@@ -1,11 +1,11 @@
 //! Account registry routes: creation with verification, edits, deletion, the live catalog, and the two
 //! operator actions that clear a cooldown or a funding hold.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -17,11 +17,13 @@ use phoebis_store::{
 use serde_json::Value;
 use utoipa::ToSchema;
 
-use crate::openapi::{ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure};
+use crate::openapi::{
+    query_refusal, ErrorBody, RegistryUnavailable, RouterUnavailable, StorageFailure,
+};
 use crate::routes::{
     account, account_json, account_write_failure, double_option, failure, fence_revision,
     parse_object, present, reload_or_no_content, reload_or_refuse, router_unavailable, stale_edit,
-    store_failure, CreatedId,
+    store_failure, AdminQuery, CreatedId,
 };
 use crate::AdminState;
 
@@ -414,8 +416,6 @@ pub(crate) async fn remove(
 }
 
 /// `GET /admin/accounts/{id}/catalog`'s query.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct CatalogQuery {
@@ -459,6 +459,7 @@ pub(crate) struct CatalogModel {
     params(("id" = String, Path, description = "The account's id"), CatalogQuery),
     responses(
         (status = 200, description = "The account's model listing.", body = Catalog),
+        (status = 400, description = query_refusal!(), body = ErrorBody, example = json!({"error": "duplicate field `refresh`"})),
         (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
         (status = 500, response = StorageFailure),
     ),
@@ -468,13 +469,13 @@ pub(crate) struct CatalogModel {
 pub(crate) async fn catalog(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<CatalogQuery>,
 ) -> Response {
     let row = match account(&state, &id) {
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    let refresh = q.get("refresh").map(String::as_str) == Some("1");
+    let refresh = q.refresh.as_deref() == Some("1");
     let fetched = if refresh {
         state.catalog.refresh(&row).await
     } else {
@@ -577,8 +578,6 @@ pub(crate) async fn clear_funding(
 }
 
 /// `GET /admin/accounts/{id}/quota`'s query.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct QuotaQuery {
@@ -638,7 +637,7 @@ pub(crate) struct ExtraUsageSample {
     params(("id" = String, Path, description = "The account's id"), QuotaQuery),
     responses(
         (status = 200, description = "The samples over the range.", body = Quota),
-        (status = 400, description = "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`", body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 404, description = "`account not found`", body = ErrorBody, example = json!({"error": "account not found"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
@@ -646,19 +645,17 @@ pub(crate) struct ExtraUsageSample {
 pub(crate) async fn quota(
     State(state): State<Arc<AdminState>>,
     Path(id): Path<String>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<QuotaQuery>,
 ) -> Response {
     if let Err(refusal) = account(&state, &id) {
         return refusal;
     }
     let now = (state.clock)();
-    let (from, to) = match phoebis_ledger::parse_range(
-        Some(q.get("range").map(String::as_str).unwrap_or("7d")),
-        now,
-    ) {
-        Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
-    };
+    let (from, to) =
+        match phoebis_ledger::parse_range(Some(q.range.as_deref().unwrap_or("7d")), now) {
+            Ok(r) => r,
+            Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        };
     let (from_bucket, to_bucket) = (from / 1_000, to / 1_000 + 300);
     let (quota, extra) = match (
         state

@@ -1,10 +1,9 @@
 //! The routing log: the merged page of decisions and events under the view's filters, and one decision's record.
 
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -17,24 +16,17 @@ use serde_json::{json, Map, Value};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, LedgerFailure};
+use crate::openapi::{query_refusal, ErrorBody, LedgerFailure};
 use crate::requests::{list_param, text_param, word_param};
-use crate::routes::failure;
+use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 200;
 
-/// The view's URL keys, alphabetical. A key outside them is refused rather than ignored, so a link built for another
-/// view never reads as a filter that took.
-const KEYS: &[&str] = &[
-    "accounts", "agent_id", "cursor", "dir", "from", "keys", "kinds", "limit", "models", "pools",
-    "request", "session", "to",
-];
-
 /// A value that parses as an integer is Unix milliseconds, else an RFC 3339 instant.
-fn time(q: &HashMap<String, String>, name: &'static str) -> Result<Option<i64>, String> {
-    let Some(raw) = q.get(name) else {
+fn time(raw: Option<&str>, name: &'static str) -> Result<Option<i64>, String> {
+    let Some(raw) = raw else {
         return Ok(None);
     };
     if let Ok(ms) = raw.parse::<i64>() {
@@ -467,9 +459,9 @@ pub(crate) struct DecisionRecord {
 }
 
 /// `GET /admin/routing-log`'s query. Any other key is refused.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
+// Refused rather than ignored, so a link built for another view never reads as a filter that took.
 #[derive(serde::Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct RoutingLogQuery {
     /// A comma list of ids. Matches a decision's source (`from_account_id`) as well as the account it placed on, and
@@ -517,33 +509,28 @@ pub(crate) struct RoutingLogQuery {
     responses(
         (status = 200, description = "The page.", body = RoutingLog),
         (status = 400, description = concat!(
-            "- `unknown filter {name}`, for a query key outside the parameters\n",
+            "- `{name}: {message}`, the parser's message behind the key, for a query key outside the parameters\n",
             "- `unknown kind {name}`\n",
             "- `{name} is not a time`, for `from` or `to`\n",
             "- `limit is 1 to 200`\n",
             "- `dir is desc or asc`\n",
-            "- `cursor is <at>:<rank>:<id>`",
-        ), body = ErrorBody, example = json!({"error": "unknown filter {name}"})),
+            "- `cursor is <at>:<rank>:<id>`\n\n",
+            query_refusal!(),
+        ), body = ErrorBody, example = json!({"error": "limit is 1 to 200"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn list(
     State(state): State<Arc<AdminState>>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<RoutingLogQuery>,
 ) -> Response {
-    if let Some(unknown) = q.keys().filter(|name| !KEYS.contains(&name.as_str())).min() {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            &format!("unknown filter {unknown}"),
-        );
-    }
     let now = (state.clock)();
-    let (from, to) = match (time(&q, "from"), time(&q, "to")) {
+    let (from, to) = match (time(q.from.as_deref(), "from"), time(q.to.as_deref(), "to")) {
         (Ok(from), Ok(to)) => (from.unwrap_or(now - HOUR_MS), to.unwrap_or(now)),
         (Err(error), _) | (_, Err(error)) => return failure(StatusCode::BAD_REQUEST, &error),
     };
     // An emptied list reads as an absent one, every kind, as the emptied fields below read as absent.
-    let kinds = match Some(list_param(&q, "kinds"))
+    let kinds = match Some(list_param(q.kinds.as_deref()))
         .filter(|kinds| !kinds.is_empty())
         .map(|names| LogKinds::parse(&names))
         .transpose()
@@ -553,16 +540,16 @@ pub(crate) async fn list(
             return failure(StatusCode::BAD_REQUEST, &format!("unknown kind {unknown}"))
         }
     };
-    let limit = match q.get("limit").map(|raw| raw.parse::<usize>()) {
+    let limit = match q.limit.map(|n| n as usize) {
         None => DEFAULT_LIMIT,
-        Some(Ok(n)) if (1..=MAX_LIMIT).contains(&n) => n,
+        Some(n) if (1..=MAX_LIMIT).contains(&n) => n,
         Some(_) => return failure(StatusCode::BAD_REQUEST, "limit is 1 to 200"),
     };
-    let dir = match word_param(&q, "dir", Direction::parse, Direction::WORDS) {
+    let dir = match word_param(q.dir.as_deref(), "dir", Direction::parse, Direction::WORDS) {
         Ok(dir) => dir,
         Err(response) => return response,
     };
-    let cursor = match q.get("cursor").map(|raw| RoutingLogCursor::parse(raw)) {
+    let cursor = match q.cursor.as_deref().map(RoutingLogCursor::parse) {
         None => None,
         Some(Some(cursor)) => Some(cursor),
         Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <at>:<rank>:<id>"),
@@ -570,13 +557,13 @@ pub(crate) async fn list(
     let filter = RoutingLogFilter {
         from,
         to,
-        request: text_param(&q, "request"),
-        session: text_param(&q, "session"),
-        agent_id: text_param(&q, "agent_id"),
-        keys: list_param(&q, "keys"),
-        pools: list_param(&q, "pools"),
-        accounts: list_param(&q, "accounts"),
-        models: list_param(&q, "models"),
+        request: text_param(q.request.as_deref()),
+        session: text_param(q.session.as_deref()),
+        agent_id: text_param(q.agent_id.as_deref()),
+        keys: list_param(q.keys.as_deref()),
+        pools: list_param(q.pools.as_deref()),
+        accounts: list_param(q.accounts.as_deref()),
+        models: list_param(q.models.as_deref()),
         kinds,
     };
     let page = state

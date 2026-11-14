@@ -55,17 +55,17 @@ Each operation names its request (path segments, query parameters, or body field
             and a backslash quotes either, so a value with no wildcard matches in full), `user_agent_groups` \
             (newline-separated patterns. Under `group_by=user_agent` each names a group, a row falls in the first that \
             matches its agent's token, and the rest group under `other`), `clients` (newline-separated patterns over \
-            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true`/`1`). Both also \
-            take `funding` (`billed` keeps the overage and fast rows, every row an API key account served and every \
-            row a usage-based seat served, `plan` the rows a subscription window paid for and the rows of a request \
-            no account served. Each row files under the funding its serving attempt had when the ledger recorded it, \
-            so deleting an account, or recreating its id as the other kind, moves none of its rows. A probe's cost \
-            files under the funding of the probe's own request, while a recipe's settlement, which carries the \
-            probes' waste, files under the kind and the class its record carries: `billed` for an API key account, \
-            `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps every \
-            row. The two subsets partition the rows). `/accounts`, `/guardrails` and `/rewrites` take `range` alone. \
-            `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, `/refusal_categories`, and \
-            `/unused_allowance`, elsewhere under this tag, take their own request shapes."),
+            the client class, the grammar and bound of `user_agents`), and `include_probes` (`true` or `false`). Both \
+            also take `funding` (`billed` keeps the overage and fast rows, every row an API key account served and \
+            every row a usage-based seat served, `plan` the rows a subscription window paid for and the rows of a \
+            request no account served. Each row files under the funding its serving attempt had when the ledger \
+            recorded it, so deleting an account, or recreating its id as the other kind, moves none of its rows. A \
+            probe's cost files under the funding of the probe's own request, while a recipe's settlement, which \
+            carries the probes' waste, files under the kind and the class its record carries: `billed` for an API key \
+            account, `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps \
+            every row. The two subsets partition the rows). `/accounts`, `/guardrails` and `/rewrites` take `range` \
+            alone. `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, `/refusal_categories`, \
+            and `/unused_allowance`, elsewhere under this tag, take their own request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \
@@ -132,6 +132,17 @@ pub(crate) struct ErrorBody {
     #[schema(example = "no admin session")]
     pub error: String,
 }
+
+/// The line each operation that reads a query names under its `400`: the query extractor's refusals, answered before
+/// the handler reads a value.
+// A macro, since a `400`'s description joins it through `concat!`, which takes literals and no `const`.
+macro_rules! query_refusal {
+    () => {
+        "A value its parameter's type does not read answers `{name}: {message}`, the parser's message behind the \
+         parameter's name, and a parameter sent twice answers the parser's message, which names it."
+    };
+}
+pub(crate) use query_refusal;
 
 /// `500 storage failure`: the store failed the read or the write, or a create lost the race for its id.
 // Declared for the document alone, since the handler builds the answer by hand.

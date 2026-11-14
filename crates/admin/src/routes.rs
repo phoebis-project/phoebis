@@ -6,11 +6,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::{MatchedPath, Path, Request, State};
+use axum::extract::{FromRequestParts, MatchedPath, Path, Query, Request, State};
 use axum::http::header::{
     AUTHORIZATION, CONTENT_LENGTH, COOKIE, HOST, ORIGIN, SET_COOKIE, TRANSFER_ENCODING,
     X_CONTENT_TYPE_OPTIONS,
 };
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, map_response, Next};
 use axum::response::{IntoResponse, Response};
@@ -36,6 +37,7 @@ use phoebis_store::{
     PoolRow, Settled, StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use utoipa::{Modify, OpenApi, ToSchema};
@@ -3723,6 +3725,31 @@ pub(crate) fn account_write_failure(error: StoreError) -> Response {
 
 pub(crate) fn failure(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// The query extractor of every admin route: the framework's own, with its rejection mapped to the route's error body
+/// and status 400. The text is the failed value's name and the parser's message.
+pub(crate) struct AdminQuery<T>(pub T);
+
+impl<T, S> FromRequestParts<S> for AdminQuery<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Query::<T>::from_request_parts(parts, state)
+            .await
+            .map(|Query(value)| AdminQuery(value))
+            .map_err(|rejection| {
+                // The rejection's own text leads with the framework's "Failed to deserialize query string", and its
+                // source is the parser's message behind the value's name alone.
+                let text = std::error::Error::source(&rejection)
+                    .map_or_else(|| rejection.body_text(), ToString::to_string);
+                failure(StatusCode::BAD_REQUEST, &text)
+            })
+    }
 }
 
 fn login_refusal(error: LoginError) -> Response {

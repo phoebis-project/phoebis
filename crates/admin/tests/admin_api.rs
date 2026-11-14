@@ -4130,9 +4130,12 @@ async fn the_request_list_answers_a_fixed_end_watermark_past_to_and_a_live_one_a
         bodies: None,
     });
     let range = format!("/admin/requests?from={from}&to={to}");
-    let fixed = wait_json(&parts.app, &format!("{range}&fixed_end=1"), &cookie, |v| {
-        v["requests"].as_array().is_some_and(|rows| rows.len() == 1)
-    })
+    let fixed = wait_json(
+        &parts.app,
+        &format!("{range}&fixed_end=true"),
+        &cookie,
+        |v| v["requests"].as_array().is_some_and(|rows| rows.len() == 1),
+    )
     .await;
     assert_eq!(
         fixed["landed_through"].as_i64(),

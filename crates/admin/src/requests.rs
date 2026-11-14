@@ -1,10 +1,10 @@
 //! The request log: one row per client request with its attempt trail, the detail with its events, and the
 //! captured bodies.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -18,8 +18,8 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::routes::{failure, reported_samples, windows_lacked};
+use crate::openapi::{query_refusal, ErrorBody, LedgerFailure};
+use crate::routes::{failure, reported_samples, windows_lacked, AdminQuery};
 use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
@@ -831,8 +831,8 @@ fn attempt_json(a: &AttemptRecord, estimated_usd: Option<f64>) -> Attempt {
     }
 }
 
-pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String> {
-    q.get(name)
+pub(crate) fn list_param(value: Option<&str>) -> Vec<String> {
+    value
         .map(|v| {
             v.split(',')
                 .map(str::trim)
@@ -844,12 +844,8 @@ pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String>
 }
 
 /// An emptied field in the view's bar narrows nothing, as an absent one.
-pub(crate) fn text_param(q: &HashMap<String, String>, name: &str) -> Option<String> {
-    q.get(name).filter(|v| !v.is_empty()).cloned()
-}
-
-pub(crate) fn flag(q: &HashMap<String, String>, name: &str) -> bool {
-    q.get(name).is_some_and(|v| v == "true" || v == "1")
+pub(crate) fn text_param(value: Option<&str>) -> Option<String> {
+    value.filter(|v| !v.is_empty()).map(String::from)
 }
 
 /// The words a parameter takes as its refusal lists them, `a, b or c`.
@@ -866,12 +862,12 @@ fn one_of(words: &[&str]) -> String {
 // and nothing else.
 #[allow(clippy::result_large_err)]
 pub(crate) fn word_param<T: Default>(
-    q: &HashMap<String, String>,
+    value: Option<&str>,
     name: &str,
     parse: impl Fn(&str) -> Option<T>,
     words: &[&str],
 ) -> Result<T, Response> {
-    match q.get(name).map(|word| parse(word)) {
+    match value.map(parse) {
         None => Ok(T::default()),
         Some(Some(value)) => Ok(value),
         Some(None) => Err(failure(
@@ -882,8 +878,6 @@ pub(crate) fn word_param<T: Default>(
 }
 
 /// `GET /admin/requests`'s query.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct RequestsQuery {
@@ -939,7 +933,7 @@ pub(crate) struct RequestsQuery {
     /// A comma list of refusal categories, read off the serving attempt as `stop_reasons` is, `-` for a request with
     /// none.
     pub refusal_categories: Option<String>,
-    /// `true`/`1` keeps the requests that presented a fallback credit, `false`/`0` the others.
+    /// `true` or `false`. `true` keeps the requests that presented a fallback credit, `false` the others.
     pub fallback: Option<bool>,
     /// A comma list of efforts as the rollups fold them: a level, `none`, `other`.
     pub efforts: Option<String>,
@@ -952,12 +946,13 @@ pub(crate) struct RequestsQuery {
     /// A comma list of `fast`, `standard`, read off the serving attempt, else `fast` for a request that asked for
     /// it and `standard` otherwise.
     pub speeds: Option<String>,
-    /// `true`/`1`: the requests that waited through a hold, one that answered without a dispatch included.
+    /// `true` or `false`. `true` keeps the requests that waited through a hold, one that answered without a dispatch
+    /// included.
     pub held: Option<bool>,
-    /// `true`/`1`.
+    /// `true` or `false`.
     pub include_probes: Option<bool>,
-    /// `true`/`1`: the range's end is fixed, so `landed_through` may pass `to` and a poll over the range reads a row
-    /// that landed after the end once. Leave it off for a live range.
+    /// `true` or `false`. `true` fixes the range's end, so `landed_through` may pass `to` and a poll over the range
+    /// reads a row that landed after the end once. Leave it off for a live range.
     pub fixed_end: Option<bool>,
     /// The order key: `received_at` (the default), `attempts`, `duration_ms`, `ttfb_ms`, `input_tokens` or
     /// `output_tokens`. Under `duration_ms`, `ttfb_ms` and the two token keys a request without the figure sorts after
@@ -982,29 +977,15 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = "- `{name} is not a number`, for `from` or `to`\n- `landed_after is not a number`\n- `statuses are numbers`\n- `limit is not a number`\n- `order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens`\n- `dir is desc or asc`\n- `cursor is <value>:<id>`\n- `fallback is true or false`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "{name} is not a number"})),
+        (status = 400, description = concat!("- `statuses are numbers`\n- `order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens`\n- `dir is desc or asc`\n- `cursor is <value>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn list(
     State(state): State<Arc<AdminState>>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<RequestsQuery>,
 ) -> Response {
-    let number = |name: &'static str| match q.get(name) {
-        Some(v) => v.parse::<i64>().map(Some).map_err(|_| name),
-        None => Ok(None),
-    };
-    let (from, to) = match (number("from"), number("to")) {
-        (Ok(f), Ok(t)) => (f, t),
-        (Err(name), _) | (_, Err(name)) => {
-            return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number"))
-        }
-    };
-    let landed_after = match number("landed_after") {
-        Ok(landed_after) => landed_after,
-        Err(name) => return failure(StatusCode::BAD_REQUEST, &format!("{name} is not a number")),
-    };
-    let statuses: Result<Vec<u16>, _> = list_param(&q, "statuses")
+    let statuses: Result<Vec<u16>, _> = list_param(q.statuses.as_deref())
         .iter()
         .map(|s| s.parse::<u16>())
         .collect();
@@ -1013,70 +994,64 @@ pub(crate) async fn list(
     };
     let single = |value: Option<String>| Patterns::new(value.into_iter().collect());
     let (Ok(user_agent), Ok(client)) = (
-        single(text_param(&q, "user_agent")),
-        single(text_param(&q, "client")),
+        single(text_param(q.user_agent.as_deref())),
+        single(text_param(q.client.as_deref())),
     ) else {
         return failure(StatusCode::BAD_REQUEST, phoebis_ledger::PATTERNS_TOO_LONG);
     };
-    // Not `flag`, which reads `false` as absent: here `false` keeps the requests without a digest.
-    let fallback = match q.get("fallback").map(String::as_str) {
-        None => None,
-        Some("true" | "1") => Some(true),
-        Some("false" | "0") => Some(false),
-        Some(_) => return failure(StatusCode::BAD_REQUEST, "fallback is true or false"),
-    };
     let filter = RequestFilter {
-        text: text_param(&q, "text"),
-        request: text_param(&q, "request"),
-        session: text_param(&q, "session"),
-        agent_id: text_param(&q, "agent_id"),
-        landed_after,
-        keys: list_param(&q, "keys"),
-        pools: list_param(&q, "pools"),
-        accounts: list_param(&q, "accounts"),
-        models: list_param(&q, "models"),
-        kinds: list_param(&q, "kinds"),
+        text: text_param(q.text.as_deref()),
+        request: text_param(q.request.as_deref()),
+        session: text_param(q.session.as_deref()),
+        agent_id: text_param(q.agent_id.as_deref()),
+        landed_after: q.landed_after,
+        keys: list_param(q.keys.as_deref()),
+        pools: list_param(q.pools.as_deref()),
+        accounts: list_param(q.accounts.as_deref()),
+        models: list_param(q.models.as_deref()),
+        kinds: list_param(q.kinds.as_deref()),
         statuses,
-        outcomes: list_param(&q, "outcomes"),
+        outcomes: list_param(q.outcomes.as_deref()),
         user_agent,
         client,
         clients: Patterns::default(),
         user_agents: Patterns::default(),
-        agent_types: list_param(&q, "agent_types"),
-        turn_origins: list_param(&q, "turn_origins"),
-        speeds: list_param(&q, "speeds"),
-        held: flag(&q, "held"),
-        from,
-        to,
-        include_probes: flag(&q, "include_probes"),
-        cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
-        input_transformations: list_param(&q, "input_transformations"),
-        efforts: list_param(&q, "efforts"),
-        request_classes: list_param(&q, "request_classes"),
-        classifiers: list_param(&q, "classifiers"),
-        guardrails: list_param(&q, "guardrails"),
-        stop_reasons: list_param(&q, "stop_reasons"),
-        refusal_categories: list_param(&q, "refusal_categories"),
-        fallback,
-        fixed_end: flag(&q, "fixed_end"),
+        agent_types: list_param(q.agent_types.as_deref()),
+        turn_origins: list_param(q.turn_origins.as_deref()),
+        speeds: list_param(q.speeds.as_deref()),
+        held: q.held.unwrap_or(false),
+        from: q.from,
+        to: q.to,
+        include_probes: q.include_probes.unwrap_or(false),
+        cache_miss_reasons: list_param(q.cache_miss_reasons.as_deref()),
+        input_transformations: list_param(q.input_transformations.as_deref()),
+        efforts: list_param(q.efforts.as_deref()),
+        request_classes: list_param(q.request_classes.as_deref()),
+        classifiers: list_param(q.classifiers.as_deref()),
+        guardrails: list_param(q.guardrails.as_deref()),
+        stop_reasons: list_param(q.stop_reasons.as_deref()),
+        refusal_categories: list_param(q.refusal_categories.as_deref()),
+        fallback: q.fallback,
+        fixed_end: q.fixed_end.unwrap_or(false),
     };
-    let limit = match q.get("limit") {
-        None => DEFAULT_LIMIT,
-        Some(raw) => match raw.parse::<usize>() {
-            Ok(n) => n,
-            Err(_) => return failure(StatusCode::BAD_REQUEST, "limit is not a number"),
-        },
-    }
-    .clamp(1, MAX_LIMIT);
-    let order = match word_param(&q, "order", RequestOrder::parse, RequestOrder::WORDS) {
+    let limit = q
+        .limit
+        .map_or(DEFAULT_LIMIT, |n| n as usize)
+        .clamp(1, MAX_LIMIT);
+    let order = match word_param(
+        q.order.as_deref(),
+        "order",
+        RequestOrder::parse,
+        RequestOrder::WORDS,
+    ) {
         Ok(order) => order,
         Err(response) => return response,
     };
-    let dir = match word_param(&q, "dir", Direction::parse, Direction::WORDS) {
+    let dir = match word_param(q.dir.as_deref(), "dir", Direction::parse, Direction::WORDS) {
         Ok(dir) => dir,
         Err(response) => return response,
     };
-    let cursor = match q.get("cursor").map(|c| RequestCursor::parse(c, order)) {
+    let cursor = match q.cursor.as_deref().map(|c| RequestCursor::parse(c, order)) {
         None => None,
         Some(Some(cursor)) => Some(cursor),
         Some(None) => return failure(StatusCode::BAD_REQUEST, "cursor is <value>:<id>"),

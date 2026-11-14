@@ -1631,7 +1631,13 @@ async fn a_non_numeric_limit_on_the_request_log_is_refused() {
     let cookie = login(&parts.app, "admin-secret").await;
     let refused = get(&parts.app, "/admin/requests?limit=abc", Some(&cookie)).await;
     assert_eq!(refused.status(), 400);
-    assert_eq!(json(refused).await["error"], "limit is not a number");
+    let error = json(refused).await["error"].clone();
+    assert!(
+        error
+            .as_str()
+            .is_some_and(|text| text.starts_with("limit: ")),
+        "the route's error body names the value: {error}"
+    );
     assert_eq!(
         get(&parts.app, "/admin/requests?limit=5", Some(&cookie))
             .await
@@ -5645,7 +5651,6 @@ async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_l
         ("cursor=100:2:r1/1", "cursor is <at>:<rank>:<id>"),
         ("limit=0", "limit is 1 to 200"),
         ("limit=201", "limit is 1 to 200"),
-        ("limit=many", "limit is 1 to 200"),
     ] {
         let refused = get(
             &parts.app,
@@ -5656,6 +5661,15 @@ async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_l
         assert_eq!(refused.status(), 400, "{query}");
         assert_eq!(json(refused).await["error"], error, "{query}");
     }
+    let refused = get(&parts.app, "/admin/routing-log?limit=many", Some(&cookie)).await;
+    assert_eq!(refused.status(), 400);
+    let error = json(refused).await["error"].clone();
+    assert!(
+        error
+            .as_str()
+            .is_some_and(|text| text.starts_with("limit: ")),
+        "a limit that is no number names the value: {error}"
+    );
     for query in ["limit=1", "limit=200", "kinds=probe,warm_prefix_expired"] {
         assert_eq!(
             get(
@@ -5843,10 +5857,12 @@ async fn the_routing_log_refuses_a_filter_outside_its_keys() {
     let cookie = login(&parts.app, "admin-secret").await;
     let refused = get(&parts.app, "/admin/routing-log?statuses=429", Some(&cookie)).await;
     assert_eq!(refused.status(), 400);
-    assert_eq!(
-        json(refused).await["error"],
-        "unknown filter statuses",
-        "a filter the route does not read is refused rather than ignored"
+    let error = json(refused).await["error"].clone();
+    assert!(
+        error
+            .as_str()
+            .is_some_and(|text| text.starts_with("statuses: ")),
+        "a filter the route does not read is refused rather than ignored: {error}"
     );
 }
 

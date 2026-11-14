@@ -1449,7 +1449,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
     let held_only = json(
         get(
             &parts.app,
-            "/admin/requests?held=1&limit=500",
+            "/admin/requests?held=true&limit=500",
             Some(&cookie),
         )
         .await,
@@ -1954,7 +1954,13 @@ async fn the_request_log_refuses_a_landed_after_that_is_not_a_number() {
     let cookie = login(&parts.app, "admin-secret").await;
     let refused = get(&parts.app, "/admin/requests?landed_after=x", Some(&cookie)).await;
     assert_eq!(refused.status(), 400);
-    assert_eq!(json(refused).await["error"], "landed_after is not a number");
+    let error = json(refused).await["error"].clone();
+    assert!(
+        error
+            .as_str()
+            .is_some_and(|text| text.starts_with("landed_after: ")),
+        "the refusal names the value: {error}"
+    );
 }
 
 #[tokio::test]

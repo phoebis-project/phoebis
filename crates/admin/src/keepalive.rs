@@ -1,9 +1,9 @@
 //! The keepalive views: every retained recipe, and the overview tiles the sessions page shows.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -15,8 +15,8 @@ use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{ErrorBody, LedgerFailure};
-use crate::routes::failure;
+use crate::openapi::{query_refusal, ErrorBody, LedgerFailure};
+use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
 
 /// The overview tiles the sessions page shows: the agents, the engine's limits, one row per pool with keepalive
@@ -151,9 +151,7 @@ pub(crate) async fn recipes(State(state): State<Arc<AdminState>>) -> Response {
 }
 
 /// `GET /admin/keepalive/overview`'s query.
-// Declared for the document alone, since the handler reads the request by hand.
-#[allow(dead_code)]
-#[derive(utoipa::IntoParams)]
+#[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct OverviewQuery {
     /// `7d` (the default) or `30d`: the UTC days the idle-return counters sum over, the current day and the 6 or 29
@@ -178,15 +176,15 @@ struct PoolDay {
     params(OverviewQuery),
     responses(
         (status = 200, description = "The overview.", body = KeepaliveOverview),
-        (status = 400, description = "`range is 7d or 30d`", body = ErrorBody, example = json!({"error": "range is 7d or 30d"})),
+        (status = 400, description = concat!("`range is 7d or 30d`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 7d or 30d"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
 pub(crate) async fn overview(
     State(state): State<Arc<AdminState>>,
-    Query(q): Query<HashMap<String, String>>,
+    AdminQuery(q): AdminQuery<OverviewQuery>,
 ) -> Response {
-    let days = match q.get("range").map(String::as_str).unwrap_or("7d") {
+    let days = match q.range.as_deref().unwrap_or("7d") {
         "7d" => 7,
         "30d" => 30,
         _ => return failure(StatusCode::BAD_REQUEST, "range is 7d or 30d"),
