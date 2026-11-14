@@ -4671,11 +4671,26 @@ async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_ef
             Some("high"),
             Some("main"),
             "none",
+            Some("thinking.organization_binding_mismatch"),
         ),
-        ("d-router", Some("router"), None, None, "messages_changed"),
-        ("d-none", None, Some("ultra"), Some("bad class"), "none"),
+        (
+            "d-router",
+            Some("router"),
+            None,
+            None,
+            "messages_changed",
+            None,
+        ),
+        (
+            "d-none",
+            None,
+            Some("ultra"),
+            Some("bad class"),
+            "none",
+            None,
+        ),
     ];
-    for ((id, source, effort, class, reason), age) in planted.into_iter().zip(1..) {
+    for ((id, source, effort, class, reason, dropped), age) in planted.into_iter().zip(1..) {
         let mut row = record(id, common::NOW - age * 1_000, "claude-sonnet-5", "s1");
         if let Record::Request {
             request, attempts, ..
@@ -4685,6 +4700,12 @@ async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_ef
             request.effort = effort.map(String::from);
             request.request_class = class.map(String::from);
             attempts[0].cache_miss_reason = Some(reason.into());
+            attempts[0].input_transformations = dropped.map(|key| {
+                serde_json::from_value(
+                    serde_json::json!({ key: { "blocks": 1, "first_message": 0 } }),
+                )
+                .unwrap()
+            });
         }
         parts.ledger.record(row);
     }
@@ -4719,6 +4740,10 @@ async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_ef
         ("efforts=none,other", &["d-router", "d-none"]),
         ("request_classes=-", &["d-router"]),
         ("request_classes=other", &["d-none"]),
+        (
+            "input_transformations=thinking.organization_binding_mismatch",
+            &["d-client"],
+        ),
     ] {
         let body = json(
             get(
