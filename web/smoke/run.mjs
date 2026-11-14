@@ -10107,14 +10107,24 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   k.unmount();
 }
 {
+  // The row writes the inherited test twice, once into the title and once around the span, so the title is read
+  // beside the text. The figures are seeds of web/src/mock/pools.ts: pool all's 24 hours, which desktop inherits,
+  // laptop's 6 and ci's 0.
   const captureOf = (name) => {
     const tr = [...m.container.querySelectorAll('.card--table tbody tr')].find((row) => row.children[0]?.querySelector('b')?.textContent?.trim() === name);
-    return tr?.children[0]?.querySelector('.sub')?.textContent?.trim() ?? 'absent';
+    const line = tr?.children[0]?.querySelector('.sub');
+    return [line?.textContent?.trim() ?? 'absent', line?.getAttribute('title') ?? 'no title'];
   };
   const effective = [captureOf('desktop'), captureOf('laptop'), captureOf('ci')];
   results.push({
     name: '/keys shows the effective capture of each key, inherited marked',
-    ok: JSON.stringify(effective) === JSON.stringify(['bodies captured, 24h inherited', 'bodies captured, 6h', 'bodies not captured']),
+    ok:
+      JSON.stringify(effective) ===
+      JSON.stringify([
+        ['bodies captured, 24h inherited', 'bodies captured, 24h inherited'],
+        ['bodies captured, 6h', 'bodies captured, 6h'],
+        ['bodies not captured', 'bodies not captured'],
+      ]),
     missing: effective,
   });
 }

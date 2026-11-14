@@ -705,7 +705,7 @@ async function attentionList(theme) {
       const ink = channels(s.color);
       const fill = channels(s.backgroundColor);
       const [high, low] = ink && fill ? [luminance(ink), luminance(fill)].sort((x, y) => y - x) : [null, null];
-      return { contrast: high === null ? null : Math.round(((high + 0.05) / (low + 0.05)) * 100) / 100, fill: s.backgroundColor, font: `${s.fontSize} ${s.fontWeight}`, height: edge.height, ink: s.color, left: Math.round(edge.left), text: b.textContent?.trim() ?? '' };
+      return { contrast: high === null ? null : (high + 0.05) / (low + 0.05), fill: s.backgroundColor, font: `${s.fontSize} ${s.fontWeight}`, height: edge.height, ink: s.color, left: Math.round(edge.left), text: b.textContent?.trim() ?? '' };
     };
     return {
       across: badges.every((b) => b.left >= r.left && b.right <= r.right),
@@ -730,7 +730,7 @@ async function attentionList(theme) {
       width: Math.round(r.width),
     };
   });
-  measurements.push(`${theme} / attention line list ${JSON.stringify(read)}`);
+  measurements.push(`${theme} / attention line list ${JSON.stringify(read, (key, value) => (key === 'contrast' ? printedRatio(value) : value))}`);
   if (!read) say('did not open');
   else {
     if (read.badges !== 23 || read.rows !== 23 || !read.oneRowEach) say(`holds ${read.badges} badges over ${read.rows} rows, not the story's twenty-three items, nightly's reset item among them, one per row`);
@@ -745,7 +745,7 @@ async function attentionList(theme) {
     if (read.info?.text !== 'Model unpriced: claude-sonnet-4-5') say(`draws ${JSON.stringify(read.info?.text ?? null)} in the info tone, not the story's unpriced model`);
     failures.push(...compare(read.info, read.warning, ['font', 'height', 'left'], `${theme} /: the attention line's list's info badge against its first warning badge`));
     if (read.info?.contrast === null || read.warning?.contrast === null || !(read.info?.contrast < read.warning?.contrast) || !(read.info?.contrast >= 4.5)) {
-      say(`draws the info badge's ink ${read.info?.ink} on ${read.info?.fill} at a contrast of ${read.info?.contrast ?? 'none'}, not under the warning badge's ${read.warning?.contrast ?? 'none'} and at 4.5 or more`);
+      say(`draws the info badge's ink ${read.info?.ink} on ${read.info?.fill} at a contrast of ${read.info?.contrast?.toFixed(2) ?? 'none'}, not under the warning badge's ${read.warning?.contrast?.toFixed(2) ?? 'none'} and at 4.5 or more`);
     }
   }
   await page.keyboard.press('Escape');
@@ -4624,11 +4624,11 @@ async function quotaFlagInk(theme) {
   const unread = read === null ? [] : Object.entries({ fill: read.fill, ink: read.ink }).filter(([, color]) => !/^rgba?\([\d., /]+\)$|^color\(srgb [-\d.e]+ [-\d.e]+ [-\d.e]+(?: \/ [-\d.e]+)?\)$/.test(color));
   const fill = read === null ? null : colorChannels(read.fill);
   const ratio = read === null || unread.length > 0 || fill.alpha < 1 ? null : contrastOf(composite(colorChannels(read.ink), fill), fill.rgb);
-  measurements.push(`${theme} /quota nightly's extra usage flag ${JSON.stringify({ ...read, ratio })}`);
+  measurements.push(`${theme} /quota nightly's extra usage flag ${JSON.stringify({ ...read, ratio: printedRatio(ratio) })}`);
   if (read === null) say("nightly's card draws no extra usage flag to read");
   else if (unread.length > 0) unread.forEach(([part, color]) => say(`the extra usage flag's ${part} ${color} is in a form the measure cannot read`));
   else if (fill.alpha < 1) say(`the extra usage flag's fill ${read.fill} is translucent and has no contrast of its own to read`);
-  else if (ratio < 4.5) say(`the extra usage flag reads ${read.ink} on ${read.fill} at ${ratio}:1, under 4.5:1`);
+  else if (ratio < 4.5) say(`the extra usage flag reads ${read.ink} on ${read.fill} at ${ratio.toFixed(2)}:1, under 4.5:1`);
 }
 
 /**
@@ -4774,11 +4774,11 @@ async function quotaLaneChips(theme) {
   const reading = (cardReadings.primary ?? []).find((t) => t.startsWith('7-day:')) ?? null;
   const pace = reading === null ? null : /ahead of pace/.test(reading) ? 1 : /behind pace/.test(reading) ? -1 : 0;
   measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))} primary's used fill ${JSON.stringify({ ...read.fill, reading })}`);
-  measurements.push(`${theme} /quota#quota-windows live bars over ${read.surface} ${JSON.stringify(live.map((b) => [b.name, b.swatch, b.body, b.bodyPct, b.bodyRatio, b.fill, b.fillPct, b.fillRatio, b.ink]))}`);
+  measurements.push(`${theme} /quota#quota-windows live bars over ${read.surface} ${JSON.stringify(live.map((b) => [b.name, b.swatch, b.body, b.bodyPct, printedRatio(b.bodyRatio), b.fill, b.fillPct, printedRatio(b.fillRatio), b.ink]))}`);
   const series = read.series.map((s) => ({ ...s, bodyRatio: contrastOf(colorChannels(s.ink).rgb, colorChannels(s.body).rgb), fillRatio: contrastOf(colorChannels(s.ink).rgb, colorChannels(s.fill).rgb) }));
-  measurements.push(`${theme} /quota#quota-windows every lane color ${JSON.stringify(series.map((s) => [s.name, s.bodyRatio, s.fillRatio]))}`);
+  measurements.push(`${theme} /quota#quota-windows every lane color ${JSON.stringify(series.map((s) => [s.name, printedRatio(s.bodyRatio), printedRatio(s.fillRatio)]))}`);
   for (const s of series) {
-    if (s.bodyRatio < 4.5 || s.fillRatio < 4.5) say(`the label reads ${s.ink} at ${s.bodyRatio}:1 over a live bar in ${s.name} and ${s.fillRatio}:1 over its fill, under 4.5:1`);
+    if (s.bodyRatio < 4.5 || s.fillRatio < 4.5) say(`the label reads ${s.ink} at ${s.bodyRatio.toFixed(2)}:1 over a live bar in ${s.name} and ${s.fillRatio.toFixed(2)}:1 over its fill, under 4.5:1`);
   }
   if (mock && live.length === 0) say('the story has current windows, yet no live bar is drawn');
   if (mock && !live.some((b) => b.fill !== null)) say('the story has current windows with a share, yet no live bar draws a used fill');
@@ -4787,8 +4787,8 @@ async function quotaLaneChips(theme) {
     if (b.swatch === null) say(`${b.name}'s lane draws no dot to read its color against`);
     else if (!b.exact) say(`${b.name}'s live bar draws ${b.body} and ${b.fill ?? 'no fill'}, not its dot's ${b.swatch} mixed into ${read.surface}`);
     if (b.fillPct !== null && b.bodyPct !== null && b.fillPct <= b.bodyPct) say(`${b.name}'s fill carries ${b.fillPct}% of its color, no stronger than the body's ${b.bodyPct}%`);
-    if (b.bodyRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s live bar ${b.body} at ${b.bodyRatio}:1, under 4.5:1`);
-    if (b.fillRatio !== null && b.fillRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s fill ${b.fill} at ${b.fillRatio}:1, under 4.5:1`);
+    if (b.bodyRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s live bar ${b.body} at ${b.bodyRatio.toFixed(2)}:1, under 4.5:1`);
+    if (b.fillRatio !== null && b.fillRatio < 4.5) say(`the label reads ${b.ink} over ${b.name}'s fill ${b.fill} at ${b.fillRatio.toFixed(2)}:1, under 4.5:1`);
     if (first && b.fill !== null) failures.push(...compare(b, first, ['bodyPct', 'fillPct'], `${theme} /quota#quota-windows: ${b.name}'s strengths against ${first.name}'s`));
   }
   if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
@@ -10351,7 +10351,12 @@ function contrastOf(a, b) {
     return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
   };
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** A ratio to two places for a measurement line, a null kept. The comparisons read the ratio unrounded. */
+function printedRatio(ratio) {
+  return ratio === null ? null : Math.round(ratio * 100) / 100;
 }
 
 /**
@@ -10389,14 +10394,14 @@ async function stripIdleContrast(theme) {
   const surface = layers.slice(0, -1).reduceRight((under, top) => ({ alpha: 1, rgb: composite(top, under) }), { alpha: 1, rgb: layers[layers.length - 1].rgb });
   const ratioOf = (stroke) => contrastOf(composite(colorChannels(stroke), surface), surface.rgb);
   const kinds = [...new Map(read.strokes.map((s) => [`${s.kind.split(' ').slice(0, 2).join(' ')} ${s.stroke}`, s])).values()];
-  measurements.push(`${theme} /routing-log strip idle token ${read.token} over ${JSON.stringify(read.surfaces)}: ${read.token === null ? 'unread' : `${ratioOf(read.token)}:1`}, ${read.strokes.length} idle strokes ${JSON.stringify(kinds.map((s) => [s.kind, s.stroke, ratioOf(s.stroke)]))}`);
+  measurements.push(`${theme} /routing-log strip idle token ${read.token} over ${JSON.stringify(read.surfaces)}: ${read.token === null ? 'unread' : `${ratioOf(read.token).toFixed(2)}:1`}, ${read.strokes.length} idle strokes ${JSON.stringify(kinds.map((s) => [s.kind, s.stroke, printedRatio(ratioOf(s.stroke))]))}`);
   if (read.token === null) say('the token could not be read off the strip');
-  else if (ratioOf(read.token) < 1.5) say(`the token ${read.token} reads ${ratioOf(read.token)}:1 over the strip's surface, under 1.5:1`);
+  else if (ratioOf(read.token) < 1.5) say(`the token ${read.token} reads ${ratioOf(read.token).toFixed(2)}:1 over the strip's surface, under 1.5:1`);
   // A strip whose idle classes moved would leave the loop below nothing to hold, and the token's ratio alone passes.
   if (read.strokes.length === 0) say('no idle stroke read');
   for (const s of kinds) {
     if (s.stroke !== read.token) say(`${s.kind} strokes ${s.stroke}, not the token's ${read.token}`);
-    else if (ratioOf(s.stroke) < 1.5) say(`${s.kind} reads ${ratioOf(s.stroke)}:1 over the strip's surface, under 1.5:1`);
+    else if (ratioOf(s.stroke) < 1.5) say(`${s.kind} reads ${ratioOf(s.stroke).toFixed(2)}:1 over the strip's surface, under 1.5:1`);
   }
 }
 

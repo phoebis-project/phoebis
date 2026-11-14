@@ -200,12 +200,18 @@ try {
 }
 const base = `http://127.0.0.1:${server.port}`;
 
-/** Closes the browser and the server before the exit, so a refusal mid-walk leaves no process behind. */
+/**
+ * Closes the browser and the server before the exit, so a refusal mid-walk leaves no process behind. The exit sits in
+ * a `finally`, here and behind each `discard`, since a clean-up that throws would end Node at 1, a difference's code.
+ */
 async function stop(code, message) {
   if (message) console.error(`styles: ${message}`);
-  await browser?.close();
-  server?.close();
-  process.exit(code);
+  try {
+    await browser?.close();
+    server?.close();
+  } finally {
+    process.exit(code);
+  }
 }
 
 /** Resolves once the console's entry module has run to its end, so the story reads the paused clock before a step. */
@@ -426,8 +432,11 @@ async function discard() {
  */
 function failed(where, error) {
   failing ??= (async () => {
-    await discard();
-    await stop(2, `${where}: ${messageOf(error)}`);
+    try {
+      await discard();
+    } finally {
+      await stop(2, `${where}: ${messageOf(error)}`);
+    }
   })();
   return failing;
 }
@@ -457,8 +466,11 @@ try {
           }
           const answer = await page.evaluate(readStyles, [[...EXCLUDED.keys()], SEP]);
           if (answer.duplicate !== undefined) {
-            await discard();
-            await stop(2, `${key}: two elements share the path ${answer.duplicate}`);
+            try {
+              await discard();
+            } finally {
+              await stop(2, `${key}: two elements share the path ${answer.duplicate}`);
+            }
           }
           read += 1;
           if (write) {
@@ -486,9 +498,12 @@ const seconds = Math.round((performance.now() - started) / 1000);
 if (write) {
   // A state the write could not draw would leave every later comparison blind to it while reading no difference.
   if (skipped.length > 0) {
-    await discard();
-    for (const line of skipped) console.error(`styles: ${line}`);
-    await stop(2, `${skipped.length} ${skipped.length === 1 ? 'state' : 'states'} skipped, so the write leaves ${baseline} as it was`);
+    try {
+      await discard();
+    } finally {
+      for (const line of skipped) console.error(`styles: ${line}`);
+      await stop(2, `${skipped.length} ${skipped.length === 1 ? 'state' : 'states'} skipped, so the write leaves ${baseline} as it was`);
+    }
   }
   try {
     out.end();
