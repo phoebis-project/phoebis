@@ -3801,7 +3801,7 @@ pub struct SessionIdentity {
 /// than tripping the cap.
 const SESSION_IDENTITY_CHUNK: usize = 900;
 
-/// For each (key id, key generation, session id) named, with no time bound: a pin-only session (one whose
+/// For each `SessionSpendKey` named, with no time bound: a pin-only session (one whose
 /// requests, if any, are all older than any activity window a caller applies elsewhere) is answered the same
 /// as a fresh one, since this query reads no `since` bound of its own.
 pub fn session_identities(
@@ -3821,14 +3821,14 @@ fn named_sessions(sessions: &[SessionSpendKey]) -> (String, Vec<rusqlite::types:
     let mut binds = Vec::with_capacity(sessions.len() * 3);
     let values: Vec<String> = sessions
         .iter()
-        .map(|(key_id, key_generation, session_id)| {
+        .map(|key| {
             format!(
                 "({})",
                 bind_all(
                     &[
-                        rusqlite::types::Value::Text(key_id.clone()),
-                        rusqlite::types::Value::Integer(*key_generation),
-                        rusqlite::types::Value::Text(session_id.clone()),
+                        rusqlite::types::Value::Text(key.key_id.clone()),
+                        rusqlite::types::Value::Integer(key.key_generation),
+                        rusqlite::types::Value::Text(key.session_id.clone()),
                     ],
                     &mut binds,
                 )
@@ -5226,8 +5226,14 @@ fn read_session_attempts(
         .map_err(LedgerError::from)
 }
 
-/// The key the session spend reads hand beside each row, its `key_id`, `key_generation` and `session_id` in order.
-pub type SessionSpendKey = (String, i64, String);
+/// The key the session spend reads hand beside each row. Its fields keep this order since the derived order sorts the
+/// sessions route's rows, so a moved field reorders the rows of one instant.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SessionSpendKey {
+    pub key_id: String,
+    pub key_generation: i64,
+    pub session_id: String,
+}
 
 /// A request the session fold prices, with its serving attempt where an account served it. The reads hand its key
 /// beside it, so the fold's row names none. Neither read answers a refused request, which the spend leaves out, or one
@@ -5298,7 +5304,11 @@ impl SessionSpendRow {
             None => None,
         };
         Ok((
-            (row.get(1)?, row.get(2)?, row.get(0)?),
+            SessionSpendKey {
+                key_id: row.get(1)?,
+                key_generation: row.get(2)?,
+                session_id: row.get(0)?,
+            },
             SessionSpendRow {
                 id: row.get(3)?,
                 agent_id: row.get(4)?,
@@ -5355,7 +5365,7 @@ pub(crate) fn session_spend_of_statement(
 }
 
 /// Every request landed after `landed_after` with a key and a session and not refused, with its serving attempt, each
-/// beside its key `(key_id, key_generation, session_id)`.
+/// beside its `SessionSpendKey`.
 pub fn session_spend_rows_since(
     conn: &Connection,
     landed_after: i64,
@@ -5532,8 +5542,16 @@ mod tests {
     #[test]
     fn the_session_identities_read_seeks_the_session_index_for_each_named_session() {
         let sessions = vec![
-            ("k".to_string(), 0, "s1".to_string()),
-            ("k".to_string(), 0, "s2".to_string()),
+            SessionSpendKey {
+                key_id: "k".to_string(),
+                key_generation: 0,
+                session_id: "s1".to_string(),
+            },
+            SessionSpendKey {
+                key_id: "k".to_string(),
+                key_generation: 0,
+                session_id: "s2".to_string(),
+            },
         ];
         let seeks_the_session_index = |plan: &[String]| {
             // SQLite runs the `EXISTS` as a join and prints its seek as `SEARCH r EXISTS USING INDEX ...`.
@@ -5648,8 +5666,16 @@ mod tests {
     #[test]
     fn the_session_spend_first_fill_seeks_the_session_index_for_each_named_session() {
         let sessions = vec![
-            ("k".to_string(), 0, "s1".to_string()),
-            ("k".to_string(), 0, "s2".to_string()),
+            SessionSpendKey {
+                key_id: "k".to_string(),
+                key_generation: 0,
+                session_id: "s1".to_string(),
+            },
+            SessionSpendKey {
+                key_id: "k".to_string(),
+                key_generation: 0,
+                session_id: "s2".to_string(),
+            },
         ];
         let (sql, binds) = session_spend_of_statement(&sessions);
         let plan = plan_under(
@@ -5714,7 +5740,11 @@ mod tests {
                 .map(|(_, row)| row.attempt.map(|a| a.account_id))
                 .collect()
         };
-        let sessions = [("k".to_string(), 0, "s".to_string())];
+        let sessions = [SessionSpendKey {
+            key_id: "k".to_string(),
+            key_generation: 0,
+            session_id: "s".to_string(),
+        }];
         let filled = db
             .read_blocking(|c| session_spend_rows_of(c, &sessions))
             .unwrap();
@@ -5783,7 +5813,11 @@ mod tests {
                 .map(|(_, row)| row.received_at)
                 .collect::<Vec<_>>()
         };
-        let sessions = [("k".to_string(), 0, "s".to_string())];
+        let sessions = [SessionSpendKey {
+            key_id: "k".to_string(),
+            key_generation: 0,
+            session_id: "s".to_string(),
+        }];
         let filled = db
             .read_blocking(|c| session_spend_rows_of(c, &sessions))
             .unwrap();

@@ -319,11 +319,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     let live = phoebis_ledger::LiveKeys::from_snapshot(&snapshot).0;
     // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
     let pin_key = |p: &phoebis_store::PinRow| {
-        Some((
-            p.key_id.clone(),
-            *live.get(&p.key_id)?,
-            p.session_id.clone(),
-        ))
+        Some(SessionSpendKey {
+            key_id: p.key_id.clone(),
+            key_generation: *live.get(&p.key_id)?,
+            session_id: p.session_id.clone(),
+        })
     };
     let now = (state.clock)();
     let cutoff = now - state.session_expiry.as_millis() as i64;
@@ -338,7 +338,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         .into_iter()
         .map(|s| {
             (
-                (s.key_id.clone(), s.key_generation, s.session_id.clone()),
+                SessionSpendKey {
+                    key_id: s.key_id.clone(),
+                    key_generation: s.key_generation,
+                    session_id: s.session_id.clone(),
+                },
                 s,
             )
         })
@@ -502,9 +506,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 move_cost: standing.move_cost,
                 pinned_at: Some(p.created_at),
                 ..unpinned_row(
-                    &key.0,
-                    key.1,
-                    &key.2,
+                    &key.key_id,
+                    key.key_generation,
+                    &key.session_id,
                     Some(&p.model),
                     created.get(key).copied(),
                 )
@@ -535,13 +539,19 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     }
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
-            unpinned_row(&key.0, key.1, &key.2, None, created.get(key).copied())
+            unpinned_row(
+                &key.key_id,
+                key.key_generation,
+                &key.session_id,
+                None,
+                created.get(key).copied(),
+            )
         });
         // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
         // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
         // deleted key's session outlives the key in the engine until the engine's next tick ends it, so a session
         // the engine still holds is skipped on `historical` as well.
-        if live.get(&key.0) != Some(&key.1) {
+        if live.get(&key.key_id) != Some(&key.key_generation) {
             continue;
         }
         entry.companion = word(view.companion);
@@ -555,7 +565,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.presence_age_seconds = view.presence_age_seconds;
     }
     for (key, entry) in rows.iter_mut() {
-        let historical = live.get(&key.0) != Some(&key.1);
+        let historical = live.get(&key.key_id) != Some(&key.key_generation);
         entry.historical = historical;
         if historical || !engine.contains_key(key) {
             entry.agents = agents_by_session.get(key).map_or(0, |a| a.len() as u64);
@@ -602,9 +612,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .filter(|standing| {
                 if companion {
                     unreleased.contains(&(
-                        key.0.clone(),
-                        key.1,
-                        key.2.clone(),
+                        key.key_id.clone(),
+                        key.key_generation,
+                        key.session_id.clone(),
                         standing.pin.agent_id.clone(),
                     ))
                 } else {
@@ -666,7 +676,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             continue;
         };
         recipe_by_session
-            .entry((recipe.key_id.clone(), generation, recipe.session_id.clone()))
+            .entry(SessionSpendKey {
+                key_id: recipe.key_id.clone(),
+                key_generation: generation,
+                session_id: recipe.session_id.clone(),
+            })
             .or_insert(recipe);
     }
     for (key, entry) in rows.iter_mut() {
@@ -687,7 +701,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         .into_iter()
         .map(|i| {
             (
-                (i.key_id.clone(), i.key_generation, i.session_id.clone()),
+                SessionSpendKey {
+                    key_id: i.key_id.clone(),
+                    key_generation: i.key_generation,
+                    session_id: i.session_id.clone(),
+                },
                 i,
             )
         })
@@ -827,7 +845,11 @@ fn strip_lacked(spend: &mut SessionSpend, lacked: &[(&str, Vec<&'static str>)]) 
 /// The row a session's ledger activity lands on, spelled once so the fork-facts read names the row the activity pass
 /// files it under.
 fn activity_key(a: &phoebis_ledger::SessionActivity) -> SessionSpendKey {
-    (a.key_id.clone(), a.key_generation, a.session_id.clone())
+    SessionSpendKey {
+        key_id: a.key_id.clone(),
+        key_generation: a.key_generation,
+        session_id: a.session_id.clone(),
+    }
 }
 
 /// The row of a session no pin stands for, the model the ledger's activity names where it names one.

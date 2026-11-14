@@ -596,7 +596,11 @@ mod tests {
     const UNSIZED_TIER: &str = "default_claude_enterprise";
 
     fn key(session: &str) -> SessionSpendKey {
-        ("k".into(), 0, session.into())
+        SessionSpendKey {
+            key_id: "k".into(),
+            key_generation: 0,
+            session_id: session.into(),
+        }
     }
 
     fn request(id: &str, session: &str, received_at: i64) -> RequestRecord {

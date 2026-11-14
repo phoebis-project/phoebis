@@ -13,8 +13,8 @@ use phoebis_ledger::{
     EventRecord, FoldRules, FundingFilter, GroupBy, GroupRow, Histogram, InputTransformation,
     KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
     PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, SeriesFilter, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS,
-    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    RollupSelect, SeriesFilter, SessionSpendKey, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
+    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
@@ -8120,7 +8120,16 @@ fn session_identities_answer_a_session_whose_requests_are_older_than_the_activit
         "the same session is outside session_activity's own since bound"
     );
     let rows = db
-        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s1".into())]))
+        .read_blocking(|c| {
+            session_identities(
+                c,
+                &[SessionSpendKey {
+                    key_id: "k1".into(),
+                    key_generation: 0,
+                    session_id: "s1".into(),
+                }],
+            )
+        })
         .unwrap();
     assert_eq!(rows.len(), 1);
 }
@@ -8141,7 +8150,16 @@ fn a_forked_sessions_identity_names_its_base_from_its_first_request() {
     );
     plant_identity(&db, "r2", "k1", 0, "s2", "inference", 2_000, None, None);
     let rows = db
-        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
+        .read_blocking(|c| {
+            session_identities(
+                c,
+                &[SessionSpendKey {
+                    key_id: "k1".into(),
+                    key_generation: 0,
+                    session_id: "s2".into(),
+                }],
+            )
+        })
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -8185,7 +8203,16 @@ fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main
     plant("r1", "s2", 1_000, "main", Some("s1"), Some(3));
     plant("r2", "s2", 2_000, "main", None, None);
     let rows = db
-        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
+        .read_blocking(|c| {
+            session_identities(
+                c,
+                &[SessionSpendKey {
+                    key_id: "k1".into(),
+                    key_generation: 0,
+                    session_id: "s2".into(),
+                }],
+            )
+        })
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -8198,7 +8225,16 @@ fn a_forked_sessions_identity_skips_an_auxiliary_request_ahead_of_its_first_main
     plant("r3", "s3", 500, "auxiliary", Some("s1"), Some(1));
     plant("r4", "s3", 1_000, "main", None, None);
     let rows = db
-        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s3".into())]))
+        .read_blocking(|c| {
+            session_identities(
+                c,
+                &[SessionSpendKey {
+                    key_id: "k1".into(),
+                    key_generation: 0,
+                    session_id: "s3".into(),
+                }],
+            )
+        })
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -8237,7 +8273,16 @@ fn a_forked_sessions_identity_skips_a_probe_and_another_keys_session_of_the_same
         Some(3),
     );
     let rows = db
-        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s2".into())]))
+        .read_blocking(|c| {
+            session_identities(
+                c,
+                &[SessionSpendKey {
+                    key_id: "k1".into(),
+                    key_generation: 0,
+                    session_id: "s2".into(),
+                }],
+            )
+        })
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -8252,7 +8297,16 @@ fn a_session_the_ledger_holds_no_client_request_for_is_absent_from_the_answer() 
     let db = LedgerDb::open_in_memory().unwrap();
     plant_identity(&db, "r1", "k1", 0, "s3", "probe", 1_000, None, None);
     let rows = db
-        .read_blocking(|c| session_identities(c, &[("k1".into(), 0, "s3".into())]))
+        .read_blocking(|c| {
+            session_identities(
+                c,
+                &[SessionSpendKey {
+                    key_id: "k1".into(),
+                    key_generation: 0,
+                    session_id: "s3".into(),
+                }],
+            )
+        })
         .unwrap();
     assert!(
         rows.is_empty(),
@@ -8277,7 +8331,11 @@ fn session_identities_chunks_a_call_over_many_sessions_and_merges_the_answer() {
             None,
             None,
         );
-        named.push(("k1".to_string(), 0_i64, session));
+        named.push(SessionSpendKey {
+            key_id: "k1".to_string(),
+            key_generation: 0,
+            session_id: session,
+        });
     }
     let rows = db.read_blocking(|c| session_identities(c, &named)).unwrap();
     assert_eq!(
