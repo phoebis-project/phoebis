@@ -1374,8 +1374,8 @@ async fn the_reload_route_answers_each_listener_as_exactly_one_of_the_three_clos
     }
 }
 
-/// The burn operation's query in the document is the four names its handler reads: the range, the grouping, the
-/// account filter and the agent groups.
+/// The burn operation's query in the document is the six names its handler reads: the range, the grouping, the
+/// account, key and pool filters and the agent groups.
 #[tokio::test]
 async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_reads() {
     let (_app, _up, document) = document().await;
@@ -1387,7 +1387,14 @@ async fn the_burn_operation_declares_the_account_filter_and_the_agent_groups_it_
         .collect();
     assert_eq!(
         names,
-        BTreeSet::from(["accounts", "group_by", "range", "user_agent_groups"]),
+        BTreeSet::from([
+            "accounts",
+            "group_by",
+            "keys",
+            "pools",
+            "range",
+            "user_agent_groups"
+        ]),
         "the burn operation's query"
     );
 }

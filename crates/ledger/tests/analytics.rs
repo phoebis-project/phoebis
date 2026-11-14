@@ -3951,6 +3951,7 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_row
         &tables,
         &PRICES,
         &filter,
+        &LiveKeys::default(),
         NOW,
     )
     .unwrap();
@@ -4020,6 +4021,7 @@ fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five
         &tables,
         &PRICES,
         &filter,
+        &LiveKeys::default(),
         NOW,
     )
     .unwrap();
@@ -4072,12 +4074,19 @@ fn a_classifier_row_reads_zero_in_the_session_series_and_its_price_names_the_rea
         };
         let sessions = db
             .read_blocking(|c| {
-                phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter, NOW)
+                phoebis_ledger::session_burn_series(
+                    c,
+                    &tables,
+                    &PRICES,
+                    &filter,
+                    &LiveKeys::default(),
+                    NOW,
+                )
             })
             .unwrap();
-        let (_, points) = sessions
+        let (_, _, points) = sessions
             .iter()
-            .find(|(id, _)| id == "s")
+            .find(|(id, _, _)| id == "s")
             .unwrap_or_else(|| panic!("the session is answered: {sessions:?}"));
         let point = point_at(points, hour);
         [
@@ -4201,7 +4210,7 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
             accounts: accounts.iter().map(|a| a.to_string()).collect(),
             ..SeriesFilter::default()
         };
-        db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+        db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -4319,7 +4328,7 @@ fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_ke
                 "-",
             )
         };
-        let point = burn_series_over(&[row], &tables, &PRICES, &filter, NOW)
+        let point = burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -4391,7 +4400,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
     let fast = row("claude-opus-5-5", "fast");
     let fast_usd = shipped_usd(3_600_000, "claude-opus-5-5", Speed::Fast, usage(1_000, 0));
     for rows in [[unpriced.clone(), fast.clone()], [fast, unpriced]] {
-        let point = burn_series_over(&rows, &tables, &PRICES, &filter, NOW)
+        let point = burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -4446,7 +4455,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
                 "-",
             )
         };
-        burn_series_over(&[row], &tables, &PRICES, &filter, NOW)
+        burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -4522,7 +4531,7 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard
                 "-",
             )
         };
-        burn_series_over(&[row], &tables, &PRICES, &filter, NOW)
+        burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
             .unwrap()
             .into_iter()
             .find(|p| p.at == 3_600_000)
@@ -4599,7 +4608,7 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
         None,
         "the model has no weight, so it prices nothing on the plan window"
     );
-    let point = burn_series_over(&[row], &tables, &prices, &filter, NOW)
+    let point = burn_series_over(&[row], &tables, &prices, &filter, &LiveKeys::default(), NOW)
         .unwrap()
         .into_iter()
         .find(|p| p.at == 3_600_000)
@@ -4661,7 +4670,7 @@ fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
                 "-",
             )
         };
-        burn_series_over(&[row], &tables, &PRICES, &filter, NOW)
+        burn_series_over(&[row], &tables, &PRICES, &filter, &LiveKeys::default(), NOW)
             .unwrap()
             .into_iter()
             .find(|p| p.at == hour_of(at) * 1_000)
@@ -4726,7 +4735,7 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         ..SeriesFilter::default()
     };
     let points = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
         .unwrap();
     let peak = points
         .iter()
@@ -4774,7 +4783,16 @@ fn an_hour_inside_the_peak_band_weighs_the_five_hour_share_and_prices_the_seven_
         ..filter.clone()
     };
     let daily_points = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &daily_filter, NOW))
+        .read_blocking(|c| {
+            burn_series(
+                c,
+                &tables,
+                &PRICES,
+                &daily_filter,
+                &LiveKeys::default(),
+                NOW,
+            )
+        })
         .unwrap();
     let day = daily_points
         .iter()
@@ -4836,7 +4854,7 @@ fn a_bucket_counts_every_token_type_its_rows_carry() {
         ..SeriesFilter::default()
     };
     let point = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -4897,7 +4915,7 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
             accounts: vec![account.into()],
             ..SeriesFilter::default()
         };
-        db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+        db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
             .unwrap()
             .into_iter()
             .find(|p| p.at == hour)
@@ -5025,7 +5043,7 @@ fn off_band_point_on_max_20x(db: &LedgerDb, account: &str) -> phoebis_ledger::Bu
         accounts: vec![account.into()],
         ..SeriesFilter::default()
     };
-    db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+    db.read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -5173,14 +5191,15 @@ fn a_session_attempt_weighs_its_five_hour_share_by_the_band_at_its_completion() 
                 &tables,
                 &PriceRevisions::shipped(),
                 &filter,
+                &LiveKeys::default(),
                 NOW,
             )
         })
         .unwrap();
     let point = sessions
         .iter()
-        .find(|(id, _)| id == "s-edge")
-        .and_then(|(_, points)| points.iter().find(|p| p.five_hour_share.is_some()))
+        .find(|(id, _, _)| id == "s-edge")
+        .and_then(|(_, _, points)| points.iter().find(|p| p.five_hour_share.is_some()))
         .unwrap_or_else(|| panic!("the session's bucket carries its share: {sessions:?}"));
     let tokens = usage(1_000, 100);
     let base = share_of(
@@ -5264,6 +5283,7 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
                 &tables,
                 &PriceRevisions::shipped(),
                 &filter,
+                &LiveKeys::default(),
                 NOW,
             )
         })
@@ -5271,8 +5291,8 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
     let point = |session: &str| {
         sessions
             .iter()
-            .find(|(id, _)| id == session)
-            .and_then(|(_, points)| points.iter().find(|p| p.at == hour).cloned())
+            .find(|(id, _, _)| id == session)
+            .and_then(|(_, _, points)| points.iter().find(|p| p.at == hour).cloned())
             .unwrap_or_else(|| panic!("{session} has the planted hour: {sessions:?}"))
     };
     let standard = point("s-standard");
@@ -5365,7 +5385,8 @@ fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    let points = burn_series_over(&rows, &tables, &PRICES, &filter, NOW).unwrap();
+    let points =
+        burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW).unwrap();
     for hour in [3_600, 7_200, 10_800] {
         let point = point_at(&points, hour);
         assert!(point.usd > 0.0, "{point:?}");
@@ -5403,7 +5424,7 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
             accounts,
             ..SeriesFilter::default()
         };
-        burn_series_over(&rows, &tables, &PRICES, &filter, NOW).unwrap()
+        burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW).unwrap()
     };
     let million = usage(1_000_000, 0);
     let week_share = tables
@@ -5491,7 +5512,8 @@ fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its
         regime_row(hour, UNATTRIBUTED, MAX_20X),
         regime_row(hour + 3_600, "claude-code/desk", MAX_20X),
     ];
-    let points = burn_series_over(&rows, &tables, &PRICES, &filter, NOW).unwrap();
+    let points =
+        burn_series_over(&rows, &tables, &PRICES, &filter, &LiveKeys::default(), NOW).unwrap();
     // 1,000 input tokens at Sonnet 5.5's weight 2 are 2,000 units. The base row divides by Pro's 5 and the band's
     // 0.5, the desk row by the desk regime's Pro 10 and its factor 1, both rows at 07:00 and 08:00 in Los Angeles.
     assert_eq!(
@@ -5542,7 +5564,15 @@ fn a_burn_bucket_answers_its_plan_rows_list_dollars_in_plan_usd_and_its_billed_r
         row(BILLED_FUNDING, UNATTRIBUTED, 2_000, 0),
     ];
     let point = point_at(
-        &burn_series_over(&rows, &share_tables(), &prices, &filter, NOW).unwrap(),
+        &burn_series_over(
+            &rows,
+            &share_tables(),
+            &prices,
+            &filter,
+            &LiveKeys::default(),
+            NOW,
+        )
+        .unwrap(),
         3_600,
     );
     // A dollar per million tokens of every type: the plan row's 1,100 tokens and the billed row's 2,000.
@@ -5588,7 +5618,15 @@ fn the_fable_week_figure_counts_the_fable_rows_alone_and_a_busy_bucket_without_o
         row(3_600, "claude-sonnet-5-5"),
         row(7_200, "claude-sonnet-5-5"),
     ];
-    let points = burn_series_over(&rows, &share_tables(), &PRICES, &filter, NOW).unwrap();
+    let points = burn_series_over(
+        &rows,
+        &share_tables(),
+        &PRICES,
+        &filter,
+        &LiveKeys::default(),
+        NOW,
+    )
+    .unwrap();
     let figures = |hour: i64| {
         let point = point_at(&points, hour);
         (point.fable_equivalent, point.equivalent)
@@ -5674,10 +5712,15 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
             .unwrap()
         }
     };
-    let point = |groups: &[(String, Vec<phoebis_ledger::BurnPoint>)], key: &str| {
-        let (_, points) = groups
+    let point = |groups: &[(
+        String,
+        phoebis_routing::BurnUnit,
+        Vec<phoebis_ledger::BurnPoint>,
+    )],
+                 key: &str| {
+        let (_, _, points) = groups
             .iter()
-            .find(|(group, _)| group == key)
+            .find(|(group, _, _)| group == key)
             .unwrap_or_else(|| panic!("a group {key}: {groups:?}"));
         point_at(points, hour)
     };
@@ -5686,7 +5729,7 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
     assert_eq!(
         by_model
             .iter()
-            .map(|(group, _)| group.as_str())
+            .map(|(group, _, _)| group.as_str())
             .collect::<Vec<_>>(),
         ["claude-opus-5-5", "claude-sonnet-5-5"]
     );
@@ -5735,9 +5778,94 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
     let all = read(GroupBy::All, Vec::new()).await;
     assert_eq!(
         all.iter()
-            .map(|(group, _)| group.as_str())
+            .map(|(group, _, _)| group.as_str())
             .collect::<Vec<_>>(),
         ["all"]
+    );
+}
+
+/// A burn group whose rows in the range hold refusals alone is left out beside a group whose one token falls on a model
+/// the cost model has no weight for, which stays and reads unpriced, so a gate written on a priced figure fails here.
+#[tokio::test]
+async fn a_burn_group_of_refusals_alone_is_left_out_beside_an_unpriced_group_with_one_token() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_request(
+        &RequestRecord {
+            id: "r-refused".into(),
+            received_at: WEEKDAY_OFF_PEAK,
+            finished_at: Some(WEEKDAY_OFF_PEAK + 4),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            model: "claude-unweighted-1".into(),
+            canonical_model: "claude-unweighted-1".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(403),
+            outcome: "rejected".into(),
+            attempts: 0,
+            error_code: Some("guardrail_blocked".into()),
+            refused: true,
+            ..Default::default()
+        },
+        &[],
+        None,
+    )
+    .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r-token".into(),
+            received_at: WEEKDAY_OFF_PEAK,
+            finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            model: "claude-unweighted-1".into(),
+            canonical_model: "claude-unweighted-1".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r-token".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::Oauth,
+            started_at: WEEKDAY_OFF_PEAK,
+            finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let filter = SeriesFilter {
+        from: hour * 1_000,
+        to: (hour + 3_600) * 1_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let groups = burn_groups_paged(
+        &db,
+        &share_tables(),
+        &PRICES,
+        &filter,
+        GroupBy::Account,
+        &LiveKeys::default(),
+        &[],
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|(group, _, points)| (group.as_str(), point_at(points, hour).unpriced))
+            .collect::<Vec<_>>(),
+        [("a", true)],
+        "the refused request's group leaves and the unweighted token's stays: {groups:?}"
     );
 }
 
@@ -5760,12 +5888,19 @@ fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
         };
         let sessions = db
             .read_blocking(|c| {
-                phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter, NOW)
+                phoebis_ledger::session_burn_series(
+                    c,
+                    &tables,
+                    &PRICES,
+                    &filter,
+                    &LiveKeys::default(),
+                    NOW,
+                )
             })
             .unwrap();
-        let (_, points) = sessions
+        let (_, _, points) = sessions
             .iter()
-            .find(|(id, _)| id == "s")
+            .find(|(id, _, _)| id == "s")
             .unwrap_or_else(|| panic!("the session is answered: {sessions:?}"));
         point_at(points, hour)
     };
@@ -5833,20 +5968,115 @@ fn a_session_series_naming_one_account_ranks_that_account_s_sessions_alone() {
         ..SeriesFilter::default()
     };
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter, NOW))
+        .read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &tables,
+                &PRICES,
+                &filter,
+                &LiveKeys::default(),
+                NOW,
+            )
+        })
         .unwrap();
     assert_eq!(
         sessions
             .iter()
-            .map(|(id, _)| id.as_str())
+            .map(|(id, _, _)| id.as_str())
             .collect::<Vec<_>>(),
         ["s-z"],
         "account a's one session, and none of b's: {sessions:?}"
     );
-    let point = point_at(&sessions[0].1, hour);
+    let point = point_at(&sessions[0].2, hour);
     assert!(
         point.uncached_tokens == 1_000_000 && point.five_hour_share.is_some(),
         "its attempt priced under a's tier: {point:?}"
+    );
+}
+
+/// A session read under a key or a pool ranks and prices the named key's or pool's requests alone, and leaves out a
+/// session whose requests there hold no token. Twenty sessions of another key in another pool each hold more tokens
+/// than session one, so a ranking that binds neither crowds it out of the twenty.
+#[test]
+fn a_session_series_under_a_key_or_a_pool_ranks_and_prices_its_requests_alone() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, session: &str, key: &str, pool: &str, input: Option<u64>| {
+        db.insert_request(
+            &RequestRecord {
+                id: id.into(),
+                received_at: WEEKDAY_OFF_PEAK,
+                finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+                key_id: Some(key.into()),
+                key_generation: 1,
+                pool_id: Some(pool.into()),
+                session_id: Some(session.into()),
+                canonical_model: "claude-opus-5-5".into(),
+                model: "claude-opus-5-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: id.into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: AccountKind::Oauth,
+                started_at: WEEKDAY_OFF_PEAK,
+                finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+                outcome: "succeeded".into(),
+                input_tokens: input,
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+    };
+    plant("r-one-a", "s-one", "ka", "p1", Some(1_000));
+    plant("r-one-b", "s-one", "kb", "p2", Some(2_000));
+    for n in 0..20 {
+        plant(
+            &format!("r-b-{n:02}"),
+            &format!("s-b-{n:02}"),
+            "kb",
+            "p2",
+            Some(10_000),
+        );
+    }
+    plant("r-empty", "s-empty", "ka", "p1", None);
+    let live = LiveKeys(BTreeMap::from([
+        ("ka".to_string(), 1),
+        ("kb".to_string(), 1),
+    ]));
+    let tables = PlanTables::shipped();
+    let hour = hour_of(WEEKDAY_OFF_PEAK);
+    let read = |keys: Vec<String>, pools: Vec<String>| {
+        let filter = SeriesFilter {
+            from: hour * 1_000,
+            to: (hour + 3_600) * 1_000,
+            bucket_seconds: 3_600,
+            keys,
+            pools,
+            ..SeriesFilter::default()
+        };
+        db.read_blocking(|c| {
+            phoebis_ledger::session_burn_series(c, &tables, &PRICES, &filter, &live, NOW)
+        })
+        .unwrap()
+        .into_iter()
+        .map(|(id, _, points)| (id, point_at(&points, hour).tokens))
+        .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        read(vec!["ka".into()], Vec::new()),
+        [("s-one".to_string(), 1_000)],
+        "under key ka, session one alone with its ka request's tokens"
+    );
+    assert_eq!(
+        read(Vec::new(), vec!["p1".into()]),
+        [("s-one".to_string(), 1_000)],
+        "under pool p1, session one alone with its p1 request's tokens"
     );
 }
 
@@ -6013,7 +6243,7 @@ fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
         "the fold files the two requests under their fundings"
     );
     let point = db
-        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+        .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &LiveKeys::default(), NOW))
         .unwrap()
         .into_iter()
         .find(|p| p.at == hour)
@@ -6083,14 +6313,15 @@ fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_
                 &tables,
                 &PriceRevisions::shipped(),
                 &filter,
+                &LiveKeys::default(),
                 NOW,
             )
         })
         .unwrap();
     let point = sessions
         .iter()
-        .find(|(id, _)| id == "s-mixed")
-        .and_then(|(_, points)| points.iter().find(|p| p.at == hour).cloned())
+        .find(|(id, _, _)| id == "s-mixed")
+        .and_then(|(_, _, points)| points.iter().find(|p| p.at == hour).cloned())
         .unwrap_or_else(|| panic!("the session has the planted hour: {sessions:?}"));
     let plan = usage(1_000, 100);
     let at = WEEKDAY_OFF_PEAK + 500;
@@ -6168,6 +6399,8 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
         db.insert_request(&request, &attempts, None).unwrap();
     }
     let tables = PlanTables::shipped();
+    // The key scope's bare id reads the generation a live key holds it at, one of the two the day's rows carry.
+    let live = LiveKeys(BTreeMap::from([("k2".to_string(), 0)]));
     for bucket_seconds in [3_600, 6 * 3_600] {
         // A range that starts mid-bucket, so the read reaches back to the bucket's edge.
         let base = SeriesFilter {
@@ -6201,9 +6434,9 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
                 ..scope
             };
             let read = db
-                .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, NOW))
+                .read_blocking(|c| burn_series(c, &tables, &PRICES, &filter, &live, NOW))
                 .unwrap();
-            let over = burn_series_over(&rows, &tables, &PRICES, &filter, NOW).unwrap();
+            let over = burn_series_over(&rows, &tables, &PRICES, &filter, &live, NOW).unwrap();
             // The unweighted GPT rows of b and c latch their buckets' figure, so a scope holding them reads the fast
             // rows' dollars alone.
             assert!(
@@ -6532,7 +6765,7 @@ async fn series_readers_over(
         ),
         (
             "burn_series_over",
-            burn_series_over(&[], &COSTS, &PRICES, &filter, NOW).map(drop),
+            burn_series_over(&[], &COSTS, &PRICES, &filter, &LiveKeys::default(), NOW).map(drop),
         ),
         (
             "burn_groups_paged",
@@ -6556,7 +6789,14 @@ async fn series_readers_over(
         (
             "session_burn_series",
             db.read_blocking(|c| {
-                phoebis_ledger::session_burn_series(c, &COSTS, &PRICES, &filter, NOW)
+                phoebis_ledger::session_burn_series(
+                    c,
+                    &COSTS,
+                    &PRICES,
+                    &filter,
+                    &LiveKeys::default(),
+                    NOW,
+                )
             })
             .map(drop),
         ),
@@ -7799,7 +8039,7 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
     plant_share(&db, row("r-desk", "claude-code/desk"));
     plant_share(&db, row("r-sdk", "claude-code/sdk-cli"));
     let points = db
-        .read_blocking(|c| burn_series(c, &costs, &prices, &filter, NOW))
+        .read_blocking(|c| burn_series(c, &costs, &prices, &filter, &LiveKeys::default(), NOW))
         .unwrap();
     let share = points
         .iter()
@@ -7812,12 +8052,21 @@ fn a_group_mixing_two_clients_prices_each_rows_regime() {
     let db = LedgerDb::open_in_memory().unwrap();
     plant_share(&db, row("r-desk", "claude-code/desk"));
     let sessions = db
-        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &costs, &prices, &filter, NOW))
+        .read_blocking(|c| {
+            phoebis_ledger::session_burn_series(
+                c,
+                &costs,
+                &prices,
+                &filter,
+                &LiveKeys::default(),
+                NOW,
+            )
+        })
         .unwrap();
     let share = sessions
         .iter()
-        .find(|(id, _)| id == "s")
-        .and_then(|(_, points)| points.iter().find_map(|p| p.five_hour_share))
+        .find(|(id, _, _)| id == "s")
+        .and_then(|(_, _, points)| points.iter().find_map(|p| p.five_hour_share))
         .unwrap_or_else(|| panic!("the session's hour carries its share: {sessions:?}"));
     assert!(close(share, 0.01), "the attempt under the regime: {share}");
 }

@@ -3302,6 +3302,87 @@ async fn a_usage_based_seats_burn_group_charts_in_dollars() {
     );
 }
 
+/// An account the registry does not hold charts in the unit its rows' recorded funding names: the window share where a
+/// row with a token was plan-funded, though an earlier row was billed, and dollars where every row was billed. A
+/// session grouping that names the account reads its unit the same way.
+#[tokio::test]
+async fn an_unregistered_accounts_burn_group_takes_its_unit_from_its_rows_funding() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    let on = |id: &str, at: i64, account: &str, overage: bool, session: &str| {
+        let mut row = record(id, at, "claude-sonnet-5-5", session);
+        if let Record::Request { attempts, .. } = &mut row {
+            attempts[0].account_id = account.into();
+            attempts[0].overage_in_use = overage.then_some(true);
+        }
+        row
+    };
+    parts.ledger.record(on(
+        "gone-overage",
+        now - 2 * HOUR,
+        "gone-plan",
+        true,
+        "s-gone",
+    ));
+    parts
+        .ledger
+        .record(on("gone-plan", now - HOUR, "gone-plan", false, "s-gone"));
+    parts.ledger.record(on(
+        "gone-billed",
+        now - HOUR,
+        "gone-billed",
+        true,
+        "s-billed",
+    ));
+    for id in ["gone-overage", "gone-plan", "gone-billed"] {
+        common::landed(&parts, id).await;
+    }
+    let units = |burn: &serde_json::Value, group: &str| -> std::collections::BTreeSet<String> {
+        burn["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["group"] == group)
+            .map(|p| p["unit"].to_string())
+            .collect()
+    };
+    let by_account = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            units(&by_account, "gone-plan"),
+            units(&by_account, "gone-billed")
+        ),
+        (
+            std::collections::BTreeSet::from([r#""window_share""#.to_string()]),
+            std::collections::BTreeSet::from([r#""usd""#.to_string()])
+        ),
+        "the plan-funded account's group and the billed one's: {by_account}"
+    );
+    let by_session = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=session&accounts=gone-plan",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        units(&by_session, "s-gone"),
+        std::collections::BTreeSet::from([r#""window_share""#.to_string()]),
+        "the session holding the plan-funded request: {by_session}"
+    );
+}
+
 /// A cached Sonnet 5.5 request and a probe on `business`, and a `direct` request, an hour ago.
 fn share_rows() -> Vec<Record> {
     let at = common::NOW - HOUR;
@@ -3958,6 +4039,127 @@ async fn the_burn_key_grouping_names_the_live_holder_by_its_id_and_an_earlier_on
     );
 }
 
+/// Each burn group's tokens summed over its points, the groups with none left out.
+fn burn_tokens(burn: &serde_json::Value) -> std::collections::BTreeMap<String, u64> {
+    let mut tokens = std::collections::BTreeMap::new();
+    for p in burn["points"].as_array().unwrap() {
+        let n = p["tokens"].as_u64().unwrap();
+        if n > 0 {
+            *tokens
+                .entry(p["group"].as_str().unwrap().to_string())
+                .or_default() += n;
+        }
+    }
+    tokens
+}
+
+#[tokio::test]
+async fn the_burn_route_reads_the_named_pools_rows_alone() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let at = common::NOW - HOUR;
+    // 1,000 input and 100 output tokens under the key `desktop` in the pool `main`, and 2,100 under another key in
+    // another pool.
+    parts
+        .ledger
+        .record(record("pool-main", at, "claude-sonnet-5-5", "s1"));
+    let mut side = record("pool-side", at, "claude-sonnet-5-5", "s2");
+    if let Record::Request {
+        request, attempts, ..
+    } = &mut side
+    {
+        request.key_id = Some("laptop".into());
+        request.pool_id = Some("side".into());
+        attempts[0].input_tokens = Some(2_000);
+    }
+    parts.ledger.record(side);
+    for id in ["pool-main", "pool-side"] {
+        common::landed(&parts, id).await;
+    }
+    let burn = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account&pools=main",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        burn_tokens(&burn),
+        std::collections::BTreeMap::from([("business".to_string(), 1_100)]),
+        "the pool main's request alone: {burn}"
+    );
+}
+
+/// A bare key id reads the key that holds the id now, as the breakdown's selector does, and an id no live key holds
+/// reads no group rather than every key's.
+#[tokio::test]
+async fn a_bare_key_id_on_the_burn_route_reads_the_live_holder_and_an_unheld_id_no_group() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    let at = common::NOW - HOUR;
+    // 1,100 tokens of the live holder, and 2,100 of the key that held the id before it.
+    parts.ledger.record(record_at(
+        "key-live",
+        at,
+        "claude-sonnet-5-5",
+        "s1",
+        generation,
+    ));
+    let mut earlier = record_at("key-earlier", at, "claude-sonnet-5-5", "s2", generation - 1);
+    if let Record::Request { attempts, .. } = &mut earlier {
+        attempts[0].input_tokens = Some(2_000);
+    }
+    parts.ledger.record(earlier);
+    for id in ["key-live", "key-earlier"] {
+        common::landed(&parts, id).await;
+    }
+    let live = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account&keys=desktop",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        burn_tokens(&live),
+        std::collections::BTreeMap::from([("business".to_string(), 1_100)]),
+        "the live holder's request alone: {live}"
+    );
+    let unheld = json(
+        get(
+            &parts.app,
+            "/admin/analytics/burn?range=24h&group_by=account&keys=laptop",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        unheld["points"],
+        serde_json::json!([]),
+        "an id no live key holds reads no group: {unheld}"
+    );
+}
+
 #[tokio::test]
 async fn the_breakdown_and_the_series_label_an_earlier_key_deleted_and_the_empty_model_no_model() {
     let parts = common::admin_parts_full().await;
@@ -4439,6 +4641,145 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason_and_by_fi
             .collect::<Vec<_>>(),
         [(Some(2_000), Some(1))],
         "the request's slow-down wait alone, in its bucket: {held:?}"
+    );
+}
+
+/// The rewrites route reads the accounts and the pools its query names: the moves and the rewrite tokens keep the named
+/// account's rows, and the held time the named pool's.
+#[tokio::test]
+async fn the_rewrites_route_reads_the_named_accounts_and_pools_alone() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let hour_ago = common::NOW - HOUR;
+    // A moved request's cache write and a slow-down wait, on `account` in `pool`.
+    let moved = |id: &str, account: &str, pool: &str, written: u64, held_ms: u64| Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: hour_ago,
+            finished_at: Some(hour_ago + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some(pool.into()),
+            session_id: Some(id.into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            held: Some(format!(
+                r#"{{"waited_on":["{account}"],"cohort":null,"held_ms":{held_ms},"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
+            )),
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: account.into(),
+            account_kind: AccountKind::Oauth,
+            started_at: hour_ago,
+            outcome: "succeeded".into(),
+            cache_write_5m_tokens: Some(written),
+            selection: Some(
+                r#"{"strategy":"pace","tier":null,"renewed":false,"moved":"shed","skipped":[]}"#
+                    .into(),
+            ),
+            ..Default::default()
+        }],
+        bodies: None,
+    };
+    let migrated = |at: i64, account: &str, from: &str, reason: &str| {
+        Record::Event(EventRecord {
+            at,
+            kind: "pin_migrated".into(),
+            account_id: Some(account.into()),
+            key_id: Some("desktop".into()),
+            session_id: Some("s1".into()),
+            model: Some("claude-sonnet-5".into()),
+            actor: None,
+            detail: Some(
+                serde_json::json!({ "from_account": from, "epoch": 1, "reason": reason, "fit": "fits" })
+                    .to_string(),
+            ),
+            pool_id: None,
+            agent_id: None,
+            request_id: None,
+            from_account_id: Some(from.into()),
+        })
+    };
+    parts
+        .ledger
+        .record(moved("r-business", "business", "main", 500, 2_000));
+    parts
+        .ledger
+        .record(moved("r-direct", "direct", "side", 300, 700));
+    parts
+        .ledger
+        .record(migrated(hour_ago + 100, "business", "direct", "shed"));
+    parts
+        .ledger
+        .record(migrated(hour_ago + 200, "direct", "business", "spent"));
+    let every = wait_json(
+        &parts.app,
+        "/admin/analytics/rewrites?range=24h",
+        &cookie,
+        |v| v["moves"]["shed"] == 1 && v["moves"]["spent"] == 1,
+    )
+    .await;
+    let rewrite_tokens = |v: &serde_json::Value| -> u64 {
+        v["points"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["rewrite_tokens"].as_u64().unwrap())
+            .sum()
+    };
+    let waits = |v: &serde_json::Value| -> Vec<(u64, u64)> {
+        v["held"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["requests"] != 0)
+            .map(|p| {
+                (
+                    p["held_ms"].as_u64().unwrap(),
+                    p["requests"].as_u64().unwrap(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        (rewrite_tokens(&every), waits(&every)),
+        (800, vec![(2_700, 2)]),
+        "the unfiltered read holds both accounts' writes and both pools' waits: {every}"
+    );
+    let by_account = json(
+        get(
+            &parts.app,
+            "/admin/analytics/rewrites?range=24h&accounts=business",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (rewrite_tokens(&by_account), &by_account["moves"]),
+        (500, &serde_json::json!({ "shed": 1 })),
+        "the business account's write and move alone: {by_account}"
+    );
+    let by_pool = json(
+        get(
+            &parts.app,
+            "/admin/analytics/rewrites?range=24h&pools=main",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        waits(&by_pool),
+        [(2_000, 1)],
+        "the main pool's wait alone: {by_pool}"
     );
 }
 

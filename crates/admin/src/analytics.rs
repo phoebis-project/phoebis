@@ -129,7 +129,7 @@ fn selection(state: &AdminState, q: &RollupQuery) -> Result<Selection, Response>
     Ok(((from, to), group_by, filter, live, now))
 }
 
-/// The query of `GET /admin/analytics/accounts`, `GET /admin/analytics/guardrails` and `GET /admin/analytics/rewrites`.
+/// The query of `GET /admin/analytics/accounts` and `GET /admin/analytics/guardrails`.
 #[derive(serde::Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct RangeQuery {
@@ -212,6 +212,23 @@ pub(crate) struct BurnQuery {
     pub accounts: Option<String>,
     /// Newline-separated patterns, each naming a group under `group_by=user_agent` as the Analytics tag describes.
     pub user_agent_groups: Option<String>,
+    /// The keys to read, comma-separated: a bare id reads the key's live generation, `<id>@<generation>` that one.
+    pub keys: Option<String>,
+    /// The pools to read, comma-separated.
+    pub pools: Option<String>,
+}
+
+/// `GET /admin/analytics/rewrites`' query.
+#[derive(serde::Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(crate) struct RewritesQuery {
+    /// `1h`, `24h`, `7d`, `30d`, or `<from>,<to>` in Unix milliseconds spanning at most 400 days. Default `24h`.
+    pub range: Option<String>,
+    /// A comma-separated list. The moves, the rewrite tokens and the held time keep the named accounts' rows.
+    pub accounts: Option<String>,
+    /// A comma-separated list. The held time keeps the named pools' rows, while the moves and the rewrite tokens read
+    /// every pool, since the account rollups they come from carry no pool.
+    pub pools: Option<String>,
 }
 
 /// `GET /admin/analytics/reconciliations`' query.
@@ -820,7 +837,8 @@ pub(crate) async fn accounts(
 /// answer under `group_by=account` and under any grouping whose `accounts` filter names exactly one account, and read
 /// null otherwise, since shares of different accounts' windows do not add. The figure answers under every grouping. So
 /// do a plan-funded row's list dollars in `plan_usd` beside the billed dollars in `usd`, and the Pro 5-hour figure in
-/// `five_hour_equivalent` and the Fable week's in `fable_equivalent` beside the Pro-week figure.
+/// `five_hour_equivalent` and the Fable week's in `fable_equivalent` beside the Pro-week figure. A group none of whose
+/// rows in the range holds a token answers no point.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Burn {
@@ -840,8 +858,9 @@ pub(crate) struct BurnPoint {
     pub at: i64,
     pub group: String,
     /// `window_share` for an oauth account, `usd` for an API key one and for a usage-based seat, whose spend is billed
-    /// in dollars. Null for an account no longer registered, and under every grouping but `account` unless the
-    /// `accounts` filter names exactly one account.
+    /// in dollars. For an account the registry no longer holds, `window_share` where a row of the group that holds a
+    /// token was plan-funded and `usd` where every such row was billed. Null under every grouping but `account` unless
+    /// the `accounts` filter names exactly one account.
     #[schema(example = "window_share")]
     pub unit: Option<String>,
     /// An API key account's estimated cost, and a usage-based seat's. It also carries a subscription account's
@@ -940,6 +959,7 @@ pub(crate) async fn burn(
     // One snapshot names the live keys the read groups by and each group's account kind. The account write routes
     // reload the registry before they answer, so the kind agrees with the store's.
     let snapshot = state.router.snapshot();
+    let live = LiveKeys::from_snapshot(&snapshot);
     let accounts = list(q.accounts.as_deref());
     let one_account = names_one_account(&accounts).then(|| accounts[0].clone());
     let tables = state.tables.clone();
@@ -949,6 +969,8 @@ pub(crate) async fn burn(
         to,
         bucket_seconds: bucket,
         accounts,
+        keys: list(q.keys.as_deref()),
+        pools: list(q.pools.as_deref()),
         ..Default::default()
     };
     let prices = state.pricing.revisions();
@@ -957,7 +979,7 @@ pub(crate) async fn burn(
             state
                 .ledger
                 .db()
-                .read(move |c| session_burn_series(c, &tables, &prices, &filter, now))
+                .read(move |c| session_burn_series(c, &tables, &prices, &filter, &live, now))
                 .await
         }
         // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
@@ -969,7 +991,7 @@ pub(crate) async fn burn(
                 &prices,
                 &filter,
                 by,
-                &LiveKeys::from_snapshot(&snapshot),
+                &live,
                 &agent_groups,
                 now,
             )
@@ -983,20 +1005,23 @@ pub(crate) async fn burn(
     let reported = reported_samples(&state).await;
     let points = series
         .into_iter()
-        .flat_map(|(group, points)| {
+        .flat_map(|(group, recorded, points)| {
             // The one account the group's rows belong to, under the gate the ledger answers the shares under. Its
             // kind and its class name the unit a reader charts the group in, so a subscription whose tier no table
             // sizes reads apart from an api_key account or a usage-based seat, all answering no share. An account the
-            // registry no longer holds has none.
+            // registry no longer holds takes the unit its rows' recorded funding names.
             let account = if by == Some(GroupBy::Account) {
                 Some(&group)
             } else {
                 one_account.as_ref()
             };
-            let unit = account.and_then(|account| {
+            let unit = account.map(|account| {
                 snapshot
                     .account(account)
-                    .map(|a| BurnUnit::of(a.kind, snapshot.usage_based(account), false).as_str())
+                    .map_or(recorded, |a| {
+                        BurnUnit::of(a.kind, snapshot.usage_based(account), false)
+                    })
+                    .as_str()
             });
             // The ledger prices the shares by the tier each row recorded, so a shared window the account's set no
             // longer holds is taken out here.
@@ -1473,7 +1498,7 @@ pub(crate) struct RewritePoint {
     path = "/admin/analytics/rewrites",
     operation_id = "analytics_rewrites",
     tag = "Analytics",
-    params(RangeQuery),
+    params(RewritesQuery),
     responses(
         (status = 200, description = "The points, the moves and the slow-down's held time over the range.", body = Rewrites),
         (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
@@ -1482,7 +1507,7 @@ pub(crate) struct RewritePoint {
 )]
 pub(crate) async fn rewrites(
     State(state): State<Arc<AdminState>>,
-    AdminQuery(q): AdminQuery<RangeQuery>,
+    AdminQuery(q): AdminQuery<RewritesQuery>,
 ) -> Response {
     let (from, to) = match parse_range(q.range.as_deref(), (state.clock)()) {
         Ok(r) => r,
@@ -1493,6 +1518,8 @@ pub(crate) async fn rewrites(
         from,
         to,
         bucket_seconds: bucket,
+        accounts: list(q.accounts.as_deref()),
+        pools: list(q.pools.as_deref()),
         ..Default::default()
     };
     let read = state

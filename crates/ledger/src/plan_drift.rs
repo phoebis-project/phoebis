@@ -346,7 +346,8 @@ fn walks(plan: &[String], names: &[&str]) -> bool {
 #[test]
 fn the_session_attempts_read_keeps_its_plan_under_statistics() {
     let (_dir, db) = seeded();
-    let (sql, binds) = session_attempts_statement(FROM, TO, &["s007".into(), "s008".into()]);
+    let (sql, binds) =
+        session_attempts_statement(FROM, TO, &["s007".into(), "s008".into()], &[], &[]);
     let steps = plan(&db, &sql, params_from_iter(binds));
     assert!(
         seeks(

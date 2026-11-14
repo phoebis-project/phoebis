@@ -63,9 +63,9 @@ Each operation names its request (path segments, query parameters, or body field
             probe's cost files under the funding of the probe's own request, while a recipe's settlement, which \
             carries the probes' waste, files under the kind and the class its record carries: `billed` for an API key \
             account, `usage_based` for a usage-based seat, else `fast` for a fast recipe, else `plan`. Absent keeps \
-            every row. The two subsets partition the rows). `/accounts`, `/guardrails` and `/rewrites` take `range` \
-            alone. `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, `/refusal_categories`, \
-            and `/unused_allowance`, elsewhere under this tag, take their own request shapes."),
+            every row. The two subsets partition the rows). `/accounts` and `/guardrails` take `range` alone. \
+            `GET /admin/analytics/budgets`, `/burn`, `/placements`, `/reconciliations`, `/refusal_categories`, \
+            `/rewrites`, and `/unused_allowance`, elsewhere under this tag, take their own request shapes."),
         (name = "Attention"),
         (name = "Dashboard"),
         (name = "Guardrails", description = "A guardrail is a named list of conditions a request is checked against \

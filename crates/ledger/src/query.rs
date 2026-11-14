@@ -9,8 +9,8 @@ use phoebis_bus::Kind;
 use phoebis_oauth::ClaimOutcome;
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
-    model_week, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    model_week, BurnUnit, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES,
+    SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{canonical_id, AccountKind, AttachmentSubject, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
@@ -4309,12 +4309,23 @@ pub struct SeriesFilter {
     pub bucket_seconds: i64,
     /// Account ids; empty means every account. The one scope `rewrite_series` and `moves_by_reason` read, since the account rollups carry no other dimension.
     pub accounts: Vec<String>,
-    /// Key ids, matched on `key_id` alone; empty means every key. `rollups_hourly` only.
+    /// Key selectors as a `keys=` filter names them: a bare id names the live generation, `<id>@<generation>` that one,
+    /// and the reserved id its rows at any generation. Empty means every key, and selectors none of which names a
+    /// lifetime select no row.
     pub keys: Vec<String>,
-    /// Pool ids; empty means every pool. `rollups_hourly` only.
+    /// Pool ids. Empty means every pool.
     pub pools: Vec<String>,
     /// Request classes, `NO_CLASS` naming the classless rows; empty means every class. `rollups_hourly` only.
     pub request_classes: Vec<String>,
+}
+
+impl SeriesFilter {
+    /// The key selectors resolved against `live` as `RollupFilter::rollup_select` resolves its own, `None` where the
+    /// filter names keys and none of them names a lifetime, which selects no row rather than every row.
+    fn key_select(&self, live: &LiveKeys) -> Option<Vec<KeySelector>> {
+        let keys = key_selectors(&self.keys, live);
+        (self.keys.is_empty() || !keys.is_empty()).then_some(keys)
+    }
 }
 
 /// The first bucket's edge at or below `start`, in seconds, once the range up to `end` passes the guard every series
@@ -4611,10 +4622,11 @@ pub fn burn_series(
     tables: &PlanTables,
     prices: &PriceRevisions,
     filter: &SeriesFilter,
+    live: &LiveKeys,
     now: i64,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let rows = burn_rows(conn, filter)?;
-    burn_series_over(&rows, tables, prices, filter, now)
+    burn_series_over(&rows, tables, prices, filter, live, now)
 }
 
 /// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket, its shares
@@ -4628,12 +4640,14 @@ pub fn burn_series_over(
     tables: &PlanTables,
     prices: &PriceRevisions,
     filter: &SeriesFilter,
+    live: &LiveKeys,
     now: i64,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
     let mut sums = empty_burn_sums(first, last, filter.bucket_seconds);
     let shares = names_one_account(&filter.accounts);
-    for row in rows.iter().filter(|r| burn_scope_holds(filter, r)) {
+    let keys = key_selectors(&filter.keys, live);
+    for row in rows.iter().filter(|r| burn_scope_holds(filter, &keys, r)) {
         price_burn_row(
             &mut sums,
             first,
@@ -4659,8 +4673,14 @@ fn empty_burn_sums(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnSums> 
         .collect()
 }
 
-fn burn_scope_holds(filter: &SeriesFilter, r: &RollupRow) -> bool {
-    (filter.keys.is_empty() || filter.keys.contains(&r.key_id))
+/// Whether a row lies in the filter's scopes. `keys` holds the filter's selectors as `key_selectors` resolved them,
+/// each matched on its id and on its generation where it carries one, so the reserved id matches at any generation and
+/// a filter whose selectors resolved to none matches no row.
+fn burn_scope_holds(filter: &SeriesFilter, keys: &[KeySelector], r: &RollupRow) -> bool {
+    (filter.keys.is_empty()
+        || keys.iter().any(|k| {
+            k.key_id == r.key_id && k.key_generation.is_none_or(|g| g == r.key_generation)
+        }))
         && (filter.pools.is_empty() || filter.pools.contains(&r.pool_id))
         && (filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
         && (filter.request_classes.is_empty() || filter.request_classes.contains(&r.request_class))
@@ -4695,8 +4715,9 @@ fn price_burn_row(
 /// The burn series of every group under `group_by`, any dimension `GroupBy` names, within `filter`'s scopes, read
 /// through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each group's points are the
 /// ones `burn_series_over` answers for that group's rows alone, the shares answered where each group holds one
-/// account's rows. The groups are the ones the range itself holds, and the read reaches back to the first bucket's
-/// edge, which may start before it.
+/// account's rows. A group is answered where a row of the range itself holds a token, and the read reaches back to the
+/// first bucket's edge, which may start before it. Each group carries the unit its rows' recorded funding names, as
+/// `recorded_unit` reads it. A filter whose keys name no lifetime answers no group.
 #[allow(clippy::too_many_arguments)]
 pub async fn burn_groups_paged(
     db: &Arc<LedgerDb>,
@@ -4707,7 +4728,7 @@ pub async fn burn_groups_paged(
     live: &LiveKeys,
     agent_groups: &[String],
     now: i64,
-) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
+) -> Result<Vec<(String, BurnUnit, Vec<BurnPoint>)>, LedgerError> {
     let shares = holds_one_account(group_by, &filter.accounts);
     let grouping = Grouping {
         agent_groups,
@@ -4716,29 +4737,36 @@ pub async fn burn_groups_paged(
     };
     let (first, last) = bucket_range(filter)?;
     let from_hour = hour_of(filter.from);
+    let Some(keys) = filter.key_select(live) else {
+        return Ok(Vec::new());
+    };
     let select = RollupSelect {
         pools: filter.pools.clone(),
         accounts: filter.accounts.clone(),
-        keys: filter
-            .keys
-            .iter()
-            .map(|id| KeySelector {
-                key_id: id.clone(),
-                key_generation: None,
-            })
-            .collect(),
+        keys,
         ..RollupSelect::default()
     };
-    // Each group's points, and whether a row of the range itself joined it.
-    let mut groups: BTreeMap<String, (Vec<BurnSums>, bool)> = BTreeMap::new();
+    // Each group's points, whether a row of the range itself holds a token, and whether a row with a token is
+    // plan-funded.
+    let mut groups: BTreeMap<String, (Vec<BurnSums>, bool, bool)> = BTreeMap::new();
     read_rollups_paged(db, &select, first, last, |row| {
-        if !burn_scope_holds(filter, row) {
+        if !burn_scope_holds(filter, &select.keys, row) {
             return;
         }
-        let (points, held) = groups
-            .entry(grouping.group_of(row))
-            .or_insert_with(|| (empty_burn_sums(first, last, filter.bucket_seconds), false));
-        *held |= row.hour >= from_hour && row.hour < last;
+        let (points, held, plan_funded) =
+            groups.entry(grouping.group_of(row)).or_insert_with(|| {
+                (
+                    empty_burn_sums(first, last, filter.bucket_seconds),
+                    false,
+                    false,
+                )
+            });
+        // A token is what `price_request` prices, whatever the tables then answer, so a group whose model has no
+        // weight stays and reads unpriced.
+        if tokens_of(row.usage()) > 0 {
+            *held |= row.hour >= from_hour && row.hour < last;
+            *plan_funded |= row.funding_kind() == Funding::Plan;
+        }
         price_burn_row(
             points,
             first,
@@ -4753,9 +4781,26 @@ pub async fn burn_groups_paged(
     .await?;
     Ok(groups
         .into_iter()
-        .filter(|(_, (_, held))| *held)
-        .map(|(group, (sums, _))| (group, sums.into_iter().map(BurnSums::point).collect()))
+        .filter(|(_, (_, held, _))| *held)
+        .map(|(group, (sums, _, plan_funded))| {
+            (
+                group,
+                recorded_unit(plan_funded),
+                sums.into_iter().map(BurnSums::point).collect(),
+            )
+        })
         .collect())
+}
+
+/// The unit a burn group's recorded funding names, for a reader whose registry no longer holds the group's account:
+/// the window share where a row of the group that holds a token was plan-funded, dollars where every such row was
+/// billed.
+fn recorded_unit(plan_funded: bool) -> BurnUnit {
+    if plan_funded {
+        BurnUnit::WindowShare
+    } else {
+        BurnUnit::Usd
+    }
 }
 
 /// The cache-write tokens the account rollups booked as a rewrite, per bucket; the bucket's `at` is
@@ -4929,22 +4974,25 @@ const SESSION_BURN_LIMIT: usize = 20;
 /// runs. A request is admitted within an hour of any attempt's start, so the request's own index carries the range.
 /// The index is named: without statistics, as on a fresh file, SQLite prices a scan of every attempt below this range
 /// search. Named accounts rank by their own attempts alone, the attempts the series then prices, and the unary plus
-/// keeps them off the attempts' account index so the requests' range stays the outer loop.
+/// keeps them off the attempts' account index so the requests' range stays the outer loop. Named keys and pools rank
+/// by their own requests alone, as `session_scope` binds them.
 pub(crate) fn top_sessions_statement(
     from: i64,
     to: i64,
     limit: usize,
     accounts: &[String],
+    keys: &[KeySelector],
+    pools: &[String],
 ) -> (String, Vec<rusqlite::types::Value>) {
-    let named = if accounts.is_empty() {
-        String::new()
-    } else {
-        let marks = (0..accounts.len())
-            .map(|i| format!("?{}", i + 4))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(" AND +a.account_id IN ({marks})")
-    };
+    let mut bind = vec![
+        rusqlite::types::Value::Integer(from),
+        rusqlite::types::Value::Integer(to),
+        rusqlite::types::Value::Integer(limit as i64),
+    ];
+    let mut clauses = Vec::new();
+    in_list("+a.account_id", accounts, &mut bind, &mut clauses);
+    session_scope(keys, pools, &mut bind, &mut clauses);
+    let named: String = clauses.iter().map(|c| format!(" AND {c}")).collect();
     let sql = format!(
         "SELECT r.session_id FROM attempts a \
          JOIN requests r INDEXED BY requests_received ON r.id = a.request_id \
@@ -4956,29 +5004,35 @@ pub(crate) fn top_sessions_statement(
              + COALESCE(a.output_tokens, 0)) DESC, r.session_id \
          LIMIT ?3"
     );
-    let mut bind = vec![
-        rusqlite::types::Value::Integer(from),
-        rusqlite::types::Value::Integer(to),
-        rusqlite::types::Value::Integer(limit as i64),
-    ];
-    bind.extend(
-        accounts
-            .iter()
-            .map(|account| rusqlite::types::Value::Text(account.clone())),
-    );
     (sql, bind)
 }
 
-/// The `limit` sessions with the most tokens over `[from, to)` on `accounts` (every account when empty), ranked in
-/// SQL rather than in memory, so a caller never reads an attempt row belonging to a session it will not answer.
+/// The session burn statements' clauses on the named keys and pools, read off the request row, which stores NULL for
+/// the reserved id where the rollups store the id itself. The attempt row carries no key, so the key clause's bare
+/// columns name the request's.
+fn session_scope(
+    keys: &[KeySelector],
+    pools: &[String],
+    args: &mut Vec<rusqlite::types::Value>,
+    clauses: &mut Vec<String>,
+) {
+    key_clause(keys, true, args, clauses);
+    in_list_or_null("r.pool_id", pools, args, clauses);
+}
+
+/// The `limit` sessions with the most tokens over `[from, to)` on `accounts`, `keys` and `pools` (each list reads
+/// every one when empty), ranked in SQL rather than in memory, so a caller never reads an attempt row belonging to a
+/// session it will not answer.
 fn top_sessions_by_tokens(
     conn: &Connection,
     from: i64,
     to: i64,
     limit: usize,
     accounts: &[String],
+    keys: &[KeySelector],
+    pools: &[String],
 ) -> Result<Vec<String>, LedgerError> {
-    let (sql, bind) = top_sessions_statement(from, to, limit, accounts);
+    let (sql, bind) = top_sessions_statement(from, to, limit, accounts, keys, pools);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(bind), |row| row.get::<_, String>(0))?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -5090,19 +5144,15 @@ struct SessionAttempt {
 
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
 /// statement the read runs. A request is admitted within an hour of any attempt's start, so the request's own index
-/// carries the range.
+/// carries the range. The named keys and pools price their own requests' attempts alone, as `session_scope` binds them.
 pub(crate) fn session_attempts_statement(
     from: i64,
     to: i64,
     sessions: &[String],
+    keys: &[KeySelector],
+    pools: &[String],
 ) -> (String, Vec<rusqlite::types::Value>) {
     let placeholders = sessions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT r.session_id, a.account_id, a.started_at, {PRICED_ATTEMPT_COLUMNS} \
-         FROM attempts a JOIN requests r ON r.id = a.request_id \
-         WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
-         AND r.received_at >= ? AND r.received_at < ?"
-    );
     let mut bind: Vec<rusqlite::types::Value> = sessions
         .iter()
         .map(|s| rusqlite::types::Value::Text(s.clone()))
@@ -5111,6 +5161,16 @@ pub(crate) fn session_attempts_statement(
     bind.push(rusqlite::types::Value::Integer(to));
     bind.push(rusqlite::types::Value::Integer(from - HOUR_MS));
     bind.push(rusqlite::types::Value::Integer(to));
+    // The scope's numbered marks follow every bare one, which SQLite numbers in the order they appear.
+    let mut clauses = Vec::new();
+    session_scope(keys, pools, &mut bind, &mut clauses);
+    let scoped: String = clauses.iter().map(|c| format!(" AND {c}")).collect();
+    let sql = format!(
+        "SELECT r.session_id, a.account_id, a.started_at, {PRICED_ATTEMPT_COLUMNS} \
+         FROM attempts a JOIN requests r ON r.id = a.request_id \
+         WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
+         AND r.received_at >= ? AND r.received_at < ?{scoped}"
+    );
     (sql, bind)
 }
 
@@ -5119,11 +5179,13 @@ fn read_session_attempts(
     from: i64,
     to: i64,
     sessions: &[String],
+    keys: &[KeySelector],
+    pools: &[String],
 ) -> Result<Vec<SessionAttempt>, LedgerError> {
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let (sql, bind) = session_attempts_statement(from, to, sessions);
+    let (sql, bind) = session_attempts_statement(from, to, sessions, keys, pools);
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(bind), |row| {
         Ok(SessionAttempt {
@@ -5309,42 +5371,65 @@ pub fn newest_landed_at(conn: &Connection) -> Result<i64, LedgerError> {
 /// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
 /// `burn_series` prices an account row, save that an attempt lands in the bucket it started in, reads the band at
 /// its completion and prices under the account tier it recorded. A session can move between accounts, so its shares
-/// are answered where the filter names one account, whose attempts alone the series then holds. The Pro-week figure
-/// divides by the anchor row in force at `now`. One pass over the range's attempts: each lands in its bucket by index,
-/// rather than every session re-scanning every attempt for every bucket.
+/// are answered where the filter names one account, whose attempts alone the series then holds. Named keys and pools
+/// rank and price their own requests alone, and a session is answered where an attempt of the range itself holds a
+/// token, as `burn_groups_paged` answers a group, with the unit its attempts' recorded funding names. The Pro-week
+/// figure divides by the anchor row in force at `now`. One pass over the range's attempts: each lands in its bucket by
+/// index, rather than every session re-scanning every attempt for every bucket.
 pub fn session_burn_series(
     conn: &Connection,
     tables: &PlanTables,
     prices: &PriceRevisions,
     filter: &SeriesFilter,
+    live: &LiveKeys,
     now: i64,
-) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
+) -> Result<Vec<(String, BurnUnit, Vec<BurnPoint>)>, LedgerError> {
     let shares = names_one_account(&filter.accounts);
     let (first, last) = bucket_range(filter)?;
+    let from_hour = hour_of(filter.from);
+    let Some(keys) = filter.key_select(live) else {
+        return Ok(Vec::new());
+    };
     let sessions = top_sessions_by_tokens(
         conn,
         first * 1_000,
         last * 1_000,
         SESSION_BURN_LIMIT,
         &filter.accounts,
+        &keys,
+        &filter.pools,
     )?;
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let mut by_session: HashMap<String, Vec<BurnSums>> = sessions
+    // Each session's points, whether an attempt of the range itself holds a token, and whether an attempt with a
+    // token is plan-funded.
+    let mut by_session: HashMap<String, (Vec<BurnSums>, bool, bool)> = sessions
         .iter()
         .map(|id| {
             (
                 id.clone(),
-                empty_burn_sums(first, last, filter.bucket_seconds),
+                (
+                    empty_burn_sums(first, last, filter.bucket_seconds),
+                    false,
+                    false,
+                ),
             )
         })
         .collect();
-    for a in read_session_attempts(conn, first * 1_000, last * 1_000, &sessions)? {
+    let attempts = read_session_attempts(
+        conn,
+        first * 1_000,
+        last * 1_000,
+        &sessions,
+        &keys,
+        &filter.pools,
+    )?;
+    for a in attempts {
         if !filter.accounts.is_empty() && !filter.accounts.contains(&a.account_id) {
             continue;
         }
-        let Some(series) = by_session.get_mut(&a.session_id) else {
+        let Some((series, held, plan_funded)) = by_session.get_mut(&a.session_id) else {
             continue;
         };
         let bucket_at = a.at / 1_000;
@@ -5360,13 +5445,21 @@ pub fn session_burn_series(
             continue;
         }
         let (key, usage) = a.priced.usage(prices, now);
+        *held |= bucket_at >= from_hour;
+        *plan_funded |= key.funding == Funding::Plan;
         price_usage(point, prices, tables, key, usage, shares);
     }
     Ok(sessions
         .into_iter()
-        .map(|id| {
-            let series = by_session.remove(&id).unwrap_or_default();
-            (id, series.into_iter().map(BurnSums::point).collect())
+        .filter_map(|id| {
+            let (series, held, plan_funded) = by_session.remove(&id)?;
+            held.then(|| {
+                (
+                    id,
+                    recorded_unit(plan_funded),
+                    series.into_iter().map(BurnSums::point).collect(),
+                )
+            })
         })
         .collect())
 }
@@ -5442,7 +5535,8 @@ mod tests {
     }
 
     /// The session burn chart's two reads bound the request by its own `received_at` beside the attempt's start,
-    /// which no index leads with, so the request side seeks the range rather than walking every retained session.
+    /// which no index leads with, so the request side seeks the range under each scope the reads bind, rather than
+    /// walking every retained session.
     #[test]
     fn the_session_burn_reads_search_the_requests_by_their_received_range() {
         // The requests' range is the outer loop and each of its requests looks its attempts up by id: an attempts index
@@ -5459,18 +5553,41 @@ mod tests {
                 step.starts_with("SEARCH a USING ") && step.contains("request_id=?")
             }) && !plan.iter().any(|step| step.starts_with("SCAN"))
         };
-        for accounts in [Vec::new(), vec!["a".to_string(), "b".to_string()]] {
-            let (sql, binds) = top_sessions_statement(0, 3_600_000, 20, &accounts);
+        let keys = [
+            KeySelector {
+                key_id: "k".into(),
+                key_generation: Some(1),
+            },
+            KeySelector {
+                key_id: UNATTRIBUTED.into(),
+                key_generation: None,
+            },
+        ];
+        let pools = ["p".to_string()];
+        let accounts = ["a".to_string(), "b".to_string()];
+        let scopes: [(&[String], &[KeySelector], &[String]); 4] = [
+            (&[], &[], &[]),
+            (&accounts, &[], &[]),
+            (&[], &keys, &[]),
+            (&[], &[], &pools),
+        ];
+        for (accounts, keys, pools) in scopes {
+            let (sql, binds) = top_sessions_statement(0, 3_600_000, 20, accounts, keys, pools);
             let top = plan_of(&sql, binds);
             assert!(
                 ranged(&top) && top[0].starts_with("SEARCH r USING INDEX requests_received "),
-                "{accounts:?}: {top:?}"
+                "{accounts:?} {keys:?} {pools:?}: {top:?}"
             );
+            let (sql, binds) = session_attempts_statement(
+                0,
+                3_600_000,
+                &["s1".to_string(), "s2".to_string()],
+                keys,
+                pools,
+            );
+            let attempts = plan_of(&sql, binds);
+            assert!(ranged(&attempts), "{keys:?} {pools:?}: {attempts:?}");
         }
-        let (sql, binds) =
-            session_attempts_statement(0, 3_600_000, &["s1".to_string(), "s2".to_string()]);
-        let attempts = plan_of(&sql, binds);
-        assert!(ranged(&attempts), "{attempts:?}");
     }
 
     /// The incremental read seeks the landing index and walks no table, on statistics that make the received index
