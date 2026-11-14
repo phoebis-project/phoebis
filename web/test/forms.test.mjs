@@ -261,14 +261,14 @@ test('a model rule list is refused in the route\'s order and words, and the refu
 
 test("the key dialog's holds agree with its Save condition", () => {
   assert.deepEqual(d.KEY_GROUPS, ['key', 'access', 'models', 'guardrails', 'sessions', 'capture']);
-  const named = { captureHours: '6', captureMode: 'inherit', modelRules: [], name: 'workstation', poolId: 'all' };
+  const named = { captureHours: 6, captureMode: 'inherit', modelRules: [], name: 'workstation', poolId: 'all' };
   assert.deepEqual(d.keyRefusals(named), [], 'a named key in a pool with no rules may save');
   assert.deepEqual(d.keyRefusals({ ...named, name: '' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }]);
   assert.deepEqual(d.keyRefusals({ ...named, name: '   ' }), [{ field: 'Name', group: 'key', text: 'the key needs a name.' }], 'a name of spaces is saved trimmed, so it is no name');
   assert.deepEqual(d.keyRefusals({ ...named, poolId: '' }), [{ field: 'Pool', group: 'key', text: 'the key needs a pool.' }]);
   assert.deepEqual(d.keyRefusals({ ...named, modelRules: rules('a***') }), [{ field: 'Model rules', group: 'models', text: d.modelRulesRefusal(rules('a***')) }]);
   assert.deepEqual(
-    d.keyRefusals({ captureHours: '', captureMode: 'override', modelRules: rules('a***'), name: '', poolId: '' }, { maxHours: 72 }).map((r) => [r.group, r.field]),
+    d.keyRefusals({ captureHours: null, captureMode: 'override', modelRules: rules('a***'), name: '', poolId: '' }, { maxHours: 72 }).map((r) => [r.group, r.field]),
     [['key', 'Name'], ['key', 'Pool'], ['models', 'Model rules'], ['capture', 'Capture hours for this key']],
     'every hold at once reads in rail order',
   );
@@ -294,22 +294,22 @@ test("a new key's name is refused when its id is taken, by case or by punctuatio
 });
 
 test("an override's hours must be a whole number inside the ceiling", () => {
-  const form = { captureHours: '6', captureMode: 'override', modelRules: [], name: 'workstation', poolId: 'all' };
+  const form = { captureHours: 6, captureMode: 'override', modelRules: [], name: 'workstation', poolId: 'all' };
   const hours = (captureHours, captureMode = 'override', checks = { maxHours: 72 }) => d.keyRefusals({ ...form, captureHours, captureMode }, checks);
   const refused = (text) => [{ field: 'Capture hours for this key', group: 'capture', text }];
-  for (const v of ['', '0', '2.5', '73']) assert.deepEqual(hours(v), refused('Capture hours is a whole number from 1 to 72.'), `${JSON.stringify(v)} is refused`);
-  for (const v of ['1', '72']) assert.deepEqual(hours(v), [], `${v} is inside`);
-  assert.deepEqual(hours('', 'inherit'), [], 'Inherit never reads the field');
-  assert.deepEqual(hours('', 'off'), [], 'Off never reads the field');
-  for (const v of ['', '0', '2.5']) assert.deepEqual(hours(v, 'override', {}), refused('Capture hours is a whole number of at least 1.'), `${JSON.stringify(v)} is refused before the ceiling is read`);
-  assert.deepEqual(hours('500', 'override', {}), [], 'before the ceiling is read no upper bound applies');
+  for (const v of [null, 0, 2.5, 73]) assert.deepEqual(hours(v), refused('Capture hours is a whole number from 1 to 72.'), `${JSON.stringify(v)} is refused`);
+  for (const v of [1, 72]) assert.deepEqual(hours(v), [], `${v} is inside`);
+  assert.deepEqual(hours(null, 'inherit'), [], 'Inherit never reads the field');
+  assert.deepEqual(hours(null, 'off'), [], 'Off never reads the field');
+  for (const v of [null, 0, 2.5]) assert.deepEqual(hours(v, 'override', {}), refused('Capture hours is a whole number of at least 1.'), `${JSON.stringify(v)} is refused before the ceiling is read`);
+  assert.deepEqual(hours(500, 'override', {}), [], 'before the ceiling is read no upper bound applies');
   const row = fixture('keys').keys[0];
   const stored = (hours) => d.keyFormOf(d.decodeKey({ ...row, body_capture_hours: hours }), 'unused');
-  assert.deepEqual([stored(12).captureMode, stored(12).captureHours], ['override', '12'], 'an override opens as the text of its hours');
-  assert.deepEqual([stored(0).captureMode, stored(0).captureHours], ['off', '6'], 'off opens with the default hours in the field');
-  assert.equal(d.keyFormOf(null, 'all').captureHours, '6');
+  assert.deepEqual([stored(12).captureMode, stored(12).captureHours], ['override', 12], 'an override opens as its hours');
+  assert.deepEqual([stored(0).captureMode, stored(0).captureHours], ['off', 6], 'off opens with the default hours in the field');
+  assert.equal(d.keyFormOf(null, 'all').captureHours, 6);
   const sent = (patch) => d.keyInputOf({ ...stored(12), ...patch }, NOW).bodyCaptureHours;
-  assert.deepEqual([sent({}), sent({ captureHours: '48' }), sent({ captureMode: 'off' }), sent({ captureMode: 'inherit' })], [12, 48, 0, null]);
+  assert.deepEqual([sent({}), sent({ captureHours: 48 }), sent({ captureMode: 'off' }), sent({ captureMode: 'inherit' })], [12, 48, 0, null]);
 });
 
 test('a pool refusal names the group its control sits in', () => {

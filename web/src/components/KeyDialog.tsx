@@ -6,7 +6,7 @@ import { PatternEditor, useCatalogSuggestions } from '@/components/PatternEditor
 import { OptionList } from '@/components/ui/OptionList';
 import { Popover } from '@/components/ui/Popover';
 import { IconInfo, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, Button, CopyButton, Dialog, Expert, Field, GroupedDialog, Input, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, Button, CopyButton, Dialog, Expert, Field, GroupedDialog, Input, NumberInput, PageLink, Refusal, RowActions, Segmented, Select, Skeleton, StaleRefusal, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { messageOf, plural } from '@/lib/format';
 import { guardrailsChange, KEY_GROUPS, keyFormOf, keyInputOf, keyRefusals, refusalsView, sameValues, saveStatus, type AutoModeOverride, type KeyForm, type KeyGroup } from '@/lib/forms';
@@ -166,7 +166,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
   const poolHours = pool?.bodyCaptureHours ?? 0;
-  const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : Number(captureHours);
+  const effectiveHours = captureMode === 'inherit' ? poolHours : captureMode === 'off' ? 0 : (captureHours ?? 0);
   const suggestions = useCatalogSuggestions(pool?.members.map((m) => m.accountId) ?? [], open);
   const refusals = keyRefusals({ captureHours, captureMode, modelRules, name, poolId }, { identity: { existingIds, isNew: existing === null }, maxHours: captureMaxHours });
   const { first, invalid, refusalOf, refusedGroups } = refusalsView(refusals);
@@ -399,12 +399,11 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
                 <input type="radio" name={`capture-${existing?.id ?? 'new'}`} checked={captureMode === 'override'} onChange={() => set('captureMode', 'override')} />
                 <span className="row">
                   Override:
-                  <Input
-                    type="number"
+                  <NumberInput
                     min={1}
                     max={captureMaxHours}
                     value={captureHours}
-                    onChange={(e) => set('captureHours', e.target.value)}
+                    onNumber={(v) => set('captureHours', v)}
                     onFocus={() => set('captureMode', 'override')}
                     style={{ flex: 1 }}
                     aria-label="Capture hours for this key"

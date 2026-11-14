@@ -307,8 +307,11 @@ export type CaptureMode = 'inherit' | 'off' | 'override';
 export interface KeyForm {
   allowance: boolean;
   autoModeServer: AutoModeOverride;
-  /** The override field's text, kept as typed so an emptied field reads empty rather than 0. */
-  captureHours: string;
+  /**
+   * The override's hours as the number field reports them, null for an emptied field and NaN for text the browser
+   * cannot parse.
+   */
+  captureHours: number | null;
   captureMode: CaptureMode;
   enabled: boolean;
   /** `keep` leaves the stored expiry alone, `never` clears it, and a number is days from the save. */
@@ -346,7 +349,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
   return {
     allowance: existing?.companionPermissions.includes('allowance') ?? true,
     autoModeServer: existing?.autoModeServer == null ? 'inherit' : existing.autoModeServer ? 'on' : 'off',
-    captureHours: String(existing?.bodyCaptureHours || 6),
+    captureHours: existing?.bodyCaptureHours || 6,
     captureMode: existing ? (existing.bodyCaptureHours === null ? 'inherit' : existing.bodyCaptureHours === 0 ? 'off' : 'override') : 'inherit',
     // The stored switch rather than `status`: every edit sends it, and an expired or revoked key's status would
     // say nothing about it.
@@ -366,7 +369,7 @@ export function keyFormOf(existing: ApiKey | null, poolId: string): KeyForm {
 export function keyInputOf(form: KeyForm, now: number): KeyInput & { guardrails?: never } {
   return {
     autoModeServer: form.autoModeServer === 'inherit' ? null : form.autoModeServer === 'on',
-    bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : Number(form.captureHours),
+    bodyCaptureHours: form.captureMode === 'inherit' ? null : form.captureMode === 'off' ? 0 : form.captureHours,
     // The form's switches carry the words' own names.
     companionPermissions: COMPANION_PERMISSION_VALUES.filter((p) => form[p]),
     enabled: form.enabled,
@@ -415,9 +418,9 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
   if (!form.poolId) out.push({ field: 'Pool', group: 'key', text: 'the key needs a pool.' });
   const rules = modelRulesRefusal(form.modelRules);
   if (rules) out.push({ field: 'Model rules', group: 'models', text: rules });
-  // An emptied field would send 0, which the route stores as capture off while the radio still says Override.
+  // An emptied field would send null, which the route stores as inherit while the radio still says Override.
   if (form.captureMode === 'override') {
-    const text = hoursRefusal('Capture hours is a whole number', Number(form.captureHours), checks.maxHours);
+    const text = hoursRefusal('Capture hours is a whole number', form.captureHours ?? Number.NaN, checks.maxHours);
     if (text) out.push({ field: 'Capture hours for this key', group: 'capture', text });
   }
   return out;

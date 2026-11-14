@@ -10492,8 +10492,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   foot(ci, 'Cancel')?.click();
   await m.settle(200);
   {
-    // Under Override the field is read as typed: an emptied one holds Save rather than sending 0, which the route
-    // stores as capture off while the radio still says Override.
+    // Under Override an emptied field holds Save rather than sending null, which the route stores as inherit while
+    // the radio still says Override.
     const desktop = await editOf('desktop');
     rail(desktop, 'capture')?.click();
     await m.settle(100);

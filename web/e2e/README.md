@@ -111,7 +111,8 @@ line, the group's vertical center within a pixel of the name's, or on a line of 
 the title's, Delete after Edit on one line, both inside the title's box, and in the mock pass the named pools' group on
 the title's line at 400 px), the serving table's columns (Account the fill), the chevron of the pool dialog's Identity
 select (12 px square at a 1.5 stroke), the pool dialog's members table (Account the fill, each Priority and budget input
-at least its column's 96, 140 or 150 px less the cell's padding) and keys table (Key the fill), each read while its
+at least its column's 96, 140 or 150 px less the cell's padding, and in the plain view a Priority at 0 that holds the
+unparsable `1e` and reads no bad input once its member is unticked) and keys table (Key the fill), each read while its
 group shows, and in the mock pass's expert view its model rules table (Model the fill, each select holding its widest
 option's text inside its padding), which the router's seed draws no override for, the Create key dialog's Key group (the
 Name input, the Pool select and the footer's buttons 32 px, the Notes field 72 px, each label above its control), the

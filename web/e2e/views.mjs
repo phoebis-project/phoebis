@@ -3324,6 +3324,33 @@ async function poolDialogWalk(theme, mode) {
       else if (box.input < width - box.padding - 1) sayIn('Members', `the column ${i + 2} input is ${box.input} px wide, under the column's ${width} px less its ${box.padding} px of padding`);
     });
   };
+  // A ticked member's Priority holds text the browser cannot parse when the member is unticked: its figure goes to
+  // none, so the disabled box must stop drawing that text. The member is one at 0, since the tick back writes 0 and
+  // the form then reaches the Escape that closes the walk as it opened.
+  const priorityBadInput = async () => {
+    const label = await dialog.evaluate((el) => {
+      const row = [...el.querySelectorAll('.members-table tbody tr')].find((tr) => tr.querySelector('input[type="checkbox"]')?.checked && tr.querySelector('input[type="number"]')?.value === '0');
+      return row?.querySelector('input[type="number"]')?.getAttribute('aria-label') ?? null;
+    });
+    if (label === null) return sayIn('Members', 'no ticked member at priority 0 to type unparsable text into');
+    const priority = page.getByRole('spinbutton', { exact: true, name: label });
+    const tick = dialog.locator('.members-table tbody tr').filter({ has: priority }).getByRole('checkbox');
+    const bad = () => priority.evaluate((input) => input.validity.badInput);
+    await priority.selectText();
+    await page.keyboard.type('1e');
+    const typed = await bad();
+    // The blur re-sorts the rows, so it lands before the click rather than between the click's press and release.
+    await priority.blur();
+    await settle();
+    await tick.click();
+    await settle();
+    const unticked = await bad();
+    await tick.click();
+    await settle();
+    measurements.push(`${theme} /pools ${mode} dialog Priority bad input ${JSON.stringify({ typed, unticked })}`);
+    if (!typed) sayIn('Members', `typing 1e into ${label} left no bad input to clear`);
+    else if (unticked) sayIn('Members', `${label} still holds its unparsable text with the member unticked`);
+  };
   // Each select of the model rules table against its widest option, whose text is measured in a span that takes the
   // select's font: a select clips a long option inside its own box, which its scrollWidth does not report.
   const ruleSelects = async () => {
@@ -3360,6 +3387,8 @@ async function poolDialogWalk(theme, mode) {
       await memberInputs();
       await cutReaders(theme, `/pools ${mode} dialog`);
       await hiddenNodes(theme, `/pools ${mode} dialog`);
+      // Both views draw the same Priority field, so the plain view's walk reads it once.
+      if (!expert) await priorityBadInput();
     }
     if (group === 'Keys') await tableColumns(theme, `pools ${mode} dialog`, '.keys-table', ['Key']);
     if (group === 'Cache TTL' && expert) {

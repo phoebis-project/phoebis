@@ -401,10 +401,25 @@ const numberText = (value: number | null) => (value === null || Number.isNaN(val
 type NumberInputProps = Omit<InputProps, 'onChange' | 'onInput' | 'type' | 'value'> & { onNumber: (value: number | null) => void; value: number | null };
 export const NumberInput = forwardRef<HTMLInputElement, NumberInputProps>(function NumberInput({ onNumber, value, ...rest }, ref) {
   const [typed, setTyped] = useState<TypedField>(() => ({ bad: false, text: numberText(value) }));
+  const own = useRef<HTMLInputElement | null>(null);
+  const merged = useCallback(
+    (node: HTMLInputElement | null) => {
+      own.current = node;
+      if (typeof ref === 'function') ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref],
+  );
+  // A box whose text the browser cannot parse reads an empty value, so React writes nothing for a figure that went
+  // to none and the browser would keep drawing the text.
+  useLayoutEffect(() => {
+    const node = own.current;
+    if (value === null && node?.validity.badInput) node.value = '';
+  }, [value]);
   const text = Object.is(typedNumber(typed), value) ? typed.text : numberText(value);
   return (
     <Input
-      ref={ref}
+      ref={merged}
       {...rest}
       type="number"
       value={text}
