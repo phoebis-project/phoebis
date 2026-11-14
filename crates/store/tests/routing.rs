@@ -969,6 +969,7 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
         "DROP TABLE model_week_hours;
+         ALTER TABLE pools DROP COLUMN thinking_diagnostics;
          ALTER TABLE accounts DROP COLUMN limit_resets_json;
          ALTER TABLE accounts DROP COLUMN limit_resets_read_at;
          ALTER TABLE accounts DROP COLUMN limit_resets_epoch;
