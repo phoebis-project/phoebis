@@ -12,6 +12,9 @@ interface AppSettings {
   expertView: boolean;
   /** Bumped by every time-format change, so a component that only formats times has something to depend on. */
   formatVersion: number;
+  /** The days before a limit reset's end inside which the Quota card warns. Null until the settings answer, and where
+   *  that read failed. */
+  limitResetWarningDays: number | null;
   /**
    * The cost model's two tier members, which every list of models orders by. The empty pair until the settings answer.
    */
@@ -19,6 +22,7 @@ interface AppSettings {
   palette: PaletteChoice;
   resolvedTheme: 'dark' | 'light';
   setExpertView: (on: boolean) => void;
+  setLimitResetWarningDays: (days: number | null) => void;
   setModelTiers: (tiers: ModelTiers) => void;
   setPalette: (palette: PaletteChoice) => void;
   setTheme: (t: ThemeChoice) => void;
@@ -53,6 +57,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [unit, setUnit] = useLocalStorage('phoebis.unit', positionOf);
   const [week, setWeek] = useLocalStorage('phoebis.week', weekOf);
   const [modelTiers, setModelTiers] = useState<ModelTiers>(NO_TIERS);
+  const [limitResetWarningDays, setLimitResetWarningDays] = useState<number | null>(null);
   // Applied while the first render is still being built, so the timestamps below are already in the stored format.
   const [formatVersion, setFormatVersion] = useState(() => {
     applyTimeFormat(storedFormat);
@@ -77,8 +82,8 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<AppSettings>(
-    () => ({ expertView, formatVersion, modelTiers, palette, resolvedTheme, setExpertView, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
-    [expertView, formatVersion, modelTiers, palette, resolvedTheme, setExpertView, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
+    () => ({ expertView, formatVersion, limitResetWarningDays, modelTiers, palette, resolvedTheme, setExpertView, setLimitResetWarningDays, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, theme, timeFormat: storedFormat, unit, week }),
+    [expertView, formatVersion, limitResetWarningDays, modelTiers, palette, resolvedTheme, setExpertView, setLimitResetWarningDays, setModelTiers, setPalette, setTheme, setTimeFormat, setUnit, setWeek, storedFormat, theme, unit, week],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
+import { useAppSettings } from '@/app/settings';
 import { useHashLanding } from '@/app/useHashLanding';
 import { accountColor, accountSlots } from '@/components/charts/theme';
 import { FilterBar } from '@/components/FilterBar';
@@ -31,10 +32,6 @@ export function QuotaPage() {
   const [intervalMs, setIntervalMs] = useState(5_000);
   const { cause: pauseCause, host } = useHoldHost();
   const accounts = useAsync(() => api.listAccounts(), [], { paused: pauseCause !== null, refreshMs: intervalMs });
-  // The warning's days come with the settings and not with the list, so the page reads them once, and until they land,
-  // or where the read fails, the Resets chip draws in the plain tone.
-  const settings = useAsync(() => api.getSettings(), []);
-  const warningDays = settings.data?.usage.limitResetWarningDays ?? null;
   const now = useNow();
   const { address, filters, update } = useQueryFilters(QUOTA_CODEC);
   const dir = sortDirOf(QUOTA_SORT_KEYS, filters);
@@ -119,7 +116,7 @@ export function QuotaPage() {
                 <div className="quota-grid">
                   {!accounts.data
                     ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-                    : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} warningDays={warningDays} />)}
+                    : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
                 </div>
               ))}
           </section>
@@ -181,7 +178,7 @@ function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
   );
 }
 
-function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed, warningDays }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot; warningDays: number | null }) {
+function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshed }: { account: Account; now: number; onRefreshed: () => void; refreshHint?: string; refreshing: boolean; snapshot?: QuotaSnapshot }) {
   const soonest = soonestResetAt(account, now);
   const [localRefreshing, setLocalRefreshing] = useState(false);
   const busy = refreshing || localRefreshing;
@@ -200,7 +197,8 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const endsAt = canceledEndOf(account);
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
   const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
-  const chip = resetChip(account.limitResets, now, warningDays);
+  const { limitResetWarningDays } = useAppSettings();
+  const chip = resetChip(account.limitResets, now, limitResetWarningDays);
   const marks = resetMarks(account.limitResets);
   const [opening, setOpening] = useState<LimitResetsRead | null>(null);
   const [readingResets, setReadingResets] = useState(false);
