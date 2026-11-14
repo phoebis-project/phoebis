@@ -10,10 +10,10 @@ use phoebis_ledger::{
     member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_shares,
     read_account_rollups, read_rollups, refusal_categories, rewrite_series, run_retention_blocking,
     series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
-    EventRecord, FundingFilter, GroupBy, GroupRow, Histogram, KeepaliveDelta, LedgerConfig,
-    LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions, PriceTable,
-    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, Speed,
-    WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
+    EventRecord, FundingFilter, GroupBy, GroupRow, Histogram, InputTransformation, KeepaliveDelta,
+    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions,
+    PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
+    Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
     PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
@@ -8257,6 +8257,75 @@ fn the_breakdown_answers_refused_and_refusals_per_group() {
             ])
         ),
         "the refused requests beside the three asked ones and not among them"
+    );
+}
+
+/// A group answers the store's reserved counts as members of their own, so its map holds the answers' keys alone.
+#[test]
+fn the_breakdown_answers_the_dropped_blocks_keys_apart_from_the_moved_count() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let request = RequestRecord {
+        id: "r1".into(),
+        received_at: WEEKDAY_OFF_PEAK,
+        key_id: Some("desktop".into()),
+        pool_id: Some("p".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(200),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let moved = AttemptRecord {
+        request_id: "r1".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: AccountKind::Oauth,
+        upstream_status: Some(200),
+        outcome: "succeeded".into(),
+        input_tokens: Some(100),
+        output_tokens: Some(10),
+        selection: Some(
+            r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":"shed","skipped":[]}"#
+                .into(),
+        ),
+        input_transformations: Some(BTreeMap::from([(
+            "thinking.end_user_binding_mismatch".to_string(),
+            InputTransformation {
+                blocks: 4,
+                first_message: 1,
+            },
+        )])),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[moved], None).unwrap();
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let groups = breakdown(
+        &apply_filter(rows, &RollupFilter::default()),
+        GroupBy::Key,
+        false,
+        &live,
+        &[],
+        &PRICES,
+        &COSTS,
+        NOW,
+    );
+    let desktop = group(&groups, "desktop");
+    assert_eq!(
+        (
+            desktop.input_transformations.clone(),
+            desktop.input_transformations_moved
+        ),
+        (
+            BTreeMap::from([("thinking.end_user_binding_mismatch".to_string(), 1)]),
+            1
+        ),
+        "the answer's one key in the map, the move beside it"
     );
 }
 

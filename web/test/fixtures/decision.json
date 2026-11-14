@@ -457,7 +457,8 @@
             "account_id": "business"
           }
         ],
-        "completed_at": 1791720999400
+        "completed_at": 1791720999400,
+        "input_transformations": {}
       }
     }
   }

@@ -1224,7 +1224,7 @@ pub(crate) fn opt_u64(r: &rusqlite::Row<'_>, i: usize) -> rusqlite::Result<Optio
 
 /// Column `i` as an answer's dropped blocks, `None` where it is null. A text that does not parse fails the row's read,
 /// as a stored word outside a decoder's list does, rather than reading as an answer that dropped nothing.
-fn transformations_at(
+pub(crate) fn transformations_at(
     r: &rusqlite::Row<'_>,
     i: usize,
 ) -> rusqlite::Result<Option<BTreeMap<String, InputTransformation>>> {
@@ -1827,6 +1827,65 @@ mod tests {
             .permissions();
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(mode.mode() & 0o777, 0o600);
+    }
+
+    /// An answer's dropped blocks read back from both columns, and a stored text that does not parse fails the read of
+    /// either column rather than reading as an answer that dropped nothing.
+    #[tokio::test]
+    async fn the_dropped_blocks_read_back_and_a_text_that_does_not_parse_fails_the_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+        let dropped = BTreeMap::from([(
+            "thinking.organization_binding_mismatch".to_string(),
+            InputTransformation {
+                blocks: 3,
+                first_message: 1,
+            },
+        )]);
+        let served = |id: &str| AttemptRecord {
+            input_transformations: Some(dropped.clone()),
+            ..attempt(id, 1, "a", "succeeded")
+        };
+        db.insert_request(&request("r1"), &[served("r1")], None)
+            .unwrap();
+        db.insert_request(&request("r2"), &[served("r2")], None)
+            .unwrap();
+        let (row, attempts) = db.request("r1").await.unwrap().unwrap();
+        assert_eq!(
+            (row.serving.input_transformations, attempts),
+            (Some(dropped.clone()), vec![served("r1")]),
+            "the request row's copy and the attempt's member"
+        );
+        db.write(|c| {
+            c.execute(
+                "UPDATE attempts SET input_transformations = 'dropped' WHERE request_id = 'r1'",
+                [],
+            )?;
+            c.execute(
+                "UPDATE requests SET input_transformations = 'dropped' WHERE id = 'r2'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            matches!(
+                db.request("r1").await,
+                Err(LedgerError::Sqlite(
+                    rusqlite::Error::FromSqlConversionFailure(..)
+                ))
+            ),
+            "the attempt's column"
+        );
+        assert!(
+            matches!(
+                db.request("r2").await,
+                Err(LedgerError::Sqlite(
+                    rusqlite::Error::FromSqlConversionFailure(..)
+                ))
+            ),
+            "the request row's column"
+        );
     }
 
     #[tokio::test]

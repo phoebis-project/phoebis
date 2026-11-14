@@ -49,6 +49,11 @@
           "none": 16,
           "pending": 1
         },
+        "input_transformations": {
+          "thinking.prefix_binding_mismatch": 1
+        },
+        "input_transformations_moved": 0,
+        "input_transformations_none": 0,
         "histograms": {
           "duration_ms": [
             0,
@@ -423,6 +428,9 @@
         "cache_miss_reasons": {
           "none": 2
         },
+        "input_transformations": {},
+        "input_transformations_moved": 0,
+        "input_transformations_none": 0,
         "histograms": {
           "duration_ms": [
             0,
@@ -804,6 +812,9 @@
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {},
+        "input_transformations": {},
+        "input_transformations_moved": 0,
+        "input_transformations_none": 0,
         "histograms": {
           "duration_ms": [
             0,
@@ -1184,6 +1195,9 @@
         "cache_miss_reasons": {
           "none": 1
         },
+        "input_transformations": {},
+        "input_transformations_moved": 0,
+        "input_transformations_none": 0,
         "histograms": {
           "duration_ms": [
             0,

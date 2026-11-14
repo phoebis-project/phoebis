@@ -139,6 +139,7 @@
           "response": {
             "cleared_input_tokens": null,
             "inference_geo": "us",
+            "input_transformations": null,
             "refusal_category": null,
             "refusal_recommended_model": null,
             "served_model": null,
@@ -200,6 +201,7 @@
           "response": {
             "cleared_input_tokens": null,
             "inference_geo": "us",
+            "input_transformations": null,
             "refusal_category": null,
             "refusal_recommended_model": null,
             "served_model": null,

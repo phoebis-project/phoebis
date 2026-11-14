@@ -592,6 +592,15 @@ pub(crate) struct BreakdownRow {
     /// The refused requests of the group by error code.
     pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
+    /// The requests per key of the blocks their serving attempt's answer dropped, a key being `<type>.<reason>` in the
+    /// upstream's two words, `other` for a word past 64 bytes. A request counts once under each key it listed, whatever
+    /// the number of blocks. Empty for the hours the router folded before it counted the blocks.
+    pub input_transformations: BTreeMap<String, u64>,
+    /// The moved requests whose serving attempt's answer dropped a block under the reason `end_user_binding_mismatch`
+    /// or `organization_binding_mismatch`.
+    pub input_transformations_moved: u64,
+    /// The requests whose serving attempt's answer listed no dropped block.
+    pub input_transformations_none: u64,
     pub histograms: HistogramsView,
     pub percentiles: PercentilesView,
     pub kept_warm: KeptWarmView,

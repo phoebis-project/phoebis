@@ -16,11 +16,11 @@ use phoebis_bus::{
 use phoebis_ledger::{
     apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
     read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
-    BudgetedMember, CacheMapWrite, DecisionRow, Direction, EventRecord, LedgerConfig, LedgerDb,
-    LedgerError, LiveKeys, LogKinds, ParkedSummary, PlanTables, PriceRevisions, Purged, Record,
-    Replayed, RequestCursor, RequestFilter, RequestOrder, RequestRecord, RollupFilter, RollupRow,
-    RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
-    UNATTRIBUTED,
+    BudgetedMember, CacheMapWrite, DecisionRow, Direction, EventRecord, InputTransformation,
+    LedgerConfig, LedgerDb, LedgerError, LiveKeys, LogKinds, ParkedSummary, PlanTables,
+    PriceRevisions, Purged, Record, Replayed, RequestCursor, RequestFilter, RequestOrder,
+    RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS,
+    BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
 };
 
 /// A rollup row's dollars, its counts priced through `price_row` at its own key on `prices`.
@@ -2927,6 +2927,67 @@ fn the_cache_miss_reason_filter_reads_the_serving_attempt_alone_and_passes_any_n
         listed(&[]),
         ["r1", "r2", "r3"],
         "an empty list narrows nothing"
+    );
+}
+
+/// A listed key matches a key of the request row's copy whole: `redacted_thinking.organization_binding_mismatch` holds
+/// the listed key as a part of its text, so a match on the column's text would keep its request.
+#[test]
+fn the_dropped_blocks_filter_keeps_a_request_whose_answer_listed_the_key_and_no_other() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, received_at: i64, keys: &[&str]| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at,
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::Oauth,
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            input_transformations: Some(
+                keys.iter()
+                    .map(|key| {
+                        (
+                            key.to_string(),
+                            InputTransformation {
+                                blocks: 2,
+                                first_message: 0,
+                            },
+                        )
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    };
+    plant("listed", 3, &["thinking.organization_binding_mismatch"]);
+    plant(
+        "other",
+        2,
+        &["redacted_thinking.organization_binding_mismatch"],
+    );
+    plant("empty", 1, &[]);
+    assert_eq!(
+        listed_ids(
+            &db,
+            &RequestFilter {
+                input_transformations: vec!["thinking.organization_binding_mismatch".into()],
+                ..Default::default()
+            },
+        ),
+        ["listed"],
+        "the request with the key alone, neither the one whose key holds it as text nor the one that listed none"
     );
 }
 
@@ -9013,6 +9074,7 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
         "freed": true,
         "cache_map_written": entries,
         "completed_at": NOW + 2_000,
+        "input_transformations": null,
     });
     let mut answer = serde_json::Map::new();
     answer.insert("request_id".into(), "r1".into());

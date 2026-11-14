@@ -335,12 +335,26 @@ pub(crate) struct AttemptWindow {
 pub(crate) struct AttemptResponse {
     pub cleared_input_tokens: Option<u64>,
     pub inference_geo: Option<String>,
+    /// The blocks the answer dropped, per key: `<type>.<reason>` in the upstream's two words, `other` for a word past
+    /// 64 bytes. An empty object for an answer that listed nothing, null for an answer without the member and for an
+    /// attempt recorded before the router kept it.
+    pub input_transformations: Option<BTreeMap<String, InputTransformationView>>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
     pub served_model: Option<String>,
     pub speed: Option<String>,
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
+}
+
+/// The blocks an answer dropped under one key of `input_transformations`.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct InputTransformationView {
+    /// The dropped blocks under the key.
+    pub blocks: u64,
+    /// The lowest index `i` of the dropped blocks' `messages.{i}` paths.
+    pub first_message: u64,
 }
 
 /// The newest `stream_interrupted` event of the request, lifted so a reader takes one member rather than the list.
@@ -775,6 +789,20 @@ fn attempt_json(a: &AttemptRecord, estimated_usd: Option<f64>) -> Attempt {
         response: AttemptResponse {
             cleared_input_tokens: a.cleared_input_tokens,
             inference_geo: a.inference_geo.clone(),
+            input_transformations: a.input_transformations.as_ref().map(|dropped| {
+                dropped
+                    .iter()
+                    .map(|(key, entry)| {
+                        (
+                            key.clone(),
+                            InputTransformationView {
+                                blocks: entry.blocks,
+                                first_message: entry.first_message,
+                            },
+                        )
+                    })
+                    .collect()
+            }),
             refusal_category: a.refusal_category.clone(),
             refusal_recommended_model: a.refusal_recommended_model.clone(),
             served_model: a.served_model.clone(),
@@ -885,6 +913,9 @@ pub(crate) struct RequestsQuery {
     pub turn_origins: Option<String>,
     /// A comma list of reasons, read off the serving attempt, any name the beta sent.
     pub cache_miss_reasons: Option<String>,
+    /// A comma list of `<type>.<reason>` keys of the blocks an answer dropped, read off the serving attempt, the last
+    /// one. A request whose answer listed no block, or carried no such member, matches none.
+    pub input_transformations: Option<String>,
     /// A comma list of stop reasons, read off the serving attempt, the last one, `-` for a request whose serving
     /// attempt carries none or that no attempt served.
     pub stop_reasons: Option<String>,
@@ -1002,6 +1033,7 @@ pub(crate) async fn list(
         to,
         include_probes: flag(&q, "include_probes"),
         cache_miss_reasons: list_param(&q, "cache_miss_reasons"),
+        input_transformations: list_param(&q, "input_transformations"),
         efforts: list_param(&q, "efforts"),
         request_classes: list_param(&q, "request_classes"),
         classifiers: list_param(&q, "classifiers"),

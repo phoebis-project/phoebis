@@ -3,9 +3,9 @@
 //! `quota_samples`, `request_guardrails`, `requests`, `rollups_hourly`, `routing_conditions` and
 //! `window_reconciliations`, plus `meta` for the schema marker. `MIGRATIONS` steps it to version 4, the last step
 //! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
-//! `requests.input_transformations`, `events.from_account_id` and `rollups_hourly.client_canceled`, filling the stored
-//! events' move sources and pools, filling the client's cancels from the stored rollups' errors maps, and deleting the
-//! stored account hours that hold nothing.
+//! `requests.input_transformations`, `events.from_account_id`, `rollups_hourly.client_canceled` and
+//! `rollups_hourly.input_transformations_json`, filling the stored events' move sources and pools, filling the client's
+//! cancels from the stored rollups' errors maps, and deleting the stored account hours that hold nothing.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -242,9 +242,11 @@ CREATE TABLE IF NOT EXISTS "extra_usage_samples" (
 -- band and tier name the cells and windows the counts price at, and classifier files a classifier call's usage apart,
 -- so the share readers price it at no plan share. probes_skipped counts the due probes a scheduling gate withheld,
 -- incomplete the committed answers whose body ended early, the two kept-warm token columns what a kept-warm credit read
--- under each TTL, the slow-down columns the waits of the row's requests, client_canceled the requests whose client
--- left (a column of the migration to version 4), in requests and apart from failed and errors_json, and refusals_json
--- the refusals by error code apart from every other figure, so a reader that sums the row sees none of them.
+-- under each TTL, the slow-down columns the waits of the row's requests, client_canceled the requests whose client left
+-- (a column of the migration to version 4), in requests and apart from failed and errors_json,
+-- input_transformations_json (a column of the same migration) the requests per key of the blocks their answer dropped,
+-- once per key whatever the blocks, beside the reserved keys moved and none, and refusals_json the refusals by error
+-- code apart from every other figure, so a reader that sums the row sees none of them.
 CREATE TABLE IF NOT EXISTS "rollups_hourly" (
   hour INTEGER NOT NULL,
   key_id TEXT NOT NULL,
@@ -437,9 +439,11 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 /// request row. `events.from_account_id` holds the account a pin move left, filled on the stored moves from their
 /// detail, and a stored pin or request event with no pool takes its request's pool or the pool of its key's newest
 /// decision at or before it. `rollups_hourly.client_canceled` counts a client's cancels apart from `failed`, and each
-/// stored row that is no probe's moves its errors map's `client_gone` count there, off `failed` and out of the map.
-/// The stored account hours that hold nothing are deleted, judged by the eleven columns `AccountRollupRow::holds_nothing`
+/// stored row that is no probe's moves its errors map's `client_gone` count there, off `failed` and out of the map. The
+/// stored account hours that hold nothing are deleted, judged by the eleven columns `AccountRollupRow::holds_nothing`
 /// reads, so the rows a cleared cooldown emptied before the step leave as `unfold_cooldown` deletes them after it.
+/// `rollups_hourly.input_transformations_json` counts the requests per key of the blocks their answer dropped, and a
+/// stored hour reads the empty map, since no attempt stored before the step carries the member.
 const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
     ALTER TABLE requests ADD COLUMN input_transformations TEXT; \
@@ -461,7 +465,8 @@ const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     DELETE FROM account_rollups_hourly \
         WHERE utilization_5h_max IS NULL AND utilization_7d_max IS NULL AND utilization_7d_oi_max IS NULL \
         AND overage_seconds = 0 AND cooldown_seconds = 0 AND pins_created = 0 AND pins_migrated_in = 0 \
-        AND pins_migrated_out = 0 AND rewrite_tokens = 0 AND wall_early_ms = 0 AND migrations_json = '{}'";
+        AND pins_migrated_out = 0 AND rewrite_tokens = 0 AND wall_early_ms = 0 AND migrations_json = '{}'; \
+    ALTER TABLE rollups_hourly ADD COLUMN input_transformations_json TEXT NOT NULL DEFAULT '{}'";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.

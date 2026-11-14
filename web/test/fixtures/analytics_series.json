@@ -134,6 +134,9 @@
             "cache_miss_reasons": {
               "none": 1
             },
+            "input_transformations": {},
+            "input_transformations_moved": 0,
+            "input_transformations_none": 0,
             "histograms": {
               "duration_ms": [
                 0,
@@ -529,6 +532,9 @@
             "cache_miss_reasons": {
               "none": 13
             },
+            "input_transformations": {},
+            "input_transformations_moved": 0,
+            "input_transformations_none": 0,
             "histograms": {
               "duration_ms": [
                 0,
@@ -911,6 +917,9 @@
             "cache_miss_reasons": {
               "none": 1
             },
+            "input_transformations": {},
+            "input_transformations_moved": 0,
+            "input_transformations_none": 0,
             "histograms": {
               "duration_ms": [
                 0,
@@ -1300,6 +1309,11 @@
               "none": 4,
               "pending": 1
             },
+            "input_transformations": {
+              "thinking.prefix_binding_mismatch": 1
+            },
+            "input_transformations_moved": 0,
+            "input_transformations_none": 0,
             "histograms": {
               "duration_ms": [
                 0,

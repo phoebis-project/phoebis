@@ -5989,6 +5989,7 @@ async fn a_decision_record_answers_record_v3_with_its_completion() {
             "freed": false,
             "cache_map_written": null,
             "completed_at": now + 1_000,
+            "input_transformations": null,
         })
     );
 }

@@ -34,7 +34,7 @@ use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
     RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT,
-    OTHER_DIMENSION, UNATTRIBUTED,
+    OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -151,6 +151,9 @@ pub struct RequestFilter {
     /// Keep the requests whose serving attempt, the last one, reads a reason in the list. A request with no
     /// attempt or a null serving reason never matches. Any name, as the route passes any name the beta sent.
     pub cache_miss_reasons: Vec<String>,
+    /// Keep the requests whose serving attempt's answer dropped a block under a `<type>.<reason>` key in the list. A
+    /// request whose answer listed nothing, or carried no such member, never matches.
+    pub input_transformations: Vec<String>,
     /// Keep the requests whose effort, folded as the rollups fold it (`none` for none, `other` past the six),
     /// is in the list.
     pub efforts: Vec<String>,
@@ -425,6 +428,14 @@ fn filter_clauses(
         &mut args,
         &mut clauses,
     );
+    // The column holds the serving attempt's dropped blocks written at the landing. A listed key matches a key of the
+    // object whole, never a part of the column's text, and a null or an empty object matches no key.
+    if !filter.input_transformations.is_empty() {
+        let marks = bind_all(&filter.input_transformations, &mut args);
+        clauses.push(format!(
+            "EXISTS (SELECT 1 FROM json_each(requests.input_transformations) WHERE key IN ({marks}))"
+        ));
+    }
     // The two columns hold the serving attempt's words written at the landing. A NULL matches no list, so a serving
     // attempt that names no word, or a request no attempt served, reads as `-`.
     in_list(
@@ -1784,7 +1795,8 @@ pub fn decision_record(
         .query_row(
             &format!(
                 "SELECT d.kind, d.account_id, d.summary, d.record, d.cache_map, r.held, a.upstream_status, \
-                 a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.finished_at \
+                 a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.finished_at, \
+                 a.input_transformations \
                  FROM decisions d LEFT JOIN requests r ON r.id = d.request_id \
                  LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({completing}) \
                  WHERE d.request_id = ?1 AND d.seq = ?2",
@@ -1801,11 +1813,13 @@ pub fn decision_record(
                     r.get::<_, Option<String>>(5)?,
                     Answered::read(r, 6)?,
                     r.get::<_, Option<i64>>(11)?,
+                    crate::db::transformations_at(r, 12)?,
                 ))
             },
         )
         .optional()?;
-    let Some((kind, account_id, summary, frame, cache_map, held, answered, completed_at)) = row
+    let Some((kind, account_id, summary, frame, cache_map, held, answered, completed_at, dropped)) =
+        row
     else {
         return Ok(None);
     };
@@ -1829,6 +1843,7 @@ pub fn decision_record(
             "freed": freed,
             "cache_map_written": detail_json(cache_map.as_deref()),
             "completed_at": completed_at,
+            "input_transformations": dropped,
         })
     } else {
         Value::Null
@@ -2104,6 +2119,13 @@ pub struct GroupRow {
     /// The refused requests of the group by error code.
     pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
+    /// The requests per `<type>.<reason>` key of the blocks their serving attempt's answer dropped, each counted once
+    /// under each key it listed, without the store's two reserved keys.
+    pub input_transformations: BTreeMap<String, u64>,
+    /// The moved requests whose serving attempt's answer dropped a block under an account reason.
+    pub input_transformations_moved: u64,
+    /// The requests whose serving attempt's answer listed no dropped block.
+    pub input_transformations_none: u64,
     pub histograms: Histograms,
     pub percentiles: Percentiles,
     pub kept_warm: KeptWarm,
@@ -2453,6 +2475,9 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     let equivalent = plan.equivalent.finish(plan.split);
     let mut reasons = sum.cache_miss_reasons;
     let expired = reasons.remove(EXPIRED_BETWEEN_TURNS).unwrap_or(0);
+    let mut dropped = sum.input_transformations;
+    let dropped_moved = dropped.remove(TRANSFORMATIONS_MOVED).unwrap_or(0);
+    let dropped_none = dropped.remove(TRANSFORMATIONS_NONE).unwrap_or(0);
     GroupRow {
         key: key.into(),
         label,
@@ -2488,6 +2513,9 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         refused: sum.refusals.values().sum(),
         refusals: sum.refusals,
         cache_miss_reasons: reasons,
+        input_transformations: dropped,
+        input_transformations_moved: dropped_moved,
+        input_transformations_none: dropped_none,
         histograms: Histograms {
             duration_ms: sum.duration_hist.buckets(),
             output_tps: sum.output_tps_hist.buckets(),

@@ -844,6 +844,11 @@ async fn every_route_is_captured_and_holds_its_shape() {
         },
         attempts: vec![AttemptRecord {
             account_kind: selection.account.kind,
+            // The first row of the request list, so the captured list carries a dropped-blocks key.
+            input_transformations: serde_json::from_value(j!({
+                "thinking.prefix_binding_mismatch": { "blocks": 2, "first_message": 1 }
+            }))
+            .unwrap(),
             ..attempt("r-1", 1, &selection.account.id, 200, "succeeded", now)
         }],
         bodies: None,
@@ -3167,14 +3172,12 @@ async fn routing_stories(
                 "succeeded",
             )
         },
-        attempts: vec![attempt(
-            "r-static",
-            1,
-            "business",
-            200,
-            "succeeded",
-            now - 1_000,
-        )],
+        attempts: vec![AttemptRecord {
+            // The decision record's completion reads this attempt, so the captured record carries an answer that
+            // dropped nothing.
+            input_transformations: Some(Default::default()),
+            ..attempt("r-static", 1, "business", 200, "succeeded", now - 1_000)
+        }],
         bodies: None,
     });
 

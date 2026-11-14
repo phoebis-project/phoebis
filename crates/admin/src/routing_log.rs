@@ -459,7 +459,9 @@ pub(crate) struct DecisionRecord {
     /// usage), `held_ms` (every wait of the request, for a slot, a reset or the slow-down, summed, null for a request
     /// never held), `freed` (whether the request waited on the account this decision placed on, so its wait ended in
     /// that slot), `cache_map_written` (the cache-map entries the answer wrote, each `tier`, `depth`,
-    /// `prefix_tokens`, `ttl_ms`, `account_id`, null until the answer ends), and `completed_at`.
+    /// `prefix_tokens`, `ttl_ms`, `account_id`, null until the answer ends), `completed_at`, and
+    /// `input_transformations` (the blocks the answer dropped, as the attempt's `response` answers them on the request
+    /// routes, null until the answer ends).
     #[schema(value_type = Object)]
     pub outcome: Value,
 }

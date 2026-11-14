@@ -43,6 +43,12 @@ pub const NO_CLASS: &str = "-";
 /// nothing back: its cache expired between turns. A group row reads it as a count of its own.
 pub const EXPIRED_BETWEEN_TURNS: &str = "expired_between_turns";
 
+/// The reserved key of `input_transformations` that counts a moved request whose serving attempt's answer dropped a
+/// block under an account reason. An answer's key holds a dot and a reserved key none, so the two never meet.
+pub(crate) const TRANSFORMATIONS_MOVED: &str = "moved";
+/// The reserved key of `input_transformations` that counts a request whose serving attempt's answer listed no block.
+pub(crate) const TRANSFORMATIONS_NONE: &str = "none";
+
 /// The value a request files under when its answer named no `usage.speed` and it did not ask for `fast`; `fast`
 /// is the other value.
 pub const STANDARD_SPEED: &str = "standard";
@@ -272,6 +278,10 @@ pub struct RollupRow {
     /// The refused requests of the row by error code, each counted here and under no other figure of the row.
     pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
+    /// The requests counted once under each `<type>.<reason>` key of the blocks their serving attempt's answer dropped,
+    /// whatever the key's block count, with two reserved keys beside them: `TRANSFORMATIONS_MOVED` and
+    /// `TRANSFORMATIONS_NONE`.
+    pub input_transformations: BTreeMap<String, u64>,
 }
 
 impl RollupRow {
@@ -326,6 +336,7 @@ impl RollupRow {
         add_counts(&mut self.errors, &o.errors);
         add_counts(&mut self.refusals, &o.refusals);
         add_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
+        add_counts(&mut self.input_transformations, &o.input_transformations);
     }
 
     /// Every counter of the row paired with `o`'s, so `add` and `subtract` list them once.
@@ -502,6 +513,7 @@ impl RollupRow {
         subtract_counts(&mut self.errors, &o.errors);
         subtract_counts(&mut self.refusals, &o.refusals);
         subtract_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
+        subtract_counts(&mut self.input_transformations, &o.input_transformations);
     }
 }
 
@@ -665,6 +677,22 @@ pub fn deltas_of(
                 .or_default() += 1;
         }
     }
+    // A request counts once under each key whatever the key's `blocks`, since the readers count requests.
+    if let Some((a, dropped)) = last.and_then(|a| Some((a, a.input_transformations.as_ref()?))) {
+        for key in dropped.keys() {
+            *d.input_transformations.entry(key.clone()).or_default() += 1;
+        }
+        if dropped.is_empty() {
+            *d.input_transformations
+                .entry(TRANSFORMATIONS_NONE.into())
+                .or_default() += 1;
+        }
+        if moved(a) && dropped.keys().any(|key| under_account_reason(key)) {
+            *d.input_transformations
+                .entry(TRANSFORMATIONS_MOVED.into())
+                .or_default() += 1;
+        }
+    }
     // A held probe and a refused request asked no account and reached no cache, so neither counts under a request
     // figure, a timing or an error code the rate should count.
     if counted {
@@ -755,7 +783,7 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
 
 /// The 16 columns of a probe or kept-warm rollup row the keepalive overview folds, which `read_overview_rollups`
 /// answers. The overview reads a day of every row on each poll and holds a reader connection through the decode, so it
-/// reads these alone in place of all 59 a `RollupRow` decodes, the four histograms among them.
+/// reads these alone in place of all 60 a `RollupRow` decodes, the four histograms among them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverviewRollupRow {
     pub kind: String,
@@ -973,6 +1001,17 @@ fn moved(a: &AttemptRecord) -> bool {
         .as_deref()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .is_some_and(|v| !v["moved"].is_null())
+}
+
+/// Whether a dropped-blocks key names one of the two account reasons, read off the key's suffix: `identifier_byte`
+/// admits a dot inside a word, so a split at a dot could cut the type or the reason.
+fn under_account_reason(key: &str) -> bool {
+    [
+        ".end_user_binding_mismatch",
+        ".organization_binding_mismatch",
+    ]
+    .iter()
+    .any(|reason| key.ends_with(reason))
 }
 
 /// The serving attempt (the last one; `finish` writes usage there and nowhere else) and its cache-write
@@ -1968,7 +2007,7 @@ pub fn open_cooldown_remainders(
     Ok(remainders)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json";
 const ACCOUNT_COLUMNS: &str = "hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms";
 
 /// The rollup key, the table's primary key in its order: the upsert's conflict target, the order a read answers in and
@@ -2130,6 +2169,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
         r.classifier,
         counts_json(&r.refusals),
         r.client_canceled as i64,
+        counts_json(&r.input_transformations),
     ])?;
     Ok(())
 }
@@ -2206,6 +2246,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         kept_warm_1h_tokens: u(55)?,
         classifier: r.get(offset + 56)?,
         refusals: counts(57)?,
+        input_transformations: counts(59)?,
     })
 }
 
@@ -2951,6 +2992,91 @@ mod tests {
         assert_eq!((d.rate_limited, d.failed), (0, 1));
     }
 
+    /// The serving delta's dropped-blocks map for a request whose one attempt holds `member` and the trace `selection`.
+    fn transformations_of(
+        member: Option<BTreeMap<String, InputTransformation>>,
+        selection: Option<&str>,
+    ) -> BTreeMap<String, u64> {
+        one_delta(
+            &request("succeeded", Some(200), Some("k")),
+            &[AttemptRecord {
+                input_transformations: member,
+                selection: selection.map(String::from),
+                ..attempt(1, "a", None, None, Some(10))
+            }],
+            &prices(),
+        )
+        .input_transformations
+    }
+
+    /// `blocks` dropped blocks under `key` alone, the first at message 0.
+    fn dropped(key: &str, blocks: u64) -> Option<BTreeMap<String, InputTransformation>> {
+        Some(BTreeMap::from([(
+            key.to_string(),
+            InputTransformation {
+                blocks,
+                first_message: 0,
+            },
+        )]))
+    }
+
+    const MOVED_BY_SHED: &str =
+        r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":"shed","skipped":[]}"#;
+    const NOT_MOVED: &str =
+        r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":null,"skipped":[]}"#;
+
+    /// The Analytics card's bars count requests, so an answer that dropped 154 blocks under one key counts its request
+    /// once under that key.
+    #[test]
+    fn a_request_counts_once_under_a_key_its_answer_dropped_blocks_under_whatever_the_blocks() {
+        assert_eq!(
+            transformations_of(dropped("thinking.prefix_binding_mismatch", 154), None),
+            BTreeMap::from([("thinking.prefix_binding_mismatch".to_string(), 1)])
+        );
+    }
+
+    /// A move counts where its answer dropped a block under an account reason, never for the prefix key alone, and a
+    /// request that did not move counts no move whatever its answer dropped.
+    #[test]
+    fn a_moved_request_counts_as_moved_only_where_its_answer_dropped_a_block_under_an_account_reason(
+    ) {
+        let moved = |key: &str, selection: &str| {
+            transformations_of(dropped(key, 3), Some(selection))
+                .get(TRANSFORMATIONS_MOVED)
+                .copied()
+        };
+        assert_eq!(
+            moved("thinking.prefix_binding_mismatch", MOVED_BY_SHED),
+            None,
+            "a moved request that lists a prefix key alone"
+        );
+        assert_eq!(
+            moved("thinking.organization_binding_mismatch", MOVED_BY_SHED),
+            Some(1),
+            "a moved request that lists a key under an account reason"
+        );
+        assert_eq!(
+            moved("thinking.organization_binding_mismatch", NOT_MOVED),
+            None,
+            "a request that did not move, whatever its answer dropped"
+        );
+    }
+
+    /// An answer that listed no block counts under the empty count, and an answer without the member counts nowhere.
+    #[test]
+    fn an_empty_member_counts_under_none_and_a_missing_member_counts_nowhere() {
+        assert_eq!(
+            transformations_of(Some(BTreeMap::new()), None),
+            BTreeMap::from([(TRANSFORMATIONS_NONE.to_string(), 1)]),
+            "an answer that listed nothing"
+        );
+        assert_eq!(
+            transformations_of(None, None),
+            BTreeMap::new(),
+            "an answer without the member"
+        );
+    }
+
     fn cooldown_set_event(at: i64, until: i64) -> EventRecord {
         EventRecord {
             at,
@@ -3182,7 +3308,8 @@ mod tests {
     #[test]
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
         let db = crate::LedgerDb::open_in_memory().unwrap();
-        // The replaced request is a client's cancel beside a success, so its count must leave with it.
+        // The replaced request is a client's cancel beside a success, and its answer dropped a block, so its counts
+        // must leave with it.
         let (req, attempts) = (
             RequestRecord {
                 canonical_model: SONNET.into(),
@@ -3193,6 +3320,7 @@ mod tests {
                 thinking_tokens: Some(25),
                 web_search_requests: Some(2),
                 web_fetch_requests: Some(1),
+                input_transformations: dropped("thinking.organization_binding_mismatch", 2),
                 ..attempt(1, "a", Some(5), None, Some(20))
             }],
         );
@@ -3240,6 +3368,7 @@ mod tests {
             thinking_tokens: Some(30),
             web_search_requests: Some(1),
             web_fetch_requests: Some(0),
+            input_transformations: Some(BTreeMap::new()),
             ..attempt(1, "a", Some(5), Some(100), Some(50))
         }];
         db.write(|c| {
@@ -3968,6 +4097,10 @@ mod tests {
         r.errors = BTreeMap::from([("overloaded".to_string(), 46)]);
         r.refusals = BTreeMap::from([("guardrail_blocked".to_string(), 57)]);
         r.cache_miss_reasons = BTreeMap::from([("none".to_string(), 47)]);
+        r.input_transformations = BTreeMap::from([
+            ("thinking.organization_binding_mismatch".to_string(), 59),
+            (TRANSFORMATIONS_MOVED.to_string(), 60),
+        ]);
         r
     }
 

@@ -1259,6 +1259,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "none": 18,
             "pending": 1
           },
+          "input_transformations": {
+            "thinking.prefix_binding_mismatch": 1
+          },
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -1633,6 +1638,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_miss_reasons": {
             "none": 1
           },
+          "input_transformations": {},
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -2027,6 +2035,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "none": 16,
             "pending": 1
           },
+          "input_transformations": {
+            "thinking.prefix_binding_mismatch": 1
+          },
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -2401,6 +2414,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_miss_reasons": {
             "none": 2
           },
+          "input_transformations": {},
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -2782,6 +2798,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "guardrail_blocked": 1
           },
           "cache_miss_reasons": {},
+          "input_transformations": {},
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -3162,6 +3181,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_miss_reasons": {
             "none": 1
           },
+          "input_transformations": {},
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -3552,6 +3574,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_miss_reasons": {
             "none": 1
           },
+          "input_transformations": {},
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -3939,6 +3964,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "none": 18,
             "pending": 1
           },
+          "input_transformations": {
+            "thinking.prefix_binding_mismatch": 1
+          },
+          "input_transformations_moved": 0,
+          "input_transformations_none": 0,
           "histograms": {
             "duration_ms": [
               0,
@@ -6476,6 +6506,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -6871,6 +6904,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 13
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -7253,6 +7289,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -7642,6 +7681,11 @@ export const FIXTURES: Record<string, Fixture> = {
                 "none": 4,
                 "pending": 1
               },
+              "input_transformations": {
+                "thinking.prefix_binding_mismatch": 1
+              },
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -8114,6 +8158,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -8509,6 +8556,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 12
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -8892,6 +8942,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -9273,6 +9326,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 "guardrail_blocked": 1
               },
               "cache_miss_reasons": {},
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -9653,6 +9709,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -10041,6 +10100,11 @@ export const FIXTURES: Record<string, Fixture> = {
                 "none": 3,
                 "pending": 1
               },
+              "input_transformations": {
+                "thinking.prefix_binding_mismatch": 1
+              },
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -10413,6 +10477,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "input_transformations": {},
+              "input_transformations_moved": 0,
+              "input_transformations_none": 0,
               "histograms": {
                 "duration_ms": [
                   0,
@@ -12157,7 +12224,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "account_id": "business"
             }
           ],
-          "completed_at": 1791720999400
+          "completed_at": 1791720999400,
+          "input_transformations": {}
         }
       }
     }
@@ -14619,6 +14687,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "response": {
               "cleared_input_tokens": null,
               "inference_geo": "us",
+              "input_transformations": null,
               "refusal_category": null,
               "refusal_recommended_model": null,
               "served_model": null,
@@ -14680,6 +14749,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "response": {
               "cleared_input_tokens": null,
               "inference_geo": "us",
+              "input_transformations": null,
               "refusal_category": null,
               "refusal_recommended_model": null,
               "served_model": null,
@@ -14961,6 +15031,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": {
+                  "thinking.prefix_binding_mismatch": {
+                    "blocks": 2,
+                    "first_message": 1
+                  }
+                },
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15096,6 +15172,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15228,6 +15305,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15360,6 +15438,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15489,6 +15568,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15621,6 +15701,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15753,6 +15834,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -15885,6 +15967,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16041,6 +16124,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16102,6 +16186,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16351,6 +16436,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16483,6 +16569,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16694,6 +16781,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16826,6 +16914,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": "restricted_topic",
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -16958,6 +17047,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": "harmful_request",
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -17090,6 +17180,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": "harmful_request",
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -17222,6 +17313,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": null,
                 "refusal_recommended_model": null,
                 "served_model": null,
@@ -17354,6 +17446,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "response": {
                 "cleared_input_tokens": null,
                 "inference_geo": "us",
+                "input_transformations": null,
                 "refusal_category": "harmful_request",
                 "refusal_recommended_model": null,
                 "served_model": null,
