@@ -492,7 +492,9 @@ nor the reading names a reset, the cycle runs the window's length and a minute f
 wall was announced, the reset's passing for a wall that went on past its reset, or the stored reading's instant where no
 announcement stands. A wall the router restored from the registry at a start keeps the anchor its stored reading gave
 it, so a reading inside the margin after the restart neither moves the anchor nor holds the account past the window's
-length.
+length. A weekly window that falls by more than 5 points under its unchanged reset, the trace a used limit reset leaves,
+emits `window_dropped` with the first poll's figure after the fall, and a fall from the wall emits it beside the
+`window_cleared` ([Quota samples](statistics.md#quota-samples)).
 
 **The projection** Every move and placement reads where each plan window of a subscription account is headed: its
 prediction plus the burn of the sessions pinned to it under the pool's keys, priced per window on the account's tier,

@@ -445,21 +445,22 @@ a subscription account, or "No samples yet" with "Quota samples appear after the
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"
 ("left at {date}" and the badge where that reset is the term's end), the three weeks before it with their figures, and
-"Total, {n} weeks", each week's hover naming its reset's instant and where its reading came from. The figures read in
-the week the week control names under every position: the share of the account's own window times its tier's 7-day
-capacity, a model week at its capacity factor, over the chosen week's tier's, so a Fable-week reset reads half its 7-day
-figure. Each week prices at the tier the account ran under at that reset, so a week before an upgrade reads its figure
-at the earlier tier's capacity, and a reset the router recorded no tier for at the account's current one, a dash where
-the cost model holds no capacity for the tier a week prices at (a Free plan among them, the card then noting it), and
-the total a dash where one of its weeks reads one. Each week's hover adds the reset's own share of the account's window
-under the plan that week prices at, such as `Ultra: 39% of the 7-day window left`. The block waits on the cost model,
-which the page reads from the settings once per visit whichever account opens, so it draws its placeholder until the
-settings answer and the read's error where they fail. A week the account's term ended inside counts as a reset with the
-badge "term ended", a clock-walk reset reads the last reading before it as the event carries it, and the card reads "No
-weekly reset recorded yet. The first shows once this account's week ends." before the first. The card reads its weeks
-once per account, again on the bar's Refresh, once a weekly window resets and once the account's term end moves (its
-cancellation flag, saved end or plan-ended flag), and a failed read draws its error with Try again, which reads the
-weeks and the settings again.
+"Total, {n} weeks", each week's hover naming its reset's instant and where its reading came from. The block shows the
+rows of the card "Unused allowance by account", a used limit reset that cleared its window among them, so its four weeks
+count the natural resets and add the uses between them. The figures read in the week the week control names under every
+position: the share of the account's own window times its tier's 7-day capacity, a model week at its capacity factor,
+over the chosen week's tier's, so a Fable-week reset reads half its 7-day figure. Each week prices at the tier the
+account ran under at that reset, so a week before an upgrade reads its figure at the earlier tier's capacity, and a
+reset the router recorded no tier for at the account's current one, a dash where the cost model holds no capacity for
+the tier a week prices at (a Free plan among them, the card then noting it), and the total a dash where one of its weeks
+reads one. Each week's hover adds the reset's own share of the account's window under the plan that week prices at, such
+as `Ultra: 39% of the 7-day window left`. The block waits on the cost model, which the page reads from the settings once
+per visit whichever account opens, so it draws its placeholder until the settings answer and the read's error where they
+fail. A week the account's term ended inside counts as a reset with the badge "term ended", a clock-walk reset reads the
+last reading before it as the event carries it, and the card reads "No weekly reset recorded yet. The first shows once
+this account's week ends." before the first. The card reads its weeks once per account, again on the bar's Refresh, once
+a weekly window resets and once the account's term end moves (its cancellation flag, saved end or plan-ended flag), and
+a failed read draws its error with Try again, which reads the weeks and the settings again.
 
 "Meter drift" draws, beside it, one line per window kind the account's completed windows hold: the newest completed
 window's ratio of the upstream's rise over the router's priced share (a warning badge where the rise and the priced
@@ -1208,12 +1209,14 @@ Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created, M
 cooldown counts a cleared cooldown up to its clear, and the clear leaves no time behind. The section keeps reading the
 rollups under a session filter, since they carry no session, and its subtitle says so. The card "Unused allowance by
 account" follows Accounts in range, one row per subscription account with a weekly reset in the last four weeks under
-the Accounts filter whatever the range, with Resets, each weekly window's last and four weeks' figures in the chosen
-week (each week priced at the tier the account ran under at that reset, as the Accounts detail's "Allowance left at
-reset" prices it), sorted most left first on the four weeks' 7-day figure, an unpriced account last, a row whose latest
-reset is a term's end reading "term ended {date}" under its account, and two fleet figures over the rows, "7-day, fleet
-total" and "Fable, fleet total", the priced accounts' figures added with the unpriced accounts named. The card waits on
-the cost model, so a failed settings read draws its error state in place of the rows and the figures.
+the Accounts filter whatever the range, with Resets, which reads the used limit resets apart ("4, 1 used") with a hover
+that names each use, each weekly window's last and four weeks' figures in the chosen week (each week priced at the tier
+the account ran under at that reset, as the Accounts detail's "Allowance left at reset" prices it), a used reset that
+cleared its window counting among the resets as its `claim` row, sorted most left first on the four weeks' 7-day figure,
+an unpriced account last, a row whose latest reset is a term's end reading "term ended {date}" under its account, and
+two fleet figures over the rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts' figures added with
+the unpriced accounts named. The card waits on the cost model, so a failed settings read draws its error state in place
+of the rows and the figures.
 
 ## Sessions
 
@@ -1685,6 +1688,7 @@ panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the 
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window cleared | A quota window read under its limit again after a reading at the limit, with the readings before and after and the reset unchanged. |
+| window dropped | A weekly quota window fell by more than 5 points under its unchanged reset, the trace a used limit reset leaves, with the reading before, the first poll's reading after and the reset. |
 | window reset | A quota window reset, with the reading before it and Read from, the usage sample or the clock walk that announced it. |
 | window spent | A response head, the poll or the prediction read a quota window at its limit, once per reset cycle: a newer head or poll reading of the same cycle within two points of 1.0 after it neither clears nor repeats it, a head naming no reset, taken before the announced reset, is of the same cycle, and the cycle runs from the instant the wall was announced or, for a wall restored at a start, from the stored reading's instant. |
 

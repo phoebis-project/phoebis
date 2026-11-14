@@ -11326,6 +11326,133 @@ async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_
     no_further_event(&mut events).await;
 }
 
+/// A dropped window's edge as `(account, window, before, after, reset)`.
+fn dropped_of(event: &phoebis_routing::RouterEvent) -> Option<(&str, &str, f64, f64, i64)> {
+    match event {
+        phoebis_routing::RouterEvent::WindowDropped {
+            account_id,
+            window,
+            utilization_before,
+            utilization,
+            reset,
+            ..
+        } => Some((
+            account_id.as_str(),
+            window.as_str(),
+            *utilization_before,
+            *utilization,
+            *reset,
+        )),
+        _ => None,
+    }
+}
+
+/// A clean poll's sample of the given weekly windows, each read under `reset`.
+fn weekly_poll(at: i64, reset: i64, readings: &[(&str, f64)]) -> UtilizationSample {
+    let sample = readings
+        .iter()
+        .fold(sample(at), |sample, (window, utilization)| {
+            sample.with(
+                window,
+                WindowReading {
+                    utilization: *utilization,
+                    reset: Some(reset),
+                    observed_at: at,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            )
+        });
+    UtilizationSample {
+        poll: true,
+        ..sample
+    }
+}
+
+#[tokio::test]
+async fn a_poll_more_than_five_points_under_the_stored_weekly_reading_under_one_reset_writes_window_dropped(
+) {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.50), (SEVEN_DAY_FABLE, 0.50)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // Six points under the stored figure on one window and five on the other, under the reset both stored readings
+    // name.
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(2_000, reset, &[(SEVEN_DAY, 0.44), (SEVEN_DAY_FABLE, 0.45)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        dropped_of(&event),
+        Some(("a", SEVEN_DAY, 0.50, 0.44, reset)),
+        "{event:?}"
+    );
+    // A fall of five points is no drop.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_head_that_shows_a_weekly_fall_leaves_window_dropped_to_the_next_poll_and_its_figure() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // A head right after a use reads the week at 0.00 before the upstream's own figure settles.
+    handle
+        .report(observed(
+            "a",
+            sample(2_000).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.0,
+                    reset: Some(reset),
+                    observed_at: 2_000,
+                    source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.11)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        dropped_of(&event),
+        Some(("a", SEVEN_DAY, 0.61, 0.11, reset)),
+        "the figure before is the one the head found stored, and the figure after is the poll's: {event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
 #[tokio::test]
 async fn a_head_whose_one_window_falls_under_its_limit_emits_window_cleared_for_that_window_alone()
 {

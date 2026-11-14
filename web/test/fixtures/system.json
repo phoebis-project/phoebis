@@ -10,7 +10,7 @@
     "dead": [],
     "ledger": {
       "schema_version": 4,
-      "written": 68,
+      "written": 69,
       "dropped": 0,
       "write_failures": 0,
       "cache_map_orphans": 1,

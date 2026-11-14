@@ -604,14 +604,14 @@ history of an `oauth` account answers a head's sample and a poll's at one instan
 ledger](statistics.md#the-ledger)). The request log filters on the serving attempt's stop reason and refusal category,
 and the analytics answer the refused requests in range per category ([Refused
 requests](statistics.md#refused-requests)). The analytics answer the weekly allowance each subscription account left
-unused at its resets in range, from the stored window reset events ([Quota samples](statistics.md#quota-samples)). The
-reconciliation fold drops a dip in a window's readings that the next readings reverse past what the attempts predict, so
-a transient zero poll counts its window's rise once and holds no `meter_drift`
-([Statistics](statistics.md#conditions-and-gauges)). A window's reading carries the plan and the tier the account held
-when it was taken, and a window's reset event and the allowance route answer that pair
-([Statistics](statistics.md#quota-samples)). A `poll_backoff_ended` event names its cause, a clean poll or the account's
-plan-ended pause ([Statistics](statistics.md#conditions-and-gauges)). The profile is read again on every third usage
-poll, a quarter hour apart, so a tier or plan change reaches the router within a quarter hour
+unused at its resets in range, from the stored window reset events, and before each used limit reset that cleared a
+window, from the stored window drop events ([Quota samples](statistics.md#quota-samples)). The reconciliation fold drops
+a dip in a window's readings that the next readings reverse past what the attempts predict, so a transient zero poll
+counts its window's rise once and holds no `meter_drift` ([Statistics](statistics.md#conditions-and-gauges)). A window's
+reading carries the plan and the tier the account held when it was taken, and a window's reset event and the allowance
+route answer that pair ([Statistics](statistics.md#quota-samples)). A `poll_backoff_ended` event names its cause, a
+clean poll or the account's plan-ended pause ([Statistics](statistics.md#conditions-and-gauges)). The profile is read
+again on every third usage poll, a quarter hour apart, so a tier or plan change reaches the router within a quarter hour
 ([Statistics](statistics.md#quota-samples)). A re-fold after a moved prompt-length threshold writes into no hour the
 rollup purge dropped ([Statistics](statistics.md#retention)). Every route that prices a subscription row answers one
 figure, the Pro-week figure, null where a row it sums priced nothing, and the ledger raises `model_unpriced`, an

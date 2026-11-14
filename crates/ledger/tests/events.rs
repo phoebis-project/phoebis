@@ -2280,6 +2280,16 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             source_request_id: None,
             at: 1,
         },
+        RouterEvent::WindowDropped {
+            account_id: "a".into(),
+            window: "seven_day".into(),
+            utilization_before: 0.5,
+            utilization: 0.0,
+            reset: 2,
+            plan: None,
+            tier: None,
+            at: 1,
+        },
         RouterEvent::WindowReset {
             account_id: "a".into(),
             window: "five_hour".into(),
@@ -3286,6 +3296,142 @@ fn the_unused_allowance_answers_each_resets_pair_from_its_event_and_none_where_t
             ),
         ],
         "each reset answers the pair its own event names, so a week keeps the plan it ran under"
+    );
+}
+
+/// A `window_dropped` row as the router writes it, over a reading that carried no pair.
+fn window_dropped(
+    account_id: &str,
+    window: &str,
+    utilization_before: f64,
+    utilization: f64,
+    reset: i64,
+    at: i64,
+) -> EventRecord {
+    event_of(&RouterEvent::WindowDropped {
+        account_id: account_id.into(),
+        window: window.into(),
+        utilization_before,
+        utilization,
+        reset,
+        plan: None,
+        tier: None,
+        at,
+    })
+    .expect("a dropped row")
+}
+
+/// A `used` claim's row whose answer names `cleared`.
+fn used_claim(account_id: &str, cleared: &[&str], at: i64) -> EventRecord {
+    use phoebis_oauth::{Claim, ClaimAnswer, ClaimOutcome, ClaimReply};
+    let claim = Claim {
+        at,
+        label: "Launch reset".into(),
+        outcome: ClaimOutcome::Used,
+        reply: ClaimReply::Answered {
+            answer: Some(ClaimAnswer {
+                cleared: cleared.iter().map(|window| window.to_string()).collect(),
+                cooldown_until: None,
+                reason: None,
+                resets_left: Some(0),
+                result: "reset".into(),
+                weekly_resets_at: None,
+            }),
+            status: 200,
+        },
+        request_id: "claim-1".into(),
+    };
+    let phoebis_ledger::Record::Event(row) =
+        phoebis_ledger::limit_reset_claimed(account_id, 1, "admin", "rg-1", &claim)
+    else {
+        panic!("an event record")
+    };
+    row
+}
+
+#[test]
+fn a_drop_with_no_claim_lists_a_claim_row_where_the_poll_after_it_reads_under_five_points() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let reset = now + 2 * DAY;
+    for row in [
+        window_dropped("a", "seven_day", 0.95, 0.04, reset, now - DAY),
+        // Five points left: the use lowered the window and gave nothing up.
+        window_dropped("b", "seven_day", 0.83, 0.05, reset, now - DAY),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(
+                c,
+                &["a".into(), "b".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::new(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![reset_row(
+            "a",
+            "seven_day",
+            reset,
+            1.0 - 0.95,
+            now - DAY,
+            "claim"
+        )],
+        "the share left before the drop, under the week's unchanged reset at the drop's instant"
+    );
+}
+
+#[test]
+fn a_drop_within_the_hour_after_a_used_claim_lists_a_row_where_the_claim_names_its_window() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let reset = now + 2 * DAY;
+    let used = now - DAY;
+    for row in [
+        used_claim("a", &["seven_day_fable"], used),
+        window_dropped("a", "seven_day_fable", 0.70, 0.11, reset, used + 300_000),
+        // Under five points, though the claim's answer cleared the Fable week alone.
+        window_dropped("a", "seven_day", 0.80, 0.0, reset, used + 300_000),
+        // The same claim and Fable drop, two hours apart.
+        used_claim("b", &["seven_day_fable"], used),
+        window_dropped(
+            "b",
+            "seven_day_fable",
+            0.70,
+            0.11,
+            reset,
+            used + 2 * 3_600_000,
+        ),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(
+                c,
+                &["a".into(), "b".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::new(),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![reset_row(
+            "a",
+            "seven_day_fable",
+            reset,
+            1.0 - 0.70,
+            used + 300_000,
+            "claim"
+        )],
+        "the claim's own list judges a drop in the hour after it, and the margin judges one past the hour"
     );
 }
 

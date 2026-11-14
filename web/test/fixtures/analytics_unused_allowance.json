@@ -36,6 +36,14 @@
             "window": "seven_day_fable",
             "resets": [
               {
+                "reset_at": 1791807400000,
+                "share_left": 0.42000000000000004,
+                "observed_at": 1791719200000,
+                "source": "claim",
+                "plan": "max_20x",
+                "tier": "default_claude_max_20x"
+              },
+              {
                 "reset_at": 1790857000000,
                 "share_left": 0.6,
                 "observed_at": 1790857000000,
@@ -44,8 +52,8 @@
                 "tier": "default_claude_max_20x"
               }
             ],
-            "total_share_left": 0.6,
-            "resets_counted": 1
+            "total_share_left": 1.02,
+            "resets_counted": 2
           }
         ]
       },

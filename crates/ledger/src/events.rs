@@ -23,7 +23,7 @@ use crate::query::{
     PIN_MIGRATED, PLAN_ENDED, PLAN_RESTORED, POLL_BACKOFF_ENDED, POLL_BACKOFF_STARTED, POLL_FAILED,
     REFRESH_FAILED, REFRESH_SUCCEEDED, REFRESH_UNCERTAIN, REGISTRY_CHANGED, RESERVATION_EXPIRED,
     SHEDDING_ROUND, SLOW_DOWN_ENDED, SLOW_DOWN_STARTED, WARM_PREFIX_EXPIRED, WINDOW_CLEARED,
-    WINDOW_RESET, WINDOW_SPENT, WIND_DOWN_STARTED,
+    WINDOW_DROPPED, WINDOW_RESET, WINDOW_SPENT, WIND_DOWN_STARTED,
 };
 use crate::record::{CacheMapWrite, DecisionRow, EventRecord};
 use crate::task::Ledger;
@@ -370,6 +370,32 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 .to_string(),
             ),
             request_id: source_request_id.clone(),
+            ..Default::default()
+        },
+        RouterEvent::WindowDropped {
+            account_id,
+            window,
+            utilization_before,
+            utilization,
+            reset,
+            plan,
+            tier,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: WINDOW_DROPPED.into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "window": window,
+                    "utilization_before": utilization_before,
+                    "utilization": utilization,
+                    "reset": reset,
+                    "plan": plan,
+                    "tier": tier,
+                })
+                .to_string(),
+            ),
             ..Default::default()
         },
         RouterEvent::WindowReset {
@@ -1576,6 +1602,38 @@ mod tests {
                 "source": "head", "source_request_id": "r3"
             }),
             "the readings and the reset alone, with no cause"
+        );
+
+        let row = event_of(&RouterEvent::WindowDropped {
+            account_id: "a".into(),
+            window: "seven_day".into(),
+            utilization_before: 0.61,
+            utilization: 0.11,
+            reset: 9_000,
+            plan: Some("max_20x".into()),
+            tier: None,
+            at: 4_500,
+        })
+        .expect("a dropped row");
+        assert_eq!(
+            columns(&row),
+            (
+                "window_dropped",
+                Some("a"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "window": "seven_day", "utilization_before": 0.61, "utilization": 0.11, "reset": 9_000,
+                "plan": "max_20x", "tier": null
+            })
         );
 
         let row = event_of(&RouterEvent::WindowReset {

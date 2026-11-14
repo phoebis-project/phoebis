@@ -515,6 +515,9 @@ pub(crate) struct Event {
     /// - `window_cleared`: a plan window read under 1.0 after a reading at 1.0 or a predicted spent edge under the
     ///   same reset, with the figure before, the reading's or the prediction's, the reading after and the unchanged
     ///   reset, so the history no longer keeps the window spent.
+    /// - `window_dropped`: a weekly window fell by more than 5 points under one reset, as a used limit reset reads,
+    ///   with `utilization_before`, the stored figure, `utilization`, the first poll's figure after the fall, the
+    ///   unchanged `reset`, and the `plan` and the `tier` of the stored reading, each null where it names none.
     /// - `window_reset`: a plan window's reset passed, seen by a sample naming a later reset, or naming none once
     ///   read past it (`sample`), or by the clock (`clock`), once per reset, with the `plan` and the `tier` of the
     ///   reading whose reset passed, each null where that reading names none.

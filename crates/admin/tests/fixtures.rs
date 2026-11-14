@@ -2520,6 +2520,30 @@ async fn every_route_is_captured_and_holds_its_shape() {
         (claimed == 1).then_some(())
     })
     .await;
+    // `business`'s Fable week fell half an hour ago under its unchanged reset to a figure under the margin, as a reset
+    // used outside the router reads, so the routing log holds the kind and the unused allowance capture a `claim` row.
+    // Waited for as the claim is, so both captures and the `written` figure of `system.json` count it.
+    parts.ledger.record(Record::Event(EventRecord {
+        at: now - 1_800_000,
+        kind: "window_dropped".into(),
+        account_id: Some("business".into()),
+        detail: Some(j!({ "window": "seven_day_fable", "utilization_before": 0.58, "utilization": 0.02, "reset": now + DAY, "plan": "max_20x", "tier": "default_claude_max_20x" }).to_string()),
+        ..Default::default()
+    }));
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        let dropped = parts
+            .db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind = 'window_dropped'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+        (dropped == 1).then_some(())
+    })
+    .await;
     // Five limit reset blocks, each read through the service as a poll slot reads one. The five accounts hold the
     // seed's one token, so the fake cannot tell their reads apart and is set to each block in turn. The reads follow
     // the paired transitions, so no row of the routing log and no count of `system.json` waits on them.

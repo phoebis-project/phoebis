@@ -32,12 +32,12 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
-    is_plan_window, latest_full_reset, mark_holds, oldest_kept_hour, plan_windows, round_in_dwell,
-    shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, standing_mark, wait_until,
-    AccountTicket, BurnUnit, CreditsState, DroppedBlocks, EvidenceSource, InFlight, MemberSpend,
-    OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
-    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    is_plan_window, is_weekly_window, latest_full_reset, mark_holds, oldest_kept_hour,
+    plan_windows, round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate,
+    standing_mark, wait_until, AccountTicket, BurnUnit, CreditsState, DroppedBlocks,
+    EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded,
+    RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
+    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
 
@@ -108,6 +108,26 @@ pub fn same_reset(a: i64, b: i64) -> bool {
 /// read 1.0), which a one-point margin would read as a clear. Two points cover the head's point under the poll with
 /// one point of room. It is a constant, measured on live samples.
 pub const SPENT_MARGIN: f64 = 0.02;
+
+/// How far a weekly window's reading has to fall under one reset to read as a used limit reset: a fall of more than
+/// this, read in whole points since a poll reads the endpoint's whole percent. Live samples showed no other weekly fall
+/// of more than 5 points under an unchanged reset.
+const WINDOW_DROP_MARGIN: f64 = 0.05;
+
+/// A utilization in whole points. Two figures rounded to the hundredth and then subtracted as floats can read 0.55 to
+/// 0.50 as more than 0.05.
+fn whole_points(utilization: f64) -> i64 {
+    (utilization * 100.0).round() as i64
+}
+
+/// The figure a weekly window fell from under one reset, kept for the poll that dates the drop: the stored reading's
+/// utilization, its reset and its pair.
+struct PendingDrop {
+    utilization_before: f64,
+    reset: i64,
+    plan: Option<String>,
+    tier: Option<String>,
+}
 
 /// The words a pin event's kind is named by, in a decision record's `pin_events` and in the ledger's events table
 /// alike, so the console reads one vocabulary in both.
@@ -310,6 +330,20 @@ pub enum RouterEvent {
         reset: Option<i64>,
         source: WindowSource,
         source_request_id: Option<String>,
+        at: i64,
+    },
+    /// A weekly window fell by more than `WINDOW_DROP_MARGIN` under the stored reading's reset, the trace a used limit
+    /// reset leaves: the stored figure before, the first poll's figure after, the unchanged reset and the stored
+    /// reading's plan and tier. Dated at that poll, since a head after a use reads 0.00 before the upstream's own
+    /// figure settles.
+    WindowDropped {
+        account_id: String,
+        window: String,
+        utilization_before: f64,
+        utilization: f64,
+        reset: i64,
+        plan: Option<String>,
+        tier: Option<String>,
         at: i64,
     },
     /// A window's reset passed: the sample's own instant has passed it, within `RESET_SLACK_MS` where the sample names
@@ -1960,6 +1994,9 @@ struct Task {
     #[cfg(any(test, feature = "debug-hooks"))]
     parked: Option<Vec<(Report, u64)>>,
     pending: Pending,
+    /// The weekly falls a head showed, per account and window, which the next poll under the same reset emits. Kept in
+    /// memory beside `spent_announced`, so a restart between the head and the poll loses the drop.
+    pending_drops: HashMap<(String, String), PendingDrop>,
     /// The reloads that arrived while a load ran, which one more load answers: the write each follows may postdate
     /// the running load's read.
     reload_waiters: Vec<oneshot::Sender<Result<(), String>>>,
@@ -2125,6 +2162,7 @@ pub fn spawn(
         purge_held,
         purged: false,
         pending,
+        pending_drops: HashMap::new(),
         reload_waiters: Vec::new(),
         reports,
         reset_announced: HashMap::new(),
@@ -2705,6 +2743,15 @@ fn reset_under(stored: Option<&WindowReading>, reading: &WindowReading) -> Optio
     match (reading.reset, stored.and_then(|stored| stored.reset)) {
         (None, Some(stored_reset)) if reading.observed_at < stored_reset => Some(stored_reset),
         (reset, _) => reset,
+    }
+}
+
+/// Whether `reading` stands under `reset` with no reset passed between: it names one `same_reset` reads as `reset`, or
+/// names none and was taken before it.
+fn stands_under(reset: i64, reading: &WindowReading) -> bool {
+    match reading.reset {
+        Some(named) => same_reset(reset, named),
+        None => reading.observed_at < reset,
     }
 }
 
@@ -4289,8 +4336,16 @@ impl Task {
                             window,
                             stored.get(window).cloned(),
                             predicted.get(window).copied(),
-                            reading,
+                            reading.clone(),
                             source_request_id.as_deref(),
+                            now,
+                        );
+                        self.window_drop(
+                            &account_id,
+                            window,
+                            stored.get(window),
+                            &reading,
+                            sample.poll,
                             now,
                         );
                     }
@@ -4995,6 +5050,72 @@ impl Task {
                 at: now,
             });
         }
+    }
+
+    /// The fall of a weekly window under one reset, read beside `window_edges`. The stored reading has to name a reset
+    /// the new reading still stands under, since without one a fall under one reset reads like a new window. A poll
+    /// that reads a fall of more than `WINDOW_DROP_MARGIN` emits `WindowDropped` with its own figure after. A head
+    /// emits nothing, since a head after a use reads 0.00 before the upstream's own figure settles: it keeps the
+    /// stored figure, its reset and its pair as the window's pending drop, which a later head leaves as it is. The next
+    /// poll under that reset reads the pending figure in place of the stored one and clears it whether it emits or
+    /// not, and a reading past the pending reset, or under another, clears it too.
+    fn window_drop(
+        &mut self,
+        account_id: &str,
+        window: &str,
+        stored: Option<&WindowReading>,
+        reading: &WindowReading,
+        poll: bool,
+        now: i64,
+    ) {
+        if !is_weekly_window(window) {
+            return;
+        }
+        let key = (account_id.to_string(), window.to_string());
+        let pending = self
+            .pending_drops
+            .remove(&key)
+            .filter(|pending| stands_under(pending.reset, reading));
+        let before = match pending {
+            Some(pending) if !poll => {
+                self.pending_drops.insert(key, pending);
+                return;
+            }
+            Some(pending) => pending,
+            None => {
+                let Some((stored, reset)) = stored.and_then(|stored| {
+                    let reset = stored.reset.filter(|reset| stands_under(*reset, reading))?;
+                    Some((stored, reset))
+                }) else {
+                    return;
+                };
+                PendingDrop {
+                    utilization_before: stored.utilization,
+                    reset,
+                    plan: stored.plan.clone(),
+                    tier: stored.tier.clone(),
+                }
+            }
+        };
+        if whole_points(before.utilization_before) - whole_points(reading.utilization)
+            <= whole_points(WINDOW_DROP_MARGIN)
+        {
+            return;
+        }
+        if !poll {
+            self.pending_drops.insert(key, before);
+            return;
+        }
+        self.emit(RouterEvent::WindowDropped {
+            account_id: account_id.to_string(),
+            window: window.to_string(),
+            utilization_before: before.utilization_before,
+            utilization: reading.utilization,
+            reset: before.reset,
+            plan: before.plan,
+            tier: before.tier,
+            at: now,
+        });
     }
 
     /// The sample as the routing reads it. A plan window's reading that names no reset, taken before the stored

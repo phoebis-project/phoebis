@@ -1170,6 +1170,7 @@ event_kinds! {
     WARM_PREFIX_EXPIRED => "warm_prefix_expired",
     WIND_DOWN_STARTED => "wind_down_started",
     WINDOW_CLEARED => "window_cleared",
+    WINDOW_DROPPED => "window_dropped",
     WINDOW_RESET => "window_reset",
     WINDOW_SPENT => "window_spent",
 }
