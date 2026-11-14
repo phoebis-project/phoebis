@@ -7096,6 +7096,127 @@ async fn a_fable_pins_move_cost_reads_its_rewrites_pro_share_of_the_fable_week_o
     );
 }
 
+/// A cost model that weighs Opus 5.5 at 2 units a token and Sonnet 5.5 at 1, and prices an output token at four times
+/// a five-minute cache write, so the thinking a move drops weighs four tokens of rewrite.
+const DROP_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      default_claude_ai:      {five_hour: 1000000, seven_day: 10000000}
+      default_claude_max_20x: {five_hour: 20000000, seven_day: 200000000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 8}
+    model_weight:
+      claude-opus-5-5: 2
+      claude-sonnet-5-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [opus, sonnet]
+    model_tier:
+      claude-opus-5-5: opus
+      claude-sonnet-5-5: sonnet
+";
+
+#[tokio::test]
+async fn a_session_row_and_its_line_answer_the_size_and_the_drop_a_round_reads_at_the_pins_destination(
+) {
+    use common::{get, json, login};
+    let now = common::NOW;
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(DROP_COSTS)
+            .expect("the cost model with an output weight parses"),
+        path: None,
+        source: "test".to_string(),
+    };
+    // Three warm pins on business, each a session of its own: `s1` and `s3` of Opus 5.5, whose pair of business and
+    // direct, the sibling a round plans their move to, the store holds bound, and `s2` of Sonnet 5.5, which no move has
+    // observed. s3 holds a zero sum of business's thinking.
+    let pin = |session: &str, model: &str, prompt: u64, own: u64, generation: i64| {
+        phoebis_store::PinRow {
+            model: model.into(),
+            lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
+            last_input_tokens: prompt,
+            thinking_sums: std::collections::BTreeMap::from([("business".to_string(), own)]),
+            ..burning_opus_pin(session, "business", generation, now, 100.0, 145.0)
+        }
+    };
+    let seed = sessions_seed(|generation| {
+        vec![
+            pin("s1", "claude-opus-5-5", 100_000, 40_000, generation),
+            pin("s2", "claude-sonnet-5-5", 50_000, 40_000, generation),
+            pin("s3", "claude-opus-5-5", 70_000, 0, generation),
+        ]
+    })
+    .await;
+    seed.store
+        .write_routing(|tx| {
+            tx.replace_thinking_binding(&phoebis_store::ThinkingBindingRow {
+                model: "claude-opus-5-5".into(),
+                account_a: "business".into(),
+                account_b: "direct".into(),
+                bound: true,
+                observed_at: now - 3_600_000,
+            })
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on_equivalent(
+        seed.store.clone(),
+        tables,
+        phoebis_ledger::LedgerConfig::default(),
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    // The size, the weighted drop and its share, each null where the route answers none.
+    let drop_reads = |value: &serde_json::Value| {
+        [
+            value["move_size"].as_f64(),
+            value["move_drop_size"].as_f64(),
+            value["move_drop_cost"].as_f64(),
+        ]
+    };
+    let agree = |read: [Option<f64>; 3], expected: [Option<f64>; 3]| {
+        read.into_iter().zip(expected).all(|pair| match pair {
+            (Some(read), Some(expected)) => (read - expected).abs() <= expected * 1e-12,
+            (read, expected) => read == expected,
+        })
+    };
+    // s1's move to direct rewrites 60,000 of its 100,000 tokens and drops business's 40,000 at the weight of 4, 160,000
+    // tokens, a size of 220,000. The 40,000 output tokens at the multiplier 8 and Opus 5.5's weight 2 are 640,000
+    // units, 0.064 of the anchor's 10,000,000 on the week, and the write of 60,000 tokens at the multiplier 2 and the
+    // weight 2 is 240,000 units, 0.024, so the move costs 0.088.
+    let s1 = session_row(&sessions, "s1");
+    let s1_line = &s1["agent_contexts"][0];
+    let s1_drop = [Some(220_000.0), Some(160_000.0), Some(0.064)];
+    assert!(
+        agree(drop_reads(&s1), s1_drop) && close(s1["move_cost"].as_f64(), 0.088),
+        "the row answers the round's figures at the bound destination: {s1}"
+    );
+    assert!(
+        agree(drop_reads(s1_line), s1_drop) && close(s1_line["move_cost"].as_f64(), 0.088),
+        "the pin's line answers the same figures: {s1_line}"
+    );
+    // s2's model holds no observation and s3's sum is zero, so each move rewrites the whole last prompt and drops
+    // nothing.
+    for (session, prompt) in [("s2", 50_000.0), ("s3", 70_000.0)] {
+        let row = session_row(&sessions, session);
+        assert!(
+            agree(drop_reads(&row), [Some(prompt), None, None])
+                && agree(
+                    drop_reads(&row["agent_contexts"][0]),
+                    [Some(prompt), None, None]
+                ),
+            "{session}'s row and line answer its last prompt and no drop: {row}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects() {
     use common::{get, json, login, patch, wait_json};
@@ -9043,7 +9164,8 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
 /// cases pin, and dollars with no window, no Pro-week figure and no plan dollars on the API-key account `direct`. A
 /// `context_pin` was written ten milliseconds before the rig's clock and refreshed at its last use, so its cache stays
 /// warm until that use plus the TTL. It rides the standard lane, and the harness's router prices no rewrite, so a line
-/// reads `fast` false and `move_cost` null.
+/// reads `fast` false and `move_cost` null. The pin holds no thinking sum, so its move rewrites its whole last prompt,
+/// which `move_size` reads with no pricer and null where the pin holds no prompt, and the two drop members read null.
 // Each argument is a member the case pins, so a struct of them would only rename the call sites.
 #[allow(clippy::too_many_arguments)]
 fn agent_line(
@@ -9077,6 +9199,9 @@ fn agent_line(
         "ended": false,
         "fast": false,
         "move_cost": null,
+        "move_size": (last_input_tokens > 0).then_some(last_input_tokens as f64),
+        "move_drop_size": null,
+        "move_drop_cost": null,
         "lifecycle": lifecycle,
     })
 }

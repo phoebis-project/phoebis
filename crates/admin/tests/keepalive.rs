@@ -1732,6 +1732,8 @@ async fn lines(
 /// its plan dollars 0 on a model the harness's price list names, as it names every model these cases pin. Its cache
 /// stays warm until its refresh five milliseconds back plus its TTL, and it was written ten milliseconds back. It rides
 /// the standard lane, and the harness's router prices no rewrite, so a line reads `fast` false and `move_cost` null.
+/// The pin holds no thinking sum, so its move rewrites its whole last prompt, which `move_size` reads with no pricer,
+/// and the two drop members read null.
 fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
@@ -1753,6 +1755,9 @@ fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) ->
         "ended": false,
         "fast": false,
         "move_cost": null,
+        "move_size": 100_000.0,
+        "move_drop_size": null,
+        "move_drop_cost": null,
         "lifecycle": lifecycle,
     })
 }

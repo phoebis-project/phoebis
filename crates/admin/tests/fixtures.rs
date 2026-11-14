@@ -3576,6 +3576,7 @@ async fn routing_stories(
                     cold: true,
                     burn: Some(0.07),
                     last_input_tokens: 48_100,
+                    dropped_thinking_tokens: Some(12_000),
                     per_rewrite: Some(0.004),
                     marked: true,
                     rewrite: Some(0.005),

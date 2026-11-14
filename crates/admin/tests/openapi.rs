@@ -800,6 +800,9 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines() {
             "lifecycle",
             "model",
             "move_cost",
+            "move_drop_cost",
+            "move_drop_size",
+            "move_size",
             "pinned_at",
             "warm",
             "warm_until"

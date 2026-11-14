@@ -673,14 +673,17 @@ With `load_shedding` off no round runs and nothing is marked, and a mark already
 next request, which renews the pin in place. The destination gate, the reservations and the two ceilings on every move
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
-The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens, or for a pin no call has renewed with usage yet, the prompt its move would rewrite:
-the body of the request the round runs on for that request's own pin and nothing for any other pin), a pin whose burn
-the cost model cannot price after every priced pin of its group, each burn read from the pin's average decayed with
+The round orders the pool's pins on the account, cold ones first, those whose move drops no thinking by burn and then
+the others by burn over the thinking they drop, then warm ones by burn over their move's size. A move's size is the
+prompt it rewrites on the destination the gate finds for it before the walk plans any move, as [What a move
+drops](#what-a-move-drops) sizes it (for a pin no call has renewed with usage yet, the body of the request the round
+runs on for that request's own pin and nothing for any other pin), plus the thinking the move drops at the weight of
+output: the cost model's share of a token as output over its share as a cache write at the pin's TTL. A pin whose burn
+the cost model cannot price follows every priced pin of its group. Each burn is read from the pin's average decayed with
 `burn_average_seconds`, and as its demand under a round the stretch fired, so the round's pins add up to its excess.
 `warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
-ones, and `always` orders every pin by burn over rewrite cost, cold or warm. A pin a former pool left on the account is
-outside the round until it ends. While the account runs on its plan, a pin whose last refreshing request was sent in
+ones, and `always` orders every pin by burn over its move's size, cold or warm. A pin a former pool left on the account
+is outside the round until it ends. While the account runs on its plan, a pin whose last refreshing request was sent in
 fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no share to shed. In
 dollars, on an API-key account or one in overage, it stays in the round. A session that returns to standard requests
 brings its pin back with the plan burn it still carries. A pin whose model does not draw the window that fired is out of
@@ -705,11 +708,12 @@ the gate planned for it, and the walk counts that destination's planned rewrite 
 marks do not take one sibling's headroom twice. A pin is indivisible, so the order serves a target larger than one pin's
 burn, and once the burn of a pin the walk has not reached covers what the target still asks, the walk picks instead:
 among the pins whose burn covers the rest and for which the gate finds a destination, it marks the one whose move costs
-the least, a warm pin its rewrite as the Pro share of the pin's model week, or of the 7-day window where the model has
-no week, the window the pick compares on, one figure for the pin on every destination, and a cold pin nothing, since its
-cache is rewritten wherever it runs next (under `warm_sessions` `always` every pin its rewrite, as the order ignores
-warmth there), the first in the order among equals, and the marking ends there with the target met. A move's cost is the
-share its rewrite spends on the scarce weekly windows, since the 5-hour window refills. The pin the pick marked carries
+the least, a warm pin its rewrite on that destination plus the share of the thinking its move drops, counted as output,
+each as the Pro share of the pin's model week, or of the 7-day window where the model has no week, the window the pick
+compares on, and a cold pin the dropped thinking's share alone, since its cache is rewritten wherever it runs next
+(under `warm_sessions` `always` every pin its rewrite and its drop, as the order ignores warmth there), the first in the
+order among equals, and the marking ends there with the target met. A move's cost is the share its rewrite and its
+dropped thinking spend on the scarce weekly windows, since the 5-hour window refills. The pin the pick marked carries
 the note `cheapest` in the round's record and event, every pin the pick read carries the runway the gate read for it,
 unbounded where it passes its window's reset, and its rewrite as the Pro-week figure, the share of the Pro 7-day window
 a Pro account would spend on it, with the window the pick compared on beside it, which the routing log reads in the
@@ -835,8 +839,10 @@ model holds a bound pair, and unobserved otherwise.
 
 A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
 leaves, plus its sum for the destination, never under zero. A pair that reads kept or unobserved, a session with no pin
-and a pin no answer has renewed with usage price their rewrite as above. The shedding round orders its pins by the
-whole last prompt of each, and the `rewrite` of a planned move in the round's record reads the smaller size.
+and a pin no answer has renewed with usage price their rewrite as above. The shedding round reads each pin's move at the
+destination its gate finds for the pin: it orders its pins by that rewrite plus the thinking the move drops, counted at
+the weight of output, and prices a warm pin's move at both shares and a cold pin's at the dropped thinking's share,
+while the `rewrite` of a planned move in the round's record reads the write alone.
 
 ### Slow-down
 

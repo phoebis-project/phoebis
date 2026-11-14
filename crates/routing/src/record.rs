@@ -740,6 +740,9 @@ pub struct ShedPinFacts {
     pub cold: bool,
     pub burn: Option<f64>,
     pub last_input_tokens: u64,
+    /// The thinking the round read as dropped by the pin's move, in tokens. Null where the pin's destination keeps
+    /// its blocks, where its model has no observation and where the round found no destination.
+    pub dropped_thinking_tokens: Option<u64>,
     pub per_rewrite: Option<f64>,
     pub marked: bool,
     /// The pin's rewrite as the Pro-week figure, the share of the Pro 7-day window a Pro account would spend on it,

@@ -77,8 +77,9 @@ wall runs from the announcement's instant, or from the reset's passing for a wal
 classified by account kind, and a failover lands the session as a move whose record and event carry its cause
 ([Cooldowns and failover](routing.md#cooldowns-and-failover)), and `overage_policy` chooses what happens once an account
 bills extra usage ([Overage](routing.md#overage)). A pin whose model does not draw the fired window leaves the round, no
-5-hour round fires in the window's first two burn averages, the cheapest pick compares a rewrite as the Pro share of the
-pin's weekly window and records it as the Pro-week figure with the window it compared on, which the routing log reads in
+5-hour round fires in the window's first two burn averages, the cheapest pick compares a warm pin's rewrite plus the
+share of the thinking its move drops, and that share alone for a cold pin, each as the Pro share of the pin's weekly
+window, and records the rewrite as the Pro-week figure with the window it compared on, which the routing log reads in
 the chosen week, and the projection, the runway and the stretch weigh the band's hours inside the horizon. A moved pin's
 stamp names how it moved, a shedding round or the failover that landed it, which the status page's pins block and the
 routing log's record card read as `shed from` or `failed over from` the account it left ([Is it

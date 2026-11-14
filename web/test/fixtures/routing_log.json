@@ -5896,6 +5896,7 @@
               "cold": true,
               "burn": 0.07,
               "last_input_tokens": 48100,
+              "dropped_thinking_tokens": 12000,
               "per_rewrite": 0.004,
               "marked": true,
               "rewrite": 0.005,

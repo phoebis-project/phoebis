@@ -901,12 +901,7 @@ fn prompt_size(
     if pin.last_input_tokens == 0 {
         return request.body_tokens;
     }
-    let bound = destination
-        .filter(|destination| *destination != pin.account_id)
-        .filter(|destination| {
-            state.binding(&pin.model, &pin.account_id, destination) == Binding::Bound
-        });
-    match bound {
+    match bound_destination(state, pin, destination) {
         Some(destination) => {
             let sum = |account: &str| pin.thinking_sums.get(account).copied().unwrap_or(0);
             pin.last_input_tokens
@@ -915,6 +910,20 @@ fn prompt_size(
         }
         None => pin.last_input_tokens,
     }
+}
+
+/// `destination` where the pin's move there drops the blocks its account produced: another account whose pair with
+/// the pin's reads bound for the pin's model.
+fn bound_destination<'a>(
+    state: &RoutingState,
+    pin: &PinRow,
+    destination: Option<&'a str>,
+) -> Option<&'a str> {
+    destination
+        .filter(|destination| *destination != pin.account_id)
+        .filter(|destination| {
+            state.binding(&pin.model, &pin.account_id, destination) == Binding::Bound
+        })
 }
 
 /// Whether the selection sets the session's thinking sums to zero: a compacted request's prompt holds no earlier
@@ -962,6 +971,10 @@ pub(crate) fn rewrite_write(
         ),
         None => (body, FIVE_MINUTES_MS),
     };
+    cache_write(tokens, ttl_ms)
+}
+
+fn cache_write(tokens: u64, ttl_ms: i64) -> PinUsage {
     if ttl_ms >= ONE_HOUR_MS {
         PinUsage {
             write_1h: tokens,
@@ -4920,7 +4933,8 @@ pub(crate) struct Mark {
 #[derive(Clone, Default)]
 struct PinRead {
     skip: Option<&'static str>,
-    cost: Option<f64>,
+    /// The move at the destination `plan_of` found for the pin, or with none where it found none.
+    moved: Option<MoveRead>,
     rewrite: Option<f64>,
     rewrite_window: Option<&'static str>,
     runway_ms: Option<i64>,
@@ -5250,29 +5264,85 @@ pub(crate) fn standing_request(pin: &PinRow) -> SelectRequest {
     }
 }
 
-/// The figure a shedding round's pick compares for a pin: the Pro share its rewrite spends on the week its model
-/// draws. None where the cost model weighs no rewrite of the model on that week or the pin holds no prompt size. The
-/// week is the scarce window, since the 5-hour window refills, and a Fable pin's cost carries its week's factor. The
-/// cost is the pin's alone, the same on every destination: a figure that read 0 on one kind of sibling would turn the
-/// pick into a destination preference, which is the gate's to make. `req` is the request `pin_request` shapes for the
-/// pin in a round, or `standing_request`'s for a standing pin.
-pub(crate) fn move_cost(
+/// What a shedding round reads of a pin's move to one destination. The round's order, its pick and the standing
+/// pins take their figures from this one value, so the sessions route answers what a round reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MoveRead {
+    /// The cost the pick compares for a warm pin: the Pro share the rewrite spends on the week the pin's model
+    /// draws, plus `drop_cost`. None where neither is priced above zero, as for a pin with no prompt size.
+    pub cost: Option<f64>,
+    /// The size the order divides a warm pin's burn by, in tokens: the rewrite at the destination plus `drop_size`,
+    /// never under one token. None where the pin holds no prompt size.
+    pub size: Option<f64>,
+    /// The dropped thinking at the weight of output, in tokens: the size the order divides a cold pin's burn by.
+    /// None where the move drops no thinking, a count of zero included, and where the pricer answers no weight.
+    pub drop_size: Option<f64>,
+    /// The Pro share of the dropped thinking as output on the window `cost` reads: the cost the pick compares for a
+    /// cold pin. None where `drop_size` is.
+    pub drop_cost: Option<f64>,
+    /// The thinking the move drops, in tokens: the pin's sum for its own account where its pair with the destination
+    /// reads bound. None where the pair reads kept, where the model has no observation and with no destination.
+    pub dropped_thinking_tokens: Option<u64>,
+}
+
+/// The round's read of `pin`'s move to `destination`, or with none where no destination stands. The write's share is
+/// the Pro share the rewrite spends on the week the pin's model draws: the week is the scarce window, since the 5-hour
+/// window refills, and a Fable pin's cost carries its week's factor. The share is the pin's own on every kind of
+/// destination, since a figure that read 0 on one kind of sibling would turn the pick into a destination preference,
+/// which is the gate's to make. The dropped thinking reads the pair of the pin's account and the destination, and its
+/// weight is the share of a token as output over its share as a cache write at the pin's TTL, so the cost model sets
+/// it. `req` is the request `pin_request` shapes for the pin in a round, or `standing_request`'s for a standing pin.
+pub(crate) fn move_read(
     state: &RoutingState,
     req: &SelectRequest,
     pin: &PinRow,
     now: i64,
-) -> Option<f64> {
+    destination: Option<&str>,
+) -> MoveRead {
     let model = req.canonical_model.as_str();
-    state
-        .share()
-        .equivalent(
+    let share = |usage: PinUsage| {
+        state.share().equivalent(
             window_for(model),
             req.entrypoint.as_deref(),
             model,
-            rewrite_write(state, req, Some(pin), None),
+            usage,
             now,
         )
-        .filter(|share| *share > 0.0)
+    };
+    let dropped_thinking_tokens = bound_destination(state, pin, destination)
+        .map(|_| pin.thinking_sums.get(&pin.account_id).copied().unwrap_or(0));
+    // A share of zero is a weight the cost model does not give, and a drop sized at zero would have the order divide a
+    // burn by it.
+    let weighed = dropped_thinking_tokens
+        .filter(|count| *count > 0)
+        .and_then(|count| {
+            let as_output = share(PinUsage {
+                output: count,
+                ..PinUsage::default()
+            })
+            .filter(|share| *share > 0.0)?;
+            let as_write =
+                share(cache_write(count, pin.cache_ttl_ms)).filter(|share| *share > 0.0)?;
+            Some((count as f64 * as_output / as_write, as_output))
+        });
+    let drop_size = weighed.map(|(size, _)| size);
+    let drop_cost = weighed.map(|(_, cost)| cost);
+    let size = (prompt_size(state, pin, req, None) > 0).then(|| {
+        (prompt_size(state, pin, req, destination) as f64 + drop_size.unwrap_or(0.0)).max(1.0)
+    });
+    let write =
+        share(rewrite_write(state, req, Some(pin), destination)).filter(|share| *share > 0.0);
+    let cost = match (write, drop_cost) {
+        (None, None) => None,
+        (write, drop) => Some(write.unwrap_or(0.0) + drop.unwrap_or(0.0)),
+    };
+    MoveRead {
+        cost,
+        size,
+        drop_size,
+        drop_cost,
+        dropped_thinking_tokens,
+    }
 }
 
 /// The shed rule's destination for `pin` among the eligible siblings, as its own move would read it: the no-return
@@ -5344,22 +5414,81 @@ fn destination_of(
     reads.into_iter().find(|(id, _)| *id == chosen)
 }
 
+/// A standing pin's `move_read` at the destination a round's order reads for it now: among the members of `pool` that
+/// no obstacle holds off for the pin's own model and its lane's speed, with no account attempted, the set `run` builds
+/// for the pin's own next request at its first attempt, and with no booking planned. No request stands behind a
+/// standing, so the instant and the fallback are the read's own.
+pub(crate) fn standing_move_read(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    pin: &PinRow,
+    now: i64,
+    fallback_ms: i64,
+) -> MoveRead {
+    let request = standing_request(pin);
+    let members: Vec<Candidate> = snapshot
+        .members(&pool.id)
+        .iter()
+        .map(|member| Candidate {
+            account_id: member.account_id.clone(),
+            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
+            priority: member.priority,
+            upstream_model: pin.model.clone(),
+        })
+        .collect();
+    let eligible: Vec<&Candidate> = members
+        .iter()
+        .filter(|member| {
+            let blocking =
+                state.blocking_cooldown(&member.account_id, &pin.model, now, request.fast);
+            obstacle(
+                state,
+                snapshot,
+                pool,
+                &member.account_id,
+                blocking,
+                &[],
+                now,
+                fallback_ms,
+                request.fast,
+            )
+            .is_none()
+        })
+        .collect();
+    let destination = destination_of(
+        state,
+        snapshot,
+        pool,
+        &request,
+        &eligible,
+        pin,
+        &[],
+        now,
+        fallback_ms,
+    )
+    .map(|(account_id, _)| account_id);
+    move_read(state, &request, pin, now, destination.as_deref())
+}
+
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
 /// keys, ordered in a window-share round by the span's average share of the trigger's window the walk prices them by,
-/// and in a `usd` round by the dollar burn at `now` (cold first by burn, then warm by burn over rewrite cost, bounded
-/// by `warm_sessions`, a fast-lane pin out of a window-share round, and a pin whose model does not draw the trigger's
-/// window and a pin with no priced burn on it out of any round, since none of them has a share of it to shed, and a pin
-/// whose agent ended out of any round too, since its agent sends no new turn and marking its decayed burn relieves
-/// nothing), then walked while the removed burn is under the target, `min(excess, shed_cap x burn_sum)` on the
-/// trigger's window. Once one pin's burn covers what the target still asks, the walk marks the covering pin whose move
-/// costs the least, `cheapest` on the record, rather than the next in the order. Where no covering pin has a
-/// destination, the walk marks the pin at its position only where its burn covers `SHED_MARK_SHARE` of the rest,
-/// `sliver` otherwise. A standing mark is a move pending, so its burn counts as removed and the pin is skipped. A pin
-/// whose mark would leave the account's other unmarked priced pins under `SHED_MARK_SHARE` of the burn sum is never
-/// marked, `last_pin` before its gate is read, while no unpriced pin stands unmarked. An unpriced pin is never marked,
-/// and a pin with no fitting destination counts nothing. Each mark plans a reservation on its destination, which the
-/// next pin's fit counts, so a sibling's headroom is taken once. The current pin's warmth and lane are this request's,
-/// every other pin's the stored ones.
+/// and in a `usd` round by the dollar burn at `now` (cold first, those whose move drops no thinking by burn and then
+/// the rest by burn over the dropped thinking at the weight of output, then warm by burn over the rewrite plus that
+/// weighted drop, each move read at the pin's own destination, bounded by `warm_sessions`, a fast-lane pin out of a
+/// window-share round, and a pin whose model does not draw the trigger's window and a pin with no priced burn on it out
+/// of any round, since none of them has a share of it to shed, and a pin whose agent ended out of any round too, since
+/// its agent sends no new turn and marking its decayed burn relieves nothing), then walked while the removed burn is
+/// under the target, `min(excess, shed_cap x burn_sum)` on the trigger's window. Once one pin's burn covers what the
+/// target still asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than
+/// the next in the order: a warm pin's rewrite plus the share of the thinking its move drops, and a cold pin's share of
+/// that thinking alone. Where no covering pin has a destination, the walk marks the pin at its position only where its
+/// burn covers `SHED_MARK_SHARE` of the rest, `sliver` otherwise. A standing mark is a move pending, so its burn counts
+/// as removed and the pin is skipped. A pin whose mark would leave the account's other unmarked priced pins under
+/// `SHED_MARK_SHARE` of the burn sum is never marked, `last_pin` before its gate is read, while no unpriced pin stands
+/// unmarked. An unpriced pin is never marked, and a pin with no fitting destination counts nothing. Each mark plans a
+/// reservation on its destination, which the next pin's fit counts, so a sibling's headroom is taken once. The current
+/// pin's warmth and lane are this request's, every other pin's the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -5452,13 +5581,13 @@ fn shed_round(
         .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
         .unwrap_or(1.0);
     let horizon = trigger.horizon.max(now.saturating_add(1_000));
-    // A walked pin beside its figures: `burn` the order sorts by, `share` the walk's figure and `prompt` its rewrite's
-    // prompt size.
+    // A walked pin beside its figures: `burn` the order sorts by, `share` the walk's figure and `read` its move at the
+    // destination its own next request would take.
     struct RoundPin {
         row: PinRow,
         burn: Option<f64>,
         share: Option<f64>,
-        prompt: f64,
+        read: MoveRead,
     }
     let pins: Vec<RoundPin> = pins
         .into_iter()
@@ -5485,10 +5614,6 @@ fn shed_round(
                         .increase()
                         / seconds(horizon - now)
                 });
-            // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it. A pin with no
-            // prompt size reported yet ranks as the cheapest rewrite.
-            let prompt = prompt_size(state, &p, &pin_request(request, &p, is_current(&p)), None)
-                .max(1) as f64;
             // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the
             // record lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at
             // `now`, which counts the fast and classifier usage the account pays for beside the row's copy.
@@ -5501,7 +5626,7 @@ fn shed_round(
                 row: p,
                 burn,
                 share,
-                prompt,
+                read: MoveRead::default(),
             }
         })
         .collect();
@@ -5511,21 +5636,64 @@ fn shed_round(
         .into_iter()
         .partition(|p| p.share.is_some_and(|share| share == 0.0));
     left_out.extend(burnless.into_iter().map(|p| (p.row, "no_burn")));
+    // The order reads each walked pin's move where the pin's own next request would land it, with no booking planned,
+    // since what a move rewrites and drops depends on the destination.
+    let pins: Vec<RoundPin> = pins
+        .into_iter()
+        .map(|p| {
+            let req = pin_request(request, &p.row, is_current(&p.row));
+            let destination = destination_of(
+                state,
+                snapshot,
+                pool,
+                &req,
+                eligible,
+                &p.row,
+                &[],
+                now,
+                fallback_ms,
+            )
+            .map(|(account_id, _)| account_id);
+            RoundPin {
+                read: move_read(state, &req, &p.row, now, destination.as_deref()),
+                ..p
+            }
+        })
+        .collect();
     let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
         pins.into_iter().partition(|p| is_cold(&p.row));
     // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
-    let priced_first =
-        |a: &Option<f64>, b: &Option<f64>, desc: fn(f64, f64) -> Ordering| match (a, b) {
-            (Some(a), Some(b)) => desc(*a, *b),
+    fn priced_first<T>(
+        a: &Option<T>,
+        b: &Option<T>,
+        order: impl Fn(&T, &T) -> Ordering,
+    ) -> Ordering {
+        match (a, b) {
+            (Some(a), Some(b)) => order(a, b),
             (Some(_), None) => Ordering::Less,
             (None, Some(_)) => Ordering::Greater,
             (None, None) => Ordering::Equal,
-        };
-    let per_rewrite = |p: &RoundPin| p.burn.map(|b| b / p.prompt);
+        }
+    }
+    // A pin with no prompt size reported yet ranks as the cheapest rewrite, at one token.
+    let size = |p: &RoundPin| p.read.size.unwrap_or(1.0);
+    let per_rewrite = |p: &RoundPin| p.burn.map(|b| b / size(p));
     let by_rewrite = |a: &RoundPin, b: &RoundPin| {
-        priced_first(&per_rewrite(a), &per_rewrite(b), |x, y| y.total_cmp(&x))
+        priced_first(&per_rewrite(a), &per_rewrite(b), |x, y| y.total_cmp(x))
     };
-    cold.sort_by(|a, b| priced_first(&a.burn, &b.burn, |x, y| y.total_cmp(&x)));
+    // A cold pin's cache is rewritten wherever it runs next, so the pins that drop nothing lead by burn, and those
+    // whose move drops thinking, which the session pays again as output, follow by burn over the weighted drop.
+    let by_drop = |p: &RoundPin| {
+        p.burn.map(|burn| match p.read.drop_size {
+            None => (false, burn),
+            Some(drop) => (true, burn / drop),
+        })
+    };
+    cold.sort_by(|a, b| {
+        priced_first(&by_drop(a), &by_drop(b), |(a_drops, a), (b_drops, b)| {
+            a_drops.cmp(b_drops).then(b.total_cmp(a))
+        })
+    });
     warm_pins.sort_by(by_rewrite);
     let cold_count = cold.len();
     let mut ordered = cold;
@@ -5577,8 +5745,7 @@ fn shed_round(
     // and the booking a mark plans there: `no_runway` where nothing fits.
     let plan_of = |p: &PinRow, planned: &[Reservation]| {
         let req = pin_request(request, p, is_current(p));
-        let mut read = PinRead::default();
-        let Some((destination, fit)) = destination_of(
+        let found = destination_of(
             state,
             snapshot,
             pool,
@@ -5588,7 +5755,18 @@ fn shed_round(
             planned,
             now,
             fallback_ms,
-        ) else {
+        );
+        let mut read = PinRead {
+            moved: Some(move_read(
+                state,
+                &req,
+                p,
+                now,
+                found.as_ref().map(|(destination, _)| destination.as_str()),
+            )),
+            ..PinRead::default()
+        };
+        let Some((destination, fit)) = found else {
             read.skip = Some("no_runway");
             return (read, None);
         };
@@ -5604,14 +5782,18 @@ fn shed_round(
         );
         read.runway_ms = fit.runway_ms;
         let model = req.canonical_model.as_str();
-        read.cost = move_cost(state, &req, p, now);
-        // The record shows the Pro-week figure, one unit for every pin.
+        // The record shows the Pro-week figure of the write alone, one unit for every pin.
         let write = rewrite_write(state, &req, Some(p), Some(&destination));
         read.rewrite = state
             .share()
             .equivalent(SEVEN_DAY, req.entrypoint.as_deref(), model, write, now)
             .filter(|share| *share > 0.0);
-        read.rewrite_window = read.cost.map(|_| window_for(model));
+        // The window names where the write's share was read, so it follows `rewrite` beside the cost: a pin whose write
+        // prices nothing and whose drop is priced states neither.
+        read.rewrite_window = read
+            .rewrite
+            .and(read.moved.and_then(|moved| moved.cost))
+            .map(|_| window_for(model));
         let booking = Reservation {
             account_id: destination,
             attempt: request.attempt,
@@ -5624,16 +5806,18 @@ fn shed_round(
         };
         (read, Some(booking))
     };
-    // A move's cost in cache terms: a warm pin pays its rewrite, the Pro share of the week its model draws and the same
-    // on every destination, while a cold pin's cache is rewritten wherever it runs next, the reason the order walks the
-    // cold pins first, so its move costs nothing. Under `always` the order ignores warmth, and every pin pays its
-    // rewrite. A pin with no prompt size reported costs nothing, as the order ranks it. The record's Pro-week figure
-    // never orders a move, since it reads a Fable pin's rewrite without its week's factor.
+    // A move's cost: a warm pin pays its rewrite, the Pro share of the week its model draws, plus the share of the
+    // thinking its move drops, which the session pays again as output. A cold pin's cache is rewritten wherever it runs
+    // next, the reason the order walks the cold pins first, so it pays the dropped thinking's share alone. Under
+    // `always` the order ignores warmth, and every pin pays its rewrite and its drop. A pin with no prompt size
+    // reported and no drop costs nothing, as the order ranks it. The record's Pro-week figure never orders a move,
+    // since it reads a Fable pin's rewrite without its week's factor.
     let cost_of = |p: &PinRow, read: &PinRead| {
+        let moved = read.moved.unwrap_or_default();
         if pool.shedding.warm_sessions == WarmSessions::Always || !is_cold(p) {
-            read.cost.unwrap_or(0.0)
+            moved.cost.unwrap_or(0.0)
         } else {
-            0.0
+            moved.drop_cost.unwrap_or(0.0)
         }
     };
     let mut met = false;
@@ -5755,7 +5939,12 @@ fn shed_round(
             cold: is_cold(p),
             burn,
             last_input_tokens: p.last_input_tokens,
-            per_rewrite: walked.zip(burn).map(|((_, w), b)| b / w.prompt),
+            // The pick's read where it read the pin, else the order's.
+            dropped_thinking_tokens: read
+                .and_then(|read| read.moved)
+                .or(walked.map(|(_, w)| w.read))
+                .and_then(|moved| moved.dropped_thinking_tokens),
+            per_rewrite: walked.zip(burn).map(|((_, w), b)| b / size(w)),
             marked: destination.is_some() || mark_holds(p),
             rewrite: read.and_then(|read| read.rewrite),
             rewrite_window: read.and_then(|read| read.rewrite_window),

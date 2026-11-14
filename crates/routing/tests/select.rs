@@ -5,20 +5,21 @@ use phoebis_routing::{
     CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditAccount, CreditsState, Decided,
     DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, FailedOver, HeadMark,
     HoldFacts, HoldOutcome, HoldReason, HoldWait, LaneFacts, LongContextRates, MemberSpend,
-    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinnedObstacle,
-    Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates, RegistrySnapshot,
-    RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult, SharePricer,
-    SharedWindows, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite, UtilizationSample,
-    WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS, WEEK_MS,
+    MigrateReason, MoveCause, OverageEvidence, PinKeyFacts, PinRef, PinShed, PinUsage,
+    PinnedObstacle, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegimeRates,
+    RegistrySnapshot, RequestFlags, Reservation, RoutingState, SelectRequest, SelectResult,
+    SharePricer, SharedWindows, SlowDownEdge, SlowDownRead, SlowDownState, StateWrite,
+    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowFacts, WindowReading, WindowSource,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, SLOW_DOWN_MIN_HOLD_MS, SLOW_DOWN_WAIT_MS,
+    WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, ModelWeekHourRow,
     OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RegistryLoad,
     ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding, SlowDown,
-    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -27224,6 +27225,257 @@ fn an_unsized_and_an_unpriced_covering_pin_cost_nothing_and_the_pick_takes_one_f
          unpriced, whose model the equivalent does not weigh, so its move costs nothing"
     );
     assert_eq!((round.outcome.as_str(), round.reason), ("marked 1", None));
+}
+
+/// `hourly_pricer` whose Pro share prices an output token as `ratio` five-minute cache-write tokens, so the thinking a
+/// move drops weighs `ratio` tokens of rewrite on every window.
+fn output_pricer(ratio: u64) -> SharePricer {
+    let hourly = hourly_pricer();
+    let (price, rate) = (hourly.clone(), hourly.clone());
+    SharePricer::new(move |window, entrypoint, tier, model, usage, at| {
+        price.price(window, entrypoint, tier, model, usage, at)
+    })
+    .with_rate(move |window, entrypoint, tier, model, burn, at| {
+        rate.rate(window, entrypoint, tier, model, burn, at)
+    })
+    .with_equivalent(move |window, entrypoint, model, usage, at| {
+        let as_writes = PinUsage {
+            write_5m: usage.write_5m + ratio * usage.output,
+            output: 0,
+            ..usage
+        };
+        hourly.equivalent(window, entrypoint, model, as_writes, at)
+    })
+}
+
+/// A pin of `session` on `a` burning `burn` input tokens a second, warm or cold, over a last prompt of `prompt` tokens
+/// that holds `own` tokens of the thinking `a` produced.
+fn thinking_pin(session: &str, burn: f64, warm: bool, prompt: u64, own: u64) -> PinRow {
+    PinRow {
+        last_input_tokens: prompt,
+        thinking_sums: BTreeMap::from([("a".to_string(), own)]),
+        ..burning(session, "a", burn, warm, T)
+    }
+}
+
+/// The round that a request of `small`, a warm pin burning 0.001 of the 5-hour window an hour over 10,000 tokens, fires
+/// on `a` beside `pins` under `output_pricer(ratio)`, with each `(model, bound)` of `facts` stored for the pair of `a`
+/// and `b` as a router loads it at its start. `a` reads `five_hour` on its 5-hour window with the reset an hour out,
+/// and `b` reads 0.1 on both windows, which fits each pin of these cases.
+fn thinking_round(
+    pins: Vec<PinRow>,
+    facts: &[(&str, bool)],
+    ratio: u64,
+    five_hour: f64,
+) -> phoebis_routing::ShedRoundFacts {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let small = PinRow {
+        last_input_tokens: 10_000,
+        ..burning("small", "a", 0.1, true, T)
+    };
+    let mut st = RoutingState::from_load(RoutingLoad {
+        pins: pins.into_iter().chain([small]).collect(),
+        thinking_bindings: facts
+            .iter()
+            .map(|(model, bound)| ThinkingBindingRow {
+                model: model.to_string(),
+                account_a: "a".into(),
+                account_b: "b".into(),
+                bound: *bound,
+                observed_at: T - HOUR,
+            })
+            .collect(),
+        ..RoutingLoad::default()
+    });
+    st.set_share(output_pricer(ratio));
+    st.record_sample(
+        "a",
+        refreshing(five_hour, T + HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T - 500), 0);
+    past_the_wait(&mut st, &s, "p", "a", T);
+    decide(&mut st, &s, &auxiliary(&s, "small", T), &mut rng())
+        .shed_round
+        .expect("the round ran")
+        .facts
+}
+
+/// The sessions of a round's rows in the round's order.
+fn round_order(round: &phoebis_routing::ShedRoundFacts) -> Vec<String> {
+    round.pins.iter().map(|p| p.session_id.clone()).collect()
+}
+
+/// The row of `session` in a round's record.
+fn round_pin<'a>(
+    round: &'a phoebis_routing::ShedRoundFacts,
+    session: &str,
+) -> &'a phoebis_routing::ShedPinFacts {
+    round
+        .pins
+        .iter()
+        .find(|p| p.session_id == session)
+        .unwrap_or_else(|| panic!("no row for {session} in {:?}", round.pins))
+}
+
+/// A figure within a billionth of `expected`, for the per-token figures far under the file's absolute bound.
+fn near(read: Option<f64>, expected: f64) -> bool {
+    read.is_some_and(|read| (read - expected).abs() <= expected.abs() * 1e-9)
+}
+
+#[test]
+fn a_rounds_record_states_the_thinking_a_bound_move_drops_and_divides_its_burn_by_the_weighted_size(
+) {
+    // Two warm pins burning 0.03 of the 5-hour window an hour over a last prompt of 100,000 tokens, each holding 40,000
+    // of a's thinking: the Sonnet pin's pair of a and b reads bound and the Opus pin's kept. a at 0.967 projects 1.028
+    // at its reset with the three pins' 0.061 an hour, a target of 0.028 that either covers. At an output weight of 4
+    // the Sonnet pin's move rewrites 60,000 tokens and drops 40,000 that weigh 160,000, a size of 220,000 that its move
+    // costs as cache writes, where the Opus pin's rewrite costs its 100,000.
+    let round = thinking_round(
+        vec![
+            thinking_pin("bound", 3.0, true, 100_000, 40_000),
+            PinRow {
+                model: "claude-opus-5".into(),
+                lane: lane_key("claude-opus-5", "standard", "none", "-"),
+                ..thinking_pin("kept", 3.0, true, 100_000, 40_000)
+            },
+        ],
+        &[("claude-sonnet-5", true), ("claude-opus-5", false)],
+        4,
+        0.967,
+    );
+    let (bound, kept) = (round_pin(&round, "bound"), round_pin(&round, "kept"));
+    assert_eq!(
+        (bound.dropped_thinking_tokens, kept.dropped_thinking_tokens),
+        (Some(40_000), None),
+        "the bound move drops a's thinking, and the kept one states no count: {round:?}"
+    );
+    assert!(
+        near(bound.per_rewrite, 0.03 / 220_000.0),
+        "the bound pin's burn over its rewrite plus its weighted drop: {:?}",
+        bound.per_rewrite
+    );
+    assert_eq!(
+        (kept.marked, kept.note, bound.marked),
+        (true, Some("cheapest"), false),
+        "the round marks the pin whose destination keeps its blocks: {round:?}"
+    );
+}
+
+#[test]
+fn the_dropped_thinkings_weight_in_the_order_is_the_pricers_output_over_its_cache_write() {
+    // Two warm pins burning 0.03 of the 5-hour window an hour on Sonnet's bound pair: `whole` rewrites its last prompt
+    // of 100,000 tokens, since it holds a zero sum of a's thinking, and `dropping` rewrites 40,000 of its 60,000 and
+    // drops a's 20,000. Where output prices at twice a cache write, dropping's size is 80,000 and it sheds more per
+    // token. At eight times its size is 200,000 and whole leads. small's 0.001 over 10,000 stays last.
+    let order = |ratio| {
+        round_order(&thinking_round(
+            vec![
+                thinking_pin("whole", 3.0, true, 100_000, 0),
+                thinking_pin("dropping", 3.0, true, 60_000, 20_000),
+            ],
+            &[("claude-sonnet-5", true)],
+            ratio,
+            0.967,
+        ))
+    };
+    assert_eq!(
+        order(2),
+        ["dropping", "whole", "small"],
+        "at twice the cache write"
+    );
+    assert_eq!(
+        order(8),
+        ["whole", "dropping", "small"],
+        "at eight times the cache write"
+    );
+}
+
+#[test]
+fn the_pick_adds_the_dropped_thinkings_share_to_a_warm_pins_rewrite() {
+    // Two covering warm pins on Sonnet's bound pair: `whole` rewrites 100,000 tokens and drops nothing, `dropping`
+    // rewrites 30,000 of its 80,000 and drops a's 50,000, which weigh 200,000 at an output weight of 4. dropping's move
+    // costs 230,000 tokens of cache write against whole's 100,000, where its write alone reads 30,000.
+    let round = thinking_round(
+        vec![
+            thinking_pin("whole", 3.0, true, 100_000, 0),
+            thinking_pin("dropping", 3.0, true, 80_000, 50_000),
+        ],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.967,
+    );
+    let mark = |session| {
+        let row = round_pin(&round, session);
+        (row.marked, row.note)
+    };
+    assert_eq!(
+        (mark("whole"), mark("dropping")),
+        ((true, Some("cheapest")), (false, None)),
+        "{round:?}"
+    );
+}
+
+#[test]
+fn the_cold_group_orders_the_pins_that_drop_nothing_by_burn_then_the_rest_by_burn_over_the_weighted_drop(
+) {
+    // Three cold pins over a last prompt of 100,000 tokens on Sonnet's bound pair: `none` burns 0.01 of the 5-hour
+    // window an hour and holds a zero sum of a's thinking, `heavy` burns 0.03 over a's 40,000, which weigh 160,000 at
+    // an output weight of 4, and `light` 0.02 over a's 10,000, which weigh 40,000. none leads, then light at 0.02 over
+    // 40,000 ahead of heavy at 0.03 over 160,000, and the warm small follows the cold group.
+    let round = thinking_round(
+        vec![
+            thinking_pin("none", 1.0, false, 100_000, 0),
+            thinking_pin("heavy", 3.0, false, 100_000, 40_000),
+            thinking_pin("light", 2.0, false, 100_000, 10_000),
+        ],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.967,
+    );
+    assert_eq!(round_order(&round), ["none", "light", "heavy", "small"]);
+}
+
+#[test]
+fn a_cold_pins_move_costs_the_share_of_the_thinking_it_drops() {
+    // Two covering pins on Sonnet's bound pair: the cold one drops a's 50,000 of its 100,000, which weigh 200,000
+    // tokens of cache write at an output weight of 4, and the warm one rewrites 50,000 and drops nothing.
+    let round = thinking_round(
+        vec![
+            thinking_pin("cold", 3.0, false, 100_000, 50_000),
+            thinking_pin("warm", 3.0, true, 50_000, 0),
+        ],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.967,
+    );
+    let mark = |session| {
+        let row = round_pin(&round, session);
+        (row.marked, row.note)
+    };
+    assert_eq!(
+        (mark("warm"), mark("cold")),
+        ((true, Some("cheapest")), (false, None)),
+        "{round:?}"
+    );
+}
+
+#[test]
+fn a_move_that_rewrites_nothing_divides_the_burn_by_the_weighted_drop() {
+    // `drained` holds 30,000 of a's thinking in its last prompt of 30,000 on Sonnet's bound pair, so its move rewrites
+    // nothing and drops 30,000 that weigh 120,000 at an output weight of 4. a at 0.99 projects 1.021 at its reset.
+    let round = thinking_round(
+        vec![thinking_pin("drained", 3.0, true, 30_000, 30_000)],
+        &[("claude-sonnet-5", true)],
+        4,
+        0.99,
+    );
+    let drained = round_pin(&round, "drained");
+    assert!(
+        near(drained.per_rewrite, 0.03 / 120_000.0),
+        "the burn over the weighted drop: {:?}",
+        drained.per_rewrite
+    );
 }
 
 #[test]

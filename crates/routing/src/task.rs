@@ -25,10 +25,10 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    budget_facts, burn_unit, decide, handed_sums, lane_is_fast, mark_cleared_of, move_cost,
+    budget_facts, burn_unit, decide, handed_sums, lane_is_fast, mark_cleared_of, move_read,
     move_word, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
-    slow_down_ramp, standing_request, zeroes_sums, BurnRead, Decided, FailedOver, Obstacle,
-    Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    slow_down_ramp, standing_move_read, standing_request, zeroes_sums, BurnRead, Decided,
+    FailedOver, MoveRead, Obstacle, Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -1460,12 +1460,8 @@ pub struct PinStanding {
     /// The pin's lane is the fast lane, by the test a shedding round reads to leave a fast-lane pin out of a
     /// window-share round.
     pub fast: bool,
-    /// The figure a shedding round's pick compares for the pin, read from the pin's own facts: the Pro share its
-    /// rewrite spends on the week its model draws, the Fable week for a model that draws it and the 7-day window
-    /// otherwise. `None` where the round's figure is none: the cost model weighs no rewrite of the model on that week,
-    /// or the pin holds no prompt size. A reader takes a `None` as 0, as the pick does. The figure stands whatever the
-    /// pin's warmth, where the pick reads a cold pin's move at 0 unless the pool's `warm_sessions` is `always`.
-    pub move_cost: Option<f64>,
+    /// The round's read of the pin's move at the destination a round's order would plan for it now.
+    pub move_read: MoveRead,
 }
 
 /// A standing pin's account as the slow-down entry in force reads it.
@@ -2970,7 +2966,11 @@ fn pins_standing(
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
             let fast = lane_is_fast(&pin.lane);
-            let cost = move_cost(state, &standing_request(&pin), &pin, now);
+            // A pin whose pool left the registry has no siblings to plan a move among.
+            let read = match pool {
+                Some(pool) => standing_move_read(state, snapshot, pool, &pin, now, fallback_ms),
+                None => move_read(state, &standing_request(&pin), &pin, now, None),
+            };
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 burn_unit,
@@ -2981,7 +2981,7 @@ fn pins_standing(
                 cycle_ms,
                 auxiliary_only,
                 fast,
-                move_cost: cost,
+                move_read: read,
             }
         })
         .collect()
