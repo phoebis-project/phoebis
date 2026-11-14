@@ -1192,6 +1192,16 @@ impl PlanTables {
             .band_factor(window, entrypoint, at)
     }
 
+    /// The factor that turns a share of the model week `window` into a share of the 7-day window under the revision in
+    /// force at `at`: the divisor `priced_window` applies to the week, 1 for a week the revision names no row for.
+    /// `None` for a window that prices nothing.
+    pub fn week_factor(&self, window: &str, at: i64) -> Option<f64> {
+        self.revisions
+            .in_force(at)
+            .priced_window(window)
+            .map(|(_, divisor)| divisor)
+    }
+
     /// The segments of `[from, to)` under the revision in force at `from`.
     pub fn band_segments(
         &self,

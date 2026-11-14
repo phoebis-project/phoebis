@@ -968,7 +968,8 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE accounts DROP COLUMN limit_resets_json;
+        "DROP TABLE model_week_hours;
+         ALTER TABLE accounts DROP COLUMN limit_resets_json;
          ALTER TABLE accounts DROP COLUMN limit_resets_read_at;
          ALTER TABLE accounts DROP COLUMN limit_resets_epoch;
          ALTER TABLE accounts ADD COLUMN subscription_plan TEXT;

@@ -31,12 +31,12 @@ use crate::select::{
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
-    is_plan_window, latest_full_reset, mark_holds, plan_windows, round_in_dwell, shed_dwell_ms,
-    slow_down_hold_ms, spend_reset_estimate, standing_mark, wait_until, AccountTicket, BurnUnit,
-    CreditsState, DroppedBlocks, EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef,
-    PinUsage, RateTable, Recorded, RoutingState, SharePricer, SlowDownEdge, SpendWindow,
-    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE,
+    is_plan_window, latest_full_reset, mark_holds, oldest_kept_hour, plan_windows, round_in_dwell,
+    shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate, standing_mark, wait_until,
+    AccountTicket, BurnUnit, CreditsState, DroppedBlocks, EvidenceSource, InFlight, MemberSpend,
+    OverageEvidence, PinRef, PinUsage, RateTable, Recorded, RoutingState, SharePricer,
+    SlowDownEdge, SpendWindow, StateWrite, UtilizationSample, WindowReading, WindowSource,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
 
@@ -1353,7 +1353,8 @@ pub struct WindowProjection {
     pub burn: f64,
     /// The pins' burn over the speed with the live bookings' burn undivided, in share per hour.
     pub demand: f64,
-    /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it.
+    /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it, the room
+    /// on `seven_day` less the Fable reservation where one applies.
     pub spare_rate: f64,
 }
 
@@ -2553,6 +2554,9 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
                 tx.delete_window(account_id, window, *incarnation)?;
             }
             StateWrite::InsertFirstSeen(row) => tx.insert_first_seen(row)?,
+            StateWrite::PurgeModelWeekHours { before } => {
+                tx.purge_model_week_hours_before(*before)?;
+            }
             StateWrite::PurgeShedRounds { before } => {
                 tx.purge_shed_rounds_before(*before)?;
             }
@@ -2570,6 +2574,9 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::UpsertCooldown(row) => tx.upsert_cooldown(row)?,
             StateWrite::UpsertCredits(row) => {
                 tx.upsert_credits(row)?;
+            }
+            StateWrite::UpsertModelWeekHour(row) => {
+                tx.upsert_model_week_hour(row)?;
             }
             StateWrite::UpsertOverage(row) => {
                 tx.upsert_overage(row)?;
@@ -4436,6 +4443,18 @@ impl Task {
                 for (window, before) in before {
                     self.predicted_spent(&account_id, window, before, &request_id, at);
                 }
+                // The model week's share enters its hour, the record Pace's reservation reads the peak hour from.
+                if let Some((week, share)) = model_week(&canonical_model).and_then(|week| {
+                    shares
+                        .iter()
+                        .find(|(window, share)| *window == week && *share > 0.0)
+                        .copied()
+                }) {
+                    let row = self
+                        .state
+                        .add_week_hour(&account_id, incarnation, week, at, share);
+                    self.write(vec![StateWrite::UpsertModelWeekHour(row)]);
+                }
             }
             Report::AccountState {
                 account_id,
@@ -4811,6 +4830,9 @@ impl Task {
         let longest_dwell_ms = snapshot.pools().map(shed_dwell_ms).max().unwrap_or(0);
         writes.push(StateWrite::PurgeShedRounds {
             before: now - longest_dwell_ms,
+        });
+        writes.push(StateWrite::PurgeModelWeekHours {
+            before: oldest_kept_hour(now),
         });
         // The fenced upsert keeps a previous holder's window rows off disk; this sweep is the backstop, so none that
         // got there anyway outlives a tick.
@@ -5264,8 +5286,15 @@ enum DeferredKey {
     Credits(String),
     /// An agent's record by key id, session id and agent id.
     FirstSeen(String, String, String),
+    /// A model week's hour of an account: each write carries the hour's whole sum, so the last one stands for all.
+    ModelWeekHour {
+        account_id: String,
+        window: String,
+        hour: i64,
+    },
     Overage(String),
     Pin(PinKey),
+    PurgeModelWeekHours,
     PurgeShedRounds,
     PurgeStaleWindows,
     /// A pool's round on an account: a later round replaces the held one, as the store's write does.
@@ -5286,12 +5315,13 @@ enum DeferredKey {
 /// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
 /// first-seen record's last insert or delete, a window's last upsert or delete, a window set's last upsert per
 /// account, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
-/// affinity row's last upsert or delete per key, a pool's last round per account, one round purge, one stale-window
-/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
-/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of the
-/// pin writes held beside it: a mark is read back only for the pin and the epoch its row names. A segment lands in map
-/// order, so a record's delete and its insert share the record's key: a session that ends and returns writes the
-/// return's record over the end's delete, and the end never lands behind the return to take its row.
+/// affinity row's last upsert or delete per key, a pool's last round per account, a model week hour's last sum, one
+/// round purge, one hour purge, one stale-window sweep, and every rekey in order. A rekey closes the rows before it
+/// into a segment of their own, so a pin's write dated after a resolution never lands ahead of the rekey that moved its
+/// rows. A round may land on either side of the pin writes held beside it: a mark is read back only for the pin and the
+/// epoch its row names. A segment lands in map order, so a record's delete and its insert share the record's key: a
+/// session that ends and returns writes the return's record over the end's delete, and the end never lands behind the
+/// return to take its row.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5426,6 +5456,7 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             ),
             write,
         ),
+        StateWrite::PurgeModelWeekHours { .. } => one(DeferredKey::PurgeModelWeekHours, write),
         StateWrite::PurgeShedRounds { .. } => one(DeferredKey::PurgeShedRounds, write),
         StateWrite::PurgeStaleWindows => one(DeferredKey::PurgeStaleWindows, write),
         StateWrite::Rekey(rekey) => Err(Box::new(rekey)),
@@ -5459,6 +5490,14 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::UpsertCredits(ref row) => {
             one(DeferredKey::Credits(row.account_id.clone()), write)
         }
+        StateWrite::UpsertModelWeekHour(ref row) => one(
+            DeferredKey::ModelWeekHour {
+                account_id: row.account_id.clone(),
+                window: row.window.clone(),
+                hour: row.hour,
+            },
+            write,
+        ),
         StateWrite::UpsertOverage(ref row) => {
             one(DeferredKey::Overage(row.account_id.clone()), write)
         }

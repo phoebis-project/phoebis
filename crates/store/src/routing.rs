@@ -403,12 +403,26 @@ pub struct FirstSeenRow {
     pub first_seen_at: i64,
 }
 
+/// The share the router's own requests priced on one model week of an account in one clock hour, fenced by the
+/// account's incarnation as the window rows are.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ModelWeekHourRow {
+    pub account_id: String,
+    pub incarnation: u64,
+    /// The model week, such as `seven_day_fable`.
+    pub window: String,
+    /// The instant in milliseconds over 3,600,000, floored.
+    pub hour: i64,
+    pub share: f64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RoutingLoad {
     pub affinity: Vec<AffinityRow>,
     pub cooldowns: Vec<CooldownRow>,
     pub credits: Vec<CreditsRow>,
     pub first_seen: Vec<FirstSeenRow>,
+    pub model_week_hours: Vec<ModelWeekHourRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
@@ -433,6 +447,12 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             first_seen: tx.prepare("SELECT key_id, session_id, agent_id, first_seen_at FROM session_first_seen ORDER BY key_id, session_id, agent_id")?
                 .query_map([], |r| Ok(FirstSeenRow { key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, first_seen_at: r.get(3)? }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            // As with the windows, a previous holder's hours are never loaded.
+            model_week_hours: tx.prepare("SELECT h.account_id, h.incarnation, h.window, h.hour, h.share \
+                 FROM model_week_hours h JOIN accounts ON accounts.id = h.account_id AND accounts.incarnation = h.incarnation \
+                 ORDER BY h.account_id, h.window, h.hour")?
+                .query_map([], |r| Ok(ModelWeekHourRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, window: r.get(2)?, hour: r.get(3)?, share: r.get(4)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             overage: tx.prepare("SELECT account_id, in_use, since, reset, observed_at, source, incarnation FROM overage_state ORDER BY account_id")?
                 .query_map([], |r| Ok(OverageRow { account_id: r.get(0)?, in_use: r.get(1)?, since: r.get(2)?, reset: r.get(3)?, observed_at: r.get(4)?, source: r.get(5)?, incarnation: r.get::<_, i64>(6)? as u64 }))?
@@ -728,6 +748,15 @@ impl RoutingTx<'_> {
         insert_first_seen_on(self.tx, row)
     }
 
+    /// Drops every model week hour numbered under `before`. Only the router's batches write the hours, so `Store` has
+    /// no single-write form.
+    pub fn purge_model_week_hours_before(&mut self, before: i64) -> Result<usize, StoreError> {
+        Ok(self
+            .tx
+            .prepare_cached("DELETE FROM model_week_hours WHERE hour < ?1")?
+            .execute(params![before])?)
+    }
+
     pub fn purge_shed_rounds_before(&mut self, before: i64) -> Result<usize, StoreError> {
         purge_shed_rounds_before_on(self.tx, before)
     }
@@ -781,6 +810,29 @@ impl RoutingTx<'_> {
 
     pub fn upsert_credits(&mut self, row: &CreditsRow) -> Result<bool, StoreError> {
         upsert_credits_on(self.tx, row)
+    }
+
+    /// Writes the hour's sum as the routing state holds it, so a write the backlog kept in place of an earlier one for
+    /// the same hour still lands the whole sum. Only for the account's current incarnation, a previous holder's row
+    /// replaced, and only from the router's batches. Answers whether a row was written.
+    pub fn upsert_model_week_hour(&mut self, row: &ModelWeekHourRow) -> Result<bool, StoreError> {
+        // The insert-select is the incarnation check, as `upsert_window_on`'s is.
+        let written = self
+            .tx
+            .prepare_cached(
+                "INSERT INTO model_week_hours (account_id, incarnation, window, hour, share) \
+                 SELECT ?1, ?2, ?3, ?4, ?5 FROM accounts WHERE id = ?1 AND incarnation = ?2 \
+                 ON CONFLICT(account_id, window, hour) DO UPDATE SET \
+                   incarnation = excluded.incarnation, share = excluded.share",
+            )?
+            .execute(params![
+                row.account_id,
+                row.incarnation as i64,
+                row.window,
+                row.hour,
+                row.share
+            ])?;
+        Ok(written > 0)
     }
 
     pub fn upsert_overage(&mut self, row: &OverageRow) -> Result<bool, StoreError> {

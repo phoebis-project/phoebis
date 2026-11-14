@@ -3,7 +3,8 @@
 //! `guardrail_tombstones`, `guardrails`, `keepalive_agents`, `keepalive_idle_returns`, `keepalive_sessions`,
 //! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
-//! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`.
+//! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
+//! adds `model_week_hours`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -328,9 +329,29 @@ ALTER TABLE accounts ADD COLUMN limit_resets_read_at INTEGER;
 ALTER TABLE accounts ADD COLUMN limit_resets_epoch INTEGER NOT NULL DEFAULT 0;
 "#;
 
+/// Step 8: the record of the share the router's own requests priced on a model week per clock hour.
+const V8: &str = r#"
+CREATE TABLE model_week_hours (
+    account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    incarnation INTEGER NOT NULL,
+    window      TEXT NOT NULL,
+    hour        INTEGER NOT NULL,
+    share       REAL NOT NULL,
+    PRIMARY KEY (account_id, window, hour)
+);
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
-pub const MIGRATIONS: &[(u32, &str)] = &[(2, V2), (3, V3), (4, V4), (5, V5), (6, V6), (7, V7)];
+pub const MIGRATIONS: &[(u32, &str)] = &[
+    (2, V2),
+    (3, V3),
+    (4, V4),
+    (5, V5),
+    (6, V6),
+    (7, V7),
+    (8, V8),
+];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.

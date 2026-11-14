@@ -3224,6 +3224,71 @@ async fn a_restart_loads_the_persisted_windows_and_the_first_selection_ranks_by_
 }
 
 #[tokio::test]
+async fn a_fable_completions_hour_reaches_the_reservation_of_the_next_starts_non_fable_pick() {
+    use phoebis_routing::FactValue;
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.strategy = Strategy::Pace;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    // The start of clock hour 100, with a tenth of the week and half the Fable week read, both resetting a day out.
+    let at = 100 * HOUR;
+    for (window, utilization) in [(SEVEN_DAY, 0.1), (SEVEN_DAY_FABLE, 0.5)] {
+        assert!(store
+            .upsert_window(&window_row("a", window, utilization, Some(at + 24 * HOUR)))
+            .unwrap());
+    }
+    // Two hundredths of the Fable week per million input tokens, no other window, and a factor of a half.
+    let config = || RouterConfig {
+        share: SharePricer::new(|window, _, _, _, usage, _| {
+            (window == SEVEN_DAY_FABLE).then(|| usage.input as f64 / 1_000_000.0 * 0.02)
+        })
+        .with_week_factor(|window, _| (window == SEVEN_DAY_FABLE).then_some(0.5)),
+        ..RouterConfig::default()
+    };
+    let now = Arc::new(AtomicI64::new(at));
+    let first = spawn(store.clone(), clock(&now), config()).unwrap();
+    first
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: at - HOUR / 2,
+            canonical_model: "claude-fable-5-1".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 1_000_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            classifier: false,
+            request_id: "r-0".into(),
+            attempt: 1,
+            entrypoint: None,
+            judged_pin: None,
+        })
+        .await;
+    first.shutdown().await.unwrap();
+    let second = spawn(store.clone(), clock(&now), config()).unwrap();
+    let mut events = second.subscribe_events();
+    second.select(request(&second, None, at)).await.unwrap();
+    let record = next_record(&mut events).await;
+    let reservation = record
+        .walk
+        .iter()
+        .find(|step| step.step == "pick")
+        .and_then(|step| {
+            step.facts
+                .iter()
+                .find(|f| f.key == "fable_reservation" && f.account_id.as_deref() == Some("a"))
+        })
+        .map(|f| f.value.clone());
+    // Hour 99 holds the completion's 0.02: 0.48 over the 24 hours, under the Fable room of 0.5, at a half 0.24.
+    assert!(
+        matches!(reservation, Some(FactValue::Number(n)) if (n - 0.24).abs() < 1e-9),
+        "the second start reads the hour the first wrote: {reservation:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_reading_drops_it() {
     let store = seeded_oauth(&["a"]);
     with_tier(&store, "a");

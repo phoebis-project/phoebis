@@ -130,8 +130,10 @@ Each strategy's rule, as the pool dialog's Strategy hint states it:
 
 **`pace`**: Pace scores each member by its spare rate: the allowance left in the window it reads, the model's own 7-day
 Fable window where the model has one, else the 7-day window, per hour until that window resets or the subscription ends,
-less what its sessions burn of that window an hour, within the first priority tier that has an eligible account. An
-API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are random.
+less what its sessions burn of that window an hour, within the first priority tier that has an eligible account. On the
+7-day window the allowance first loses the member's Fable reservation, the share its expected Fable use is to take of
+it. An API-key member scores the room left in its worst bucket. An unsampled account counts as untouched, and ties are
+random.
 
 **`priority`**: Within the first priority tier that has an eligible account, any of them at random.
 
@@ -402,7 +404,17 @@ account's end ([Subscription end](#subscription-end)), less the burn of the sess
 that window, in share per hour. The burn it subtracts is the burn those sessions would make unheld (see **The demand**,
 below), so an account calm only because the slow-down holds its sessions reads as full. An account at 0.3 used with two
 heavy sessions can thus rank below an idle one at 0.6, and the score reads negative where the account spends faster than
-its pace allows. An API-key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
+its pace allows. On a request whose model draws the 7-day window alone, a subscription account's allowance first loses
+its Fable reservation, the share of that window its expected Fable use is to take before the deadline. The expected use
+is the stronger of two rates on the Fable week, each over the score's hours: the strongest clock hour of the router's
+own requests on the account's Fable week among the hours that end inside them (the hour still running counts at its sum
+so far), or the current burn of the account's Fable sessions. The Fable allowance left caps it, and the cost model's row
+for the Fable week (`model_windows.seven_day_fable`) turns it into a share of the 7-day window. The burn the score
+subtracts is then that of the account's other sessions, since the reservation holds the Fable ones. The reservation
+orders the accounts inside the first tier, applies to those that hold a Fable reading and refuses none, so an account
+whose reservation exceeds its allowance scores negative and still takes the request when no other can. The pick line
+names it in the fact `fable_reservation` for each of those accounts. A Fable request scores its own week with no
+reservation. An API-key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
 division by hours and no burn, since a bucket refills within a minute and its own reset never enters the score. Either
 way a window nobody has read reads as untouched: remaining 1 over the full week. A subscription window read past its
 reset reads as the router's own use since it, while an API-key bucket past its reset is refunded and reads as untouched,

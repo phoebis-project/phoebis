@@ -6520,9 +6520,12 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 /// where the account spends faster than its pace allows. An untiered account prices no burn. A paid source scores by
 /// its remaining share alone: an api_key account by its worst live bucket (a bucket refills within a minute, so Pace
 /// degrades to least utilized on it, and neither the bucket's own reset nor a burn enters the score), a usage-based
-/// seat, which reads no plan window, as untouched. `choose` ranks by this score and the record carries the rest, so
-/// the two cannot disagree. `own` is the request's pin key on a placement's own score, whose row the demand leaves
-/// out as the placement's fit does, and `None` on every other read.
+/// seat, which reads no plan window, as untouched. On a `seven_day` request the score holds back the member's Fable
+/// reservation (`fable_reservation`) from the remaining allowance, unfloored, so a member whose reservation exceeds its
+/// room scores under one with room left, and the burn it subtracts is then that of the pins and bookings whose model
+/// draws no model week, since the Fable ones stand in the reservation. `choose` ranks by this score and the record
+/// carries the rest, so the two cannot disagree. `own` is the request's pin key on a placement's own score, whose row
+/// the demand leaves out as the placement's fit does, and `None` on every other read.
 pub(crate) fn pace_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -6531,6 +6534,22 @@ pub(crate) fn pace_of(
     window: &str,
     now: i64,
     own: Option<&PinKey>,
+) -> PaceFacts {
+    pace_figures(state, snapshot, pool, candidate, window, now, own, true)
+}
+
+/// `pace_of`'s figures, with the Fable reservation where `reserve` is set and the score and burn of no reservation
+/// otherwise.
+#[allow(clippy::too_many_arguments)]
+fn pace_figures(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    candidate: &Candidate,
+    window: &str,
+    now: i64,
+    own: Option<&PinKey>,
+    reserve: bool,
 ) -> PaceFacts {
     let (remaining, reset) = remaining(state, &candidate.account_id, window, now);
     if paid_source(snapshot, &candidate.account_id) {
@@ -6543,6 +6562,7 @@ pub(crate) fn pace_of(
             score: remaining,
             window: None,
             burn: 0.0,
+            fable_reservation: None,
         };
     }
     let end = account_end(snapshot, &candidate.account_id, now);
@@ -6550,34 +6570,78 @@ pub(crate) fn pace_of(
     let hours = deadline
         .map(|d| ((d - now) as f64 / HOUR_MS as f64).max(1.0 / 60.0))
         .unwrap_or(WEEK_HOURS);
+    let id = candidate.account_id.as_str();
+    let keep = in_pool_without(snapshot, pool, own);
+    let tier = snapshot.priced_tier(id);
+    let per_hour = |shares: &BTreeMap<String, f64>, window: &str| {
+        shares.get(window).copied().unwrap_or(0.0) * 3_600.0
+    };
     // A slowed account's calm is its holds' work, so the score reads what its sessions would spend unslowed.
-    let burn = snapshot
-        .priced_tier(&candidate.account_id)
-        .and_then(|tier| {
-            state
-                .demand_shares(
-                    &candidate.account_id,
-                    &in_pool_without(snapshot, pool, own),
-                    tier,
-                    now,
-                    burn_average_ms(pool),
-                    state.slow_down_speed(pool, &candidate.account_id, now),
-                )
-                .get(window)
-                .copied()
-        })
-        .unwrap_or(0.0)
-        * 3_600.0;
+    let speed = || state.slow_down_speed(pool, id, now);
+    let demand = tier
+        .map(|tier| state.demand_shares(id, &keep, tier, now, burn_average_ms(pool), speed()))
+        .unwrap_or_default();
+    let fable_reservation = if reserve {
+        fable_reservation_of(
+            state,
+            candidate,
+            window,
+            now,
+            hours,
+            per_hour(&demand, SEVEN_DAY_FABLE),
+        )
+    } else {
+        None
+    };
+    let burn = match (fable_reservation, tier) {
+        (Some(_), Some(tier)) => per_hour(
+            &state.demand_shares_off_model_weeks(
+                id,
+                &keep,
+                tier,
+                now,
+                burn_average_ms(pool),
+                speed(),
+            ),
+            window,
+        ),
+        _ => per_hour(&demand, window),
+    };
     PaceFacts {
         remaining,
         reset,
         end,
         deadline,
         hours: Some(hours),
-        score: remaining / hours - burn,
+        score: (remaining - fable_reservation.unwrap_or(0.0)) / hours - burn,
         window: Some(window.to_string()),
         burn,
+        fable_reservation,
     }
+}
+
+/// The share of a member's 7-day room Pace holds back on a `seven_day` request for the member's expected use of the
+/// Fable week until the score's deadline: the pricer's `week_factor` times the smaller of the Fable room and the
+/// stronger of two rates over the score's `hours`, the peak hour of the member's record among the hours that end inside
+/// them and `live`, the pins' demand on the week, each in share of the week per hour. `None` on a request on a model
+/// week, on a member with no Fable reading and where the pricer answers no factor.
+fn fable_reservation_of(
+    state: &RoutingState,
+    candidate: &Candidate,
+    window: &str,
+    now: i64,
+    hours: f64,
+    live: f64,
+) -> Option<f64> {
+    let id = candidate.account_id.as_str();
+    if window != SEVEN_DAY || state.predicted(id, SEVEN_DAY_FABLE, now).is_none() {
+        return None;
+    }
+    let factor = state.share().week_factor(SEVEN_DAY_FABLE, now)?;
+    let (room, _) = remaining(state, id, SEVEN_DAY_FABLE, now);
+    let since = now as f64 - hours * HOUR_MS as f64;
+    let peak = state.week_peak(id, candidate.incarnation, SEVEN_DAY_FABLE, since);
+    Some(factor * room.min(peak.max(live) * hours))
 }
 
 /// `choose`'s sort key for a candidate: under the kind order, group one is oauth with plan quota, two oauth in
@@ -6616,7 +6680,8 @@ fn tier_of(
 }
 
 /// The strategy's reading of a set before the draw: the tier `tier_of` ranks first, its members, their Pace scores
-/// with the burn each subtracts (share per hour) where the strategy reads them, the candidates the strategy draws
+/// with the Pace facts each was read from (the burn it subtracts in share per hour and the Fable reservation it holds
+/// back) where the strategy reads them, the candidates the strategy draws
 /// among (the best Pace score, the whole tier under Priority, the tier in id order under round robin), the ties the
 /// longest runway kept where it narrowed them (empty otherwise, and always under round robin, where the cursor picks),
 /// and the one a round plans on: the first of the ties the runway left, or under round robin the one at the cursor's
@@ -6626,7 +6691,7 @@ struct Ranked<'a> {
     tier: Tier,
     members: Vec<&'a Candidate>,
     scores: Vec<Score>,
-    burns: Vec<f64>,
+    paces: Vec<PaceFacts>,
     ties: Vec<&'a Candidate>,
     by_runway: Vec<&'a Candidate>,
     planned: &'a Candidate,
@@ -6662,7 +6727,7 @@ fn rank<'a>(
         .filter(|(_, key)| *key == tier)
         .map(|(c, _)| *c)
         .collect();
-    let (scores, burns, ties, turn) = match pool.strategy {
+    let (scores, paces, ties, turn) = match pool.strategy {
         Strategy::Pace => {
             let paces: Vec<PaceFacts> = members
                 .iter()
@@ -6677,7 +6742,6 @@ fn rank<'a>(
                     unit: score_unit(snapshot, &c.account_id),
                 })
                 .collect();
-            let burns = paces.iter().map(|pace| pace.burn).collect();
             let best = scores
                 .iter()
                 .map(|s| s.score)
@@ -6689,7 +6753,7 @@ fn rank<'a>(
                 .filter(|(_, s)| s.score == best)
                 .map(|(c, _)| c)
                 .collect();
-            (scores, burns, ties, 0)
+            (scores, paces, ties, 0)
         }
         Strategy::Priority => (Vec::new(), Vec::new(), members.clone(), 0),
         Strategy::RoundRobin => {
@@ -6714,7 +6778,7 @@ fn rank<'a>(
         tier,
         members,
         scores,
-        burns,
+        paces,
         ties,
         by_runway,
         planned,
@@ -6749,9 +6813,10 @@ fn runway_ties<'a>(ties: &[&'a Candidate], reads: &[(String, FitRead)]) -> Vec<&
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
 /// `reads` holds the fit reads whose runway breaks the strategy's tie, empty where none is to break it.
 /// `spent_model` names the candidates step 6 kept on extra usage with a spent window. The pick's line names the tier,
-/// every tier member's score and burn under Pace, the strategy's ties, the ones the runway kept where it narrowed
-/// them, whether a draw was left to make and the round-robin turn, and the tier's members take their rank, the chosen
-/// one first. `own` is the request's pin key, whose row the Pace scores leave out.
+/// every tier member's score and burn under Pace with its Fable reservation where one applies, the strategy's ties,
+/// the ones the runway kept where it narrowed them, whether a draw was left to make and the round-robin turn, and the
+/// tier's members take their rank, the chosen one first, and under Pace the Pace facts they ranked by. `own` is the
+/// request's pin key, whose row the Pace scores leave out.
 #[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
@@ -6773,7 +6838,7 @@ fn choose<'a>(
         tier: first,
         members: tier,
         scores,
-        burns,
+        paces,
         ties,
         by_runway,
         ..
@@ -6819,17 +6884,29 @@ fn choose<'a>(
     };
     let chosen = match pool.strategy {
         Strategy::Pace => {
-            for (score, burn) in scores.iter().zip(&burns) {
+            for (score, pace) in scores.iter().zip(&paces) {
                 facts.push(
                     Fact::number("score", score.score)
                         .unit(score.unit)
                         .about(&score.account_id),
                 );
                 facts.push(
-                    Fact::number("burn", *burn)
+                    Fact::number("burn", pace.burn)
                         .unit("percent_per_hour")
                         .about(&score.account_id),
                 );
+                if let Some(reservation) = pace.fable_reservation {
+                    facts.push(
+                        Fact::number("fable_reservation", reservation)
+                            .unit("percent")
+                            .about(&score.account_id),
+                    );
+                }
+                // The step-2 read of a candidate holds no reservation, since the first tier is known here alone, so a
+                // member of it takes the figures it ranked by.
+                if let Some(member) = rec.candidate_mut(&score.account_id) {
+                    member.pace = Some(pace.clone());
+                }
             }
             draw_facts(&mut facts);
             Some(drawn_from[rng.random_range(0..drawn_from.len())])
@@ -7353,8 +7430,9 @@ fn candidate_facts(
         in_flight_cap: pool.failover.in_flight_cap,
         windows,
         allowance_known: allowance_known(state, snapshot, id, window, now),
+        // No reservation outside the first tier, whose members `choose` gives the figures they ranked by.
         pace: (pool.strategy == Strategy::Pace)
-            .then(|| pace_of(state, snapshot, pool, candidate, window, now, own)),
+            .then(|| pace_figures(state, snapshot, pool, candidate, window, now, own, false)),
         budget,
         cooldowns,
         credits,

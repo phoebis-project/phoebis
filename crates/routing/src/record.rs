@@ -355,8 +355,12 @@ pub struct PaceFacts {
     /// source, which no plan window scores. The caller holds the window, so the console derives nothing.
     pub window: Option<String>,
     /// The demand of the pins on the account on `window`, their burn over the account's realized speed, share per
-    /// hour: what the score subtracts.
+    /// hour: the burn the score subtracted. Beside a Fable reservation it is the demand of the pins and bookings whose
+    /// model draws no model week, since the reservation stands for the others.
     pub burn: f64,
+    /// The share of the member's 7-day room the score held back for its expected use of a model week. Null where no
+    /// reservation applies.
+    pub fable_reservation: Option<f64>,
 }
 
 /// The spend and its period are the ledger's spend row for the budget's period, all `None` while the ledger has

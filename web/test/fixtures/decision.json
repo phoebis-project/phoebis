@@ -145,7 +145,8 @@
           "hours": 168.0,
           "score": 0.005952380952380952,
           "window": "seven_day",
-          "burn": 0.0
+          "burn": 0.0,
+          "fable_reservation": null
         },
         "budget": [
           {
@@ -236,7 +237,8 @@
           "hours": null,
           "score": 1.0,
           "window": null,
-          "burn": 0.0
+          "burn": 0.0,
+          "fable_reservation": null
         },
         "budget": [
           {

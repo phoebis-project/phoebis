@@ -16,9 +16,9 @@ use phoebis_routing::{
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, FirstSeenRow,
-    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RegistryLoad,
-    ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding, SlowDown,
-    Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    ModelWeekHourRow, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
+    RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
+    SlowDown, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -818,6 +818,261 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
         .expect("a Pace member's facts");
     assert!(close(pace.burn, 0.018), "{pace:?}");
     assert!(close(pace.score, 0.7 / 24.0 - 0.018), "{pace:?}");
+}
+
+/// The instant the Fable reservation's cases read at, the start of clock hour 100: hour 99 is the one that just ended
+/// and hour 70 the one that ended 29 hours ago.
+const RESERVED_AT: i64 = 100 * HOUR;
+
+/// A member read at `RESERVED_AT` on the 7-day window at `seven_day` and on the Fable week at `fable`, both resetting
+/// `reset_hours` out.
+fn fable_read(seven_day: f64, fable: f64, reset_hours: i64) -> UtilizationSample {
+    let reading = |utilization| WindowReading {
+        utilization,
+        reset: Some(RESERVED_AT + reset_hours * HOUR),
+        observed_at: RESERVED_AT,
+        source: WindowSource::Poll,
+        plan: None,
+        tier: None,
+    };
+    UtilizationSample {
+        observed_at: RESERVED_AT,
+        ..Default::default()
+    }
+    .with(SEVEN_DAY, reading(seven_day))
+    .with(SEVEN_DAY_FABLE, reading(fable))
+}
+
+/// One clock hour of a member's Fable week record under incarnation 1, as a start loads it from the store.
+fn fable_hour(account: &str, hour: i64, share: f64) -> ModelWeekHourRow {
+    ModelWeekHourRow {
+        account_id: account.into(),
+        incarnation: 1,
+        window: SEVEN_DAY_FABLE.into(),
+        hour,
+        share,
+    }
+}
+
+/// A state that loads `hours` and `pins` as a start does, prices through `share` and holds each sample of `reads`.
+fn loaded_with_hours(
+    hours: Vec<ModelWeekHourRow>,
+    pins: Vec<PinRow>,
+    share: SharePricer,
+    reads: Vec<(&str, UtilizationSample)>,
+) -> RoutingState {
+    let mut st = RoutingState::from_load(RoutingLoad {
+        model_week_hours: hours,
+        pins,
+        ..RoutingLoad::default()
+    });
+    st.set_share(share);
+    for (account, sample) in reads {
+        st.record_sample(account, sample, RESERVED_AT);
+    }
+    st
+}
+
+/// A pricer that prices no window and answers `factor` for the Fable week.
+fn fable_factor(factor: f64) -> SharePricer {
+    SharePricer::default()
+        .with_week_factor(move |window, _| (window == SEVEN_DAY_FABLE).then_some(factor))
+}
+
+/// The pick line's `fable_reservation` fact about `account`.
+fn reservation_of(record: &DecisionRecord, account: &str) -> f64 {
+    number(fact_of(line(record, "pick"), "fable_reservation", account))
+}
+
+#[test]
+fn a_non_fable_request_ranks_a_member_whose_fable_hour_ran_strong_below_its_equal_and_a_fable_request_ties_them(
+) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    // Both read 0.1 of the week and half the Fable week, resetting a day out. Only b's record holds an hour, a
+    // hundredth of the Fable week in the hour that just ended: 0.24 over the 24 hours, under the Fable room of 0.5, so
+    // a factor of a half holds back 0.12 of b's room.
+    let mut st = loaded_with_hours(
+        vec![fable_hour("b", 99, 0.01)],
+        Vec::new(),
+        fable_factor(0.5),
+        vec![
+            ("a", fable_read(0.1, 0.5, 24)),
+            ("b", fable_read(0.1, 0.5, 24)),
+        ],
+    );
+    for seed in 0..8u64 {
+        let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+        let d = decide(&mut st, &s, &req, &mut StdRng::seed_from_u64(seed));
+        assert_eq!(
+            picked(&d.result),
+            "a",
+            "seed {seed}: 0.9 over 24 hours outranks 0.78 over 24 hours"
+        );
+    }
+    let fable = request(&s, None, "claude-fable-5-1", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &fable, &mut rng());
+    assert_eq!(
+        fact(line(&d.record, "pick"), "ties"),
+        &FactValue::List(vec!["a".into(), "b".into()]),
+        "a Fable request reads the Fable week's room, where the two stand equal"
+    );
+}
+
+#[test]
+fn the_one_servable_member_takes_a_non_fable_request_while_its_fable_reservation_exceeds_its_seven_day_room(
+) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // A fifth of the week left, half the Fable week, and an hour of a twentieth of it: 1.2 over the 24 hours, capped at
+    // the Fable room of 0.5, which a factor of 1 holds back whole, past the fifth.
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 99, 0.05)],
+        Vec::new(),
+        fable_factor(1.0),
+        vec![("a", fable_read(0.8, 0.5, 24))],
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "the reservation orders the tier and refuses no member"
+    );
+    assert!(
+        close(reservation_of(&d.record, "a"), 0.5),
+        "the reservation exceeds the room: {:?}",
+        line(&d.record, "pick").facts
+    );
+}
+
+#[test]
+fn a_strong_fable_hour_thirty_hours_back_reserves_nothing_with_twenty_hours_to_the_reset_and_reserves_with_forty(
+) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        ..Pool::default()
+    });
+    // Hour 70 ran from 30 to 29 hours ago at half a hundredth of the Fable week on both members. a's reset 20 hours out
+    // looks back past it. b's 40 hours out reads it: 0.2 over the 40 hours, under the Fable room of 0.5, so a factor of
+    // a half holds back 0.1.
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 70, 0.005), fable_hour("b", 70, 0.005)],
+        Vec::new(),
+        fable_factor(0.5),
+        vec![
+            ("a", fable_read(0.1, 0.5, 20)),
+            ("b", fable_read(0.1, 0.5, 40)),
+        ],
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert!(
+        close(reservation_of(&d.record, "a"), 0.0),
+        "20 hours look back to hour 80: {:?}",
+        line(&d.record, "pick").facts
+    );
+    assert!(
+        close(reservation_of(&d.record, "b"), 0.1),
+        "40 hours look back to hour 60: {:?}",
+        line(&d.record, "pick").facts
+    );
+}
+
+#[test]
+fn a_fable_reservation_is_capped_by_the_fable_room_and_scaled_by_the_pricers_week_factor() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // Four percent of the Fable week left and an hour of a tenth of it: 2.4 over the 24 hours, capped at the room of
+    // 0.04, which a factor of a quarter turns into 0.01 of the week.
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 99, 0.1)],
+        Vec::new(),
+        fable_factor(0.25),
+        vec![("a", fable_read(0.1, 0.96, 24))],
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert!(
+        close(reservation_of(&d.record, "a"), 0.01),
+        "{:?}",
+        line(&d.record, "pick").facts
+    );
+}
+
+#[test]
+fn beside_a_fable_reservation_the_pace_score_subtracts_the_burn_of_the_non_fable_pins_alone() {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // Each pin burns 150 input tokens a second, 0.009 of the week an hour on the ratio pricer, and the Fable pin 0.018
+    // of the Fable week an hour, stronger than the record's hour of a hundredth. 0.018 over the 24 hours is 0.432,
+    // under the Fable room of 0.5, so a factor of a quarter holds back 0.108 of the 0.7 left.
+    let fable_pin = PinRow {
+        model: "claude-fable-5-1".into(),
+        ..burning("f", "a", 150.0, true, RESERVED_AT)
+    };
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 99, 0.01)],
+        vec![burning("s", "a", 150.0, true, RESERVED_AT), fable_pin],
+        ratio_pricer().with_week_factor(|window, _| (window == SEVEN_DAY_FABLE).then_some(0.25)),
+        vec![("a", fable_read(0.3, 0.5, 24))],
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let pace = candidate(&d.record, "a")
+        .pace
+        .as_ref()
+        .expect("a Pace member's facts");
+    assert!(close(pace.burn, 0.009), "{pace:?}");
+    assert!(close(pace.score, (0.7 - 0.108) / 24.0 - 0.009), "{pace:?}");
+}
+
+#[test]
+fn a_member_outside_the_first_tier_carries_no_fable_reservation_and_a_score_that_holds_back_none() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    // Both records hold a hundredth of the Fable week in the hour that just ended. a leads the tier and holds back 0.12
+    // of its room over its 24 hours. b, behind it, scores its 0.8 left over its 40 hours, its own hour aside.
+    let mut st = loaded_with_hours(
+        vec![fable_hour("a", 99, 0.01), fable_hour("b", 99, 0.01)],
+        Vec::new(),
+        fable_factor(0.5),
+        vec![
+            ("a", fable_read(0.1, 0.5, 24)),
+            ("b", fable_read(0.2, 0.5, 40)),
+        ],
+    );
+    let req = request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    let pace = |account: &str| {
+        candidate(&d.record, account)
+            .pace
+            .clone()
+            .expect("Pace scores every member")
+    };
+    assert!(
+        pace("a").fable_reservation.is_some_and(|r| close(r, 0.12)),
+        "{:?}",
+        pace("a")
+    );
+    assert_eq!(pace("b").fable_reservation, None, "{:?}", pace("b"));
+    assert!(close(pace("b").score, 0.8 / 40.0), "{:?}", pace("b"));
 }
 
 #[test]

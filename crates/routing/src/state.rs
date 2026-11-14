@@ -10,8 +10,8 @@ pub use phoebis_store::EvidenceSource;
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
-    FirstSeenRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RekeyWrite,
-    ResolutionRow, RoutingLoad, StateCause, WindowRow, WindowSetRow,
+    FirstSeenRow, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember,
+    PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, StateCause, WindowRow, WindowSetRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -425,6 +425,10 @@ pub enum StateWrite {
         incarnation: u64,
     },
     InsertFirstSeen(FirstSeenRow),
+    /// `before` is `oldest_kept_hour` at the purge tick, so the stored record keeps the week the state keeps.
+    PurgeModelWeekHours {
+        before: i64,
+    },
     /// `before` is `now` less the longest `shed_dwell_seconds` of the snapshot's pools, computed at the purge tick.
     PurgeShedRounds {
         before: i64,
@@ -445,6 +449,8 @@ pub enum StateWrite {
     UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
     UpsertCredits(CreditsRow),
+    /// One clock hour of a model week's record at the sum the state holds after a completion added to it.
+    UpsertModelWeekHour(ModelWeekHourRow),
     UpsertOverage(OverageRow),
     UpsertPin(PinRow),
     UpsertWindow(WindowRow),
@@ -520,6 +526,7 @@ pub struct SharePricer {
     rate: Arc<Rate>,
     equivalent: Arc<Equivalent>,
     band_segments: Arc<BandSegments>,
+    week_factor: Arc<WeekFactor>,
 }
 
 type Price = dyn Fn(&str, Option<&str>, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
@@ -527,6 +534,7 @@ type Measured = dyn Fn(&str) -> bool + Send + Sync;
 type Rate = dyn Fn(&str, Option<&str>, &str, &str, &PinBurn, i64) -> Option<f64> + Send + Sync;
 type Equivalent = dyn Fn(&str, Option<&str>, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
 type BandSegments = dyn Fn(&str, Option<&str>, i64, i64) -> Vec<BandSegment> + Send + Sync;
+type WeekFactor = dyn Fn(&str, i64) -> Option<f64> + Send + Sync;
 
 /// One piece of a span as the band weighs it: `[from, to)` in milliseconds at `weight`, one over the regime's capacity
 /// factor inside the band and 1 outside.
@@ -559,6 +567,7 @@ impl SharePricer {
                     weight: 1.0,
                 }]
             }),
+            week_factor: Arc::new(|_, _| None),
         }
     }
 
@@ -618,6 +627,22 @@ impl SharePricer {
             band_segments: Arc::new(segments),
             ..self
         }
+    }
+
+    /// `week_factor(window, at)`: the factor that turns a share of the model week `window` into a share of the
+    /// 7-day window under the cost revision in force at `at`. Every pricer answers none here until it is set.
+    pub fn with_week_factor(
+        self,
+        week_factor: impl Fn(&str, i64) -> Option<f64> + Send + Sync + 'static,
+    ) -> SharePricer {
+        SharePricer {
+            week_factor: Arc::new(week_factor),
+            ..self
+        }
+    }
+
+    pub fn week_factor(&self, window: &str, at: i64) -> Option<f64> {
+        (self.week_factor)(window, at)
     }
 
     pub fn rate(
@@ -1523,6 +1548,9 @@ pub struct RoutingState {
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
+    /// Each account's record of a model week by account id and week, kept for a week and written through, so the peak
+    /// hour Pace's reservation reads survives a restart.
+    model_week_hours: HashMap<(String, String), WeekHours>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -1583,6 +1611,25 @@ pub(crate) struct TurnEnd {
     pub incarnation: u64,
 }
 
+/// One account's record of a model week for the holder of `incarnation`: the share the router's own requests priced
+/// on the week, summed per clock hour by `hour_of`.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct WeekHours {
+    incarnation: u64,
+    hours: BTreeMap<i64, f64>,
+}
+
+/// The clock hour `at` falls in: the instant in milliseconds over `HOUR_MS`, floored.
+pub(crate) fn hour_of(at: i64) -> i64 {
+    at.div_euclid(HOUR_MS)
+}
+
+/// The first clock hour the model week record keeps at `now`. Every hour before it ended more than a week before
+/// `now`, past the longest look-back Pace's reservation reads.
+pub(crate) fn oldest_kept_hour(now: i64) -> i64 {
+    hour_of(now) - WEEK_MS / HOUR_MS
+}
+
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
         let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
@@ -1620,6 +1667,14 @@ impl RoutingState {
             sample.polled = Some(row.windows.split(',').map(String::from).collect());
             sample.polled_at = Some(row.observed_at);
         }
+        let mut model_week_hours: HashMap<(String, String), WeekHours> = HashMap::new();
+        for row in load.model_week_hours {
+            let record = model_week_hours
+                .entry((row.account_id, row.window))
+                .or_default();
+            record.incarnation = row.incarnation;
+            record.hours.insert(row.hour, row.share);
+        }
         RoutingState {
             accounting_degraded: false,
             affinity: Arc::new(RwLock::new(affinity_map)),
@@ -1651,6 +1706,7 @@ impl RoutingState {
             head_marks: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
+            model_week_hours,
             next_epoch,
             overage: load
                 .overage
@@ -3359,7 +3415,7 @@ impl RoutingState {
         now: i64,
         average_ms: i64,
     ) -> BTreeMap<String, f64> {
-        self.shares(account_id, keep, tier, now, average_ms, 1.0)
+        self.shares(account_id, keep, &|_| true, tier, now, average_ms, 1.0)
     }
 
     /// The twin of `burn_shares` that the slow-down's readers take: the kept pins' sum on every window over `speed`,
@@ -3375,7 +3431,81 @@ impl RoutingState {
         average_ms: i64,
         speed: f64,
     ) -> BTreeMap<String, f64> {
-        self.shares(account_id, keep, tier, now, average_ms, speed)
+        self.shares(account_id, keep, &|_| true, tier, now, average_ms, speed)
+    }
+
+    /// `demand_shares` with every pin whose model draws a model week and every live booking whose burn names one left
+    /// out: the burn Pace subtracts beside a Fable reservation, which stands for those pins and bookings alone.
+    pub(crate) fn demand_shares_off_model_weeks(
+        &self,
+        account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
+        tier: &str,
+        now: i64,
+        average_ms: i64,
+        speed: f64,
+    ) -> BTreeMap<String, f64> {
+        let is_week = |window: &String| MODEL_WINDOWS.iter().any(|(_, week)| week == window);
+        self.shares(
+            account_id,
+            &|pin| keep(pin) && model_week(&pin.model).is_none(),
+            &|booking| !booking.burn.keys().any(is_week),
+            tier,
+            now,
+            average_ms,
+            speed,
+        )
+    }
+
+    /// Adds `share` to the clock hour of `at` in the account's record of `window` for the holder of `incarnation`,
+    /// where a record of another holder is replaced, and answers the hour's row to write.
+    pub(crate) fn add_week_hour(
+        &mut self,
+        account_id: &str,
+        incarnation: u64,
+        window: &str,
+        at: i64,
+        share: f64,
+    ) -> ModelWeekHourRow {
+        let record = self
+            .model_week_hours
+            .entry((account_id.to_string(), window.to_string()))
+            .or_default();
+        if record.incarnation != incarnation {
+            *record = WeekHours {
+                incarnation,
+                hours: BTreeMap::new(),
+            };
+        }
+        let hour = hour_of(at);
+        let sum = record.hours.entry(hour).or_insert(0.0);
+        *sum += share;
+        ModelWeekHourRow {
+            account_id: account_id.to_string(),
+            incarnation,
+            window: window.to_string(),
+            hour,
+            share: *sum,
+        }
+    }
+
+    /// The strongest clock hour of the account's record of `window` for the holder of `incarnation` among the hours
+    /// that end after `since`, in share of the week per hour, the running hour at its sum so far. 0 with none.
+    pub(crate) fn week_peak(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        window: &str,
+        since: f64,
+    ) -> f64 {
+        self.model_week_hours
+            .get(&(account_id.to_string(), window.to_string()))
+            .filter(|record| record.incarnation == incarnation)
+            .into_iter()
+            .flat_map(|record| &record.hours)
+            .filter(|(hour, _)| ((*hour + 1) * HOUR_MS) as f64 > since)
+            .map(|(_, share)| *share)
+            .fold(0.0, f64::max)
     }
 
     /// The account's rates as `shares` sums them, each over `[now, horizon(window))` as the band weighs it, for the
@@ -3447,10 +3577,13 @@ impl RoutingState {
         banded
     }
 
+    /// `booked` decides which of the account's live bookings count, as `keep` does for its pins.
+    #[allow(clippy::too_many_arguments)]
     fn shares(
         &self,
         account_id: &str,
         keep: &dyn Fn(&PinRow) -> bool,
+        booked: &dyn Fn(&Reservation) -> bool,
         tier: &str,
         now: i64,
         average_ms: i64,
@@ -3471,7 +3604,7 @@ impl RoutingState {
             *share /= speed;
         }
         // A booking made before a poll dropped a window still names it, and the account no longer has it.
-        for reservation in self.live_bookings(account_id) {
+        for reservation in self.live_bookings(account_id).filter(|r| booked(r)) {
             for (window, burn) in reservation
                 .burn
                 .iter()
@@ -4029,6 +4162,13 @@ impl RoutingState {
         self.drop_usage_based_overage(snapshot);
         self.credits
             .retain(|account_id, state| !gone(account_id, state.incarnation));
+        // Unlike the rows above, the hours take a written cut: the task writes this age cut beside the purge, and a
+        // previous holder's hours cascade with its account.
+        let oldest = oldest_kept_hour(now);
+        self.model_week_hours.retain(|(account_id, _), record| {
+            record.hours.retain(|hour, _| *hour >= oldest);
+            !record.hours.is_empty() && !gone(account_id, record.incarnation)
+        });
         self.samples.retain(|account_id, _| !absent(account_id));
         self.spend_heads.retain(|account_id, _| !absent(account_id));
         self.spend_shares

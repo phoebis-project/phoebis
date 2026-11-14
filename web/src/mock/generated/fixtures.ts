@@ -13077,7 +13077,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "hours": 168,
             "score": 0.005952380952380952,
             "window": "seven_day",
-            "burn": 0
+            "burn": 0,
+            "fable_reservation": null
           },
           "budget": [
             {
@@ -13168,7 +13169,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "hours": null,
             "score": 1,
             "window": null,
-            "burn": 0
+            "burn": 0,
+            "fable_reservation": null
           },
           "budget": [
             {

@@ -738,11 +738,12 @@ pub async fn run_until(
 /// The routing task's burn prices and peak band: the model's two share tables, its 5-hour and its 7-day share per
 /// token on its anchor tier per regime, and its band, and for dollars `prices`, the revision of the table
 /// `Pricing::load` chose that is in force at the start `now`, the share of an account's window a completed request
-/// consumed, and the share per second a pin's burn consumes, both priced through the model on the account's tier, and
-/// the Pro share of a window a pin's rewrite spends, priced on the anchor tier whatever the account's. Every closure
-/// prices under the regime of the entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the
-/// measured windows are read at `now` and fixed for the life of the process, so a pending revision reaches them at the
-/// next start, while the two shares and the equivalent price at each call's instant under the revision in force then.
+/// consumed, and the share per second a pin's burn consumes, both priced through the model on the account's tier, the
+/// Pro share of a window a pin's rewrite spends, priced on the anchor tier whatever the account's, and the factor that
+/// turns a model week's share into one of the 7-day window. Every closure that prices does so under the regime of the
+/// entrypoint it is handed, the base one for `None`. The `BurnRates` tables and the measured windows are read at `now`
+/// and fixed for the life of the process, so a pending revision reaches them at the next start, while the two shares,
+/// the equivalent and the model week's factor read at each call's instant under the revision in force then.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -753,6 +754,7 @@ fn router_config(
     let measured = tables.clone();
     let rate_tables = tables.clone();
     let equivalent_tables = tables.clone();
+    let week_tables = tables.clone();
     let segment_tables = tables.clone();
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, entrypoint, at| {
@@ -777,6 +779,7 @@ fn router_config(
         .with_equivalent(move |window, entrypoint, model, usage, at| {
             equivalent_tables.equivalent_at(window, entrypoint, model, usage, at, at, at)
         })
+        .with_week_factor(move |window, at| week_tables.week_factor(window, at))
         .with_band_segments(move |window, entrypoint, from, to| {
             segment_tables.band_segments(window, entrypoint, from, to)
         }),
@@ -1631,6 +1634,49 @@ mod tests {
             burn,
             opus(&pending.rate_table(phoebis_routing::FIVE_HOUR, None)),
             "the held entry waits for the next start"
+        );
+    }
+
+    /// On tables whose second entry holds the Fable week at a quarter of the 7-day window and whose first holds it at
+    /// half, a start inside the first entry reads the second entry's factor once that entry takes effect.
+    #[test]
+    fn the_router_config_reads_a_model_weeks_factor_under_the_revision_in_force_at_each_call() {
+        use phoebis_ledger::test_tables::{FEBRUARY_2026, JANUARY_2026, SUBSCRIPTION_COSTS};
+        let half = "seven_day_fable: {of: seven_day, capacity_factor: 0.5}";
+        let mut costs = SUBSCRIPTION_COSTS.to_string();
+        let second = costs
+            .rfind(half)
+            .expect("the second entry names the Fable week");
+        costs.replace_range(
+            second..second + half.len(),
+            "seven_day_fable: {of: seven_day, capacity_factor: 0.25}",
+        );
+        let tables = phoebis_ledger::PlanTables {
+            revisions: phoebis_ledger::CostRevisions::from_yaml(&costs)
+                .expect("the test cost model parses"),
+            path: None,
+            source: "test".to_string(),
+        };
+        let config = router_config(
+            phoebis_ledger::PriceRevisions::shipped().in_force(START),
+            Arc::new(tables),
+            &RoutingConfig::default(),
+            JANUARY_2026,
+        );
+        let factor = |at| {
+            config
+                .share
+                .week_factor(phoebis_routing::SEVEN_DAY_FABLE, at)
+        };
+        assert_eq!(
+            factor(JANUARY_2026),
+            Some(0.5),
+            "the entry in force at the start"
+        );
+        assert_eq!(
+            factor(FEBRUARY_2026),
+            Some(0.25),
+            "the entry in force at the call, which took effect after the start"
         );
     }
 
