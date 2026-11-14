@@ -1386,6 +1386,65 @@ fn a_standing_seven_day_mark_moves_while_the_fable_reservations_test_waits() {
 }
 
 #[test]
+fn a_room_back_at_the_fable_reservation_clears_the_stamp_so_the_next_short_room_waits_afresh() {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(0.76, reserved_pins());
+    decide(&mut st, &s, &auxiliary(&s, "s3", RESERVED_AT), &mut rng());
+    // Ten minutes on the room reads 0.25, the reservation itself.
+    let back = RESERVED_AT + 10 * MINUTE;
+    st.record_sample("a", reserved_read(0.75, back), 0);
+    decide(&mut st, &s, &auxiliary(&s, "s3", back), &mut rng());
+    // A wait after the first reading short, the room reads short again.
+    st.record_sample("a", reserved_read(0.76, RESERVATION_WAITED), 0);
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s3", RESERVATION_WAITED),
+        &mut rng(),
+    );
+    assert!(d.shed_round.is_none(), "{:?}", d.shed_round);
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "over_since_fable_reservation"),
+        &FactValue::Int(RESERVATION_WAITED)
+    );
+}
+
+#[test]
+fn a_fable_pins_seven_day_mark_heals_on_the_projection_while_the_room_reads_short() {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(
+        0.76,
+        vec![
+            PinRow {
+                model: "claude-fable-5-1".into(),
+                mark: Some(PinMark {
+                    at: RESERVED_AT - HOUR,
+                    on: "a".into(),
+                    window: SEVEN_DAY.into(),
+                }),
+                ..burning("s1", "a", 4.0, false, RESERVATION_WAITED)
+            },
+            burning("s2", "a", 2.0, false, RESERVATION_WAITED),
+        ],
+    );
+    // The week projects 0.863 at its horizon, under the ceiling of 0.95, with the room at 0.24 under 0.25.
+    let fable_turn = with_facts(
+        request(&s, Some("s1"), "claude-fable-5-1", true, &[], RESERVED_AT),
+        Some("quota"),
+        false,
+        None,
+        &[],
+    );
+    let d = decide(&mut st, &s, &fable_turn, &mut rng());
+    assert_eq!(
+        d.record.outcome.mark_cleared.as_ref().map(|c| c.reason),
+        Some("healed"),
+        "the reservation holds no Fable pin's mark: {:?}",
+        line(&d.record, "move:shed").facts
+    );
+}
+
+#[test]
 fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by_its_reset() {
     let mut st = RoutingState::from_load(RoutingLoad::default());
     // `a` would win under all three rules on the shared windows alone: the lowest 5h and the earliest 7d.
@@ -28498,6 +28557,27 @@ fn the_purge_drops_the_projection_stamps_no_test_reads() {
         stamps(&st),
         [[None, None], [None, None]],
         "a pool with load shedding off tests no window"
+    );
+}
+
+#[test]
+fn a_purge_while_the_fable_reservation_option_is_off_drops_the_reservations_stamp() {
+    let on = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(0.76, reserved_pins());
+    decide(&mut st, &on, &auxiliary(&on, "s3", RESERVED_AT), &mut rng());
+    st.purge(&reserving_pool(Strategy::Pace, false), RESERVED_AT + MINUTE);
+    // A wait after the first reading short, with the option on again.
+    let d = decide(
+        &mut st,
+        &on,
+        &auxiliary(&on, "s3", RESERVATION_WAITED),
+        &mut rng(),
+    );
+    assert!(d.shed_round.is_none(), "{:?}", d.shed_round);
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "over_since_fable_reservation"),
+        &FactValue::Int(RESERVATION_WAITED),
+        "the test reads the room short afresh"
     );
 }
 

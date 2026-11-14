@@ -674,16 +674,16 @@ With `load_shedding` off no round runs and nothing is marked, and a mark already
 next request, which renews the pin in place. The destination gate, the reservations and the two ceilings on every move
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
-With `fable_reservation_shedding` on as well, on a pool whose `strategy` is `pace`, the shed rule runs one more test
-once no window fired: the Fable reservation, the share of the 7-day window Pace holds back for the account's expected
-Fable use (see `pace` under [Selection](#selection)). The test reads over where the account's 7-day room, the share of
-the window its prediction leaves, is smaller than its reservation, strictly, so a room equal to the reservation still
-holds all of it. An account no reservation applies to, an API-key account, a usage-based seat or an account with no
-Fable reading, never reads over. The test keeps a stamp of its own from its first reading over and fires once the room
-has read short for the projection's wait: a quarter of the time from the stamp to the 7-day reset, at most twice
-`burn_average_seconds`. The wait holds back the round alone, as a window's wait does, so a mark already standing moves
-at its pin's next request. One dwell paces this round and a window's round alike on an account. The round's window is
-`seven_day`, and its record reads that window's prediction, projection, horizon and ceiling as a projection round's
+With `load_shedding` and `fable_reservation_shedding` both on, on a pool whose `strategy` is `pace`, the shed rule runs
+one more test once no window fired: the Fable reservation, the share of the 7-day window Pace holds back for the
+account's expected Fable use (see `pace` under [Selection](#selection)). The test reads over where the account's 7-day
+room, the share of the window its prediction leaves, is smaller than its reservation, strictly, so a room equal to the
+reservation still holds all of it. An account no reservation applies to, an API-key account, a usage-based seat or an
+account with no Fable reading, never reads over. The test keeps a stamp of its own from its first reading over and fires
+once the room has read short for the projection's wait: a quarter of the time from the stamp to the 7-day reset, at most
+twice `burn_average_seconds`. The wait holds back the round alone, as a window's wait does, so a mark already standing
+moves at its pin's next request. One dwell paces this round and a window's round alike on an account. The round's window
+is `seven_day`, and its record reads that window's prediction, projection, horizon and ceiling as a projection round's
 does, names its trigger `fable_reservation` and states the reservation as `fable_reservation`. The round walks the pins
 whose model draws no model week, since the account's Fable use is what the reservation keeps room for, so a Fable pin
 stays out of it as `fable_model`, though it draws the 7-day window. Every walked pin's burn spends the reserved room, so

@@ -5295,12 +5295,14 @@ fn healed(
         now,
         BurnRead::Achieved,
     )?;
-    let reserved = window == SEVEN_DAY
-        && model_week(&pin.model).is_none()
-        && reservation_shedding(pool)
-        && reservation_read(state, snapshot, pool, &pin.account_id, now)
-            .is_some_and(|read| read.over());
-    (projection.at_horizon < projection.limit && !reserved).then_some(Healed::Projection {
+    // The projection's verdict first, so a mark it holds reads no reservation.
+    let heals = projection.at_horizon < projection.limit
+        && !(window == SEVEN_DAY
+            && model_week(&pin.model).is_none()
+            && reservation_shedding(pool)
+            && reservation_read(state, snapshot, pool, &pin.account_id, now)
+                .is_some_and(|read| read.over()));
+    heals.then_some(Healed::Projection {
         projection: projection.at_horizon,
         limit: projection.limit,
     })
@@ -5715,8 +5717,8 @@ fn shed_round(
         });
     }
     // The keep left a pin whose agent ended out of every figure, so the round lists it for its record and walks it
-    // nowhere, its pin and cache kept for a respawn. A fast-lane pin and a pin off the window keep their words whatever
-    // their agent did.
+    // nowhere, its pin and cache kept for a respawn. A fast-lane pin, a pin off the window and the Fable pin of a
+    // reservation's round keep their words whatever their agent did.
     pins = leave_out(pins, "ended", &|p: &PinRow| p.ended);
 
     // The walk's figures: each pin's burn on the trigger's window in share per second, `None` for a pin the pricer

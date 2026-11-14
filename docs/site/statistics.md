@@ -879,13 +879,14 @@ each listed window's kind, `five_hour_ceiling` for `five_hour` and `weekly_ceili
 values of the pool the account sits in at the read, and names one figure by the trigger of the newest shedding round on
 the wall's window within that window's length before the wall: after a projection round the projection error, one less
 the round's projection, after a slow-down round the time the wall arrived before the reset (0 at or after it), and
-neither with no round. The ledger also keeps each account's longest early wall of the hour under a slow-down round, so
-the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on the account's spent
-windows since the condition began. A holding wall's detail also carries `reset` (`clears`, `grant` and `label`) while
-the usage poll reads the account, a limit reset of the account is usable now and one of the windows it clears reads at
-its limit in the account's newest usage reading. The member is joined at each read and never folded, so it leaves at the
-read after the reset was used. The dashboard's line then adds `, a reset can clear it` and opens the account's card on
-the [Quota](console.md#quota) view in place of the routing log.
+neither after a round the Fable reservation fired or with no round. The ledger also keeps each account's longest early
+wall of the hour under a slow-down round, so the figure outlives the trailing day. The item opens the [routing
+log](console.md#routing-log) on the account's spent windows since the condition began. A holding wall's detail also
+carries `reset` (`clears`, `grant` and `label`) while the usage poll reads the account, a limit reset of the account is
+usable now and one of the windows it clears reads at its limit in the account's newest usage reading. The member is
+joined at each read and never folded, so it leaves at the read after the reset was used. The dashboard's line then adds
+`, a reset can clear it` and opens the account's card on the [Quota](console.md#quota) view in place of the routing
+log.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent

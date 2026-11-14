@@ -725,8 +725,8 @@ pub struct ShedRoundFacts {
     /// `marked N` or `nothing_to_mark`.
     pub outcome: String,
     /// `None` after marks, else the deepest skip class any walked pin reached (`last_pin`, `no_runway`, `sliver`,
-    /// `standing` or `unpriced`), or where no pin was walked the word a left-out pin carries (`ended`, `no_burn`,
-    /// `off_window` or `fable_model`), else `unpriced`.
+    /// `standing` or `unpriced`), or where no pin was walked the word a left-out pin carries (`ended`, `fable_model`,
+    /// `no_burn` or `off_window`), else `unpriced`.
     pub reason: Option<&'static str>,
     pub dwell_seconds: u64,
     pub dwell_until: i64,
@@ -761,7 +761,7 @@ pub struct ShedPinFacts {
     /// The destination the round found for the pin.
     pub planned: Option<String>,
     pub runway_ms: Option<i64>,
-    /// `ended`, `fast_lane`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `fable_model`, `sliver`, `standing` or
+    /// `ended`, `fable_model`, `fast_lane`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `sliver`, `standing` or
     /// `unpriced`.
     pub skip: Option<&'static str>,
     /// `cheapest` for the pin the round marked as the cheapest one whose burn covers what the target still asked,

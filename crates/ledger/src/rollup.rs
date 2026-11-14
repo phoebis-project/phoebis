@@ -1729,18 +1729,14 @@ pub fn fold_routing_conditions(
     for (account, (since, count, windows, (newest, window, detail))) in walls {
         let round = newest_round(tx, account, window, newest)?;
         // A projection round's projection that came true reads 1.0 at the wall, so the error is how far under the wall
-        // the round projected it. A stretch round's projection is the demand's at a moved horizon and measures nothing
-        // at the reset, where the slow-down paces the window to arrive, so its wall reads how early it came instead.
-        // The Fable reservation fires its round on the account's room while the projection can read far under the
-        // wall, so no projection predicted that wall and the round reads no error either.
+        // the round projected it, read off a round whose trigger is `projection` or that names no trigger, and off no
+        // other round. A stretch round's projection is the demand's at a moved horizon and measures nothing at the
+        // reset, where the slow-down paces the window to arrive, so its wall reads how early it came instead. The Fable
+        // reservation fires its round on the account's room while the projection can read far under the wall, so no
+        // projection predicted that wall.
         let projection = round
             .as_ref()
-            .filter(|round| {
-                !matches!(
-                    round["trigger"].as_str(),
-                    Some("slow_down" | "fable_reservation")
-                )
-            })
+            .filter(|round| matches!(round["trigger"].as_str(), None | Some("projection")))
             .and_then(|round| round["projection"].as_f64());
         held.insert(
             (RoutingKind::WallReached, "account", account.to_string()),

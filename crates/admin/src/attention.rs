@@ -67,7 +67,8 @@ pub(crate) struct AttentionItem {
     /// `projection_error` and `early_ms`, read off the newest shedding round on the account on the wall's window inside
     /// the window's length before the wall (`projection_error` one less a projection round's projection, `early_ms`
     /// after a stretch round the milliseconds the newest wall arrived before its window's reset, 0 at or after it, each
-    /// null after the other trigger's round and both null with none) and `reset` (`clears`, `grant` and `label`),
+    /// null after the other trigger's round, and both null after a round the Fable reservation fired and with none) and
+    /// `reset` (`clears`, `grant` and `label`),
     /// present while a usable limit reset of the account clears a window that reads at its limit now,
     /// `destination_spent` with `moves`, `fits` (the moves' destination fits with counts) and `windows`,
     /// `shed_no_runway` with `rounds` and `accounts`, and `slowed_long` with `spans` (the slow-down spans counted),
