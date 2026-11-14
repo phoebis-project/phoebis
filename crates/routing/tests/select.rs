@@ -29851,6 +29851,53 @@ fn a_failed_over_landing_with_no_row_names_the_account_it_left() {
 }
 
 #[test]
+fn a_request_without_a_pin_after_a_failed_attempt_names_no_account_left_and_breaks_no_tie_by_runway(
+) {
+    let s = tiered(Pool {
+        affinity: 0,
+        members: vec![("a", 0), ("b", 1), ("c", 1)],
+        ..Pool::default()
+    });
+    // A warm pin burning on b gives the pool's prior a burn as large as the failed attempt's row, so b and c read
+    // different runways whichever of the two the fit prices.
+    let mut st = priced(vec![gated_pin("w", "b", 100.0)]);
+    st.record_sample(
+        "b",
+        refreshing(0.3, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    st.record_sample(
+        "c",
+        refreshing(0.5, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    // The task can still hold a failover's entry for a session whose pool pins nothing, as when an admin switched the
+    // pinning off inside the failover's window.
+    let req = failing_over(&s, "a", "cooldown", gated_pin("s1", "a", 100.0), None, T);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        left_of(&d.result),
+        None,
+        "a request that takes no pin lands no session, so it names no account the session left"
+    );
+    assert_ne!(
+        candidate(&d.record, "b").runway_ms,
+        candidate(&d.record, "c").runway_ms,
+        "the two runways differ, so a runway read would narrow the tie"
+    );
+    let pick = line(&d.record, "pick");
+    assert_eq!(
+        fact(pick, "ties"),
+        &FactValue::List(vec!["b".into(), "c".into()])
+    );
+    assert!(
+        pick.facts.iter().all(|f| f.key != "by_runway"),
+        "the strategy's own draw settles the tie: {:?}",
+        pick.facts
+    );
+}
+
+#[test]
 fn a_row_idle_past_the_ttl_re_placed_elsewhere_names_the_account_it_left() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

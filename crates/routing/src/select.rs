@@ -597,9 +597,9 @@ pub struct Selection {
     /// The account the session's previous request landed on, where this selection lands elsewhere: the pin row
     /// step 1 read, live, idle past the TTL or left behind by its pool, the newest across the session's models,
     /// leaving out a pin only auxiliary calls used, unless the request is an auxiliary call, else the landing a
-    /// failover carried to this request. A renewal names it too, after a turn of the session on another account.
-    /// `None` on a count's bound and a placement the routing holds no previous landing for. The relay names no
-    /// previous message on a request that carries it, since the account cannot find one.
+    /// failover carried to this request where it takes a pin. A renewal names it too, after a turn of the session on
+    /// another account. `None` on a count's bound and a placement the routing holds no previous landing for. The relay
+    /// names no previous message on a request that carries it, since the account cannot find one.
     pub left: Option<String>,
     /// `Some` for the client's classifier call alone: `On` where the selected account and incarnation are the ones
     /// the judged turn's stream ended on, `Off` elsewhere and in a session with no turn to judge.
@@ -1678,6 +1678,20 @@ fn run(
             && ttl_ms > 0
             && (pool.affinity.mode == AffinityMode::Always || request.marker || !request.portable)
     });
+    // The task hands a failover's entry on until a selection lands the session. A request that takes no pin lands
+    // nothing, so it reads no entry, and the entry waits for the session's next request that takes a pin. The copy
+    // shadows `request`, so no read below can reach the entry.
+    let unpinned;
+    let request = match session {
+        None if request.failed_over.is_some() => {
+            unpinned = SelectRequest {
+                failed_over: None,
+                ..request.clone()
+            };
+            &unpinned
+        }
+        _ => request,
+    };
     if request.classifier {
         // The client's classifier call follows its session's judged turn and holds no pin of its own.
         rec.pin_reason = Some("classifier");
