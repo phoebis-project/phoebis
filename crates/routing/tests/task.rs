@@ -11381,16 +11381,32 @@ async fn a_poll_more_than_five_points_under_the_stored_weekly_reading_under_one_
     handle
         .report(observed(
             "a",
-            weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.50), (SEVEN_DAY_FABLE, 0.50)]),
+            weekly_poll(
+                1_000,
+                reset,
+                &[
+                    (SEVEN_DAY, 0.50),
+                    (SEVEN_DAY_FABLE, 0.50),
+                    ("seven_day_opus", 0.55),
+                ],
+            ),
         ))
         .await;
     handle.samples().await.unwrap();
-    // Six points under the stored figure on one window and five on the other, under the reset both stored readings
-    // name.
+    // Six points under the stored figure on one window and five on the other two, under the reset each stored reading
+    // names. The two figures of 0.55 to 0.50, subtracted as floats, read more than 0.05.
     handle
         .report(observed(
             "a",
-            weekly_poll(2_000, reset, &[(SEVEN_DAY, 0.44), (SEVEN_DAY_FABLE, 0.45)]),
+            weekly_poll(
+                2_000,
+                reset,
+                &[
+                    (SEVEN_DAY, 0.44),
+                    (SEVEN_DAY_FABLE, 0.45),
+                    ("seven_day_opus", 0.50),
+                ],
+            ),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -11450,6 +11466,125 @@ async fn a_head_that_shows_a_weekly_fall_leaves_window_dropped_to_the_next_poll_
         Some(("a", SEVEN_DAY, 0.61, 0.11, reset)),
         "the figure before is the one the head found stored, and the figure after is the poll's: {event:?}"
     );
+    no_further_event(&mut events).await;
+}
+
+/// A head's sample of the 7-day window under `reset`.
+fn seven_day_head(at: i64, reset: i64, utilization: f64) -> UtilizationSample {
+    sample(at).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization,
+            reset: Some(reset),
+            observed_at: at,
+            source: WindowSource::Head,
+            plan: None,
+            tier: None,
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_poll_after_a_head_s_fall_compares_the_figure_the_head_found_and_not_the_one_it_stored() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    for report in [
+        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
+        // The fold stores the head's 0.40 as 0.41, the top of the head's percent.
+        seven_day_head(2_000, reset, 0.40),
+        weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.30)]),
+    ] {
+        handle.report(observed("a", report)).await;
+        handle.samples().await.unwrap();
+    }
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        dropped_of(&event),
+        Some(("a", SEVEN_DAY, 0.61, 0.30, reset)),
+        "{event:?}"
+    );
+    // The stored 0.41 stands more than five points over the poll too, and writes no second event.
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_poll_that_writes_no_drop_clears_the_figure_a_head_found() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    for report in [
+        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
+        seven_day_head(2_000, reset, 0.0),
+        // Three points under the 0.61 the head found: no drop.
+        weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.58)]),
+        weekly_poll(3_500, reset, &[(SEVEN_DAY, 0.40)]),
+    ] {
+        handle.report(observed("a", report)).await;
+        handle.samples().await.unwrap();
+    }
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        dropped_of(&event),
+        Some(("a", SEVEN_DAY, 0.58, 0.40, reset)),
+        "the last poll compares the figure the poll before it stored: {event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_later_head_leaves_the_figure_the_first_head_found_for_the_poll() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 7 * 24 * HOUR;
+    for report in [
+        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
+        seven_day_head(2_000, reset, 0.0),
+        // The second head reads the 0.01 the first one stored, so a figure taken from it shows no fall.
+        seven_day_head(2_500, reset, 0.0),
+        weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.11)]),
+    ] {
+        handle.report(observed("a", report)).await;
+        handle.samples().await.unwrap();
+    }
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        dropped_of(&event),
+        Some(("a", SEVEN_DAY, 0.61, 0.11, reset)),
+        "{event:?}"
+    );
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn a_passed_reset_clears_the_figure_a_head_found_so_the_next_week_s_poll_writes_no_drop() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let reset = 3_000;
+    for report in [
+        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
+        seven_day_head(2_000, reset, 0.0),
+        // Past the stored reset, naming the next week's.
+        weekly_poll(3_500, reset + 7 * 24 * HOUR, &[(SEVEN_DAY, 0.02)]),
+    ] {
+        handle.report(observed("a", report)).await;
+        handle.samples().await.unwrap();
+    }
+    let event = next_event(&mut events).await;
+    assert!(
+        matches!(&event, RouterEvent::WindowReset { window, reset_at: 3_000, .. } if window == SEVEN_DAY),
+        "{event:?}"
+    );
+    // The head's 0.61 belongs to the week that reset, so the new week's 0.02 writes no drop.
     no_further_event(&mut events).await;
 }
 

@@ -111,8 +111,9 @@ pub const SPENT_MARGIN: f64 = 0.02;
 
 /// How far a weekly window's reading has to fall under one reset to read as a used limit reset: a fall of more than
 /// this, read in whole points since a poll reads the endpoint's whole percent. Live samples showed no other weekly fall
-/// of more than 5 points under an unchanged reset.
-const WINDOW_DROP_MARGIN: f64 = 0.05;
+/// of more than 5 points under an unchanged reset. The unused allowance reads a drop's window cleared where the figure
+/// after stands under it.
+pub const WINDOW_DROP_MARGIN: f64 = 0.05;
 
 /// A utilization in whole points. Two figures rounded to the hundredth and then subtracted as floats can read 0.55 to
 /// 0.50 as more than 0.05.
@@ -1997,8 +1998,9 @@ struct Task {
     #[cfg(any(test, feature = "debug-hooks"))]
     parked: Option<Vec<(Report, u64)>>,
     pending: Pending,
-    /// The weekly falls a head showed, per account and window, which the next poll under the same reset emits. Kept in
-    /// memory beside `spent_announced`, so a restart between the head and the poll loses the drop.
+    /// The weekly falls a head showed, per account and window, which the next poll under the same reset reads in place
+    /// of the stored reading. Kept in memory beside `spent_announced`, so a restart between the head and the poll loses
+    /// the drop.
     pending_drops: HashMap<(String, String), PendingDrop>,
     /// The reloads that arrived while a load ran, which one more load answers: the write each follows may postdate
     /// the running load's read.

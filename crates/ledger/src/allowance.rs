@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use phoebis_oauth::ClaimOutcome;
-use phoebis_routing::{account_window_id, is_weekly_window};
+use phoebis_routing::{account_window_id, is_weekly_window, WINDOW_DROP_MARGIN};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 
@@ -16,9 +16,10 @@ use crate::LedgerError;
 /// use, so it stands up to a poll interval behind the claim.
 const CLAIM_JOIN_MS: i64 = 3_600_000;
 
-/// The router's drop margin in whole points: a drop with no parsed claim to read cleared its window where the first
-/// poll after it read under it.
-const CLEAR_MARGIN_POINTS: f64 = 5.0;
+/// A utilization in whole points, the unit the router reads a drop's margin in.
+fn whole_points(utilization: f64) -> i64 {
+    (utilization * 100.0).round() as i64
+}
 
 /// One weekly reset an account met in range, a used limit reset that cleared its window, or its term's end read as a
 /// reset: what the unused allowance route lists.
@@ -225,7 +226,7 @@ pub fn unused_allowance(
         // A request between the use and the poll can lift a cleared window off zero, so the test reads the margin.
         let cleared = match answered {
             Some(claim) => claim.cleared.contains(&detail.window),
-            None => (detail.utilization * 100.0).round() < CLEAR_MARGIN_POINTS,
+            None => whole_points(detail.utilization) < whole_points(WINDOW_DROP_MARGIN),
         };
         if !cleared {
             continue;

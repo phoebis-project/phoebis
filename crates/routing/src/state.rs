@@ -377,7 +377,8 @@ impl UtilizationSample {
             .cloned()
     }
 
-    /// A builder for tests.
+    /// The sample with `reading` as its reading of `window`, in place of any it held, as `sample_from_usage` builds a
+    /// poll's sample one window at a time.
     pub fn with(mut self, window: &str, reading: WindowReading) -> UtilizationSample {
         self.windows.insert(window.to_string(), reading);
         self

@@ -3436,6 +3436,79 @@ fn a_drop_within_the_hour_after_a_used_claim_lists_a_row_where_the_claim_names_i
     );
 }
 
+#[test]
+fn a_drop_before_an_ended_account_s_term_end_lists_its_row_and_a_drop_at_the_end_none() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let end = now - 10 * DAY;
+    // The week the end cut short resets after it, as the reset of each drop names.
+    let reset = end + 2 * DAY;
+    for row in [
+        window_dropped("t", "seven_day", 0.70, 0.02, reset, end - 3_600_000),
+        window_dropped("t", "seven_day", 0.70, 0.02, reset, end),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| {
+            unused_allowance(
+                c,
+                &["t".into()],
+                now - 30 * DAY,
+                now,
+                &BTreeMap::from([(
+                    "t".into(),
+                    TermEnd {
+                        end_at: end,
+                        pairs: BTreeMap::new(),
+                    },
+                )]),
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![reset_row(
+            "t",
+            "seven_day",
+            reset,
+            1.0 - 0.70,
+            end - 3_600_000,
+            "claim"
+        )],
+        "a drop counts by its own instant against the end, whatever the reset it names"
+    );
+}
+
+#[test]
+fn a_drop_at_the_range_s_start_joins_a_used_claim_from_before_the_range() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let now = 100 * DAY;
+    let from = now - DAY;
+    let reset = now + 2 * DAY;
+    for row in [
+        used_claim("a", &["seven_day_fable"], from - 600_000),
+        // Eleven points left: only the claim's list reads the window cleared.
+        window_dropped("a", "seven_day_fable", 0.70, 0.11, reset, from + 300_000),
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let rows = db
+        .read_blocking(|c| unused_allowance(c, &["a".into()], from, now, &BTreeMap::new()))
+        .unwrap();
+    assert_eq!(
+        rows,
+        vec![reset_row(
+            "a",
+            "seven_day_fable",
+            reset,
+            1.0 - 0.70,
+            from + 300_000,
+            "claim"
+        )]
+    );
+}
+
 /// The term end's row carries the pair it is handed and no other, so a reset event's pair from before the end names
 /// none on it while the account's resets name theirs.
 #[test]
