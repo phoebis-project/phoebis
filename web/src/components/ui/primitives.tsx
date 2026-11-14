@@ -324,6 +324,16 @@ export function Refusal({ children }: { children: ReactNode }) {
   );
 }
 
+/** A warning callout, announced politely. `Refusal` is its critical twin. */
+export function Warning({ children }: { children: ReactNode }): JSX.Element {
+  return (
+    <div className="callout callout--warning" role="status">
+      <IconWarning size={16} />
+      <div>{children}</div>
+    </div>
+  );
+}
+
 /** A save refused as stale, with the Reload that reads the record again. */
 export function StaleRefusal({ message, onReload }: { message: string; onReload?: () => void }) {
   return (
@@ -581,14 +591,15 @@ const HELD_FOCUS = 'a[href], button, input, select, textarea, [tabindex]';
 
 /**
  * The outside path of a modal dialog: a backdrop click or the Escape key's `cancel`. While `unsaved` holds, both
- * ask before closing. The X button and a footer's Cancel never pass through here.
+ * ask before closing. The X button and a footer's Cancel never pass through here. The element follows `open`, and an
+ * element the browser closed by force while `open` still holds shows again.
  */
 function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   const ref = useRef<HTMLDialogElement>(null);
   const [asking, setAsking] = useState(false);
-  // The latest `onClose` and `unsaved` behind one stable `request`, so the `cancel` listener is attached once per
-  // element and never reads a stale prop.
-  const latest = useLatest({ onClose, unsaved });
+  // The latest `onClose`, `open` and `unsaved` in one stable ref, so the `cancel` and `close` listeners are attached
+  // once per element and never read a stale prop.
+  const latest = useLatest({ onClose, open, unsaved });
   // The last control inside the dialog that took the focus: a click on the backdrop moves the focus off the control
   // before the dialog hears the click, so the active element alone would miss it.
   const lastFocused = useRef<HTMLElement | null>(null);
@@ -659,6 +670,16 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     el.addEventListener('cancel', onCancel);
     return () => el.removeEventListener('cancel', onCancel);
   }, [latest, request]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // The browser can close the element over an owner that declined, so the element follows the owner's state again.
+    const onElementClose = () => {
+      if (latest.current.open && el.isConnected && !el.open) el.showModal();
+    };
+    el.addEventListener('close', onElementClose);
+    return () => el.removeEventListener('close', onElementClose);
+  }, [latest]);
   const onBackdrop = (e: ReactMouseEvent<HTMLDialogElement>) => {
     if (e.target === ref.current) request();
   };

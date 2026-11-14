@@ -3,8 +3,7 @@ import { createPortal } from 'react-dom';
 import { api } from '@/api';
 import type { Account, LimitResetsRead, ResetGrant, ResetUse, WindowId } from '@/api/types';
 import { useSession } from '@/app/session';
-import { IconWarning } from '@/components/ui/icons';
-import { Button, Dialog, KeyValue, Refusal } from '@/components/ui/primitives';
+import { Button, Dialog, KeyValue, Refusal, Warning } from '@/components/ui/primitives';
 import { fmtDate, fmtEndsIn, fmtRelative, listWords, noun } from '@/lib/format';
 import { useLatest } from '@/lib/hooks';
 import { windowOf } from '@/lib/quota';
@@ -66,7 +65,8 @@ export function ResetDialog({
     }
   }
   const latest = useLatest({ account, now });
-  const body = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLUListElement>(null);
+  const cancelButton = useRef<HTMLButtonElement>(null);
   const open = opening !== null;
   const out = claim === 'out';
   const answered = claim === null || claim === 'out' ? null : claim;
@@ -95,23 +95,19 @@ export function ResetDialog({
       return;
     }
     setClaim({ answer, grant: grant.id, row: latest.current.account, use: 'use' in result ? result.use : null });
-    // The state still says open where the browser closed the element under the claim, so the answer opens it again.
-    const element = body.current?.closest('dialog');
-    if (element && !element.open) element.showModal();
   };
 
   // A child's effects run first, so this lands after the dialog's own showModal, as ConfirmDialog's focus does.
   useEffect(() => {
     if (!open) return;
-    const root = body.current?.closest('dialog');
-    const rows = [...(root?.querySelectorAll<HTMLButtonElement>('button[data-grant]') ?? [])].filter((b) => !b.disabled);
+    const rows = [...(list.current?.querySelectorAll<HTMLButtonElement>('button[data-grant]') ?? [])].filter((b) => !b.disabled);
     // A page change unmounts the focused button, so each page names its own start.
     const start = page.at === 'confirm' ? undefined : (rows.find((b) => b.dataset.grant === page.from) ?? rows[0]);
-    (start ?? root?.querySelector<HTMLElement>('[data-reset-cancel]'))?.focus();
+    (start ?? cancelButton.current)?.focus();
   }, [open, page]);
 
   const cancel = (
-    <Button variant="ghost" data-reset-cancel="" disabled={out} onClick={close}>
+    <Button ref={cancelButton} variant="ghost" disabled={out} onClick={close}>
       Cancel
     </Button>
   );
@@ -147,12 +143,7 @@ export function ResetDialog({
         {resetClearsNothing(
           confirming.clears.map((id) => windowOf(account, id)),
           now,
-        ) && (
-          <div className="callout callout--warning" role="status">
-            <IconWarning size={16} />
-            <div>{`${listWords(tags)} ${noun(tags.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</div>
-          </div>
-        )}
+        ) && <Warning>{`${listWords(tags)} ${noun(tags.length, 'reads', 'read')} 100% left now, so this reset has nothing to clear yet.`}</Warning>}
         <p>{confirming.label}</p>
         <div className="reset-dialog__windows">
           {confirming.clears.map((id) => (
@@ -201,7 +192,7 @@ export function ResetDialog({
   } else {
     title = `Resets on ${label}`;
     pages = block !== null && (
-      <ul className="plain-list reset-dialog__rows">
+      <ul ref={list} className="plain-list reset-dialog__rows">
         {resetRows(block).map((g) => {
           const note = resetRowNote(g, block.cooldownUntil, now);
           return (
@@ -230,10 +221,10 @@ export function ResetDialog({
   // A dialog inside the card would inherit the foot's type size and join the card's text, so it lives under the body.
   return createPortal(
     <Dialog open={open} onClose={close} title={title} width={440} className="reset-dialog" footer={foot}>
-      <div ref={body} className="reset-dialog__page">
+      <>
         {stale}
         {pages}
-      </div>
+      </>
     </Dialog>,
     document.body,
   );

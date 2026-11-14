@@ -25,9 +25,9 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
-import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
+import { IconPencil, IconPlus } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
@@ -978,18 +978,15 @@ function PoolWarnings({ warnings }: { warnings: PoolWarning[] }) {
       {warnings.map((warning) => {
         const group = warningGroup(warning);
         return (
-          <div key={warning.code} className="callout callout--warning" role="status">
-            <IconWarning size={16} />
-            <div>
-              {warning.text}
-              {group !== null && (
-                <>
-                  {' '}
-                  Go to <GroupLink id={group}>{POOL_RAIL[group].label}</GroupLink>.
-                </>
-              )}
-            </div>
-          </div>
+          <Warning key={warning.code}>
+            {warning.text}
+            {group !== null && (
+              <>
+                {' '}
+                Go to <GroupLink id={group}>{POOL_RAIL[group].label}</GroupLink>.
+              </>
+            )}
+          </Warning>
         );
       })}
     </div>
@@ -2320,12 +2317,9 @@ export function PoolDialog({
           </div>
           <ReturnRate {...idleReturns} />
           {warming && shortAffinity && (
-            <div className="callout callout--warning" role="status">
-              <IconWarning size={16} />
-              <div>
-                Session affinity is {fmtAffinity(affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
-              </div>
-            </div>
+            <Warning>
+              Session affinity is {fmtAffinity(affinity)}, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under <GroupLink id="pinning">Pinning</GroupLink>.
+            </Warning>
           )}
         </>
       ),

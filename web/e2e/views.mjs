@@ -3338,10 +3338,11 @@ async function poolDialogWalk(theme, mode) {
     const bad = () => priority.evaluate((input) => input.validity.badInput);
     await priority.selectText();
     await page.keyboard.type('1e');
-    const typed = await bad();
     // The blur re-sorts the rows, so it lands before the click rather than between the click's press and release.
     await priority.blur();
     await settle();
+    // Read after the blur, since a blur that cleared the text would leave the untick's read nothing to prove.
+    const typed = await bad();
     await tick.click();
     await settle();
     const unticked = await bad();
@@ -5173,7 +5174,7 @@ async function quotaResetDialog(theme) {
     });
     measurements.push(`${theme} /quota reset dialog focus after Back ${JSON.stringify({ focus, grant })}`);
     if (grant === null || focus?.grant !== grant) say(`Back left the focus on ${JSON.stringify(focus)}, not on the first row's button for ${grant}`);
-    await dialog.locator('[data-reset-cancel]').click();
+    await dialog.locator('.dialog__foot').getByRole('button', { name: 'Cancel', exact: true }).click();
     await dialog.waitFor({ state: 'detached', timeout: 5_000 });
     await advance(CLOCK_STEP_MS);
     const closed = await page.evaluate(() => {
@@ -5188,7 +5189,7 @@ async function quotaResetDialog(theme) {
     await card.locator('.qcard__use').dispatchEvent('click');
     await advance(600);
     await dialog.waitFor({ state: 'visible', timeout: 5_000 });
-    await dialog.locator('[data-reset-cancel]').click();
+    await dialog.locator('.dialog__foot').getByRole('button', { name: 'Cancel', exact: true }).click();
     await dialog.waitFor({ state: 'detached', timeout: 5_000 });
     await advance(CLOCK_STEP_MS);
     const fromCard = await page.evaluate(() => {

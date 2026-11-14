@@ -206,6 +206,41 @@ test('an uncancelable cancel closes an unsaved dialog without asking', () => {
   assert.equal(question(), null);
 });
 
+/**
+ * An open dialog that the browser closes by force, as Chromium does on a second Escape with no activation between: an
+ * uncancelable cancel, then the element's own close. Its owner turns `open` false on that cancel where `closes` holds.
+ */
+function forcedClose(closes) {
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const render = (open) =>
+    root.render(
+      h(
+        Dialog,
+        {
+          onClose: () => {
+            if (closes) render(false);
+          },
+          open,
+          title: 'Edit',
+        },
+        'body',
+      ),
+    );
+  act(() => render(true));
+  const element = container.querySelector('dialog');
+  cancel(element, false);
+  act(() => element.close());
+  return element;
+}
+
+test('a dialog the browser closed shows again while its owner keeps it open, and stays closed once its owner closed it', () => {
+  assert.equal(forcedClose(false).hasAttribute('open'), true, 'the owner that keeps it open has it back');
+  assert.equal(forcedClose(true).hasAttribute('open'), false, 'the owner that closed it keeps it closed');
+});
+
 test('an Escape on the question keeps editing', () => {
   const { closes, element } = dialog(true);
   clickOn(element);

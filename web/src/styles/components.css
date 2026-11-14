@@ -1248,11 +1248,6 @@ textarea.input {
   max-height: none;
 }
 
-/* The reset dialog's parts stand in the body's own column, so they keep its gap. */
-.reset-dialog__page {
-  display: contents;
-}
-
 .reset-dialog__rows {
   gap: 10px;
 }
