@@ -541,7 +541,9 @@ pub(crate) struct PlacementRow {
 
 /// Read the placements per rung.
 ///
-/// The filters apply as `/breakdown` reads them, scoped to the fields a request row answers.
+/// The read takes the whole hours the range touches, from the start of the hour that holds `from` up to the first hour
+/// boundary at or after `to`, and the answer echoes `from` and `to` as asked. The filters apply as `/breakdown` reads
+/// them, scoped to the fields a request row answers.
 #[utoipa::path(
     get,
     path = "/admin/analytics/placements",
@@ -1177,6 +1179,9 @@ pub(crate) struct RefusalCategoryRow {
 }
 
 /// Read the refused requests per model and category.
+///
+/// The read takes the whole hours the range touches, from the start of the hour that holds `from` up to the first hour
+/// boundary at or after `to`, and the answer echoes `from` and `to` as asked.
 #[utoipa::path(
     get,
     path = "/admin/analytics/refusal_categories",
@@ -1493,6 +1498,11 @@ pub(crate) struct RewritePoint {
 }
 
 /// Read the rewrite tokens and the moves.
+///
+/// The read takes the whole hours the range touches, from the start of the hour that holds `from` up to the first hour
+/// boundary at or after `to`, and the answer echoes `from` and `to` as asked. The points keep the bucket grid, so the
+/// first point's `at` is the first bucket's edge, which on six-hour or daily buckets can lie before the first hour the
+/// read sums.
 #[utoipa::path(
     get,
     path = "/admin/analytics/rewrites",
@@ -1590,6 +1600,9 @@ pub(crate) struct GuardrailCount {
 }
 
 /// Read the matches per guardrail.
+///
+/// The read takes the whole hours the range touches, from the start of the hour that holds `from` up to the first hour
+/// boundary at or after `to`, and the answer echoes `from` and `to` as asked.
 #[utoipa::path(
     get,
     path = "/admin/analytics/guardrails",

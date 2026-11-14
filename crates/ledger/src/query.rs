@@ -778,12 +778,13 @@ pub struct Refusals {
     pub fallbacks: u64,
 }
 
-/// The requests in `[from, to]` under `filter` whose serving attempt's `stop_reason` is `refusal`, counted per model
-/// and category (`-` for a refusal with none), the largest count first and then the model and the category, and the
-/// requests in the same range and filter whose row carries a fallback credit's digest. Both read off the request row's
-/// columns, the serving attempt's facts and the digest the request presented, written at the landing, since no rollup
-/// carries the category or the digest. The `clients` and `user_agents` patterns match each row's client and agent
-/// folded as the rollups fold them, so both figures narrow as the series do.
+/// The requests under `filter` in the whole hours the range from `from` to `to` touches, from the start of the hour
+/// that holds `from` up to and not at the hour ceiling of `to`, whose serving attempt's `stop_reason` is `refusal`,
+/// counted per model and category (`-` for a refusal with none), the largest count first and then the model and the
+/// category, and the requests in the same hours and filter whose row carries a fallback credit's digest. Both read off
+/// the request row's columns, the serving attempt's facts and the digest the request presented, written at the
+/// landing, since no rollup carries the category or the digest. The `clients` and `user_agents` patterns match each
+/// row's client and agent folded as the rollups fold them, so both figures narrow as the series do.
 pub fn refusal_categories(
     conn: &Connection,
     filter: &RequestFilter,
@@ -791,9 +792,11 @@ pub fn refusal_categories(
     from: i64,
     to: i64,
 ) -> Result<Refusals, LedgerError> {
+    let (start, end) = request_bounds(from, to);
     let filter = RequestFilter {
-        from: Some(from),
-        to: Some(to),
+        from: Some(start),
+        // `received_at` holds whole milliseconds, so `<=` one short of `end` reads the same rows as `< end`.
+        to: Some(end - 1),
         ..filter.clone()
     };
     let (args, mut clauses) = filter_clauses(&filter, live);
@@ -894,22 +897,24 @@ pub struct GuardrailCountRow {
 }
 
 /// The two statements `guardrail_counts` prepares, exported so a test can read their query plans against the index.
-pub const GUARDRAIL_COUNTS_SQL: &str = "SELECT guardrail_id, SUM(blocked = 0), SUM(blocked = 1) FROM request_guardrails WHERE received_at >= ?1 AND received_at <= ?2 GROUP BY guardrail_id ORDER BY guardrail_id";
-pub const GUARDRAIL_BLOCKED_BYTES_SQL: &str = "SELECT COALESCE(SUM(r.request_bytes), 0) FROM request_guardrails g JOIN requests r ON r.id = g.request_id WHERE g.guardrail_id = ?1 AND g.blocked = 1 AND g.received_at >= ?2 AND g.received_at <= ?3";
+pub const GUARDRAIL_COUNTS_SQL: &str = "SELECT guardrail_id, SUM(blocked = 0), SUM(blocked = 1) FROM request_guardrails WHERE received_at >= ?1 AND received_at < ?2 GROUP BY guardrail_id ORDER BY guardrail_id";
+pub const GUARDRAIL_BLOCKED_BYTES_SQL: &str = "SELECT COALESCE(SUM(r.request_bytes), 0) FROM request_guardrails g JOIN requests r ON r.id = g.request_id WHERE g.guardrail_id = ?1 AND g.blocked = 1 AND g.received_at >= ?2 AND g.received_at < ?3";
 
-/// One row per guardrail that matched a request in `[from, to]`, ordered by id, through the child table's index led
-/// by `received_at`, which the counts read alone and the bytes read walks over the same range.
+/// One row per guardrail that matched a request in the whole hours the range from `from` to `to` touches, from the
+/// start of the hour that holds `from` up to and not at the hour ceiling of `to`, ordered by id, through the child
+/// table's index led by `received_at`, which the counts read alone and the bytes read walks over the same hours.
 pub fn guardrail_counts(
     conn: &Connection,
     from: i64,
     to: i64,
 ) -> Result<Vec<GuardrailCountRow>, LedgerError> {
+    let (start, end) = request_bounds(from, to);
     // The index led by `received_at` carries the guardrail and the verdict too, so the planner reads the index alone
     // over the range and sorts its rows for the group, and seeks the same range for the bytes, whose join reaches
     // `requests` by its primary key.
     let mut rows = conn
         .prepare(GUARDRAIL_COUNTS_SQL)?
-        .query_map(params![from, to], |r| {
+        .query_map(params![start, end], |r| {
             Ok(GuardrailCountRow {
                 guardrail_id: r.get(0)?,
                 observed: r.get::<_, i64>(1)? as u64,
@@ -920,8 +925,9 @@ pub fn guardrail_counts(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut bytes = conn.prepare(GUARDRAIL_BLOCKED_BYTES_SQL)?;
     for row in rows.iter_mut().filter(|row| row.blocked > 0) {
-        row.blocked_bytes =
-            bytes.query_row(params![row.guardrail_id, from, to], |r| r.get::<_, i64>(0))? as u64;
+        row.blocked_bytes = bytes.query_row(params![row.guardrail_id, start, end], |r| {
+            r.get::<_, i64>(0)
+        })? as u64;
     }
     Ok(rows)
 }
@@ -4053,7 +4059,9 @@ pub fn parked_count(conn: &Connection) -> Result<u64, LedgerError> {
     Ok(count as u64)
 }
 
-/// Placements by rung over `[since, until)`: `rung`, `placements`, `hits`, `cache_read_tokens`, `promised_tokens`.
+/// Placements by rung over the whole hours the range from `since` to `until` touches, from the start of the hour that
+/// holds `since` up to and not at the hour ceiling of `until`: `rung`, `placements`, `hits`, `cache_read_tokens`,
+/// `promised_tokens`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PlacementRow {
     pub rung: String,
@@ -4076,7 +4084,8 @@ pub fn placements(
     since: i64,
     until: i64,
 ) -> Result<Vec<PlacementRow>, LedgerError> {
-    let mut args: Vec<rusqlite::types::Value> = vec![since.into(), until.into()];
+    let (start, end) = request_bounds(since, until);
+    let mut args: Vec<rusqlite::types::Value> = vec![start.into(), end.into()];
     let mut clauses: Vec<String> = Vec::new();
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
@@ -4360,6 +4369,20 @@ fn series_edges(from: i64, to: i64, bucket_seconds: i64) -> Result<(i64, i64), L
 /// The bucket edges a `SeriesFilter` reads over, past the guard every series reader shares.
 fn bucket_range(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
     series_edges(filter.from, filter.to, filter.bucket_seconds)
+}
+
+/// The rollup hours a `SeriesFilter` reads, from the hour that holds `from` up to the hour ceiling of `to`, in seconds,
+/// past the guard every series reader shares. A six-hour or daily bucket's first edge can lie before the first of these
+/// hours, so a reader that keeps its points on the bucket grid still sums no hour before the range's own.
+fn rollup_hours(filter: &SeriesFilter) -> Result<(i64, i64), LedgerError> {
+    let (_, last) = bucket_range(filter)?;
+    Ok((hour_of(filter.from), last))
+}
+
+/// The request bounds of a range in milliseconds: the start of the hour that holds `from`, and the hour ceiling of `to`
+/// as the first instant past the window, so a read of the request rows counts the whole hours the rollup reads do.
+fn request_bounds(from: i64, to: i64) -> (i64, i64) {
+    (hour_of(from) * 1_000, hour_ceil(to) * 1_000)
 }
 
 /// Every bucket start of `[first, last)`, a trailing partial bucket included. The bucket must be positive.
@@ -4810,7 +4833,8 @@ pub fn rewrite_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let mut args: Vec<rusqlite::types::Value> = vec![first.into(), last.into()];
+    let (from_hour, to_hour) = rollup_hours(filter)?;
+    let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
     in_list("account_id", &filter.accounts, &mut args, &mut clauses);
     let mut stmt = conn.prepare(&format!(
@@ -4861,7 +4885,8 @@ pub fn held_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let (sql, args) = held_series_statement(filter, first, last);
+    let (from_hour, to_hour) = rollup_hours(filter)?;
+    let (sql, args) = held_series_statement(filter, from_hour, to_hour);
     let mut stmt = conn.prepare(&sql)?;
     let hours = stmt
         .query_map(params_from_iter(args), |r| {
@@ -4903,7 +4928,7 @@ pub fn moves_by_reason_and_fit(
     conn: &Connection,
     filter: &SeriesFilter,
 ) -> Result<BTreeMap<String, BTreeMap<String, u64>>, LedgerError> {
-    let (first, last) = bucket_range(filter)?;
+    let (first, last) = rollup_hours(filter)?;
     let rows = read_account_rollups(conn, first, last)?;
     let mut out: BTreeMap<String, BTreeMap<String, u64>> = BTreeMap::new();
     for row in rows

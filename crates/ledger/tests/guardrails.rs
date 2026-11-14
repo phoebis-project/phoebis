@@ -246,7 +246,7 @@ async fn the_purge_removes_the_child_rows_with_the_request() {
     )
     .unwrap();
     assert_eq!(
-        counts(&db, 0, 0),
+        counts(&db, 0, 1),
         [count("g1", 1, 0, 0), count("g2", 0, 1, 1_000)],
         "the old request's matches are on record"
     );
@@ -265,8 +265,8 @@ async fn the_purge_removes_the_child_rows_with_the_request() {
     );
 }
 
-/// Per guardrail over the range: the matches that let the request through, the ones that blocked it, and the blocked
-/// requests' bytes alone, each bound inclusive, a guardrail matched only outside the range left out.
+/// Per guardrail over the whole hours the range touches: the matches that let the request through, the ones that
+/// blocked it, and the blocked requests' bytes alone, a guardrail matched only outside those hours left out.
 #[test]
 fn the_counts_answer_observed_blocked_and_bytes_per_guardrail_over_a_range() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -289,8 +289,8 @@ fn the_counts_answer_observed_blocked_and_bytes_per_guardrail_over_a_range() {
             4_000,
             vec![matched("g1", 0, false), matched("g3", 1, true)],
         ),
-        with_bytes("r4", 25_000, 8_000, vec![matched("g2", 0, true)]),
-        with_bytes("r5", 5_000, 16_000, vec![matched("g1", 0, true)]),
+        with_bytes("r4", HOUR_MS + 25_000, 8_000, vec![matched("g2", 0, true)]),
+        with_bytes("r5", HOUR_MS + 5_000, 16_000, vec![matched("g1", 0, true)]),
     ] {
         db.insert_request(&row, &[], None).unwrap();
     }
@@ -313,6 +313,35 @@ fn the_counts_answer_observed_blocked_and_bytes_per_guardrail_over_a_range() {
                 blocked_bytes: 4_000,
             },
         ]
+    );
+}
+
+/// A range from 21:31 to 22:10 on the epoch's first day counts the matches of the whole hours it touches, from 21:00
+/// up to and not at 23:00, in the counts and in the blocked bytes alike: the requests at 21:10 and 22:40 count, and the
+/// blocked ones at 20:59 and at 23:00 do not.
+#[test]
+fn the_counts_read_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its_end() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let blocked = |id: &str, at: i64, bytes: u64| RequestRecord {
+        request_bytes: Some(bytes),
+        ..request(id, at, "k", vec![matched("g1", 0, true)])
+    };
+    for row in [
+        // 20:59, in the hour before the one that holds the start.
+        blocked("before", 75_540_000, 1_000),
+        // 21:10, before the start in the hour that holds it.
+        blocked("first-hour", 76_200_000, 2_000),
+        // 22:40, past the end in the hour that holds it.
+        request("last-hour", 81_600_000, "k", vec![matched("g1", 0, false)]),
+        // 23:00, the hour ceiling of the end.
+        blocked("ceiling", 82_800_000, 4_000),
+    ] {
+        db.insert_request(&row, &[], None).unwrap();
+    }
+    assert_eq!(
+        counts(&db, 77_460_000, 79_800_000),
+        [count("g1", 1, 1, 2_000)],
+        "the match at 22:40 observed, the one at 21:10 blocked with its bytes alone"
     );
 }
 

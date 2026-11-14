@@ -1319,7 +1319,14 @@ fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_an
     // Left out: two answers of another stop reason, and a refusal past the range.
     plant_stop(&db, "e1", 5_000, "a", "end_turn", None);
     plant_stop(&db, "u1", 6_000, "a", "tool_use", None);
-    plant_stop(&db, "late", 20_000, "a", "refusal", Some("harmful_request"));
+    plant_stop(
+        &db,
+        "late",
+        3_620_000,
+        "a",
+        "refusal",
+        Some("harmful_request"),
+    );
     // Another account's refusal, which the account filter leaves out.
     plant_stop(&db, "b1", 7_000, "b", "refusal", Some("restricted_topic"));
     // A refusal on a second model under the category of the first model's two.
@@ -1332,7 +1339,7 @@ fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_an
     db.insert_request(&request, &[attempt], None).unwrap();
     // Requests that presented a fallback credit: one in range, one past it, and one in range on the other account.
     plant_fallback(&db, "f1", 9_000, "a", None, None);
-    plant_fallback(&db, "f-late", 21_000, "a", None, None);
+    plant_fallback(&db, "f-late", 3_621_000, "a", None, None);
     plant_fallback(&db, "f-b", 9_500, "b", None, None);
     let count = |accounts: &[&str]| {
         let filter = RequestFilter {
@@ -1369,6 +1376,73 @@ fn the_refusal_count_reads_each_served_refusal_in_range_by_model_and_category_an
         },
         "without the account filter the other account's refusal joins its model and category, and its fallback \
          joins the count"
+    );
+}
+
+/// A range from 21:31 to 22:10 on the epoch's first day, which touches the hours 21:00 and 22:00.
+const WINDOW_FROM: i64 = 77_460_000;
+const WINDOW_TO: i64 = 79_800_000;
+/// 20:59, in the hour before the one that holds the window's start.
+const BEFORE_THE_FIRST_HOUR: i64 = 75_540_000;
+/// 21:10, before the start in the hour that holds it.
+const IN_THE_FIRST_HOUR: i64 = 76_200_000;
+/// 22:40, past the end in the hour that holds it.
+const IN_THE_LAST_HOUR: i64 = 81_600_000;
+/// 23:00, the hour ceiling of the window's end.
+const AT_THE_HOUR_CEILING: i64 = 82_800_000;
+
+/// The refusals of the whole hours a range touches count, from the hour that holds its start up to and not at the hour
+/// ceiling of its end.
+#[test]
+fn the_refusal_count_reads_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its_end() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_stop(
+        &db,
+        "before",
+        BEFORE_THE_FIRST_HOUR,
+        "a",
+        "refusal",
+        Some("harmful_request"),
+    );
+    plant_stop(
+        &db,
+        "first-hour",
+        IN_THE_FIRST_HOUR,
+        "a",
+        "refusal",
+        Some("harmful_request"),
+    );
+    plant_stop(
+        &db,
+        "last-hour",
+        IN_THE_LAST_HOUR,
+        "a",
+        "refusal",
+        Some("harmful_request"),
+    );
+    plant_stop(
+        &db,
+        "ceiling",
+        AT_THE_HOUR_CEILING,
+        "a",
+        "refusal",
+        Some("harmful_request"),
+    );
+    let refusals = db
+        .read_blocking(|c| {
+            refusal_categories(
+                c,
+                &RequestFilter::default(),
+                &LiveKeys::default(),
+                WINDOW_FROM,
+                WINDOW_TO,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        refusals.rows,
+        refusal_rows(&[("claude-sonnet-5", "harmful_request", 2)]),
+        "the refusals at 21:10 and 22:40 count, the ones at 20:59 and 23:00 do not"
     );
 }
 
@@ -6851,6 +6925,125 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
     );
 }
 
+/// A 7-day range from 21:31 on the epoch's first day reads six-hour buckets, whose first edge, 18:00, lies before the
+/// hour that holds the start. The account reads sum the rollups from 21:00 alone, each through its own call, while the
+/// points keep the bucket grid from 18:00: the rows of 20:00 join no point and no move.
+#[test]
+fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bucket_grid() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        fold_account(
+            &tx,
+            &phoebis_ledger::AccountRollupRow {
+                hour: 72_000,
+                account_id: "a".into(),
+                rewrite_tokens: 700,
+                migrations: BTreeMap::from([("spent/fits".to_string(), 1)]),
+                ..Default::default()
+            },
+        )?;
+        fold_account(
+            &tx,
+            &phoebis_ledger::AccountRollupRow {
+                hour: 75_600,
+                account_id: "a".into(),
+                rewrite_tokens: 40,
+                migrations: BTreeMap::from([("shed/fits".to_string(), 1)]),
+                ..Default::default()
+            },
+        )?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let held = |id: &str, received_at: i64, held_ms: u64| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at,
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            held: Some(format!(
+                r#"{{"waited_on":["a"],"cohort":null,"held_ms":{held_ms},"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
+            )),
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::Oauth,
+            outcome: "succeeded".into(),
+            output_tokens: Some(5),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    };
+    // 20:10 and 21:10, a slow-down wait in each of the two hours.
+    held("before", 72_600_000, 7_000);
+    held("first-hour", 76_200_000, 2_000);
+    let filter = SeriesFilter {
+        from: 77_460_000,
+        to: 77_460_000 + 7 * DAY_MS,
+        bucket_seconds: SIX_HOURS,
+        ..SeriesFilter::default()
+    };
+    assert_eq!(
+        db.read_blocking(|c| rewrite_series(c, &filter)).unwrap(),
+        vec![
+            (64_800_000, 40),
+            (86_400_000, 0),
+            (108_000_000, 0),
+            (129_600_000, 0),
+            (151_200_000, 0),
+            (172_800_000, 0),
+            (194_400_000, 0),
+            (216_000_000, 0),
+            (237_600_000, 0),
+            (259_200_000, 0),
+            (280_800_000, 0),
+            (302_400_000, 0),
+            (324_000_000, 0),
+            (345_600_000, 0),
+            (367_200_000, 0),
+            (388_800_000, 0),
+            (410_400_000, 0),
+            (432_000_000, 0),
+            (453_600_000, 0),
+            (475_200_000, 0),
+            (496_800_000, 0),
+            (518_400_000, 0),
+            (540_000_000, 0),
+            (561_600_000, 0),
+            (583_200_000, 0),
+            (604_800_000, 0),
+            (626_400_000, 0),
+            (648_000_000, 0),
+            (669_600_000, 0),
+        ],
+        "the first point at the 18:00 edge holds the 21:00 row's tokens alone, the last the bucket that holds the end"
+    );
+    assert_eq!(
+        db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
+            .unwrap(),
+        BTreeMap::from([(
+            "shed".to_string(),
+            BTreeMap::from([("fits".to_string(), 1)])
+        )]),
+        "the 21:00 row's move alone"
+    );
+    assert_eq!(
+        db.read_blocking(|c| held_series(c, &filter)).unwrap()[0],
+        (64_800_000, 2_000, 1),
+        "the first point at the 18:00 edge holds the 21:10 wait alone"
+    );
+}
+
 /// The six-hour bucket of the series readers' range cases.
 const SIX_HOURS: i64 = 21_600;
 
@@ -7531,7 +7724,7 @@ fn placements_by_rung_count_hits_from_the_trace_and_the_response() {
     plant_placement(&db, "s2", "inference", 5_000, "static", 200, 0);
     // Left out: a probe's attempt, and one past the range.
     plant_placement(&db, "pr", "probe", 6_000, "content", 500, 500);
-    plant_placement(&db, "out", "inference", 100_000, "content", 500, 500);
+    plant_placement(&db, "out", "inference", 3_700_000, "content", 500, 500);
 
     let rows = db
         .read_blocking(|c| placements(c, &RollupFilter::default(), &LiveKeys::default(), 0, 10_000))
@@ -7547,6 +7740,67 @@ fn placements_by_rung_count_hits_from_the_trace_and_the_response() {
             ))
             .collect::<Vec<_>>(),
         vec![("content", 3, 2, 1_100, 1_500), ("static", 2, 1, 50, 400)]
+    );
+}
+
+/// The placements of the whole hours a range touches count, from the hour that holds its start up to and not at the
+/// hour ceiling of its end.
+#[test]
+fn placements_count_the_whole_hours_a_range_touches_up_to_the_hour_ceiling_of_its_end() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_placement(
+        &db,
+        "before",
+        "inference",
+        BEFORE_THE_FIRST_HOUR,
+        "content",
+        500,
+        500,
+    );
+    plant_placement(
+        &db,
+        "first-hour",
+        "inference",
+        IN_THE_FIRST_HOUR,
+        "content",
+        500,
+        500,
+    );
+    plant_placement(
+        &db,
+        "last-hour",
+        "inference",
+        IN_THE_LAST_HOUR,
+        "content",
+        500,
+        500,
+    );
+    plant_placement(
+        &db,
+        "ceiling",
+        "inference",
+        AT_THE_HOUR_CEILING,
+        "content",
+        500,
+        500,
+    );
+    let rows = db
+        .read_blocking(|c| {
+            placements(
+                c,
+                &RollupFilter::default(),
+                &LiveKeys::default(),
+                WINDOW_FROM,
+                WINDOW_TO,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.rung.as_str(), r.placements, r.hits))
+            .collect::<Vec<_>>(),
+        vec![("content", 2, 2)],
+        "the placements at 21:10 and 22:40 count, the ones at 20:59 and 23:00 do not"
     );
 }
 
