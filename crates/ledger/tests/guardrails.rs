@@ -396,6 +396,7 @@ async fn a_blocked_request_with_a_body_keeps_its_body_row_under_the_keys_window(
         ],
         received_at: NOW,
         fallback_digest: None,
+        cache_marker: false,
     }));
     h.bus.publish(BusEvent::RequestComplete(RequestComplete {
         request_id: "blocked".into(),

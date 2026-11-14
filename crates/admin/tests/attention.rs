@@ -58,6 +58,7 @@ fn observed(id: &str, key: &str, pool: &str) -> Event {
         guardrails: Vec::new(),
         received_at: 0,
         fallback_digest: None,
+        cache_marker: false,
     })
 }
 

@@ -608,6 +608,10 @@ pub struct Selection {
     /// other request and in a session with no turn to judge. The relay hands it back on the call's usage report, so the
     /// call's tokens fold into the pin it judged and never into the pin of a turn that ended while it was upstream.
     pub judged_pin: Option<PinRef>,
+    /// The `last_input_tokens` of the pin row step 1 read, where the selection lands on that row's account and the
+    /// turn is none of `compacted`, `lane_changed` and `static_restart`. `None` in every other case: no pin row at
+    /// step 1, a row that has seen no usage report, a landing on another account and the three turns.
+    pub previous_input_tokens: Option<u64>,
 }
 
 /// A classifier call's standing against the turn it judges: the upstream keeps the call free on the account and
@@ -1629,6 +1633,9 @@ fn run(
     let mut expired: Option<PinKey> = None;
     // The key step 1 reads under, whose row the placement's own fit and Pace score leave out of the account's burn.
     let mut own_key: Option<PinKey> = None;
+    // The account of the row step 1 read, with the size it hands on, whatever its `found`: a turn after an idle expiry
+    // that lands back on the account reads its cache against that size.
+    let mut row_size: Option<(String, u64)> = None;
     if let Some(session) = session {
         let key = request.pin_key();
         // A slot wait ends at the admission, the request's dispatch, which the relay names as the cap hold's end, so
@@ -1704,6 +1711,14 @@ fn run(
                     }
                 }
             }
+            // Judged apart from the live pin's verdict below, which a row that idled out or left its pool never gets.
+            let (_, cause) = warmth_of(
+                &current,
+                request,
+                &state.affinity().read().expect("affinity lock poisoned"),
+            );
+            row_size = handed_size(current.last_input_tokens, cause)
+                .map(|size| (current.account_id.clone(), size));
             // The row's own key, never `key`: the pace and the head mark read a key as the row spells it.
             let current_key = current.key();
             // A turn of a held class folds its arrival into the pin's cycle under the live row's key, which a move
@@ -2638,9 +2653,22 @@ fn run(
             left,
             judged: None,
             judged_pin: None,
+            previous_input_tokens: row_size
+                .filter(|(account, _)| *account == chosen.account_id)
+                .map(|(_, size)| size),
         }),
         writes,
     )
+}
+
+/// The size a selection that lands on the account of the pin row step 1 read hands on: the row's
+/// `last_input_tokens`, none for a row that has seen no usage report and for a turn `warmth_of` reads as compacted, on
+/// another lane or restarted, whose cache the expiry count must not read against the size.
+fn handed_size(last_input_tokens: u64, cause: WarmthCause) -> Option<u64> {
+    match cause {
+        WarmthCause::Compacted | WarmthCause::LaneChanged | WarmthCause::StaticRestart => None,
+        _ => (last_input_tokens > 0).then_some(last_input_tokens),
+    }
 }
 
 /// Takes the row step 1 found idle past the TTL or left behind by its pool off the state, ahead of the pin that
@@ -5890,6 +5918,7 @@ fn renew(
             .map(String::from),
         judged: None,
         judged_pin: None,
+        previous_input_tokens: handed_size(current.last_input_tokens, cause),
     }
 }
 

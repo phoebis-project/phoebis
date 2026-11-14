@@ -33,8 +33,8 @@ use crate::record::{
 use crate::rollup::{
     add_counts, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of, migration_reason,
     read_account_rollups, read_rollups_paged, visit_rollups, CostSplit, KeySelector, RollupRow,
-    RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, NO_CLASS, NO_EFFORT,
-    OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, UNATTRIBUTED,
+    RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, HIT_SUFFIX, NO_CLASS,
+    NO_EFFORT, OTHER_DIMENSION, TRANSFORMATIONS_MOVED, TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -2109,6 +2109,9 @@ pub struct GroupRow {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub uncached: u64,
+    /// The uncached requests that could not read a cache, a part of `uncached`: the token counts, and the requests
+    /// whose body marked no cache and read and wrote nothing.
+    pub uncacheable: u64,
     pub expired_between_turns: u64,
     pub tokens: TokenSplit,
     pub cost: CostSplitJson,
@@ -2119,6 +2122,9 @@ pub struct GroupRow {
     /// The refused requests of the group by error code.
     pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
+    /// Per miss reason, the requests under it whose serving attempt read `HIT_SHARE_PERCENT` percent or more of its
+    /// prompt from the cache. A reason with none is left out.
+    pub cache_miss_reason_hits: BTreeMap<String, u64>,
     /// The requests per `<type>.<reason>` key of the blocks their serving attempt's answer dropped, each counted once
     /// under each key it listed, without the store's two reserved keys.
     pub input_transformations: BTreeMap<String, u64>,
@@ -2475,6 +2481,14 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
     let equivalent = plan.equivalent.finish(plan.split);
     let mut reasons = sum.cache_miss_reasons;
     let expired = reasons.remove(EXPIRED_BETWEEN_TURNS).unwrap_or(0);
+    let mut reason_hits = BTreeMap::new();
+    reasons.retain(|key, count| match key.strip_suffix(HIT_SUFFIX) {
+        Some(reason) => {
+            reason_hits.insert(reason.to_string(), *count);
+            false
+        }
+        None => true,
+    });
     let mut dropped = sum.input_transformations;
     let dropped_moved = dropped.remove(TRANSFORMATIONS_MOVED).unwrap_or(0);
     let dropped_none = dropped.remove(TRANSFORMATIONS_NONE).unwrap_or(0);
@@ -2496,6 +2510,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         cache_hits: sum.cache_hits,
         cache_misses: sum.cache_misses,
         uncached: sum.uncached_requests,
+        uncacheable: sum.uncacheable,
         expired_between_turns: expired,
         tokens: TokenSplit {
             cache_read: sum.cache_read_tokens,
@@ -2513,6 +2528,7 @@ fn group_row(key: &str, group: GroupSum, label: String) -> GroupRow {
         refused: sum.refusals.values().sum(),
         refusals: sum.refusals,
         cache_miss_reasons: reasons,
+        cache_miss_reason_hits: reason_hits,
         input_transformations: dropped,
         input_transformations_moved: dropped_moved,
         input_transformations_none: dropped_none,
@@ -2917,6 +2933,11 @@ impl GroupSums {
         }
         if counted {
             entry.sum.add(row);
+            // A token count reads no cache whatever its body marks, so its row's uncached requests join the class here,
+            // where the row's kind is read, the hours folded before the column among them.
+            if row.kind == Kind::CountTokens.as_str() {
+                entry.sum.uncacheable += row.uncached_requests;
+            }
             entry.dollars.usd.add(&usd);
             if !plan {
                 entry.dollars.billed.add(&usd);

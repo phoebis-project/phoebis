@@ -250,6 +250,20 @@
             "slow_down_stretch_seconds": 9000
           }
         }
+      },
+      {
+        "kind": "expired_between_turns",
+        "subject": {
+          "type": "router",
+          "id": "keepalive",
+          "label": "Keepalive"
+        },
+        "link": null,
+        "pools": [],
+        "since": 1791721000000,
+        "detail": {
+          "expired": 1
+        }
       }
     ]
   }

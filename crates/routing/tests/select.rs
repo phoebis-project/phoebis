@@ -11748,6 +11748,71 @@ fn marked(st: &RoutingState, session: &str) -> bool {
     st.shed_marked(&pin_key(session))
 }
 
+/// The account a selection landed on and the previous size it handed on.
+fn handed(result: SelectResult) -> (String, Option<u64>) {
+    match result {
+        SelectResult::Selected(sel) => (sel.account.id, sel.previous_input_tokens),
+        other => panic!("expected a selection, got {other:?}"),
+    }
+}
+
+/// `seeded_pin` last used two hours before `T`, past the pool's one-hour TTL.
+fn idled_out(session: &str, account: &str) -> PinRow {
+    PinRow {
+        created_at: T - 3 * HOUR,
+        last_used_at: T - 2 * HOUR,
+        ..seeded_pin(session, account, T)
+    }
+}
+
+/// Each pin row holds 1,000 tokens of prompt. `b` sits behind `a`, so the placement after an idle expiry lands on `a`.
+#[test]
+fn a_selection_hands_on_the_pin_rows_size_only_where_it_lands_on_that_rows_account() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![
+        idled_out("s-left", "b"),
+        seeded_pin("s-live", "a", T),
+        idled_out("s-back", "a"),
+    ]);
+    let mut turn =
+        |session: &str| handed(select(&mut st, &s, &main_turn(&s, session, T), &mut rng()).0);
+    assert_eq!(
+        (turn("s-left"), turn("s-live"), turn("s-back")),
+        (
+            ("a".to_string(), None),
+            ("a".to_string(), Some(1_000)),
+            ("a".to_string(), Some(1_000))
+        ),
+        "a landing off the row's account hands on nothing, a renewal and a landing back after an idle expiry the size"
+    );
+}
+
+#[test]
+fn a_compacted_turn_hands_on_no_size_on_a_live_pin_or_after_an_idle_expiry() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![seeded_pin("s-live", "a", T), idled_out("s-back", "a")]);
+    let mut compacted = |session: &str| {
+        let req = with_facts(
+            request(&s, Some(session), "claude-sonnet-5", true, &[], T),
+            Some("main"),
+            true,
+            None,
+            &[],
+        );
+        handed(select(&mut st, &s, &req, &mut rng()).0)
+    };
+    assert_eq!(
+        (compacted("s-live"), compacted("s-back")),
+        (("a".to_string(), None), ("a".to_string(), None))
+    );
+}
+
 const MINUTE: i64 = 60_000;
 const SECOND: i64 = 1_000;
 

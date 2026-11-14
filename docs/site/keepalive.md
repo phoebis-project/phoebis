@@ -461,9 +461,11 @@ sending, for example because a cooldown already held the recipe. `probes_held` c
 pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the pool's [idle-age
 counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and retained bytes,
 each beside its cap, and `expired_between_turns_24h`, the requests of the last 24 hours that missed the cache because
-their entry expired between two turns, the misses probing exists to prevent. Its `bus_gaps` counts the times the engine
-found it had missed bus events. Each gap discarded every observation still open, so those agents wait for their next
-request while an armed recipe keeps its schedule.
+their entry expired between two turns, the misses probing exists to prevent: each read back under half the prompt of
+the session's previous request on the same account, under no miss reason or one of the router's own words
+([`expired_between_turns`](statistics.md#conditions-and-gauges) names the turns left out). Its `bus_gaps` counts the
+times the engine found it had missed bus events. Each gap discarded every observation still open, so those agents wait
+for their next request while an armed recipe keeps its schedule.
 
 Prometheus carries `phoebis_keepalive_agents`, the agents holding a recipe by the mod's lifecycle word,
 `phoebis_keepalive_chain_contradictions_total`, the [chain contradictions](#the-return-rate-by-idle-age) by client

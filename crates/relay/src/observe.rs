@@ -139,6 +139,26 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
     }
 }
 
+/// Files the relay's own word on an answer's usage once every event of it merged, where the usage holds a report and
+/// no reason: `not_requested` where the leg's body carried no `diagnostics` member, `not_returned` where it carried
+/// one, a member that named no message included. A word read off one event would replace the reason an earlier event
+/// reported, since the later value of a merge wins, and an answer that held no report keeps its null.
+pub(crate) fn close_miss_reason(usage: &mut Usage, diagnostics_sent: bool) {
+    let reported = usage.input_tokens.is_some()
+        || usage.output_tokens.is_some()
+        || usage.cache_read_tokens.is_some()
+        || usage.cache_write_5m_tokens.is_some()
+        || usage.cache_write_1h_tokens.is_some();
+    if reported && usage.cache_miss_reason.is_none() {
+        let word = if diagnostics_sent {
+            "not_returned"
+        } else {
+            "not_requested"
+        };
+        usage.cache_miss_reason = Some(word.to_string());
+    }
+}
+
 /// The `input_transformations` array beside `usage`, per `<type>.<reason>` key. An entry is read only where its two
 /// words are strings and its `path` places it in a message, so each key holds a message index.
 fn input_transformations_of(at: &Value) -> Option<BTreeMap<String, InputTransformation>> {

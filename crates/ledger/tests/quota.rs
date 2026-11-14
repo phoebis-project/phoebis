@@ -3354,6 +3354,7 @@ fn headed(
             guardrails: Vec::new(),
             received_at: at,
             fallback_digest: None,
+            cache_marker: false,
         }),
         Event::AccountSelected(AccountSelected {
             request_id: id.into(),
@@ -3365,6 +3366,7 @@ fn headed(
             started_at: at,
             cache_ttl_ms: None,
             selection: None,
+            previous_input_tokens: None,
         }),
         Event::ResponseHead(phoebis_bus::ResponseHead {
             request_id: id.into(),

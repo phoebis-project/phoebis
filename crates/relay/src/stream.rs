@@ -34,7 +34,7 @@ use crate::errors::{
 use crate::hold::INSPECT_BUFFER;
 use crate::identity::PendingReports;
 use crate::messages::{cut_code, Guards, RelayOutcome, Trace, CANCELED, REFUSED, TRANSPORT_ERROR};
-use crate::observe::{answer_from_json, is_tool_use_delta, Answer};
+use crate::observe::{answer_from_json, close_miss_reason, is_tool_use_delta, Answer};
 use crate::sse::{SkippingParser, SseEvent};
 
 /// Chunks held between the upstream reader and the caller's socket. Deep enough that a caller pausing for a
@@ -630,6 +630,7 @@ impl Publish {
                 self.saw_message_id(id);
             }
         }
+        close_miss_reason(&mut self.usage, self.outcome.diagnostics.is_some());
         // The API answering under another snapshot is the alias moving; one refresh brings the listing up to it.
         // A body that failed or was canceled may have named a model from a partial or misleading answer.
         if matches!(end, BodyEnd::Complete) {

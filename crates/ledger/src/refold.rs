@@ -16,11 +16,11 @@
 //! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old
 //! and the new threshold, inside the retained window, priced at the band it settled in.
 //!
-//! A fold rule (the slow-down's hold left out of the millisecond samples, the tokens-per-second floor, the wide edge
-//! set) changes the samples a request adds to its hour, so the first start of a build that holds a rule folds again
-//! each retained request that landed before the rule's mark: its deltas under the rules it was folded under come out
-//! and its deltas under every rule go in, at the thresholds its rows stand under. That pass runs before the band
-//! re-fold and resumes from a cursor of its own.
+//! A fold rule (the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples, the
+//! tokens-per-second floor, the wide edge set) changes what a request adds to its hour, so the first start of a build
+//! that holds a rule folds again each retained request that landed before the rule's mark: its deltas under the rules
+//! it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand under. That
+//! pass runs before the band re-fold and resumes from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,7 +48,11 @@ pub const FOLD_RULES_REFOLD_KEY: &str = "fold_rules_refold";
 type Without = fn(FoldRules) -> FoldRules;
 
 /// Each fold rule by the name its `meta` row carries, with the rules a request folded without it was folded under.
-const FOLD_RULES: [(&str, Without); 3] = [
+const FOLD_RULES: [(&str, Without); 4] = [
+    ("hit_split", |rules| FoldRules {
+        hit_split: false,
+        ..rules
+    }),
     ("slow_down_hold", |rules| FoldRules {
         slow_down_hold: false,
         ..rules
@@ -1414,6 +1418,7 @@ mod tests {
         throughput_floor: false,
         wide_edges: false,
         slow_down_hold: false,
+        hit_split: false,
     };
 
     /// `request` written with its landing stamp from `now` and folded under `rules` at the thresholds of `prices`,
@@ -1560,6 +1565,7 @@ mod tests {
                 FOLD_RULES_REFOLD_KEY,
                 &RulesCursor {
                     rules: vec![
+                        "hit_split".into(),
                         "slow_down_hold".into(),
                         "throughput_floor".into(),
                         "wide_edges".into(),
@@ -1690,7 +1696,7 @@ mod tests {
         );
     }
 
-    /// The state a pass that stopped before the two other rules were marked leaves: its cursor names the slow-down
+    /// The state a pass that stopped before the other rules were marked leaves: its cursor names the slow-down
     /// hold alone and stands at the first held request, which it folded under the hold alone, and the second held
     /// request stands as the old fold filed it, beside a request that no rule moves. Each held request's duration lies
     /// past 100,000 once the hold of 20,000 comes out.
@@ -1738,6 +1744,49 @@ mod tests {
                 sampled(&[1_000.0, 2_000.0, 5_000.0])
             ),
             "each held request once, less the hold, with the rules the cursor does not name applied to both"
+        );
+    }
+
+    /// `haiku`'s request whose attempt read `read` of its 100 prompt tokens back under the reason `messages_changed`.
+    fn under_reason(id: &str, received_at: i64, read: u64) -> (RequestRecord, Vec<AttemptRecord>) {
+        let (request, mut attempts) = haiku(id, received_at, 100 - read);
+        attempts[0].cache_read_tokens = Some(read);
+        attempts[0].cache_miss_reason = Some("messages_changed".into());
+        (request, attempts)
+    }
+
+    /// Both requests stand in one row under one reason, the second reading nothing back, so the rule moves the first
+    /// alone.
+    #[test]
+    fn the_rules_pass_splits_a_retained_requests_hit_off_under_its_reason() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let without_split = FoldRules {
+            hit_split: false,
+            ..FoldRules::ALL
+        };
+        store(
+            &db,
+            &under_reason("hit", at, 95),
+            &list(Some(1_000)),
+            without_split,
+            0,
+        );
+        store(
+            &db,
+            &under_reason("miss", at + 1_000, 0),
+            &list(Some(1_000)),
+            without_split,
+            0,
+        );
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(
+            row(&db, at, STANDARD_BAND).cache_miss_reasons,
+            BTreeMap::from([
+                ("messages_changed".to_string(), 2),
+                ("messages_changed/hit".to_string(), 1)
+            ])
         );
     }
 
@@ -1790,7 +1839,8 @@ mod tests {
                 row(&db, at, LONG_BAND).ttfb_hist
             ),
             (sampled(&[1_000.0, 6_000.0]), sampled(&[32_000.0, 5_000.0])),
-            "the request that landed before the mark moves in the standard band, the one that landed after stays as folded"
+            "the request that landed before the mark moves in the standard band, the one that landed after stays as \
+             folded"
         );
     }
 }

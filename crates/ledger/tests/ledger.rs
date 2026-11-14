@@ -1179,6 +1179,7 @@ fn observed_event(id: &str) -> BusEvent {
         guardrails: Vec::new(),
         received_at: 0,
         fallback_digest: None,
+        cache_marker: false,
     })
 }
 
@@ -4073,6 +4074,7 @@ fn selected_event(id: &str, attempt: u8, account: &str, at: i64) -> BusEvent {
         started_at: at,
         cache_ttl_ms: None,
         selection: None,
+        previous_input_tokens: None,
     })
 }
 

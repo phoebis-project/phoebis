@@ -1228,7 +1228,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 19,
           "cache_misses": 0,
           "uncached": 0,
-          "expired_between_turns": 0,
+          "uncacheable": 0,
+          "expired_between_turns": 1,
           "tokens": {
             "cache_read": 10000,
             "cache_write_1h": 0,
@@ -1256,9 +1257,12 @@ export const FIXTURES: Record<string, Fixture> = {
             "guardrail_blocked": 1
           },
           "cache_miss_reasons": {
-            "none": 18,
+            "none": 16,
+            "not_requested": 1,
+            "not_returned": 1,
             "pending": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {
             "thinking.prefix_binding_mismatch": 1
           },
@@ -1694,6 +1698,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 1,
           "cache_misses": 0,
           "uncached": 0,
+          "uncacheable": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 500,
@@ -1718,6 +1723,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_miss_reasons": {
             "none": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
@@ -2167,7 +2173,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 17,
           "cache_misses": 0,
           "uncached": 0,
-          "expired_between_turns": 0,
+          "uncacheable": 0,
+          "expired_between_turns": 1,
           "tokens": {
             "cache_read": 9000,
             "cache_write_1h": 0,
@@ -2192,9 +2199,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "refused": 0,
           "refusals": {},
           "cache_miss_reasons": {
-            "none": 16,
+            "none": 15,
+            "not_returned": 1,
             "pending": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {
             "thinking.prefix_binding_mismatch": 1
           },
@@ -2630,6 +2639,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 2,
           "cache_misses": 0,
           "uncached": 0,
+          "uncacheable": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 1000,
@@ -2652,8 +2662,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "refused": 0,
           "refusals": {},
           "cache_miss_reasons": {
-            "none": 2
+            "none": 1,
+            "not_requested": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
@@ -3093,6 +3105,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 0,
           "cache_misses": 0,
           "uncached": 0,
+          "uncacheable": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 0,
@@ -3118,6 +3131,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "guardrail_blocked": 1
           },
           "cache_miss_reasons": {},
+          "cache_miss_reason_hits": {},
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
@@ -3557,6 +3571,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 1,
           "cache_misses": 0,
           "uncached": 0,
+          "uncacheable": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 500,
@@ -3581,6 +3596,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_miss_reasons": {
             "none": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
@@ -4030,6 +4046,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 1,
           "cache_misses": 0,
           "uncached": 0,
+          "uncacheable": 0,
           "expired_between_turns": 0,
           "tokens": {
             "cache_read": 500,
@@ -4052,8 +4069,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "refused": 0,
           "refusals": {},
           "cache_miss_reasons": {
-            "none": 1
+            "not_returned": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {},
           "input_transformations_moved": 0,
           "input_transformations_none": 0,
@@ -4493,7 +4511,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_hits": 19,
           "cache_misses": 0,
           "uncached": 0,
-          "expired_between_turns": 0,
+          "uncacheable": 0,
+          "expired_between_turns": 1,
           "tokens": {
             "cache_read": 10000,
             "cache_write_1h": 0,
@@ -4521,9 +4540,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "guardrail_blocked": 1
           },
           "cache_miss_reasons": {
-            "none": 18,
+            "none": 17,
+            "not_requested": 1,
             "pending": 1
           },
+          "cache_miss_reason_hits": {},
           "input_transformations": {
             "thinking.prefix_binding_mismatch": 1
           },
@@ -7122,6 +7143,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 1,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 500,
@@ -7146,6 +7168,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -7595,6 +7618,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 13,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 7000,
@@ -7622,8 +7646,10 @@ export const FIXTURES: Record<string, Fixture> = {
                 "guardrail_blocked": 1
               },
               "cache_miss_reasons": {
-                "none": 13
+                "none": 12,
+                "not_returned": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -8065,6 +8091,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 1,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 500,
@@ -8089,6 +8116,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -8534,7 +8562,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 5,
               "cache_misses": 0,
               "uncached": 0,
-              "expired_between_turns": 0,
+              "uncacheable": 0,
+              "expired_between_turns": 1,
               "tokens": {
                 "cache_read": 2500,
                 "cache_write_1h": 0,
@@ -8558,9 +8587,11 @@ export const FIXTURES: Record<string, Fixture> = {
               "refused": 0,
               "refusals": {},
               "cache_miss_reasons": {
-                "none": 4,
+                "none": 3,
+                "not_requested": 1,
                 "pending": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {
                 "thinking.prefix_binding_mismatch": 1
               },
@@ -9094,6 +9125,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 1,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 500,
@@ -9118,6 +9150,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -9570,6 +9603,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 12,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 6500,
@@ -9594,8 +9628,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "refused": 0,
               "refusals": {},
               "cache_miss_reasons": {
-                "none": 12
+                "none": 11,
+                "not_returned": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -10038,6 +10074,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 1,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 500,
@@ -10062,6 +10099,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -10501,6 +10539,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 0,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 0,
@@ -10526,6 +10565,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "guardrail_blocked": 1
               },
               "cache_miss_reasons": {},
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -10965,6 +11005,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 1,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 500,
@@ -10989,6 +11030,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_miss_reasons": {
                 "none": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -11433,7 +11475,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 4,
               "cache_misses": 0,
               "uncached": 0,
-              "expired_between_turns": 0,
+              "uncacheable": 0,
+              "expired_between_turns": 1,
               "tokens": {
                 "cache_read": 2000,
                 "cache_write_1h": 0,
@@ -11460,6 +11503,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "none": 3,
                 "pending": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {
                 "thinking.prefix_binding_mismatch": 1
               },
@@ -11893,6 +11937,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cache_hits": 1,
               "cache_misses": 0,
               "uncached": 0,
+              "uncacheable": 0,
               "expired_between_turns": 0,
               "tokens": {
                 "cache_read": 500,
@@ -11915,8 +11960,9 @@ export const FIXTURES: Record<string, Fixture> = {
               "refused": 0,
               "refusals": {},
               "cache_miss_reasons": {
-                "none": 1
+                "not_requested": 1
               },
+              "cache_miss_reason_hits": {},
               "input_transformations": {},
               "input_transformations_moved": 0,
               "input_transformations_none": 0,
@@ -12672,6 +12718,20 @@ export const FIXTURES: Record<string, Fixture> = {
             "setting_values": {
               "slow_down_stretch_seconds": 9000
             }
+          }
+        },
+        {
+          "kind": "expired_between_turns",
+          "subject": {
+            "type": "router",
+            "id": "keepalive",
+            "label": "Keepalive"
+          },
+          "link": null,
+          "pools": [],
+          "since": 1791721000000,
+          "detail": {
+            "expired": 1
           }
         }
       ]
@@ -14043,7 +14103,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "parked": 0
       },
       "bus_gaps": 0,
-      "expired_between_turns_24h": 0,
+      "expired_between_turns_24h": 1,
       "last_bus_gap_at": null,
       "limits": {
         "agents": {
@@ -16100,6 +16160,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "duration_ms": 900,
         "request_bytes": null,
         "response_bytes": null,
+        "cache_marker": true,
         "kept_warm": false,
         "captured_bodies": false,
         "response_truncated": false,
@@ -16163,6 +16224,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "ttfb_ms": 120,
             "ttft_ms": null,
             "cache_miss_reason": "none",
+            "previous_input_tokens": 1200,
             "service_tier": null,
             "client_drift": null,
             "cooldown_set": {
@@ -16230,7 +16292,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "duration_ms": 400,
             "ttfb_ms": 120,
             "ttft_ms": null,
-            "cache_miss_reason": "none",
+            "cache_miss_reason": "not_returned",
+            "previous_input_tokens": null,
             "service_tier": null,
             "client_drift": null,
             "cooldown_set": null,
@@ -16468,6 +16531,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -16534,6 +16598,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": 4000,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -16606,6 +16671,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -16668,7 +16734,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
-              "cache_miss_reason": "none",
+              "cache_miss_reason": "not_requested",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -16742,6 +16809,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": true,
           "response_truncated": false,
@@ -16808,6 +16876,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "pending",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -16875,6 +16944,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -16941,6 +17011,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -17008,6 +17079,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17071,6 +17143,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -17138,6 +17211,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17204,6 +17278,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -17271,6 +17346,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17337,6 +17413,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -17404,6 +17481,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17470,6 +17548,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -17537,6 +17616,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17600,6 +17680,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": 1200,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": {
@@ -17667,7 +17748,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "duration_ms": 400,
               "ttfb_ms": 120,
               "ttft_ms": null,
-              "cache_miss_reason": "none",
+              "cache_miss_reason": "not_returned",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -17774,6 +17856,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 4,
           "request_bytes": 48213,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17873,6 +17956,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -17939,6 +18023,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18006,6 +18091,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18072,6 +18158,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18139,6 +18226,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 3,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18227,6 +18315,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18290,6 +18379,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18351,6 +18441,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18417,6 +18508,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18484,6 +18576,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18550,6 +18643,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18617,6 +18711,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18683,6 +18778,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18750,6 +18846,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18816,6 +18913,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,
@@ -18883,6 +18981,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "duration_ms": 900,
           "request_bytes": null,
           "response_bytes": null,
+          "cache_marker": true,
           "kept_warm": false,
           "captured_bodies": false,
           "response_truncated": false,
@@ -18949,6 +19048,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": null,

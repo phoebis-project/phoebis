@@ -39,9 +39,17 @@ pub const NO_EFFORT: &str = "none";
 /// The value a request with no `x-claude-code-request-class` header files under, and a keepalive delta's own.
 pub const NO_CLASS: &str = "-";
 
-/// The reserved key of `cache_miss_reasons` that counts a request whose serving attempt named no miss reason and read
-/// nothing back: its cache expired between turns. A group row reads it as a count of its own.
+/// The reserved key of `cache_miss_reasons` that counts a request whose serving attempt read back under half the size
+/// the selection handed on, under no reason or one of the relay's own words: its cache expired between turns. A group
+/// row reads it as a count of its own.
 pub const EXPIRED_BETWEEN_TURNS: &str = "expired_between_turns";
+
+/// The share of its prompt, in percent, that an attempt read from the cache to count as a hit under its reason.
+pub const HIT_SHARE_PERCENT: u64 = 90;
+
+/// The suffix of the reserved key `<reason>/hit` of `cache_miss_reasons`, which counts the requests under the reason
+/// whose serving attempt read `HIT_SHARE_PERCENT` percent or more of its prompt back. A group row reads them apart.
+pub(crate) const HIT_SUFFIX: &str = "/hit";
 
 /// The reserved key of `input_transformations` that counts a moved request whose serving attempt's answer dropped a
 /// block under an account reason. An answer's key holds a dot and a reserved key none, so the two never meet.
@@ -240,6 +248,9 @@ pub struct RollupRow {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub uncached_requests: u64,
+    /// The uncached requests whose marker fact reads false, a token count aside, a part of `uncached_requests`: their
+    /// body marked no cache and the TTL policy added none, so no cache could answer them.
+    pub uncacheable: u64,
     pub input_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_write_5m_tokens: u64,
@@ -354,6 +365,7 @@ impl RollupRow {
         f(&mut self.cache_hits, o.cache_hits);
         f(&mut self.cache_misses, o.cache_misses);
         f(&mut self.uncached_requests, o.uncached_requests);
+        f(&mut self.uncacheable, o.uncacheable);
         f(&mut self.input_tokens, o.input_tokens);
         f(&mut self.cache_read_tokens, o.cache_read_tokens);
         f(&mut self.cache_write_5m_tokens, o.cache_write_5m_tokens);
@@ -552,6 +564,9 @@ pub struct FoldRules {
     pub wide_edges: bool,
     /// The three millisecond samples leave out the request's slow-down wait.
     pub slow_down_hold: bool,
+    /// A request whose serving attempt read `HIT_SHARE_PERCENT` percent or more of its prompt from the cache counts
+    /// under its miss reason's `<reason>/hit` key too.
+    pub hit_split: bool,
 }
 
 impl FoldRules {
@@ -559,6 +574,7 @@ impl FoldRules {
         throughput_floor: true,
         wide_edges: true,
         slow_down_hold: true,
+        hit_split: true,
     };
 }
 
@@ -693,13 +709,18 @@ pub fn deltas_of(
     let wrote = last
         .and_then(AttemptRecord::cache_write_tokens)
         .unwrap_or(0);
-    if let Some(reason) = last.and_then(|a| a.cache_miss_reason.as_ref()) {
+    if let Some((a, reason)) = last.and_then(|a| Some((a, a.cache_miss_reason.as_ref()?))) {
         *d.cache_miss_reasons.entry(reason.clone()).or_default() += 1;
-        if reason == "none" && read == 0 {
+        if rules.hit_split && read_most_of_its_prompt(a) {
             *d.cache_miss_reasons
-                .entry(EXPIRED_BETWEEN_TURNS.into())
+                .entry(format!("{reason}{HIT_SUFFIX}"))
                 .or_default() += 1;
         }
+    }
+    if counted && last.is_some_and(|a| expired_between_turns(request, a)) {
+        *d.cache_miss_reasons
+            .entry(EXPIRED_BETWEEN_TURNS.into())
+            .or_default() += 1;
     }
     // A request counts once under each key whatever the key's `blocks`, since the readers count requests.
     if let Some((a, dropped)) = last.and_then(|a| Some((a, a.input_transformations.as_ref()?))) {
@@ -730,7 +751,11 @@ pub fn deltas_of(
         } else if wrote > 0 {
             d.cache_misses = 1
         } else {
-            d.uncached_requests = 1
+            d.uncached_requests = 1;
+            // A token count joins at the read, off its row's kind, so the hours folded before the column count it too.
+            if request.cache_marker == Some(false) && request.kind != Kind::CountTokens.as_str() {
+                d.uncacheable = 1;
+            }
         }
         let record = |hist: &mut Histogram, value: f64| {
             if rules.wide_edges {
@@ -776,6 +801,38 @@ pub fn deltas_of(
         }
     }
     deltas
+}
+
+/// Whether the attempt read `HIT_SHARE_PERCENT` percent or more of its prompt (the read, both writes and the input)
+/// from the cache, compared in whole tokens. An attempt that read nothing is no hit, an empty prompt included.
+fn read_most_of_its_prompt(a: &AttemptRecord) -> bool {
+    let prompt = a.usage();
+    prompt.cache_read > 0
+        && 100 * prompt.cache_read
+            >= HIT_SHARE_PERCENT
+                * (prompt.cache_read + prompt.write_5m + prompt.write_1h + prompt.input)
+}
+
+/// The miss reasons that leave a short read to the cache's expiry: none, and the relay's own words. A reason the
+/// upstream names says why its comparison missed.
+const EXPIRY_REASONS: [&str; 4] = ["none", "not_requested", "not_returned", "pending"];
+
+/// Whether the cache of `request`'s session expired between its previous request and this one: a request that is
+/// neither a probe nor a token count, whose serving attempt carries a usage report and the size the selection handed
+/// on, read back under half that size, and named no reason or one of `EXPIRY_REASONS`. The selection hands on no size
+/// for a landing on another account and for a compacted, lane-changed or restarted turn, so none of them counts.
+fn expired_between_turns(request: &RequestRecord, serving: &AttemptRecord) -> bool {
+    let Some(previous) = serving.previous_input_tokens else {
+        return false;
+    };
+    request.kind != Kind::Probe.as_str()
+        && request.kind != Kind::CountTokens.as_str()
+        && serving.has_usage()
+        && 2 * serving.cache_read_tokens.unwrap_or(0) < previous
+        && serving
+            .cache_miss_reason
+            .as_deref()
+            .is_none_or(|reason| EXPIRY_REASONS.contains(&reason))
 }
 
 /// The delta of `deltas` at `band`, `speed` and `funding`, pushed as `base` at those cells where none is yet.
@@ -828,7 +885,7 @@ fn slow_down_held_ms(held: Option<&str>) -> Option<u64> {
 
 /// The 16 columns of a probe or kept-warm rollup row the keepalive overview folds, which `read_overview_rollups`
 /// answers. The overview reads a day of every row on each poll and holds a reader connection through the decode, so it
-/// reads these alone in place of all 60 a `RollupRow` decodes, the four histograms among them.
+/// reads these alone in place of all 61 a `RollupRow` decodes, the four histograms among them.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OverviewRollupRow {
     pub kind: String,
@@ -2052,7 +2109,7 @@ pub fn open_cooldown_remainders(
     Ok(remainders)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json, uncacheable";
 const ACCOUNT_COLUMNS: &str = "hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms";
 
 /// The rollup key, the table's primary key in its order: the upsert's conflict target, the order a read answers in and
@@ -2215,6 +2272,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
         counts_json(&r.refusals),
         r.client_canceled as i64,
         counts_json(&r.input_transformations),
+        r.uncacheable as i64,
     ])?;
     Ok(())
 }
@@ -2259,6 +2317,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         cache_hits: u(23)?,
         cache_misses: u(24)?,
         uncached_requests: u(25)?,
+        uncacheable: u(60)?,
         input_tokens: u(26)?,
         cache_read_tokens: u(27)?,
         cache_write_5m_tokens: u(28)?,
@@ -3064,7 +3123,10 @@ mod tests {
         assert_eq!(d.errors.get("upstream_unreachable"), Some(&1));
         let d = one_delta(
             &request("failed", Some(429), Some("k")),
-            &[attempt(1, "a", None, Some(3), None)],
+            &[AttemptRecord {
+                previous_input_tokens: Some(1_000),
+                ..attempt(1, "a", None, Some(3), None)
+            }],
             &prices(),
         );
         assert_eq!((d.rate_limited, d.failed, d.cache_misses), (1, 0, 1));
@@ -3074,7 +3136,7 @@ mod tests {
                 d.cache_miss_reasons.get("expired_between_turns")
             ),
             (Some(&1), Some(&1)),
-            "a none with no cache read expired between turns"
+            "a none with no cache read after a previous request of 1,000 tokens expired between turns"
         );
         let d = one_delta(
             &request("succeeded", Some(200), Some("k")),
@@ -3099,6 +3161,104 @@ mod tests {
             &prices(),
         );
         assert_eq!((d.rate_limited, d.failed), (0, 1));
+    }
+
+    /// The serving delta's expired count for a request whose one attempt read `read` back after a previous request of
+    /// 1,000 tokens, under `reason`, the request of `kind`.
+    fn expired_after(kind: &str, reason: Option<&str>, read: u64) -> Option<u64> {
+        one_delta(
+            &RequestRecord {
+                kind: kind.into(),
+                ..request("succeeded", Some(200), Some("k"))
+            },
+            &[AttemptRecord {
+                cache_miss_reason: reason.map(String::from),
+                previous_input_tokens: Some(1_000),
+                ..attempt(1, "a", Some(read), None, Some(20))
+            }],
+            &prices(),
+        )
+        .cache_miss_reasons
+        .get(EXPIRED_BETWEEN_TURNS)
+        .copied()
+    }
+
+    #[test]
+    fn a_turn_that_read_under_half_the_previous_size_expired_between_turns() {
+        assert_eq!(
+            (
+                expired_after("inference", None, 499),
+                expired_after("inference", None, 500)
+            ),
+            (Some(1), None)
+        );
+    }
+
+    #[test]
+    fn a_reason_that_names_a_divergence_leaves_a_turn_under_half_out_of_the_expired_count() {
+        assert_eq!(
+            expired_after("inference", Some("messages_changed"), 100),
+            None
+        );
+    }
+
+    #[test]
+    fn a_token_count_under_half_stays_out_of_the_expired_count() {
+        assert_eq!(expired_after("count_tokens", None, 100), None);
+    }
+
+    /// The `messages_changed/hit` count of a request whose one attempt sent `input` uncached tokens, wrote `write` and
+    /// read `read` back under the reason `messages_changed`.
+    fn hit_under_reason(input: u64, write: u64, read: u64) -> Option<u64> {
+        one_delta(
+            &request("succeeded", Some(200), Some("k")),
+            &[AttemptRecord {
+                input_tokens: Some(input),
+                cache_miss_reason: Some("messages_changed".into()),
+                ..attempt(1, "a", Some(read), Some(write), Some(20))
+            }],
+            &prices(),
+        )
+        .cache_miss_reasons
+        .get("messages_changed/hit")
+        .copied()
+    }
+
+    /// 900 of 1,000 prompt tokens read is 90 %, 899 of 1,000 is not, and an empty prompt reads nothing.
+    #[test]
+    fn a_reasons_hit_count_takes_a_read_of_90_percent_of_the_prompt_writes_included() {
+        assert_eq!(
+            (
+                hit_under_reason(50, 50, 900),
+                hit_under_reason(51, 50, 899),
+                hit_under_reason(0, 0, 0)
+            ),
+            (Some(1), None, None)
+        );
+    }
+
+    #[test]
+    fn an_unmarked_request_that_read_and_wrote_nothing_counts_as_uncacheable_and_a_marked_or_a_hit_does_not(
+    ) {
+        let uncacheable = |cache_marker: bool, read: Option<u64>| {
+            one_delta(
+                &RequestRecord {
+                    cache_marker: Some(cache_marker),
+                    ..request("succeeded", Some(200), Some("k"))
+                },
+                &[attempt(1, "a", read, None, Some(20))],
+                &prices(),
+            )
+            .uncacheable
+        };
+        assert_eq!(
+            (
+                uncacheable(false, None),
+                uncacheable(true, None),
+                uncacheable(false, Some(5))
+            ),
+            (1, 0, 0)
+        );
     }
 
     /// The serving delta's dropped-blocks map for a request whose one attempt holds `member` and the trace `selection`.
@@ -3417,12 +3577,13 @@ mod tests {
     #[test]
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
         let db = crate::LedgerDb::open_in_memory().unwrap();
-        // The replaced request is a client's cancel beside a success, and its answer dropped a block, so its counts
-        // must leave with it.
+        // The replaced request is a client's cancel beside a success, its answer dropped a block, and its body marked no
+        // cache it read or wrote, so its counts must leave with it.
         let (req, attempts) = (
             RequestRecord {
                 canonical_model: SONNET.into(),
                 error_code: Some("client_gone".into()),
+                cache_marker: Some(false),
                 ..request("canceled", Some(200), Some("k"))
             },
             vec![AttemptRecord {
@@ -3430,7 +3591,7 @@ mod tests {
                 web_search_requests: Some(2),
                 web_fetch_requests: Some(1),
                 input_transformations: dropped("thinking.organization_binding_mismatch", 2),
-                ..attempt(1, "a", Some(5), None, Some(20))
+                ..attempt(1, "a", None, None, Some(20))
             }],
         );
         let (req2, attempts2) = (
@@ -4176,6 +4337,7 @@ mod tests {
         r.cache_hits = 18;
         r.cache_misses = 19;
         r.uncached_requests = 20;
+        r.uncacheable = 61;
         r.input_tokens = 21;
         r.cache_read_tokens = 22;
         r.cache_write_5m_tokens = 23;

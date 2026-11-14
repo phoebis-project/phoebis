@@ -531,6 +531,7 @@ async fn a_later_selection_supersedes_an_earlier_attempts_evidence() {
             started_at: r.now(),
             cache_ttl_ms: None,
             selection: None,
+            previous_input_tokens: None,
         },
     ));
     // Evidence stamped with the first attempt arrives after the second selection and is ignored.

@@ -109,6 +109,7 @@
             "cache_hits": 1,
             "cache_misses": 0,
             "uncached": 0,
+            "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 500,
@@ -133,6 +134,7 @@
             "cache_miss_reasons": {
               "none": 1
             },
+            "cache_miss_reason_hits": {},
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,
@@ -585,6 +587,7 @@
             "cache_hits": 12,
             "cache_misses": 0,
             "uncached": 0,
+            "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 6500,
@@ -609,8 +612,10 @@
             "refused": 0,
             "refusals": {},
             "cache_miss_reasons": {
-              "none": 12
+              "none": 11,
+              "not_returned": 1
             },
+            "cache_miss_reason_hits": {},
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,
@@ -1053,6 +1058,7 @@
             "cache_hits": 1,
             "cache_misses": 0,
             "uncached": 0,
+            "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 500,
@@ -1077,6 +1083,7 @@
             "cache_miss_reasons": {
               "none": 1
             },
+            "cache_miss_reason_hits": {},
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,
@@ -1516,6 +1523,7 @@
             "cache_hits": 0,
             "cache_misses": 0,
             "uncached": 0,
+            "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 0,
@@ -1541,6 +1549,7 @@
               "guardrail_blocked": 1
             },
             "cache_miss_reasons": {},
+            "cache_miss_reason_hits": {},
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,
@@ -1980,6 +1989,7 @@
             "cache_hits": 1,
             "cache_misses": 0,
             "uncached": 0,
+            "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 500,
@@ -2004,6 +2014,7 @@
             "cache_miss_reasons": {
               "none": 1
             },
+            "cache_miss_reason_hits": {},
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,
@@ -2448,7 +2459,8 @@
             "cache_hits": 4,
             "cache_misses": 0,
             "uncached": 0,
-            "expired_between_turns": 0,
+            "uncacheable": 0,
+            "expired_between_turns": 1,
             "tokens": {
               "cache_read": 2000,
               "cache_write_1h": 0,
@@ -2475,6 +2487,7 @@
               "none": 3,
               "pending": 1
             },
+            "cache_miss_reason_hits": {},
             "input_transformations": {
               "thinking.prefix_binding_mismatch": 1
             },
@@ -2908,6 +2921,7 @@
             "cache_hits": 1,
             "cache_misses": 0,
             "uncached": 0,
+            "uncacheable": 0,
             "expired_between_turns": 0,
             "tokens": {
               "cache_read": 500,
@@ -2930,8 +2944,9 @@
             "refused": 0,
             "refusals": {},
             "cache_miss_reasons": {
-              "none": 1
+              "not_requested": 1
             },
+            "cache_miss_reason_hits": {},
             "input_transformations": {},
             "input_transformations_moved": 0,
             "input_transformations_none": 0,

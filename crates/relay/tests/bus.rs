@@ -1003,14 +1003,14 @@ async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_messag
             unnamed(),
             answer_with_diagnostics("msg_unnamed_null", "null"),
             client,
-            None,
+            Some("not_returned"),
             "a null member answering a body whose member named no message",
         ),
         (
             sourceless("s-null"),
             answer_with_diagnostics("msg_sourceless_null", "null"),
             None,
-            None,
+            Some("not_requested"),
             "a null member answering a body with no member",
         ),
         (
@@ -1048,7 +1048,7 @@ async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_messag
             unnamed(),
             stream_with_diagnostics("msg_unnamed_head", NULL_MEMBER, ""),
             client,
-            None,
+            Some("not_returned"),
             "a streamed head's null member on a body that named no message",
         ),
         (
@@ -1069,7 +1069,7 @@ async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_messag
             unnamed(),
             stream_with_diagnostics("msg_unnamed_delta", "", NULL_MEMBER),
             client,
-            None,
+            Some("not_returned"),
             "a delta's null member on a body that named no message",
         ),
     ];
@@ -1085,6 +1085,23 @@ async fn a_null_diagnostics_member_reads_none_only_where_the_body_named_a_messag
         );
     }
     assert_eq!(up.requests().len(), count, "one pass per case");
+    up.shutdown().await;
+}
+
+/// The upstream dies after the committed head, so the attempt drew no answer and the relay read no usage from it.
+#[tokio::test]
+async fn an_attempt_whose_answer_never_came_keeps_a_null_reason() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::DropAfterHead,
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let (status, complete) = completion_of(&h, &mut sub, stream_request(KEY)).await;
+    assert_eq!(status, 200);
+    assert_eq!(complete.usage.and_then(|u| u.cache_miss_reason), None);
     up.shutdown().await;
 }
 

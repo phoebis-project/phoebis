@@ -1139,16 +1139,21 @@ slow-down held the request.
 Cache reads `{pct} hit ratio, {n} expired between turns, {pct} of input read from cache` and draws Tokens (Uncached
 input, Cache read, Cache write 5m, Cache write 1h, Thinking, Output), Hit ratio and cached share, Write cost vs read
 cost, Misses by reason with its per-group table, Cache by model (Reads, Writes 5m, Writes 1h, Hit ratio, Cached share,
-Read cost, Write cost) and Placements by rung (Rung, Placements, Hits, Hit share, Tokens read, Tokens promised). Write
-cost vs read cost and Cache by model's Read cost and Write cost read in the top bar's unit. Under Native they read the
-subscription requests' figure in the chosen week under every grouping, the card's subtitle naming the billed requests'
-dollars and each Cache by model cell carrying them on a line under it, and the card draws the billed dollars while no
-subscription request is in range. Under the three dollar positions they read the position's dollars. A null diagnostics
-member on a request that named a
+Read cost, Write cost) and Placements by rung (Rung, Placements, Hits, Hit share, Tokens read, Tokens promised). The hit
+ratio counts the requests that read the cache over the requests that could read one: a token count, and a request whose
+body marked no cache breakpoint and that read and wrote nothing, stay out of its base. Write cost vs read cost and Cache
+by model's Read cost and Write cost read in the top bar's unit. Under Native they read the subscription requests' figure
+in the chosen week under every grouping, the card's subtitle naming the billed requests' dollars and each Cache by model
+cell carrying them on a line under it, and the card draws the billed dollars while no subscription request is in range.
+Under the three dollar positions they read the position's dollars. A null diagnostics member on a request that named a
 message is recorded as "No divergence", and the per-group table lists Pending after Not requested. Pending: the
-upstream's comparison was still running when the answer went out. Every count in Misses by reason but the expired column
-links to the Requests view on those requests with the page's filters carried over, and a count the Requests view cannot
-list exactly stays plain with the reason on hover.
+upstream's comparison was still running when the answer went out. An answered request whose answer named no reason
+counts under Not requested where its body carried no diagnostics member and under No reason returned where it carried
+one. In the hours the router stored before it filed these two words such a request counts under no reason, so those
+hours' bars add up to less than their requests. A bar draws apart the requests under its reason that read 90 % or more
+of their prompt from the cache, and the per-group table shows the same split. Every count in Misses by reason but the
+expired column links to the Requests view on those requests with the page's filters carried over, and a count the
+Requests view cannot list exactly stays plain with the reason on hover.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen week
 over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output tokens

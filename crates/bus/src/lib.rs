@@ -271,6 +271,7 @@ mod tests {
             guardrails: Vec::new(),
             received_at: 1,
             fallback_digest: None,
+            cache_marker: false,
         })
     }
 

@@ -632,6 +632,7 @@ impl Rig {
             guardrails: Vec::new(),
             received_at: self.now(),
             fallback_digest: None,
+            cache_marker: false,
         })
     }
 
@@ -690,6 +691,7 @@ impl Rig {
             guardrails: Vec::new(),
             received_at: self.now(),
             fallback_digest: None,
+            cache_marker: false,
         })
     }
 
@@ -704,6 +706,7 @@ impl Rig {
             started_at: self.now(),
             cache_ttl_ms: None,
             selection: None,
+            previous_input_tokens: None,
         })
     }
 

@@ -22,7 +22,8 @@
         "cache_hits": 19,
         "cache_misses": 0,
         "uncached": 0,
-        "expired_between_turns": 0,
+        "uncacheable": 0,
+        "expired_between_turns": 1,
         "tokens": {
           "cache_read": 10000,
           "cache_write_1h": 0,
@@ -50,9 +51,12 @@
           "guardrail_blocked": 1
         },
         "cache_miss_reasons": {
-          "none": 18,
+          "none": 16,
+          "not_requested": 1,
+          "not_returned": 1,
           "pending": 1
         },
+        "cache_miss_reason_hits": {},
         "input_transformations": {
           "thinking.prefix_binding_mismatch": 1
         },
@@ -488,6 +492,7 @@
         "cache_hits": 1,
         "cache_misses": 0,
         "uncached": 0,
+        "uncacheable": 0,
         "expired_between_turns": 0,
         "tokens": {
           "cache_read": 500,
@@ -512,6 +517,7 @@
         "cache_miss_reasons": {
           "none": 1
         },
+        "cache_miss_reason_hits": {},
         "input_transformations": {},
         "input_transformations_moved": 0,
         "input_transformations_none": 0,

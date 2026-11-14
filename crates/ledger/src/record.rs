@@ -122,6 +122,9 @@ pub struct RequestRecord {
     /// until the backfill reaches it. The assembler leaves them at their default, and the landing derives them from
     /// the attempts it writes.
     pub serving: ServingFacts,
+    /// The selection's `marker` fact: the body carried a `cache_control` marker, or the pool's TTL policy added one.
+    /// `None` on a row from before the column.
+    pub cache_marker: Option<bool>,
 }
 
 /// The serving attempt's facts the request row carries: the last attempt by number, the one the rollups file the
@@ -250,6 +253,9 @@ pub struct AttemptRecord {
     /// The blocks the answer dropped, per `<type>.<reason>` key. An empty map for an answer that listed nothing,
     /// `None` for an answer without the member and for an attempt from before the column.
     pub input_transformations: Option<BTreeMap<String, InputTransformation>>,
+    /// The prompt size of the session's previous request as the selection handed it on, the size the expiry count
+    /// halves. `None` where the selection handed none on and for an attempt from before the column.
+    pub previous_input_tokens: Option<u64>,
 }
 
 impl AttemptRecord {

@@ -420,6 +420,9 @@ pub struct RequestObserved {
     /// The SHA-256 of the body's top-level `fallback_credit_token`, lowercase hex, `None` without one. The token itself
     /// never leaves the relay's read.
     pub fallback_digest: Option<String>,
+    /// The selection's `marker` fact: the body carries a `cache_control` marker, or the pool's TTL policy adds one.
+    /// False for a refusal published before the body was read.
+    pub cache_marker: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -436,6 +439,8 @@ pub struct AccountSelected {
     pub cache_ttl_ms: Option<i64>,
     /// The selection trace as JSON, `None` for a probe's own placement.
     pub selection: Option<String>,
+    /// The size of the session's previous request as the selection handed it on (`Selection::previous_input_tokens`).
+    pub previous_input_tokens: Option<u64>,
 }
 
 #[derive(Clone, Debug)]

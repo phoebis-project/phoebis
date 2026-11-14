@@ -355,6 +355,7 @@ fn request(
         message_count: 1,
         context_edits: "clear_thinking_20251015".into(),
         stream_end_at: Some(at + 850),
+        cache_marker: Some(true),
         ..Default::default()
     }
 }
@@ -849,6 +850,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "thinking.prefix_binding_mismatch": { "blocks": 2, "first_message": 1 }
             }))
             .unwrap(),
+            // A later turn of the session whose read of 500 falls under half the previous request's prompt, so the
+            // captured list carries the size and the day's figures count one expiry between turns.
+            previous_input_tokens: Some(4_000),
             ..attempt("r-1", 1, &selection.account.id, 200, "succeeded", now)
         }],
         bodies: None,
@@ -1104,18 +1108,23 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
         },
         attempts: vec![
+            // The first attempt landed on the account of the session's previous request and hands its size on, and the
+            // failover's attempt elsewhere hands on none.
             AttemptRecord {
                 account_kind: AccountKind::ApiKey,
                 cooldown_scope: Some("account".into()),
                 cooldown_until: Some(now + 1_800_000),
                 selection: Some(placed_json),
                 stop_reason: None,
+                previous_input_tokens: Some(1_200),
                 ..attempt("r-failover", 1, "direct", 429, "rate_limited", hour_ago)
             },
+            // The router's member named no message on the account the failover reached, and the answer drew no reason.
             AttemptRecord {
                 selection: Some(trace_json.clone()),
                 stop_reason: Some("tool_use".into()),
                 speed: Some("fast".into()),
+                cache_miss_reason: Some("not_returned".into()),
                 ..attempt(
                     "r-failover",
                     2,
@@ -1381,6 +1390,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             selection: Some(
                 r#"{"placement":{"rung":"content","depth":2,"prefix_tokens":500}}"#.into(),
             ),
+            // The body carried no diagnostics member, so the answer's missing reason is the router's own word.
+            cache_miss_reason: Some("not_requested".into()),
             ..attempt("r-placed", 1, "direct", 200, "succeeded", now - 30_000)
         }],
         bodies: None,
@@ -2004,7 +2015,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
             .unwrap();
         let request_id = format!("k-{agent}");
-        parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: request_id.clone(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some(agent.into()), parent_agent_id: Some("main".into()), owner_id: None, model: model.into(), canonical_model: model.into(), wire_model: model.into(), stream: false, headers: vec![], body: bytes::Bytes::from(format!(r#"{{"model":"{model}","max_tokens":10,"messages":[{{"role":"user","content":"hi"}}]}}"#)), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None }));
+        parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: request_id.clone(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some(agent.into()), parent_agent_id: Some("main".into()), owner_id: None, model: model.into(), canonical_model: model.into(), wire_model: model.into(), stream: false, headers: vec![], body: bytes::Bytes::from(format!(r#"{{"model":"{model}","max_tokens":10,"messages":[{{"role":"user","content":"hi"}}]}}"#)), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
         parts
             .keepalive
             .observe(Event::AccountSelected(AccountSelected {
@@ -2022,6 +2033,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 started_at: now,
                 cache_ttl_ms: None,
                 selection: None,
+                previous_input_tokens: None,
             }));
         parts
             .keepalive
@@ -2086,7 +2098,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
             .unwrap();
     }
-    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None }));
+    parts.keepalive.observe(Event::RequestObserved(RequestObserved { request_id: "k1".into(), origin: Origin::Client, kind: Kind::Inference, key_id: Some("desktop".into()), key_generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: RequestShape::default(), static_hash: None, boundaries: Vec::new().into(), marked: Vec::new().into(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, guardrail_id: None, guardrails: Vec::new(), received_at: now, fallback_digest: None, cache_marker: false }));
     parts
         .keepalive
         .observe(Event::AccountSelected(AccountSelected {
@@ -2099,6 +2111,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             started_at: now,
             cache_ttl_ms: None,
             selection: None,
+            previous_input_tokens: None,
         }));
     parts
         .keepalive
@@ -2271,6 +2284,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             guardrails: Vec::new(),
             received_at: now,
             fallback_digest: None,
+            cache_marker: false,
         }));
     parts
         .attention

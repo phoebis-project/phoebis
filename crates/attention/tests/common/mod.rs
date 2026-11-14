@@ -381,6 +381,7 @@ pub fn observed_as(
         guardrails: Vec::new(),
         received_at: NOW,
         fallback_digest: None,
+        cache_marker: false,
     })
 }
 

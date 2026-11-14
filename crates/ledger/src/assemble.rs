@@ -402,6 +402,7 @@ fn attempt_row(selected: AccountSelected) -> AttemptRecord {
         started_at: selected.started_at,
         outcome: "transport_error".into(),
         selection: selected.selection,
+        previous_input_tokens: selected.previous_input_tokens,
         ..AttemptRecord::default()
     }
 }
@@ -728,6 +729,7 @@ fn finish(entry: InFlight, mut complete: RequestComplete, now: i64) -> Vec<Recor
         refused,
         fallback_digest: observed.fallback_digest,
         serving: ServingFacts::default(),
+        cache_marker: Some(observed.cache_marker),
     };
     records.push(Record::Request {
         request,
@@ -803,6 +805,7 @@ mod tests {
             guardrails: Vec::new(),
             received_at: 1_000,
             fallback_digest: None,
+            cache_marker: false,
         })
     }
     fn chunk(id: &str, index: u32) -> Event {
@@ -844,6 +847,7 @@ mod tests {
             started_at: at,
             cache_ttl_ms: None,
             selection: None,
+            previous_input_tokens: None,
         })
     }
     fn head(id: &str, n: u8, status: u16, outcome: AttemptOutcome, at: i64) -> Event {

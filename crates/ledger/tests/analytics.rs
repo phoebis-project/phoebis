@@ -8329,6 +8329,108 @@ fn the_breakdown_answers_the_dropped_blocks_keys_apart_from_the_moved_count() {
     );
 }
 
+/// A request of `kind` on `model`, its one attempt answered with `input` uncached tokens and `read` read back under the
+/// miss reason `reason`, and the marker fact `cache_marker`.
+fn cached(
+    id: &str,
+    model: &str,
+    kind: &str,
+    (input, read): (u64, u64),
+    reason: Option<&str>,
+    cache_marker: Option<bool>,
+) -> (RequestRecord, Vec<AttemptRecord>) {
+    (
+        RequestRecord {
+            id: id.into(),
+            received_at: WEEKDAY_OFF_PEAK,
+            key_id: Some("desktop".into()),
+            pool_id: Some("p".into()),
+            canonical_model: model.into(),
+            model: model.into(),
+            kind: kind.into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            cache_marker,
+            ..Default::default()
+        },
+        vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: AccountKind::Oauth,
+            upstream_status: Some(200),
+            outcome: "succeeded".into(),
+            input_tokens: Some(input),
+            cache_read_tokens: Some(read),
+            cache_miss_reason: reason.map(String::from),
+            ..Default::default()
+        }],
+    )
+}
+
+/// The groups of every row the ledger holds, by `by`.
+fn groups_of(db: &LedgerDb, by: GroupBy) -> Vec<GroupRow> {
+    let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    breakdown(
+        &apply_filter(rows, &RollupFilter::default()),
+        by,
+        false,
+        &live,
+        &[],
+        &PRICES,
+        &COSTS,
+        NOW,
+    )
+}
+
+/// One of the reason's two requests read 950 of its 1,000 prompt tokens back, the other none.
+#[test]
+fn a_reasons_hits_answer_apart_from_the_reason_map() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (id, read) in [("hit", 950), ("miss", 0)] {
+        let (request, attempts) = cached(
+            id,
+            "claude-sonnet-5",
+            "inference",
+            (1_000 - read, read),
+            Some("messages_changed"),
+            None,
+        );
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    let groups = groups_of(&db, GroupBy::Key);
+    let desktop = group(&groups, "desktop");
+    assert_eq!(
+        (
+            desktop.cache_miss_reasons.clone(),
+            desktop.cache_miss_reason_hits.clone()
+        ),
+        (
+            BTreeMap::from([("messages_changed".to_string(), 2)]),
+            BTreeMap::from([("messages_changed".to_string(), 1)])
+        )
+    );
+}
+
+/// The token count carries no marker, and its row's stored count reads 0 as an hour folded before the column does, so
+/// the 1 comes from the read alone.
+#[test]
+fn a_token_count_answers_as_uncacheable_beside_a_hit() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (id, kind, read) in [("hit", "inference", 900), ("count", "count_tokens", 0)] {
+        let (request, attempts) =
+            cached(id, "claude-sonnet-5", kind, (100, read), None, Some(false));
+        db.insert_request(&request, &attempts, None).unwrap();
+    }
+    let groups = groups_of(&db, GroupBy::Model);
+    assert_eq!(group(&groups, "claude-sonnet-5").uncacheable, 1);
+}
+
 /// The refused rows stay in the window that picks a session's newest request, so a session whose every request was
 /// refused is still listed.
 #[test]

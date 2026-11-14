@@ -1801,7 +1801,7 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(all.failovers, 1);
   assert.equal(all.tokens.cacheRead, 8500);
   assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 17);
-  assert.equal(all.cacheMissReasons.none, 16);
+  assert.equal(all.cacheMissReasons.none, 14);
   assert.equal(all.cacheMissReasons.pending, 1, 'a comparison still running counts under its own word');
   assert.equal(all.probes.ok, 0);
   assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');

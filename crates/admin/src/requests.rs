@@ -136,6 +136,9 @@ pub(crate) struct RequestSummary {
     pub duration_ms: Option<i64>,
     pub request_bytes: Option<u64>,
     pub response_bytes: Option<u64>,
+    /// Whether the body carried a `cache_control` marker or the pool's TTL policy added one, the fact the decision
+    /// record holds as `flags.marker`. Null on a row from before the router kept it.
+    pub cache_marker: Option<bool>,
     pub kept_warm: bool,
     pub captured_bodies: bool,
     pub response_truncated: bool,
@@ -272,7 +275,16 @@ pub(crate) struct Attempt {
     pub duration_ms: Option<i64>,
     pub ttfb_ms: Option<i64>,
     pub ttft_ms: Option<i64>,
+    /// The answer's cache miss reason: the type the upstream named, `pending` where its comparison was still running
+    /// and `none` for a null member answering a body that named a previous message. Where the answer named no reason,
+    /// `not_requested` for a body that carried no `diagnostics` member and `not_returned` for one that carried it. Null
+    /// for an attempt whose answer held no usage report and for one recorded before the router filed the two words.
     pub cache_miss_reason: Option<String>,
+    /// The prompt size of the session's previous request, the pin's `last_input_tokens` as the selection handed it on,
+    /// which the expiry count halves. Null where the selection landed off the account of the pin it read, for a turn
+    /// read as compacted, on another cache lane or restarted, for a pin with no usage report yet, and for an attempt
+    /// recorded before the router kept it.
+    pub previous_input_tokens: Option<u64>,
     pub service_tier: Option<String>,
     pub client_drift: Option<String>,
     pub cooldown_set: Option<CooldownSet>,
@@ -600,6 +612,7 @@ pub(crate) fn request_summary(
         duration_ms: r.duration_ms,
         request_bytes: r.request_bytes,
         response_bytes: r.response_bytes,
+        cache_marker: r.cache_marker,
         kept_warm: r.kept_warm,
         captured_bodies: r.bodies_captured,
         response_truncated: r.response_truncated,
@@ -772,6 +785,7 @@ fn attempt_json(a: &AttemptRecord, estimated_usd: Option<f64>) -> Attempt {
         ttfb_ms: a.ttfb_ms,
         ttft_ms: a.ttfc_ms,
         cache_miss_reason: a.cache_miss_reason.clone(),
+        previous_input_tokens: a.previous_input_tokens,
         service_tier: a.service_tier.clone(),
         client_drift: a.client_drift.clone(),
         cooldown_set: a.cooldown_scope.as_ref().map(|scope| CooldownSet {
@@ -911,7 +925,8 @@ pub(crate) struct RequestsQuery {
     pub agent_types: Option<String>,
     /// A comma list.
     pub turn_origins: Option<String>,
-    /// A comma list of reasons, read off the serving attempt, any name the beta sent.
+    /// A comma list of reasons, read off the serving attempt: any name the beta sent, or the router's `not_requested`
+    /// and `not_returned` for an answer that named none.
     pub cache_miss_reasons: Option<String>,
     /// A comma list of `<type>.<reason>` keys of the blocks an answer dropped, read off the serving attempt, the last
     /// one. A request whose answer listed no block, or carried no such member, matches none.

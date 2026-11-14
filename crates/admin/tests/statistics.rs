@@ -2105,6 +2105,7 @@ fn observed(id: &str) -> phoebis_bus::Event {
         guardrails: Vec::new(),
         received_at: common::NOW,
         fallback_digest: None,
+        cache_marker: false,
     })
 }
 

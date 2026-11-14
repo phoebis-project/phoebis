@@ -82,7 +82,7 @@ use crate::identity::{
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
-use crate::observe::{answer_from_json, published_headers, wants_stream};
+use crate::observe::{answer_from_json, close_miss_reason, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, HeadReading, UnifiedHeaders};
 use crate::sse::SkippingParser;
 use crate::stream::{
@@ -707,6 +707,7 @@ impl Trace {
         guardrail_id: Option<String>,
         guardrails: Vec<GuardrailMatch>,
         fallback_digest: Option<CreditDigest>,
+        cache_marker: bool,
     ) {
         if self.bus.is_none() {
             return;
@@ -757,6 +758,7 @@ impl Trace {
             guardrails,
             received_at: self.received_at,
             fallback_digest: fallback_digest.as_ref().map(hex_of),
+            cache_marker,
         }))
         .await;
         // The assembler holds an entry for the request from this fact on, and only a completion closes it.
@@ -773,6 +775,7 @@ impl Trace {
         started_at: i64,
         cache_ttl_ms: Option<i64>,
         trace: Option<&SelectionTrace>,
+        previous_input_tokens: Option<u64>,
     ) {
         self.publish_fact(Event::AccountSelected(AccountSelected {
             request_id: self.request_id.clone(),
@@ -784,6 +787,7 @@ impl Trace {
             started_at,
             cache_ttl_ms,
             selection: trace.and_then(|t| serde_json::to_string(t).ok()),
+            previous_input_tokens,
         }))
         .await;
     }
@@ -1531,6 +1535,17 @@ impl Relay {
         // Read once, for both observations and the climb that reads the request class, and reused on every attempt
         // of this request.
         let hints = ClientHints::read(&parts.headers);
+        let auxiliary = crate::identity::is_auxiliary(hints.request_class.as_deref());
+        let cache_ttl_policy = pool
+            .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
+            .unwrap_or_default();
+        // One fact for the selection and for the request's row: the body's own marker, or the one the policy adds to
+        // a body that carries none.
+        let marker = facts.markers_ttl_ms.is_some()
+            || (matches!(trace.kind, Kind::Inference | Kind::Probe)
+                && cache_ttl_policy.enabled
+                && cache_ttl_policy.inject_when_absent
+                && !auxiliary);
         let identified = refusal.map_or_else(|| identify(&parts.headers, &members, client), Err);
         let mut identity = match identified {
             Ok(identity) => identity,
@@ -1554,6 +1569,7 @@ impl Relay {
                         None,
                         Vec::new(),
                         facts.credit_digest,
+                        marker,
                     )
                     .await;
                 return self
@@ -1599,7 +1615,6 @@ impl Relay {
             hints.request_class.as_deref(),
             &self.router,
         );
-        let auxiliary = crate::identity::is_auxiliary(hints.request_class.as_deref());
         let turn = matches!(hints.request_class.as_deref(), Some("main" | "subagent"));
         let subagent = hints.request_class.as_deref() == Some("subagent");
         crate::facts::note_entrypoint_disagreement(
@@ -1660,6 +1675,7 @@ impl Relay {
                 guardrail_id.clone(),
                 guardrails,
                 facts.credit_digest,
+                marker,
             )
             .await;
         if let Some(id) = guardrail_id {
@@ -1888,9 +1904,6 @@ impl Relay {
         // The same raw lookup `insert_diagnostics` makes, so the recorded source and the edit never disagree.
         let client_diagnostics =
             trace.kind != Kind::CountTokens && members.object_member_span("diagnostics").is_some();
-        let cache_ttl_policy = pool
-            .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
-            .unwrap_or_default();
         let portable = facts.portable;
         let target = parts
             .uri
@@ -1931,6 +1944,7 @@ impl Relay {
             identity: &identity,
             key: &key,
             lane,
+            marker,
             markers_ttl_ms: facts.markers_ttl_ms,
             memory_key,
             original,
@@ -2051,11 +2065,7 @@ impl Relay {
                         .as_ref()
                         .map(|c| c.static_boundaries.clone())
                         .unwrap_or_default(),
-                    marker: admitted.markers_ttl_ms.is_some()
-                        || (matches!(admitted.trace.kind, Kind::Inference | Kind::Probe)
-                            && admitted.cache_ttl_policy.enabled
-                            && admitted.cache_ttl_policy.inject_when_absent
-                            && !admitted.auxiliary),
+                    marker: admitted.marker,
                     parent_agent_id: identity.parent_agent_id.clone(),
                     failed_over: None,
                     holds: holds.clone(),
@@ -2662,6 +2672,7 @@ impl Relay {
                     // A probe replays a recipe rather than making its own placement, so its own trace names no
                     // choice worth showing on a request drawer.
                     (admitted.trace.kind != Kind::Probe).then_some(&selection.trace),
+                    selection.previous_input_tokens,
                 )
                 .await;
             // `inject_betas` is what this leg asks for; what the caller already sent is the head builder's to
@@ -3852,6 +3863,7 @@ impl Relay {
                 None,
                 Vec::new(),
                 None,
+                false,
             )
             .await;
         self.refused(trace, 0, failure, key, None, client_version)
@@ -4416,7 +4428,10 @@ impl Relay {
         let answer = (head.status == 200)
             .then(|| answer_from_json(&payload, &[], outcome.diagnostics_named));
         let (usage, facts) = match answer {
-            Some(answer) => (Some(answer.usage), answer.response),
+            Some(mut answer) => {
+                close_miss_reason(&mut answer.usage, outcome.diagnostics.is_some());
+                (Some(answer.usage), answer.response)
+            }
             None => (None, ResponseFacts::default()),
         };
         let mut waiting = Waiting::default();
@@ -4939,6 +4954,8 @@ struct Admitted<'a> {
     key: &'a ApiKeyRow,
     /// The cache lane the request writes to, composed once at admission since no failover changes the body.
     lane: String,
+    /// The selection's `marker` fact, which the request's row keeps as well.
+    marker: bool,
     /// The largest TTL of the client's own cache markers, the renewal's TTL when no rewrite applied.
     markers_ttl_ms: Option<i64>,
     /// The session memory key this request reads under, absent when the request carries no session; a probe

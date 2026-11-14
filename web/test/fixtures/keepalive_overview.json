@@ -7,7 +7,7 @@
       "parked": 0
     },
     "bus_gaps": 0,
-    "expired_between_turns_24h": 0,
+    "expired_between_turns_24h": 1,
     "last_bus_gap_at": null,
     "limits": {
       "agents": {

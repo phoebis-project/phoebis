@@ -59,11 +59,12 @@ and budget, the output limit, the tool, system-block and message counts, the con
 requested speed and service tier. The row also names a session that branched from another conversation: that
 conversation's root and the matched depth. The session the row names is the client's own, and the Sessions view groups a
 row by it. The request row records who put the cache diagnostics member on the body the upstream compared: the client,
-the router, or none. The request row carries its serving attempt's account, speed, outcome and token counts, written
-when the request lands. A row an earlier version wrote fills in slices of up to 10,000 rows, the newest first. Each
-start fills one slice, and its log line names the rows it filled and the rows left. While the router runs, the hourly
-purge fills the rest, slice after slice, each ending after the row in progress once a write is waiting, and a log line
-names the rows it filled once no row is left.
+the router, or none. It records whether the body carried a `cache_control` marker or the pool's cache TTL policy added
+one, so the hit ratio can leave out a request that could not read a cache. The request row carries its serving
+attempt's account, speed, outcome and token counts, written when the request lands. A row an earlier version wrote fills
+in slices of up to 10,000 rows, the newest first. Each start fills one slice, and its log line names the rows it filled
+and the rows left. While the router runs, the hourly purge fills the rest, slice after slice, each ending after the row
+in progress once a write is waiting, and a log line names the rows it filled once no row is left.
 
 The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
 id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it
@@ -71,8 +72,12 @@ differs from the one the router resolved, the speed, the region inference ran in
 a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
 the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
 rate-limit window readings, overage, and the serving account's rate-limit tier where the router prices by it (none for a
-free organization, a usage-based seat or an account with no plan). No dollar is stored: every price is computed when it
-is read, from these counts, at the price revision in force when the request arrived.
+free organization, a usage-based seat or an account with no plan). An answer with a usage report that named no miss
+reason reads `not_requested` where the attempt's body carried no diagnostics member and `not_returned` where it carried
+one. The attempt also carries the prompt size of the session's previous request, the size the expiry count halves,
+where the selection landed on that request's account in a turn the router read as none of `compacted`, `lane_changed`
+and `static_restart`. No dollar is stored: every price is computed when it is read, from these counts, at the price
+revision in force when the request arrived.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -905,14 +910,17 @@ tone, and the item opens the [Sessions](console.md#sessions) view.
 
 **`expired_between_turns`** holds while a request of the last 24 hours missed the cache because its entry expired
 between two turns, the miss probing exists to prevent, and the request ran on a pool whose keepalive policy is on, under
-a key that holds the `keepalive` permission. On any other pool or key such an expiry is the expected course, since the
-keepalive probes nothing there. The reader takes the policy and the permission as they stand at each read, so an expiry
-stops counting at the next read once its pool's policy is switched off or its key's permission withdrawn, and an expiry
-from before a policy was switched on counts for up to a day. The count is the ledger's, from its hourly rollups, over
-those requests alone, while `GET /admin/keepalive/overview` answers every pool's count as `expired_between_turns_24h`,
-so the two figures can differ. The subject is the engine, `keepalive`, and the item dates from the first read of this
-process that saw it. The detail gives the count, which the dashboard's line reads as `Expired between turns: {n} in 24h`
-in the warning tone, and the item opens the [Sessions](console.md#sessions) view.
+a key that holds the `keepalive` permission. Such a request read back under half the prompt of the session's previous
+request on the same account and named no miss reason, `none`, `pending`, `not_requested` or `not_returned`. A probe, a
+token count, a turn the router reads as `compacted`, `lane_changed` or `static_restart`, a landing on another account
+and a reason that names a divergence never count. On any other pool or key such an expiry is the expected course, since
+the keepalive probes nothing there. The reader takes the policy and the permission as they stand at each read, so an
+expiry stops counting at the next read once its pool's policy is switched off or its key's permission withdrawn, and an
+expiry from before a policy was switched on counts for up to a day. The count is the ledger's, from its hourly rollups,
+over those requests alone, while `GET /admin/keepalive/overview` answers every pool's count as
+`expired_between_turns_24h`, so the two figures can differ. The subject is the engine, `keepalive`, and the item dates
+from the first read of this process that saw it. The detail gives the count, which the dashboard's line reads as
+`Expired between turns: {n} in 24h` in the warning tone, and the item opens the [Sessions](console.md#sessions) view.
 
 A threshold is a Prometheus rule over the gauge:
 

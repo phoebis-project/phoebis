@@ -1175,6 +1175,7 @@ mod tests {
                 "    destination_spent Business since 11:26",
                 "    shed_no_runway Main since 11:21",
                 "    slowed_long Business since 06:16",
+                "    expired_between_turns Keepalive since 12:16",
             ],
             "{screen}"
         );

@@ -2939,8 +2939,9 @@ async fn a_bus_gap_holds_its_item_for_a_day_and_clears_after() {
     );
 }
 
-/// A finished request of pool `main` whose serving attempt read nothing from the cache under the miss reason `none`,
-/// which the ledger's rollup counts as a cache entry that expired between turns.
+/// A finished request of pool `main` whose serving attempt read nothing from the cache under the miss reason `none`
+/// after a previous request of 1,000 tokens, which the ledger's rollup counts as a cache entry that expired between
+/// turns.
 fn expired_turn(id: &str) -> Record {
     Record::Request {
         request: RequestRecord {
@@ -2967,6 +2968,7 @@ fn expired_turn(id: &str) -> Record {
             input_tokens: Some(1_000),
             cache_read_tokens: Some(0),
             cache_miss_reason: Some("none".into()),
+            previous_input_tokens: Some(1_000),
             ..Default::default()
         }],
         bodies: None,

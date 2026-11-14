@@ -710,8 +710,8 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
     );
 }
 
-/// Lands a request of pool `main` under `key` whose serving attempt read nothing back under the miss reason `none`,
-/// which its rollup row counts as an expiry between turns.
+/// Lands a request of pool `main` under `key` whose serving attempt read nothing back of the previous request's 1,000
+/// tokens under the miss reason `none`, which its rollup row counts as an expiry between turns.
 fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
     db.insert_request_at(
         &RequestRecord {
@@ -736,6 +736,7 @@ fn land_expiry(db: &LedgerDb, id: &str, received_at: i64, key: &str) {
             outcome: "succeeded".into(),
             cache_read_tokens: Some(0),
             cache_miss_reason: Some("none".into()),
+            previous_input_tokens: Some(1_000),
             ..Default::default()
         }],
         None,

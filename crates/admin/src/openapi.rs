@@ -581,6 +581,10 @@ pub(crate) struct BreakdownRow {
     pub cache_hits: u64,
     pub cache_misses: u64,
     pub uncached: u64,
+    /// The uncached requests that could not read a cache, a part of `uncached`: the token counts, and the requests
+    /// whose body marked no cache breakpoint and read and wrote nothing. The second part is 0 for the hours the router
+    /// folded before it kept the body's marker.
+    pub uncacheable: u64,
     pub expired_between_turns: u64,
     pub tokens: TokenSplitView,
     pub cost: CostSplitView,
@@ -592,6 +596,10 @@ pub(crate) struct BreakdownRow {
     /// The refused requests of the group by error code.
     pub refusals: BTreeMap<String, u64>,
     pub cache_miss_reasons: BTreeMap<String, u64>,
+    /// Per miss reason, the requests under it whose serving attempt read 90 % or more of its prompt from the cache,
+    /// the prompt being the cache read, both cache writes and the uncached input. A reason with none is left out, and
+    /// an hour whose requests the ledger no longer held when the router first split the hits off counts none.
+    pub cache_miss_reason_hits: BTreeMap<String, u64>,
     /// The requests per key of the blocks their serving attempt's answer dropped, a key being `<type>.<reason>` in the
     /// upstream's two words, `other` for a word past 64 bytes. A request counts once under each key it listed, whatever
     /// the number of blocks. Empty for the hours the router folded before it counted the blocks.
