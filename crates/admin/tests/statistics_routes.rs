@@ -6336,26 +6336,13 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
             .clone()
     };
     let row = row_of("s1");
-    let stamp_and_mark = |row: &serde_json::Value| {
-        [
-            "shed_from",
-            "shed_reason",
-            "shed_at",
-            "marked_on",
-            "marked_at",
-            "marked_window",
-        ]
-        .map(|member| row[member].clone())
-    };
+    let stamp_and_mark =
+        |row: &serde_json::Value| ["shed", "mark"].map(|member| row[member].clone());
     let null = serde_json::Value::Null;
     assert_eq!(
         stamp_and_mark(&row),
         [
-            serde_json::json!("business"),
-            serde_json::json!("cooldown"),
-            serde_json::json!(now - 60_000),
-            null.clone(),
-            null.clone(),
+            serde_json::json!({"from": "business", "at": now - 60_000, "reason": "cooldown"}),
             null.clone(),
         ],
         "the row names the stamp's word beside the account the pin left and its instant, and no mark: {row}"
@@ -6365,11 +6352,7 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
         stamp_and_mark(&marked),
         [
             null.clone(),
-            null.clone(),
-            null.clone(),
-            serde_json::json!("business"),
-            serde_json::json!(now - 30_000),
-            serde_json::json!("five_hour"),
+            serde_json::json!({"on": "business", "at": now - 30_000, "window": "five_hour"}),
         ],
         "a marked pin with no stamp reads the mark it stands under and no move: {marked}"
     );

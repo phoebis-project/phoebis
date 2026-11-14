@@ -9529,8 +9529,8 @@ async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from
         "last_input_tokens",
         "effort",
         "last_refresh_at",
-        "shed_from",
-        "shed_reason",
+        "shed",
+        "mark",
     ] {
         assert_eq!(
             row[member],

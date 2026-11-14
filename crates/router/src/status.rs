@@ -589,8 +589,8 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
             }
         }
         // A stamp written before the row named its reason reads as a round's, the one word its readers had.
-        let stamped = row["shed_from"].as_str().map(|from| {
-            let origin = match row["shed_reason"].as_str() {
+        let stamped = row["shed"]["from"].as_str().map(|from| {
+            let origin = match row["shed"]["reason"].as_str() {
                 None | Some("round") => "shed from",
                 Some(_) => "failed over from",
             };
@@ -1066,8 +1066,11 @@ mod tests {
             row["session_id"] = json!(format!("s-ext-{i:02}"));
             row["last_used_at"] = json!(NOW_MS - i as i64 * 60_000);
             if i % 5 == 0 {
-                row["shed_from"] = json!("direct");
-                row["shed_reason"] = json!(if i % 10 == 0 { "round" } else { "cooldown" });
+                row["shed"] = json!({
+                    "from": "direct",
+                    "at": NOW_MS - 3_600_000,
+                    "reason": if i % 10 == 0 { "round" } else { "cooldown" },
+                });
             }
             if i % 3 == 0 {
                 row["keepalive"]["state"] = json!("idle");
@@ -1269,14 +1272,10 @@ mod tests {
                 "{line}"
             );
             // A stamped row reads its stamp's words in the place of `pinned`.
-            assert_eq!(
-                line.contains("pinned"),
-                row["shed_from"].is_null(),
-                "{line}"
-            );
+            assert_eq!(line.contains("pinned"), row["shed"].is_null(), "{line}");
             assert_eq!(
                 line.contains("shed from") || line.contains("failed over from"),
-                !row["shed_from"].is_null(),
+                !row["shed"].is_null(),
                 "{line}"
             );
             assert_eq!(
@@ -1353,7 +1352,7 @@ mod tests {
         row["agent_id"] = Value::Null;
         row["account_id"] = json!("direct");
         row["model"] = json!("m");
-        row["shed_from"] = Value::Null;
+        row["shed"] = Value::Null;
         let mut one = fixture_reads();
         one.sessions = Ok(short);
         let one_screen = render(
@@ -1557,9 +1556,7 @@ mod tests {
             .as_array_mut()
             .unwrap()
         {
-            for member in ["shed_from", "shed_reason", "shed_at"] {
-                row[member] = Value::Null;
-            }
+            row["shed"] = Value::Null;
         }
         let screen = render(
             &roomy,
@@ -1664,9 +1661,10 @@ mod tests {
         let twelve_seconds_ago = NOW_MS - 12_000;
         let pin = |session: &str, agent: Value, account: &str, from: &str, reason: &str| {
             json!({
-                "session_id": session, "agent_id": agent, "account_id": account, "shed_from": from,
-                "shed_reason": reason, "pinned": true, "model": "claude-sonnet-5",
-                "last_used_at": twelve_seconds_ago, "keepalive": {"state": null, "next_probe_at": null},
+                "session_id": session, "agent_id": agent, "account_id": account,
+                "shed": {"from": from, "at": twelve_seconds_ago, "reason": reason}, "pinned": true,
+                "model": "claude-sonnet-5", "last_used_at": twelve_seconds_ago,
+                "keepalive": {"state": null, "next_probe_at": null},
             })
         };
         let reads = Reads {
@@ -1723,8 +1721,9 @@ mod tests {
     ) {
         let pin = |session: &str, reason: Value, last_used_at: Value| {
             json!({
-                "session_id": session, "agent_id": "main", "account_id": "business", "shed_from": "direct",
-                "shed_reason": reason, "pinned": true, "model": "claude-sonnet-5", "last_used_at": last_used_at,
+                "session_id": session, "agent_id": "main", "account_id": "business",
+                "shed": {"from": "direct", "at": NOW_MS - 12_000, "reason": reason}, "pinned": true,
+                "model": "claude-sonnet-5", "last_used_at": last_used_at,
                 "keepalive": {"state": null, "next_probe_at": null},
             })
         };

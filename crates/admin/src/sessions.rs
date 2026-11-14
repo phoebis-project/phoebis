@@ -21,7 +21,7 @@ pub(crate) struct SessionList {
     pub sessions: Vec<Session>,
 }
 
-/// One session row. On a row with no pin `pinned_at` and the keys from `burn` to `marked_window` read null.
+/// One session row. On a row with no pin `pinned_at` and the keys from `burn` to `mark` read null.
 #[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
@@ -104,25 +104,10 @@ pub(crate) struct Session {
     pub effort: Option<String>,
     /// The pin's last main, subagent or compaction turn, or a keepalive probe's renewal.
     pub last_refresh_at: Option<i64>,
-    /// The account a shedding round's move or a failover's landing took the pin from, which keeps the pin off that
-    /// account for the dwell. No mark: the pin's mark is `marked_on`. Null with no stamp and on a row with no pin.
-    pub shed_from: Option<String>,
-    /// Why the move that wrote the stamp took the pin off `shed_from`: `round` for a shedding round's move, the
-    /// failover's reason word (`cooldown`, `fast_lane`, `mark`) for a failover's landing. The stamp records a move
-    /// that happened, never a mark. Null with no stamp and on a pin stamped before the pin carried a reason, which
-    /// reads as a round's move.
-    #[schema(example = "round")]
-    pub shed_reason: Option<String>,
-    /// The instant of the stamp `shed_from` names. Null with no stamp and on a row with no pin.
-    pub shed_at: Option<i64>,
-    /// The account a shedding round's mark on the pin was made on, the account the session is to leave. The mark
-    /// stands while this is the pin's account. Null where the pin holds no mark and on a row with no pin.
-    pub marked_on: Option<String>,
-    /// When the round made the mark, null with `marked_on`.
-    pub marked_at: Option<i64>,
-    /// The window whose trigger made the mark, null with `marked_on`.
-    #[schema(example = "five_hour")]
-    pub marked_window: Option<String>,
+    /// Null with no stamp and on a row with no pin.
+    pub shed: Option<SessionShed>,
+    /// Null where the pin holds no mark and on a row with no pin.
+    pub mark: Option<SessionMark>,
     pub historical: bool,
     /// `reporting`, `silent`, or `none`.
     #[schema(example = "reporting")]
@@ -152,6 +137,36 @@ pub(crate) struct Session {
     pub forked_from: Option<String>,
     /// The matched depth.
     pub fork_depth: Option<u32>,
+}
+
+/// A pin's shed stamp, written by a shedding round's move or a failover's landing.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionShed {
+    /// The account a shedding round's move or a failover's landing took the pin from, which keeps the pin off that
+    /// account for the dwell. No mark: the pin's mark is the row's `mark`.
+    pub from: String,
+    /// The instant of the stamp `from` names.
+    pub at: i64,
+    /// Why the move that wrote the stamp took the pin off `from`: `round` for a shedding round's move, the failover's
+    /// reason word (`cooldown`, `fast_lane`, `mark`) for a failover's landing. The stamp records a move that happened,
+    /// never a mark. Null on a pin stamped before the pin carried a reason, which reads as a round's move.
+    #[schema(example = "round")]
+    pub reason: Option<String>,
+}
+
+/// A shedding round's mark on a pin.
+#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionMark {
+    /// The account a shedding round's mark on the pin was made on, the account the session is to leave. The mark
+    /// stands while this is the pin's account.
+    pub on: String,
+    /// When the round made the mark.
+    pub at: i64,
+    /// The window whose trigger made the mark.
+    #[schema(example = "five_hour")]
+    pub window: String,
 }
 
 /// One conversation pin the row lists as a line, read from this pin alone.
@@ -456,12 +471,16 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 last_input_tokens: Some(p.last_input_tokens),
                 effort: p.effort.clone(),
                 last_refresh_at: Some(p.last_refresh_at),
-                shed_from: p.shed.as_ref().map(|shed| shed.from.clone()),
-                shed_reason: p.shed.as_ref().and_then(|shed| shed.reason.clone()),
-                shed_at: p.shed.as_ref().map(|shed| shed.at),
-                marked_on: p.mark.as_ref().map(|mark| mark.on.clone()),
-                marked_at: p.mark.as_ref().map(|mark| mark.at),
-                marked_window: p.mark.as_ref().map(|mark| mark.window.clone()),
+                shed: p.shed.as_ref().map(|shed| SessionShed {
+                    from: shed.from.clone(),
+                    at: shed.at,
+                    reason: shed.reason.clone(),
+                }),
+                mark: p.mark.as_ref().map(|mark| SessionMark {
+                    on: mark.on.clone(),
+                    at: mark.at,
+                    window: mark.window.clone(),
+                }),
                 pinned_at: Some(p.created_at),
                 ..unpinned_row(
                     &key.0,
