@@ -1984,6 +1984,76 @@ async fn two_requests_of_one_instant_landing_after_a_poll_answer_the_greater_ids
     );
 }
 
+/// `a-billed` serves an overage request and `b-plan` a plan-funded one received last, so `b-plan` is the newest account
+/// of the session and of main. `c-unpriced` serves an overage request that lands last on a model the case's price list
+/// lacks, so it bills $0. On the list, a Sonnet 5 request's 1,000 input and 100 output tokens at $1,000 and $5,000 a
+/// million cost $1.50.
+#[tokio::test]
+async fn a_sessions_billed_dollars_stand_under_the_account_that_served_them_with_no_plan_or_zero_entry(
+) {
+    let prices = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-sonnet-5: {input: 1000, \
+         cache_write_5m: 1000, cache_write_1h: 1000, cache_read: 1000, output: 5000}\n",
+        "file",
+    )
+    .unwrap();
+    let parts = common::admin_parts_full_priced(prices).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    let now = common::NOW;
+    let served = |id: &str, at: i64, account: &str, overage: bool, model: &str| {
+        let Record::Request {
+            request,
+            mut attempts,
+            ..
+        } = agent_request(id, at, "s-billed", "main", "inference", generation)
+        else {
+            unreachable!("agent_request builds a request")
+        };
+        attempts[0].account_id = account.into();
+        attempts[0].overage_in_use = overage.then_some(true);
+        Record::Request {
+            request: RequestRecord {
+                model: model.into(),
+                canonical_model: model.into(),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        }
+    };
+    for request in [
+        served("r-billed", now - 3_000, "a-billed", true, "claude-sonnet-5"),
+        served("r-plan", now - 1_000, "b-plan", false, "claude-sonnet-5"),
+        served(
+            "r-unpriced",
+            now - 2_000,
+            "c-unpriced",
+            true,
+            "claude-haiku-4-5",
+        ),
+    ] {
+        parts.ledger.record(request);
+    }
+    common::landed(&parts, "r-unpriced").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-billed");
+    assert_eq!(
+        row["spend"]["billed_usd_by_account"],
+        serde_json::json!({ "a-billed": 1.5 }),
+        "the overage request's dollars under the account that served it, the plan request's and the $0 one's \
+         under none: {row}"
+    );
+}
+
 #[tokio::test]
 async fn a_non_numeric_limit_on_the_request_log_is_refused() {
     let parts = common::admin_parts_full().await;

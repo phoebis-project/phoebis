@@ -24758,6 +24758,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "requests": 1,
             "usd": 0.0036,
             "billed_usd": {},
+            "billed_usd_by_account": {},
             "equivalent": 0.0000235,
             "shares": {
               "business": {
@@ -24769,6 +24770,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 0,
               "usd": 0,
               "billed_usd": {},
+              "billed_usd_by_account": {},
               "equivalent": 0,
               "shares": {}
             }
@@ -24844,6 +24846,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "requests": 1,
                 "usd": 0.0036,
                 "billed_usd": {},
+                "billed_usd_by_account": {},
                 "equivalent": 0.0000235,
                 "shares": {
                   "business": {
@@ -24855,6 +24858,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "requests": 0,
                   "usd": 0,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0,
                   "shares": {}
                 }
@@ -25068,6 +25072,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "api_key": 0.00355,
               "fast": 0.00355
             },
+            "billed_usd_by_account": {
+              "business": 0.00355,
+              "direct": 0.00355
+            },
             "equivalent": 0.000078,
             "shares": {
               "business": {
@@ -25079,6 +25087,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 1,
               "usd": 0.00355,
               "billed_usd": {},
+              "billed_usd_by_account": {},
               "equivalent": 0.0000235,
               "shares": {
                 "business": {
@@ -25211,6 +25220,9 @@ export const FIXTURES: Record<string, Fixture> = {
                 "billed_usd": {
                   "fast": 0.00355
                 },
+                "billed_usd_by_account": {
+                  "business": 0.00355
+                },
                 "equivalent": 0.000031,
                 "shares": {
                   "business": {
@@ -25222,6 +25234,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "requests": 1,
                   "usd": 0.00355,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0.0000235,
                   "shares": {
                     "business": {
@@ -25243,6 +25256,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "requests": 2,
                 "usd": 0.00715,
                 "billed_usd": {},
+                "billed_usd_by_account": {},
                 "equivalent": 0.000047,
                 "shares": {
                   "business": {
@@ -25254,6 +25268,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "requests": 0,
                   "usd": 0,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0,
                   "shares": {}
                 }
@@ -25272,12 +25287,16 @@ export const FIXTURES: Record<string, Fixture> = {
                 "billed_usd": {
                   "api_key": 0.00355
                 },
+                "billed_usd_by_account": {
+                  "direct": 0.00355
+                },
                 "equivalent": 0,
                 "shares": {},
                 "probes": {
                   "requests": 0,
                   "usd": 0,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0,
                   "shares": {}
                 }
@@ -25316,12 +25335,16 @@ export const FIXTURES: Record<string, Fixture> = {
             "billed_usd": {
               "api_key": 0.0036
             },
+            "billed_usd_by_account": {
+              "direct": 0.0036
+            },
             "equivalent": 0,
             "shares": {},
             "probes": {
               "requests": 0,
               "usd": 0,
               "billed_usd": {},
+              "billed_usd_by_account": {},
               "equivalent": 0,
               "shares": {}
             }
@@ -25377,12 +25400,16 @@ export const FIXTURES: Record<string, Fixture> = {
                 "billed_usd": {
                   "api_key": 0.0036
                 },
+                "billed_usd_by_account": {
+                  "direct": 0.0036
+                },
                 "equivalent": 0,
                 "shares": {},
                 "probes": {
                   "requests": 0,
                   "usd": 0,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0,
                   "shares": {}
                 }
@@ -25419,6 +25446,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "requests": 2,
             "usd": 0.00355,
             "billed_usd": {},
+            "billed_usd_by_account": {},
             "equivalent": 0.0000235,
             "shares": {
               "business": {
@@ -25430,6 +25458,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 0,
               "usd": 0,
               "billed_usd": {},
+              "billed_usd_by_account": {},
               "equivalent": 0,
               "shares": {}
             }
@@ -25482,6 +25511,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "requests": 2,
                 "usd": 0.00355,
                 "billed_usd": {},
+                "billed_usd_by_account": {},
                 "equivalent": 0.0000235,
                 "shares": {
                   "business": {
@@ -25493,6 +25523,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "requests": 0,
                   "usd": 0,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0,
                   "shares": {}
                 }
@@ -25529,6 +25560,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "requests": 1,
             "usd": 0.00355,
             "billed_usd": {},
+            "billed_usd_by_account": {},
             "equivalent": 0.0000235,
             "shares": {
               "business": {
@@ -25540,6 +25572,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "requests": 0,
               "usd": 0,
               "billed_usd": {},
+              "billed_usd_by_account": {},
               "equivalent": 0,
               "shares": {}
             }
@@ -25591,6 +25624,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "requests": 1,
                 "usd": 0.00355,
                 "billed_usd": {},
+                "billed_usd_by_account": {},
                 "equivalent": 0.0000235,
                 "shares": {
                   "business": {
@@ -25602,6 +25636,7 @@ export const FIXTURES: Record<string, Fixture> = {
                   "requests": 0,
                   "usd": 0,
                   "billed_usd": {},
+                  "billed_usd_by_account": {},
                   "equivalent": 0,
                   "shares": {}
                 }

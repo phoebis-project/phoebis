@@ -26,6 +26,9 @@ pub(crate) struct SessionSpend {
     pub usd: f64,
     /// The dollars billed by funding, `api_key`, `fast`, `overage` or `usage_based`, a zero entry left out.
     pub billed_usd: BTreeMap<String, f64>,
+    /// The billed dollars by the account that served them: an object of account id to dollars, a zero entry left out,
+    /// empty where no request billed. Its sum is the sum of `billed_usd`.
+    pub billed_usd_by_account: BTreeMap<String, f64>,
     /// The requests' Pro-week figures summed, the share of the Pro 7-day window each serving attempt's usage spends
     /// whatever account tier served it, null where a request priced nothing and 0 with no plan-funded request.
     pub equivalent: Option<f64>,
@@ -45,6 +48,7 @@ pub(crate) struct SessionSpendPart {
     pub requests: u64,
     pub usd: f64,
     pub billed_usd: BTreeMap<String, f64>,
+    pub billed_usd_by_account: BTreeMap<String, f64>,
     pub equivalent: Option<f64>,
     pub shares: BTreeMap<String, BTreeMap<String, f64>>,
 }
@@ -130,11 +134,12 @@ struct Accumulator {
     listed_at: i64,
 }
 
-/// A set of requests' count, their money and their shares per account.
+/// A set of requests' count, their money, and their billed dollars and shares per account.
 #[derive(Default)]
 struct Sums {
     requests: u64,
     money: Money,
+    billed_usd_by_account: BTreeMap<String, f64>,
     /// The serving account is keyed on every plan-funded request before its priced windows add to it, so the key
     /// stands with no window where the price gives none, and a session whose map names no account is one no
     /// subscription window paid.
@@ -215,13 +220,19 @@ fn owned(map: &BTreeMap<&'static str, f64>) -> BTreeMap<String, f64> {
 }
 
 impl Money {
-    fn add(&mut self, price: &RequestPrice) {
+    /// Answers whether the request's dollars were filed as billed, so the sums' map by account reads this one
+    /// condition and its sum stays the sum of `billed_usd`.
+    fn add(&mut self, price: &RequestPrice) -> bool {
         self.usd += price.usd;
         if price.funding == Funding::Plan {
             self.equivalent = add_figures(self.equivalent, price.equivalent);
+            false
         } else if price.usd > 0.0 {
             // `as_str`, since the rollup word files an API key account's dollars under `billed`.
             *self.billed_usd.entry(price.funding.as_str()).or_default() += price.usd;
+            true
+        } else {
+            false
         }
     }
 
@@ -254,7 +265,12 @@ impl Sums {
         let Some((account_id, price)) = served else {
             return;
         };
-        self.money.add(price);
+        if self.money.add(price) {
+            *self
+                .billed_usd_by_account
+                .entry(account_id.to_string())
+                .or_default() += price.usd;
+        }
         if price.funding != Funding::Plan {
             return;
         }
@@ -271,6 +287,7 @@ impl Sums {
             requests: self.requests,
             usd: self.money.usd,
             billed_usd: owned(&self.money.billed_usd),
+            billed_usd_by_account: self.billed_usd_by_account.clone(),
             equivalent: self.money.equivalent(),
             shares: self
                 .shares
@@ -286,6 +303,7 @@ fn spend_of(spend: &Sums, probes: &Sums) -> SessionSpend {
         requests,
         usd,
         billed_usd,
+        billed_usd_by_account,
         equivalent,
         shares,
     } = spend.part();
@@ -293,6 +311,7 @@ fn spend_of(spend: &Sums, probes: &Sums) -> SessionSpend {
         requests,
         usd,
         billed_usd,
+        billed_usd_by_account,
         equivalent,
         shares,
         probes: probes.part(),
