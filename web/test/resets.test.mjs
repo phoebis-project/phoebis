@@ -45,3 +45,12 @@ test('the warning needs every window full', () => {
   assert.equal(d.resetClearsNothing([windowAt(0), windowAt(0)], NOW), true, 'the 5-hour window and the Fable week both at 100% left');
   assert.equal(d.resetClearsNothing([windowAt(0), windowAt(0.6)], NOW), false, 'the Fable week at 40% left');
 });
+
+test('a grant that names no window has nothing to warn about', () => {
+  assert.equal(d.resetClearsNothing([], NOW), false);
+});
+
+test('a grant that names no window has no clears words', () => {
+  assert.equal(d.clearsWords([]), null, 'a grant with an empty clears');
+  assert.equal(d.clearsWords(['5h', '7d']), '5h and 7d', 'a grant that clears the 5-hour and the 7-day window');
+});

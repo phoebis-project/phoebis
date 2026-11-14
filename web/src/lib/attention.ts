@@ -3,6 +3,7 @@ import type { AttentionItem, AttentionKind } from '@/api/types';
 import { accountMeterHref, quotaCardHref } from './address';
 import { lookup } from './counts';
 import { fmtAbsolute, fmtPct, fmtRelative, instant as clockInstant, joinPresent, listWords, messageOf, noun, percentText, plural } from './format';
+import { clearsWords } from './resets';
 import { entityHref, formatFact, logHref, sinceCondition, type LogLink } from './routingLog';
 import { windowTag } from './windows';
 
@@ -196,8 +197,10 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     }
     case 'certificate_reload_failed':
       return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(isoOrNull(d.serving_since))}.`;
-    case 'limit_reset_ending':
-      return `${resetEnds(d)} (${fmtAbsolute(isoOrNull(d.ends_at))}) and clears ${listWords(strings(d.clears).map((w) => windowTag(w)))}: ${text(d.grant_label) ?? ''}`;
+    case 'limit_reset_ending': {
+      const words = clearsWords(strings(d.clears));
+      return `${resetEnds(d)} (${fmtAbsolute(isoOrNull(d.ends_at))})${words === null ? '' : ` and clears ${words}`}: ${text(d.grant_label) ?? ''}`;
+    }
     case 'model_unpriced': {
       const n = num(d.requests);
       const model = text(d.model) ?? item.subject.id;

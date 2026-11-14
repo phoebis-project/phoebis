@@ -7,7 +7,7 @@ import { Button, Dialog, KeyValue, Refusal, Warning } from '@/components/ui/prim
 import { fmtDate, fmtEndsIn, fmtRelative, listWords, noun } from '@/lib/format';
 import { useLatest } from '@/lib/hooks';
 import { windowOf } from '@/lib/quota';
-import { resetAnswer, resetClearsNothing, resetEstimate, resetHolds, resetRowNote, resetRows, type ResetAnswer } from '@/lib/resets';
+import { clearsWords, resetAnswer, resetClearsNothing, resetEstimate, resetHolds, resetRowNote, resetRows, type ResetAnswer } from '@/lib/resets';
 import { periodHoursOf, windowTag } from '@/lib/windows';
 
 /**
@@ -195,12 +195,13 @@ export function ResetDialog({
       <ul ref={list} className="plain-list reset-dialog__rows">
         {resetRows(block).map((g) => {
           const note = resetRowNote(g, block.cooldownUntil, now);
+          const words = clearsWords(g.clears);
           return (
             <li key={g.id} className="reset-dialog__row">
               <div className="reset-dialog__facts">
                 <span className="reset-dialog__label">{g.label}</span>
                 <span className="reset-dialog__line">
-                  <span>Clears {listWords(g.clears.map(windowTag))}</span>
+                  {words !== null && <span>Clears {words}</span>}
                   <span>
                     {g.resetsLeft} of {g.resetsTotal} left
                   </span>

@@ -14,10 +14,10 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconReset, IconUser } f
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, Button, EmptyState, ErrorState, Meter, MeterAbsent, Pill, Segmented, Skeleton } from '@/components/ui/primitives';
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
-import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, listWords, messageOf, noun, plural, upperFirst } from '@/lib/format';
+import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, messageOf, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
 import { NO_RESET_TITLE, STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, noResetWord, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
-import { readsFull, resetChip, resetMarks } from '@/lib/resets';
+import { clearsWords, readsFull, resetChip, resetMarks } from '@/lib/resets';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
 import { DAY, HOUR } from '@/lib/time';
@@ -200,6 +200,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const { limitResetWarningDays } = useAppSettings();
   const chip = resetChip(account.limitResets, now, limitResetWarningDays);
   const marks = resetMarks(account.limitResets);
+  const usableClears = chip?.usable ? clearsWords(chip.usable.clears) : null;
   const [opening, setOpening] = useState<LimitResetsRead | null>(null);
   const [readingResets, setReadingResets] = useState(false);
   const openResets = async () => {
@@ -313,7 +314,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             className="qcard__use"
             disabled={chip.usable === null}
             aria-disabled={readingResets || undefined}
-            title={chip.usable ? `Clears ${listWords(chip.usable.clears.map(windowTag))} on ${account.label}` : upperFirst(chip.state)}
+            title={chip.usable ? (usableClears === null ? undefined : `Clears ${usableClears} on ${account.label}`) : upperFirst(chip.state)}
             onClick={(e) => {
               if (readingResets) return;
               // Focused before the read, so the dialog records this button as its opener in every browser.
