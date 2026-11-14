@@ -4765,6 +4765,56 @@ async fn the_request_log_answers_the_diagnostics_source_and_narrows_by_reason_ef
 }
 
 #[tokio::test]
+async fn the_request_log_answers_null_token_counts_where_the_serving_attempt_stored_none_or_no_attempt_served(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .ledger
+        .record(answered("u-stored", common::NOW - 1_000, &[(200, Some(0))]));
+    parts
+        .ledger
+        .record(answered("u-unstored", common::NOW - 2_000, &[(200, None)]));
+    let mut refused = answered("u-refused", common::NOW - 3_000, &[]);
+    if let Record::Request { request, .. } = &mut refused {
+        request.status = Some(403);
+        request.outcome = "rejected".into();
+    }
+    parts.ledger.record(refused);
+    fake_upstream::wait_for_async(Duration::from_secs(5), || async {
+        parts.db.request("u-refused").await.unwrap()
+    })
+    .await;
+    let listed = json(get(&parts.app, "/admin/requests", Some(&cookie)).await).await;
+    let counts: Vec<_> = listed["requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str(),
+                r["usage"].get("input").cloned(),
+                r["usage"].get("output").cloned(),
+            )
+        })
+        .collect();
+    let null = Some(serde_json::Value::Null);
+    assert_eq!(
+        counts,
+        [
+            (
+                Some("u-stored"),
+                Some(serde_json::json!(2_000)),
+                Some(serde_json::json!(100))
+            ),
+            (Some("u-unstored"), null.clone(), null.clone()),
+            (Some("u-refused"), null.clone(), null),
+        ],
+        "a stored count reads as stored, and a count no attempt stored reads null: {listed}"
+    );
+}
+
+#[tokio::test]
 async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

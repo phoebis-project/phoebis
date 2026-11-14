@@ -228,15 +228,17 @@ pub(crate) struct RequestShape {
     pub tool_count: u32,
 }
 
-/// The serving attempt's usage, zero where it has none.
+/// The serving attempt's usage. Where no count is stored, `input` and `output` read null and the other six read zero.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RequestUsage {
     pub cache_read: u64,
     pub cache_write_1h: u64,
     pub cache_write_5m: u64,
-    pub input: u64,
-    pub output: u64,
+    /// The serving attempt's stored input count, null where it stored none and where no attempt served.
+    pub input: Option<u64>,
+    /// The serving attempt's stored output count, null under the same two conditions.
+    pub output: Option<u64>,
     pub thinking: u64,
     pub web_fetch: u64,
     pub web_search: u64,
@@ -733,8 +735,8 @@ fn usage_json(last: Option<&AttemptRecord>) -> RequestUsage {
         cache_read: usage.cache_read,
         cache_write_1h: usage.write_1h,
         cache_write_5m: usage.write_5m,
-        input: usage.input,
-        output: usage.output,
+        input: last.and_then(|a| a.input_tokens),
+        output: last.and_then(|a| a.output_tokens),
         thinking: tokens(|a| a.thinking_tokens),
         web_fetch: tokens(|a| a.web_fetch_requests),
         web_search: tokens(|a| a.web_search_requests),

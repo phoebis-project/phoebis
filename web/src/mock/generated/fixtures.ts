@@ -17896,8 +17896,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_read": 0,
             "cache_write_1h": 0,
             "cache_write_5m": 0,
-            "input": 0,
-            "output": 0,
+            "input": null,
+            "output": null,
             "thinking": 0,
             "web_fetch": 0,
             "web_search": 0
@@ -18266,8 +18266,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "cache_read": 0,
             "cache_write_1h": 0,
             "cache_write_5m": 0,
-            "input": 0,
-            "output": 0,
+            "input": null,
+            "output": null,
             "thinking": 0,
             "web_fetch": 0,
             "web_search": 0
