@@ -5,13 +5,14 @@ use axum::body::Body;
 use axum::http::Request;
 use common::*;
 use phoebis_keepalive::companion_router;
+use phoebis_ledger::{AttemptRecord, PriceRevisions, Record, RequestRecord};
 use phoebis_routing::{
     Report, RouterConfig, SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
     HOUR_MS, SEVEN_DAY,
 };
 use phoebis_store::{
-    AccountKind, AccountState, ApiKeyRow, CompanionPermissions, CooldownRow, CooldownScope,
-    Identity, MemberWrite, RulesMode, StateCause,
+    AccountKind, AccountState, AccountUpdate, AffinityMode, ApiKeyRow, Cancellation,
+    CompanionPermissions, CooldownRow, CooldownScope, Identity, MemberWrite, RulesMode, StateCause,
 };
 use serde_json::{json, Value};
 
@@ -19,6 +20,13 @@ const ALLOWANCE_PATH: &str = "/v0/companion/allowance";
 const C: &str = "sk-ant-api03-CCCC";
 const D: &str = "sk-ant-api03-DDDD";
 const OTHER_KEY: &str = "phoebis-otherkey";
+/// A table of the suite's own, so a planted spend prices from rates this file states: input at $4 a million tokens.
+const PRICES: &str = r#"
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-sonnet-4-5: {input: 4, cache_write_5m: 5, cache_write_1h: 8, cache_read: 0.4, output: 20}
+"#;
 const SESSION: &str = "session";
 /// A storage key under which `b`'s pseudonym sorts before `a`'s, against the account-id order the routing task answers
 /// in.
@@ -147,6 +155,39 @@ async fn read_window(r: &Rig, account: &str, window: &str, utilization: f64, res
         })
         .await;
     r.h.router.samples().await.unwrap();
+}
+
+/// Cancels `account` with its end at `ends_at` through the account edit the admin route commits.
+fn cancel(r: &Rig, account: &str, ends_at: i64) {
+    let row = r.h.store.account(account).unwrap().unwrap();
+    r.h.store
+        .commit_account_update(&AccountUpdate {
+            id: account,
+            expected_revision: row.revision,
+            incarnation: row.incarnation,
+            lifecycle_generation: row.lifecycle_generation,
+            label: &row.label,
+            secret: None,
+            state: None,
+            at: r.now(),
+            actor: "test",
+            enabled: None,
+            cancellation: Some(Cancellation::On {
+                ends_at: Some(ends_at),
+            }),
+        })
+        .unwrap();
+}
+
+/// Writes the pool's affinity TTL and mode through the pool write the admin route commits, then reloads the router.
+async fn set_affinity(r: &Rig, ttl_seconds: u64, mode: AffinityMode) {
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.affinity_ttl_seconds = ttl_seconds;
+    pool.affinity.mode = mode;
+    r.h.store
+        .update_pool_with_members_and_guardrails(&pool, pool.updated_at, None, None, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
 }
 
 /// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
@@ -523,6 +564,173 @@ async fn a_pins_runway_reads_the_routers_milliseconds_as_whole_minutes() {
         json!(330),
         "{}",
         answer.text
+    );
+}
+
+#[tokio::test]
+async fn an_account_past_its_saved_end_leaves_the_list_it_reads_in_before_the_end() {
+    let r = rig(RigSpec {
+        storage_key: storage_key(STORAGE_KEY),
+        ..RigSpec::default()
+    })
+    .await;
+    let app = companion_router(r.engine.clone());
+    cancel(&r, "a", r.now() + 1_000);
+    r.h.router.reload().await.unwrap();
+    let key = r.h.store.companion_key();
+    let (a, b) = (key.pseudonym("a"), key.pseudonym("b"));
+    let before = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(
+        before.account_ids(),
+        [b.clone(), a],
+        "a canceled account stays listed while its end is ahead: {}",
+        before.text
+    );
+    r.advance(10_000);
+    let after = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(after.account_ids(), [b], "{}", after.text);
+}
+
+#[tokio::test]
+async fn a_budget_the_ledger_has_not_reported_reads_no_spend_row_beside_one_it_has() {
+    let r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        pricing: PriceRevisions::from_yaml(PRICES, "test").unwrap(),
+        ..RigSpec::default()
+    })
+    .await;
+    let app = companion_router(r.engine.clone());
+    let budgets = |monthly: Option<f64>| {
+        [MemberWrite {
+            account_id: "a".into(),
+            priority: 0,
+            budget_daily_usd: Some(10.0),
+            budget_monthly_usd: monthly,
+        }]
+    };
+    r.h.store
+        .set_pool_members("main", &budgets(None), "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    let request = RequestRecord {
+        id: "spend".into(),
+        received_at: r.now(),
+        finished_at: Some(r.now() + 500),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-4-5".into(),
+        model: "claude-sonnet-4-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: "spend".into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: AccountKind::ApiKey,
+        outcome: "succeeded".into(),
+        input_tokens: Some(125_000),
+        ..Default::default()
+    };
+    r.ledger
+        .record_request(Record::Request {
+            request,
+            attempts: vec![attempt],
+            bodies: None,
+        })
+        .await;
+    settled(&r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd > 0.0)
+    })
+    .await;
+    // Once the writer has stopped, nothing reads the monthly budget's spend, so the router holds no row for it.
+    r.ledger.clone().shutdown().await.unwrap();
+    r.h.store
+        .set_pool_members("main", &budgets(Some(40.0)), "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    let answer = get(&app, Some(SESSION), Some(KEY)).await;
+    // 125,000 input tokens at $4 a million are $0.50, and the day of NOW ends at the next UTC midnight.
+    assert_eq!(
+        answer.body["accounts"][0]["spend"],
+        json!([{
+            "period": "day",
+            "spent_usd": 0.5,
+            "budget_usd": 10.0,
+            "period_end": "1970-01-02T00:00:00Z"
+        }]),
+        "{}",
+        answer.text
+    );
+}
+
+#[tokio::test]
+async fn pinning_reads_off_at_a_zero_affinity_ttl_and_the_pools_mode_at_one_second() {
+    let r = rig(RigSpec::default()).await;
+    let app = companion_router(r.engine.clone());
+    // The default mode is `always`, so `when_cached` shows the second read takes the pool's own mode.
+    set_affinity(&r, 0, AffinityMode::WhenCached).await;
+    let off = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(off.body["pool"]["pinning"], json!("off"), "{}", off.text);
+    set_affinity(&r, 1, AffinityMode::WhenCached).await;
+    let on = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(
+        on.body["pool"]["pinning"],
+        json!("when_cached"),
+        "{}",
+        on.text
+    );
+}
+
+#[tokio::test]
+async fn the_key_is_checked_before_the_session_id_and_the_session_id_before_the_permission() {
+    let r = rig(RigSpec::default()).await;
+    let app = companion_router(r.engine.clone());
+    let without = CompanionPermissions {
+        allowance: false,
+        keepalive: true,
+    };
+    r.h.store
+        .insert_api_key(&laptop_key(&r, without), "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    let unpermitted = get(&app, None, Some(OTHER_KEY)).await;
+    assert_eq!(
+        (unpermitted.status, unpermitted.body.clone()),
+        (400, json!({"code": "invalid_identity"})),
+        "{}",
+        unpermitted.text
+    );
+    let keyless = get(&app, None, None).await;
+    assert_eq!(
+        (keyless.status, keyless.header("x-phoebis-error-code")),
+        (401, Some("auth_missing")),
+        "{}",
+        keyless.text
+    );
+}
+
+#[tokio::test]
+async fn a_read_after_the_routers_shutdown_answers_503_router_unavailable() {
+    let r = rig(RigSpec::default()).await;
+    let app = companion_router(r.engine.clone());
+    let before = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(before.status, 200, "{}", before.text);
+    r.h.router.shutdown().await.unwrap();
+    let after = get(&app, Some(SESSION), Some(KEY)).await;
+    assert_eq!(
+        (after.status, after.body.clone()),
+        (503, json!({"code": "router_unavailable"})),
+        "{}",
+        after.text
     );
 }
 
