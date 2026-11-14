@@ -1132,7 +1132,9 @@ not reported on reading "not reported".
 Latency reads "Percentiles read from merged per-hour histograms" and draws one row per metric, Time to first byte,
 Time to first content token, Total duration and Output tokens per second, each with a percentile chart (p50, p90, p95,
 p99) and a Distribution card, then Latency by the chosen group with TTFB p50, TTFB p99, TTFT p99, Duration p99 and
-tok/s p50.
+tok/s p50. The histograms hold 84 buckets that reach about 61 minutes. A request counts toward Output tokens per second
+only where at least 500 ms pass from its first content token to its end, and the three times leave out the time the
+slow-down held the request.
 
 Cache reads `{pct} hit ratio, {n} expired between turns, {pct} of input read from cache` and draws Tokens (Uncached
 input, Cache read, Cache write 5m, Cache write 1h, Thinking, Output), Hit ratio and cached share, Write cost vs read

@@ -100,8 +100,11 @@ spelling the request carried, `model_permitted` the account that served the same
 [Routing log](console.md#routing-log) lists both.
 
 Percentiles for every millisecond latency and for output tokens per second come from a fixed, log-spaced,
-64-bucket histogram. A range spanning several hours merges its hourly histograms bucket by bucket before reading
-the percentile, and the value carries the error of the bucket it falls in.
+84-bucket histogram whose last bucket ends near 3,652,000, about 61 minutes for a latency. A range spanning several
+hours merges its hourly histograms bucket by bucket before reading the percentile, and the value carries the error of
+the bucket it falls in. A request records an output tokens per second sample only where at least 500 ms pass from its
+first content token to its end. Its time to first byte, time to first content token and duration leave out the time
+the slow-down held it before its head, while a wait for any other reason stays in them.
 
 Every ledger read the admin routes, the usage page, and the metrics listener make runs on a blocking worker off
 the request runtime, so a slow analytics query never delays proxy traffic.
@@ -536,7 +539,8 @@ same guard holds for a request received before the first hour boundary at or aft
 an equal rollup retention the purge drops the hour that cutoff splits: that hour stays empty, and one the purge kept for
 a budgeted member moves. The re-fold moves the request rows alone. A wasted probe's counts and a probe the keepalive
 still holds keep the band they settled or were recorded in, so the waste of a probe whose prompt falls between the old
-and the new threshold inside the retained window stays priced at that band.
+and the new threshold inside the retained window stays priced at that band. The first start after an upgrade that
+changes how the Latency samples are counted folds the retained requests again before the router serves.
 
 ## Metrics
 
@@ -576,7 +580,7 @@ The `model` label is bounded by the price entry in force at the request: a model
 own id or, for a dated id priced under its undated base, that base, and every other model is reported as `other`, so a
 downstream caller cannot grow the label set by naming models it likes. `phoebis_tokens_total` counts under five `kind`
 values, `cache_read`, `cache_write_1h`, `cache_write_5m`, `input` and `output`, and `phoebis_upstream_ttfb_seconds` uses
-the same 64 log-spaced buckets the rollups use, with an overflow bucket.
+the same 84 log-spaced buckets the rollups use, the last bound near 3,652 seconds, with an overflow bucket.
 `phoebis_refusals_total` counts the requests the router refused before any account was asked, under the refusal's code,
 the key and the kind, the requests `phoebis_requests_total` leaves out ([Refused requests](#refused-requests)).
 `phoebis_keepalive_probes_total` counts each probe under its pool and one of four outcomes: `landed` when it read the

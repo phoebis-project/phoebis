@@ -120,7 +120,7 @@ fn ten_thousand_sessions_and_models_leave_the_label_set_bounded() {
 }
 
 /// A response slower than the last finite bucket's bound has no bucket that tells the truth about it, and
-/// counting it in the last one reads a three-minute response as a hundred-second one in every quantile.
+/// counting it in the last one reads a 70-minute response as one of about an hour in every quantile.
 #[test]
 fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
     let metrics = Metrics::new();
@@ -155,7 +155,7 @@ fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
             }],
         );
     };
-    // The bucket lines in the order they are exported: the 64 finite ones, then +Inf.
+    // The bucket lines in the order they are exported: the 84 finite ones, then +Inf.
     let buckets = || -> Vec<u64> {
         metrics
             .render(&RoutingGauges::default(), &[], 0)
@@ -168,16 +168,16 @@ fn a_response_past_the_last_finite_bucket_is_exported_as_inf_only() {
     };
     observe(50);
     let before = buckets();
-    assert_eq!(before.len(), 65, "64 finite buckets and +Inf");
-    assert_eq!((before[63], before[64]), (1, 1));
-    // 200 seconds, well past the last finite edge of about 100.
-    observe(200_000);
+    assert_eq!(before.len(), 85, "84 finite buckets and +Inf");
+    assert_eq!((before[83], before[84]), (1, 1));
+    // 4,200 seconds, past the last finite edge of about 3,652.
+    observe(4_200_000);
     let after = buckets();
     assert_eq!(
-        after[63], before[63],
+        after[83], before[83],
         "the last finite bucket does not claim an observation past its bound"
     );
-    assert_eq!(after[64], before[64] + 1, "+Inf carries it");
+    assert_eq!(after[84], before[84] + 1, "+Inf carries it");
 }
 
 #[test]

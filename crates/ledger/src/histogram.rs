@@ -1,17 +1,20 @@
-//! Fixed log-spaced histograms: the web mock's 64 buckets from 1 to 100,000, shared by every latency in
-//! milliseconds and by output tokens per second, so any two histograms merge by bucket-wise addition.
+//! Fixed log-spaced histograms: 84 buckets from 1, edge 64 at 100,000 and the last edge near 3,652,000, shared by
+//! every latency in milliseconds and by output tokens per second, so any two histograms merge by bucket-wise addition.
 
-pub const BUCKET_COUNT: usize = 64;
+pub const BUCKET_COUNT: usize = 84;
+/// The steps the ratio spans from the first edge to 100,000, so edge 64 keeps that value at any bucket count.
+const RATIO_STEPS: usize = 64;
 const MIN: f64 = 1.0;
+/// The edge `RATIO_STEPS` reaches.
 const MAX: f64 = 100_000.0;
 
 fn ratio() -> f64 {
-    (MAX / MIN).powf(1.0 / BUCKET_COUNT as f64)
+    (MAX / MIN).powf(1.0 / RATIO_STEPS as f64)
 }
 
 /// The last edge, which is the bound of the last finite bucket.
 pub fn top_edge() -> f64 {
-    MAX
+    edge(BUCKET_COUNT)
 }
 
 fn edge(i: usize) -> f64 {
@@ -50,6 +53,13 @@ impl Histogram {
 
     pub fn record(&mut self, value: f64) {
         let i = bucket_index(value);
+        self.0[i] = self.0[i].saturating_add(1);
+    }
+
+    /// Files a sample as `record` does, capped at the last bucket of the 64-bucket set: the re-fold's old side takes
+    /// back through it a sample that set filed.
+    pub(crate) fn record_narrow(&mut self, value: f64) {
+        let i = bucket_index(value).min(RATIO_STEPS - 1);
         self.0[i] = self.0[i].saturating_add(1);
     }
 
@@ -121,11 +131,38 @@ mod tests {
             "ln(1.5)/ln(ratio) with ratio = 100000^(1/64)"
         );
         assert_eq!(bucket_index(99_999.0), 63);
-        assert_eq!(bucket_index(1e9), 63);
+        assert_eq!(bucket_index(1e9), 83);
         for i in 0..BUCKET_COUNT {
             let mid = (edges[i] * edges[i + 1]).sqrt();
             assert_eq!(bucket_index(mid), i, "midpoint of bucket {i}");
         }
+    }
+
+    /// 150,000 lies in bucket 66, which spans about 143,301 to 171,488.
+    #[test]
+    fn a_sample_past_100_seconds_reads_its_percentile_from_its_own_bucket() {
+        let mut h = Histogram::new();
+        h.record(150_000.0);
+        let p99 = h.percentile(0.99).unwrap();
+        assert!(p99 > 143_000.0 && p99 < 172_000.0, "{p99}");
+    }
+
+    /// A row written before the set grew holds 64 counts, 256 bytes.
+    #[test]
+    fn a_stored_64_bucket_blob_reads_its_counts_with_zeros_after_and_merges_with_the_wide_set() {
+        let mut blob = vec![0u8; 256];
+        blob[0] = 3;
+        blob[252] = 5;
+        let stored = Histogram::from_le_bytes(&blob);
+        let mut expected = [0u64; 84];
+        expected[0] = 3;
+        expected[63] = 5;
+        assert_eq!(stored.buckets(), expected);
+        let mut wide = Histogram::new();
+        wide.record(150_000.0);
+        wide.merge(&stored);
+        expected[66] = 1;
+        assert_eq!(wide.buckets(), expected);
     }
 
     #[test]
@@ -153,7 +190,7 @@ mod tests {
         let i = bucket_index(100.0);
         assert!(p99 >= edges[i] && p99 <= edges[i + 1]);
         let bytes = merged.to_le_bytes();
-        assert_eq!(bytes.len(), 256);
+        assert_eq!(bytes.len(), 336);
         assert_eq!(Histogram::from_le_bytes(&bytes), merged);
         let mut back = merged.clone();
         back.subtract(&b);

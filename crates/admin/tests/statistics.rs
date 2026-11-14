@@ -241,7 +241,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     );
     assert_eq!(
         business["histograms"]["ttfb_ms"].as_array().unwrap().len(),
-        64
+        84
     );
     let p50 = business["percentiles"]["ttfb_ms"]["p50"].as_f64().unwrap();
     assert!(

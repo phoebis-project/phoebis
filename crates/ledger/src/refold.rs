@@ -15,6 +15,12 @@
 //! A threshold move re-bands the request rows alone. The wasted-probe counts and the probes the keepalive still holds
 //! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old
 //! and the new threshold, inside the retained window, priced at the band it settled in.
+//!
+//! A fold rule (the slow-down's hold left out of the millisecond samples, the tokens-per-second floor, the wide edge
+//! set) changes the samples a request adds to its hour, so the first start of a build that holds a rule folds again
+//! each retained request that landed before the rule's mark: its deltas under the rules it was folded under come out
+//! and its deltas under every rule go in, at the thresholds its rows stand under. That pass runs before the band
+//! re-fold and resumes from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,12 +29,313 @@ use rusqlite::{params, Connection, Transaction};
 use serde::{Deserialize, Serialize};
 
 use crate::bodies::{first_kept_hour, request_cutoff};
-use crate::db::{begin_write, row_to_request, with_attempts, LedgerDb, REQUEST_SELECT};
+use crate::db::{
+    begin_write, row_to_request, with_attempts, LedgerDb, LANDING_STAMP_SQL, REQUEST_SELECT,
+};
 use crate::generations::PAGE;
 use crate::pricing::{LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable};
 use crate::record::{AttemptRecord, RequestRecord};
-use crate::rollup::{deltas_of, fold_delta, read_rollup, unfold, RollupRow};
+use crate::rollup::{deltas_of, fold_delta, read_rollup, unfold, FoldRules, RollupRow};
 use crate::LedgerError;
+
+/// One `meta` row per fold rule, `fold_rule_<name>`: `{"mark": <landing stamp>, "done": <bool>}`.
+pub const FOLD_RULE_KEY_PREFIX: &str = "fold_rule_";
+
+/// The `meta` key of a rules pass in progress, written by every page's transaction.
+pub const FOLD_RULES_REFOLD_KEY: &str = "fold_rules_refold";
+
+/// A rule's step from the rules a fold applied to the same rules less that one.
+type Without = fn(FoldRules) -> FoldRules;
+
+/// Each fold rule by the name its `meta` row carries, with the rules a request folded without it was folded under.
+const FOLD_RULES: [(&str, Without); 3] = [
+    ("slow_down_hold", |rules| FoldRules {
+        slow_down_hold: false,
+        ..rules
+    }),
+    ("throughput_floor", |rules| FoldRules {
+        throughput_floor: false,
+        ..rules
+    }),
+    ("wide_edges", |rules| FoldRules {
+        wide_edges: false,
+        ..rules
+    }),
+];
+
+/// A fold rule's `meta` row. Until the pass is `done`, a request whose `landed_at` is under `mark`, or null, holds
+/// the samples of a fold without the rule.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct RuleMark {
+    mark: i64,
+    done: bool,
+}
+
+fn rule_key(name: &str) -> String {
+    format!("{FOLD_RULE_KEY_PREFIX}{name}")
+}
+
+/// Writes the mark of every rule that has none, before the ledger folds its first request of this start. The mark
+/// is the landing watermark, the newest `landed_at` plus one, since a stored stamp can lie ahead of the clock.
+pub fn mark_fold_rules(db: &LedgerDb) -> Result<(), LedgerError> {
+    db.write(|c| {
+        let tx = begin_write(c)?;
+        let newest: i64 = tx
+            .prepare_cached(LANDING_STAMP_SQL)?
+            .query_row([], |r| r.get(0))?;
+        for (name, _) in FOLD_RULES {
+            let key = rule_key(name);
+            if read_meta::<RuleMark>(&tx, &key)?.is_none() {
+                write_meta(
+                    &tx,
+                    &key,
+                    &RuleMark {
+                        mark: newest + 1,
+                        done: false,
+                    },
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    })
+}
+
+/// Re-folds the retained requests that were folded without a rule whose pass is not done. Answers how many moved.
+/// A start that finds the cursor of a pass that stopped finishes that pass for the cursor's rules first, so a rule
+/// marked since then gets a pass of its own over every request. Each request folds at the thresholds its rows stand
+/// under (`Bands::of`), and the band re-fold moves the rows after this pass. The walk is `refold_bands`'s, bounded by
+/// the same retentions.
+pub fn refold_rules(
+    db: &LedgerDb,
+    retention_days: u32,
+    rollup_retention_days: u32,
+    now: i64,
+) -> Result<usize, LedgerError> {
+    let (cutoff, guard) = walk_bounds(retention_days, rollup_retention_days, now);
+    let (cursor, bands) = db.write(|c| {
+        Ok((
+            read_meta::<RulesCursor>(c, FOLD_RULES_REFOLD_KEY)?,
+            Bands::read(c)?,
+        ))
+    })?;
+    let walk = RulesWalk {
+        from: cutoff.unwrap_or(i64::MIN),
+        guard,
+        bands,
+    };
+    let mut moved = 0;
+    if let Some(cursor) = cursor {
+        moved += rules_pass(db, &walk, Some(cursor.rules.as_slice()), Some(cursor.after))?;
+    }
+    moved += rules_pass(db, &walk, None, None)?;
+    Ok(moved)
+}
+
+/// What a rules pass reads besides the rules: the walk's floor, the guard of `walk_bounds` and the thresholds.
+struct RulesWalk {
+    from: i64,
+    guard: Option<i64>,
+    bands: Bands,
+}
+
+/// A rule whose pass is not done.
+struct OpenRule {
+    name: &'static str,
+    mark: RuleMark,
+    without: Without,
+}
+
+fn open_rules(conn: &Connection) -> Result<Vec<OpenRule>, LedgerError> {
+    let mut open = Vec::new();
+    for (name, without) in FOLD_RULES {
+        let mark = read_meta::<RuleMark>(conn, &rule_key(name))?;
+        if let Some(mark) = mark.filter(|mark| !mark.done) {
+            open.push(OpenRule {
+                name,
+                mark,
+                without,
+            });
+        }
+    }
+    Ok(open)
+}
+
+/// One pass for the open rules `named` lists, every open rule where it lists none, resuming after `after`: a page per
+/// transaction with its cursor, the targets marked done and the cursor cleared by the last.
+fn rules_pass(
+    db: &LedgerDb,
+    walk: &RulesWalk,
+    named: Option<&[String]>,
+    mut after: Option<After>,
+) -> Result<usize, LedgerError> {
+    let open = db.write(|c| open_rules(c))?;
+    let targets: Vec<&OpenRule> = open
+        .iter()
+        .filter(|rule| named.is_none_or(|names| names.iter().any(|name| name == rule.name)))
+        .collect();
+    if targets.is_empty() {
+        return Ok(0);
+    }
+    let names: Vec<String> = targets.iter().map(|rule| rule.name.to_string()).collect();
+    let mut moved = 0;
+    loop {
+        let done = db.write(|c| {
+            let tx = begin_write(c)?;
+            let requests = requests_after(&tx, walk.from, after.as_ref(), PAGE)?;
+            for (request, attempts) in &requests {
+                let landed_at = landed_at(&tx, &request.id)?;
+                let (old, new) = folded_under(&open, &names, landed_at);
+                if old == new {
+                    continue;
+                }
+                let Some(prices) = walk.bands.of(request, landed_at) else {
+                    continue;
+                };
+                let (was, now) = (
+                    deltas_of(request, attempts, prices, old),
+                    deltas_of(request, attempts, prices, new),
+                );
+                if was == now {
+                    continue;
+                }
+                if walk.guard.is_some_and(|guard| request.received_at < guard)
+                    && !rows_stand(&tx, &was)?
+                {
+                    continue;
+                }
+                for delta in &was {
+                    unfold(&tx, delta)?;
+                }
+                for delta in &now {
+                    fold_delta(&tx, delta)?;
+                }
+                moved += 1;
+            }
+            let last = requests.len() < PAGE;
+            if last {
+                tx.execute(
+                    "DELETE FROM meta WHERE key = ?1",
+                    params![FOLD_RULES_REFOLD_KEY],
+                )?;
+                for rule in &targets {
+                    write_meta(
+                        &tx,
+                        &rule_key(rule.name),
+                        &RuleMark {
+                            done: true,
+                            ..rule.mark
+                        },
+                    )?;
+                }
+            } else if let Some((request, _)) = requests.last() {
+                let next = After {
+                    received_at: request.received_at,
+                    id: request.id.clone(),
+                };
+                write_meta(
+                    &tx,
+                    FOLD_RULES_REFOLD_KEY,
+                    &RulesCursor {
+                        rules: names.clone(),
+                        after: next.clone(),
+                    },
+                )?;
+                after = Some(next);
+            }
+            tx.commit()?;
+            Ok(last)
+        })?;
+        if done {
+            return Ok(moved);
+        }
+    }
+}
+
+/// The rules a request was folded under and the rules the pass folds it under. An open rule whose mark lies past the
+/// request's landing, or any open rule for a request from before the column, is missing from the first, and from the
+/// second too where the pass does not target it.
+fn folded_under(
+    open: &[OpenRule],
+    targets: &[String],
+    landed_at: Option<i64>,
+) -> (FoldRules, FoldRules) {
+    let (mut old, mut new) = (FoldRules::ALL, FoldRules::ALL);
+    for rule in open {
+        if landed_at.is_some_and(|at| at >= rule.mark.mark) {
+            continue;
+        }
+        old = (rule.without)(old);
+        if !targets.iter().any(|name| name == rule.name) {
+            new = (rule.without)(new);
+        }
+    }
+    (old, new)
+}
+
+fn landed_at(conn: &Connection, id: &str) -> Result<Option<i64>, LedgerError> {
+    Ok(conn
+        .prepare_cached("SELECT landed_at FROM requests WHERE id = ?1")?
+        .query_row(params![id], |r| r.get(0))?)
+}
+
+/// The thresholds the rows of the retained requests stand under, read before a rules pass.
+struct Bands {
+    /// A list with no threshold, which bands every prompt `standard`.
+    standard: PriceRevisions,
+    /// The band mark's `since` and thresholds, where a mark stands.
+    mark: Option<(i64, PriceRevisions)>,
+    /// A band re-fold that stopped mid-way: its source, its target and the last request it moved.
+    cursor: Option<(PriceRevisions, PriceRevisions, After)>,
+}
+
+impl Bands {
+    fn read(conn: &Connection) -> Result<Bands, LedgerError> {
+        let mark = read_meta::<Mark>(conn, PRICE_BANDS_KEY)?
+            .map(|mark| Ok::<_, LedgerError>((mark.since, revisions_of(&mark.revisions)?)))
+            .transpose()?;
+        let cursor = read_meta::<Cursor>(conn, PRICE_BANDS_REFOLD_KEY)?
+            .map(|c| {
+                Ok::<_, LedgerError>((revisions_of(&c.source)?, revisions_of(&c.target)?, c.after))
+            })
+            .transpose()?;
+        Ok(Bands {
+            standard: revisions_of(&[Thresholds {
+                effective: "1970-01-01".into(),
+                bands: BTreeMap::new(),
+            }])?,
+            mark,
+            cursor,
+        })
+    }
+
+    /// The list `request` bands by, `None` where the thresholds it landed under are stored nowhere. A request received
+    /// before the mark's `since` landed under the migration's `standard` where it landed before `since` too, and a
+    /// band re-fold that stopped mid-way moved the requests up to its cursor to its target alone.
+    fn of(&self, request: &RequestRecord, landed_at: Option<i64>) -> Option<&PriceRevisions> {
+        let Some((since, mark)) = &self.mark else {
+            return Some(&self.standard);
+        };
+        let since = *since;
+        if request.received_at < since {
+            return landed_at
+                .is_none_or(|at| at < since)
+                .then_some(&self.standard);
+        }
+        Some(match &self.cursor {
+            Some((source, target, after)) => {
+                if (request.received_at, request.id.as_str())
+                    <= (after.received_at, after.id.as_str())
+                {
+                    target
+                } else {
+                    source
+                }
+            }
+            None => mark,
+        })
+    }
+}
 
 /// The `meta` key holding the mark: `{"since": <ms>, "revisions": [{"effective": "<effective>", "bands": {"<model>":
 /// <over or null>}}]}`, `since` the instant the first mark was written (the first start after the migration) and the
@@ -71,6 +378,13 @@ struct Cursor {
     after: After,
 }
 
+/// A rules pass in progress: the rules it folds the requests under and the last request a committed page read.
+#[derive(Debug, Serialize, Deserialize)]
+struct RulesCursor {
+    rules: Vec<String>,
+    after: After,
+}
+
 /// Re-folds the requests whose band moved since the last start, in pages of 1,000 requests ordered by
 /// `(received_at, id)`, one transaction per page carrying the page's rows and its cursor, the mark rewritten and the
 /// cursor cleared in the last page's transaction. Answers how many requests moved: 0 on a first start (which writes
@@ -87,19 +401,7 @@ pub fn refold_bands(
     now: i64,
 ) -> Result<usize, LedgerError> {
     let loaded = thresholds_of(prices);
-    // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
-    // since the configuration holds a nonzero rollup retention at least as long as the request one, so the rollup
-    // purge drops at most the hour the request cutoff splits. The first hour boundary at or after the request cutoff
-    // guards each request before it rather than bounding the walk, since that hour's rows stand for every member under
-    // a rollup retention of 0 or a longer one, and a budgeted member's under an equal one too. Under a request
-    // retention of 0 the first hour the rollup purge keeps guards each request before it rather than bounding the walk,
-    // since the purge keeps a budgeted member's hours from its period's start, before that hour, and `member_spends`
-    // prices them by band.
-    let (cutoff, guard) = match (retention_days, rollup_retention_days) {
-        (0, 0) => (None, None),
-        (0, days) => (None, Some(first_kept_hour(now, days))),
-        (days, _) => (request_cutoff(days, now), Some(first_kept_hour(now, days))),
-    };
+    let (cutoff, guard) = walk_bounds(retention_days, rollup_retention_days, now);
     let mut moved = 0;
     let (mark, cursor) = db.write(|c| {
         Ok((
@@ -141,6 +443,28 @@ pub fn refold_bands(
     Ok(moved)
 }
 
+/// The request cutoff that bounds a re-fold's walk, and the instant before which a request moves only where its rows
+/// stand.
+fn walk_bounds(
+    retention_days: u32,
+    rollup_retention_days: u32,
+    now: i64,
+) -> (Option<i64>, Option<i64>) {
+    // Each purge's own arithmetic, a zero keeping its rows for good. A nonzero request retention bounds the walk,
+    // since the configuration holds a nonzero rollup retention at least as long as the request one, so the rollup
+    // purge drops at most the hour the request cutoff splits. The first hour boundary at or after the request cutoff
+    // guards each request before it rather than bounding the walk, since that hour's rows stand for every member under
+    // a rollup retention of 0 or a longer one, and a budgeted member's under an equal one too. Under a request
+    // retention of 0 the first hour the rollup purge keeps guards each request before it rather than bounding the walk,
+    // since the purge keeps a budgeted member's hours from its period's start, before that hour, and `member_spends`
+    // prices them by band.
+    match (retention_days, rollup_retention_days) {
+        (0, 0) => (None, None),
+        (0, days) => (None, Some(first_kept_hour(now, days))),
+        (days, _) => (request_cutoff(days, now), Some(first_kept_hour(now, days))),
+    }
+}
+
 /// One pass from `source` to `target` over the requests received at or after the later of `since`, the cutoff and the
 /// first instant the two lists' band functions differ, resuming after `after` when a start left one halfway. A request
 /// received before `guard` moves only where every row its old deltas name still stands.
@@ -168,8 +492,8 @@ fn pass(
             };
             for (request, attempts) in &requests {
                 let (was, now) = (
-                    deltas_of(request, attempts, &old),
-                    deltas_of(request, attempts, &new),
+                    deltas_of(request, attempts, &old, FoldRules::ALL),
+                    deltas_of(request, attempts, &new, FoldRules::ALL),
                 );
                 if was == now {
                     continue;
@@ -398,6 +722,8 @@ thread_local! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::insert_request_in;
+    use crate::histogram::Histogram;
     use crate::pricing::{Band, PriceTable, Speed};
     use crate::query::{member_spends, BudgetedMember};
     use crate::record::{AttemptRecord, RequestRecord};
@@ -1062,6 +1388,280 @@ mod tests {
                     1_500
                 ),
             ]
+        );
+    }
+
+    /// `request` written with its landing stamp from `now` and folded under `rules` at the thresholds of `prices`,
+    /// as a build that applied those rules filed it.
+    fn store(
+        db: &LedgerDb,
+        request: &(RequestRecord, Vec<AttemptRecord>),
+        prices: &PriceRevisions,
+        rules: FoldRules,
+        now: i64,
+    ) {
+        db.write(|c| {
+            let tx = begin_write(c)?;
+            insert_request_in(&tx, &request.0, &request.1, None, now)?;
+            for delta in deltas_of(&request.0, &request.1, prices, rules) {
+                fold_delta(&tx, &delta)?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// `haiku`'s request with its first byte at `ttfb_ms`, its first content at `ttfc_ms` and its end at
+    /// `duration_ms`.
+    fn timed(
+        id: &str,
+        received_at: i64,
+        prompt: u64,
+        (ttfb_ms, ttfc_ms, duration_ms): (i64, i64, i64),
+    ) -> (RequestRecord, Vec<AttemptRecord>) {
+        let (mut request, attempts) = haiku(id, received_at, prompt);
+        request.ttfb_ms = Some(ttfb_ms);
+        request.ttfc_ms = Some(ttfc_ms);
+        request.duration_ms = Some(duration_ms);
+        (request, attempts)
+    }
+
+    /// `request` held `held_ms` by the slow-down.
+    fn slowed(
+        mut request: (RequestRecord, Vec<AttemptRecord>),
+        held_ms: u64,
+    ) -> (RequestRecord, Vec<AttemptRecord>) {
+        request.0.held = Some(format!(
+            r#"{{"waits":[{{"reason":"slow_down","held_ms":{held_ms}}}]}}"#
+        ));
+        request
+    }
+
+    /// The row of the hour holding `received_at` in `band`.
+    fn row(db: &LedgerDb, received_at: i64, band: &str) -> RollupRow {
+        let hour = crate::rollup::hour_of(received_at);
+        rows(db)
+            .into_iter()
+            .find(|r| r.hour == hour && r.band == band)
+            .expect("the hour's row in the band")
+    }
+
+    /// A histogram holding `values`.
+    fn sampled(values: &[f64]) -> Histogram {
+        let mut h = Histogram::new();
+        for value in values {
+            h.record(*value);
+        }
+        h
+    }
+
+    /// Ten tokens over 40 ms read as 250 a second under no rule.
+    #[test]
+    fn the_rules_pass_takes_a_short_spans_tokens_per_second_sample_out_of_a_retained_hour() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let request = timed("r", at, 100, (200, 1_000, 1_040));
+        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, 0);
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(row(&db, at, STANDARD_BAND).output_tps_hist.count(), 0);
+    }
+
+    #[test]
+    fn the_rules_pass_moves_a_retained_sample_past_100_seconds_out_of_bucket_63() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let request = timed("r", at, 100, (200, 1_000, 150_000));
+        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, 0);
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(
+            row(&db, at, STANDARD_BAND).duration_hist,
+            sampled(&[150_000.0])
+        );
+    }
+
+    #[test]
+    fn the_rules_pass_moves_a_retained_held_requests_first_byte_to_its_time_less_the_hold() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let request = slowed(timed("r", at, 100, (21_000, 21_500, 30_000)), 20_000);
+        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, 0);
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(row(&db, at, STANDARD_BAND).ttfb_hist, sampled(&[1_000.0]));
+    }
+
+    /// The late request's 40 ms span reads 250 tokens a second under no rule, the rate the other request of its
+    /// hour records, which no rule moves.
+    #[test]
+    fn the_rules_pass_leaves_a_request_that_landed_after_the_marks_as_folded() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let mut other = timed("a", at, 100, (100, 500, 1_500));
+        other.1[0].output_tokens = Some(250);
+        store(&db, &other, &list(Some(1_000)), FoldRules::NONE, 0);
+        mark_fold_rules(&db).unwrap();
+        let late = timed("b", at + 1_000, 100, (200, 1_000, 1_040));
+        store(&db, &late, &list(Some(1_000)), FoldRules::ALL, 0);
+        let histograms =
+            |r: RollupRow| (r.ttfb_hist, r.ttfc_hist, r.duration_hist, r.output_tps_hist);
+        let folded = histograms(row(&db, at, STANDARD_BAND));
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(histograms(row(&db, at, STANDARD_BAND)), folded);
+    }
+
+    /// The state a pass that stopped after its first page leaves: the first request as the pass moved it, the second
+    /// as the old fold filed it and the cursor at the first, beside a request of the same hour that no rule moves.
+    #[test]
+    fn a_rules_pass_resumes_after_its_cursor_and_moves_each_request_once() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let first = slowed(timed("r1", at, 100, (21_000, 21_500, 30_000)), 20_000);
+        let second = slowed(
+            timed("r2", at + 1_000, 100, (32_000, 32_500, 40_000)),
+            30_000,
+        );
+        let other = timed("r3", at + 2_000, 100, (5_000, 5_500, 9_000));
+        store(&db, &first, &list(Some(1_000)), FoldRules::ALL, 0);
+        store(&db, &second, &list(Some(1_000)), FoldRules::NONE, 0);
+        store(&db, &other, &list(Some(1_000)), FoldRules::NONE, 0);
+        mark_fold_rules(&db).unwrap();
+        db.write(|c| {
+            let tx = begin_write(c)?;
+            write_meta(
+                &tx,
+                FOLD_RULES_REFOLD_KEY,
+                &RulesCursor {
+                    rules: vec![
+                        "slow_down_hold".into(),
+                        "throughput_floor".into(),
+                        "wide_edges".into(),
+                    ],
+                    after: After {
+                        received_at: at,
+                        id: "r1".into(),
+                    },
+                },
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(
+            row(&db, at, STANDARD_BAND).ttfb_hist,
+            sampled(&[1_000.0, 2_000.0, 5_000.0])
+        );
+    }
+
+    /// One start with a moved threshold and an open rule: the held request's 1,500 prompt tokens fell in the long
+    /// band at 1,000 and fall in the standard one at 2,000, while the long row's other request of 2,500 and the
+    /// standard row's of 500 stay where they are.
+    #[test]
+    fn the_rules_pass_folds_under_the_stored_thresholds_before_the_band_refold_moves_the_request() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let now = NEW_YEAR + 3 * DAY;
+        refold_bands(&db, &list(Some(1_000)), 0, 0, NEW_YEAR + DAY).unwrap();
+        let at = NEW_YEAR + 2 * DAY;
+        let held = slowed(timed("r", at, 1_500, (21_000, 21_500, 30_000)), 20_000);
+        let long = timed("l", at + 1_000, 2_500, (5_000, 5_500, 9_000));
+        let short = timed("s", at + 2_000, 500, (6_000, 6_500, 9_000));
+        for request in [&held, &long, &short] {
+            store(&db, request, &list(Some(1_000)), FoldRules::NONE, 0);
+        }
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, now).unwrap();
+        refold_bands(&db, &list(Some(2_000)), 0, 0, now).unwrap();
+        assert_eq!(
+            (
+                row(&db, at, STANDARD_BAND).ttfb_hist,
+                row(&db, at, LONG_BAND).ttfb_hist
+            ),
+            (sampled(&[1_000.0, 6_000.0]), sampled(&[5_000.0]))
+        );
+    }
+
+    /// 2100-01-01, past the start's clock and the host's.
+    const AHEAD: i64 = 4_102_444_800_000;
+
+    /// A landing before a clock set back leaves a stamp ahead of the clock.
+    #[test]
+    fn the_rules_pass_folds_again_a_request_whose_stamp_lies_ahead_of_the_clock() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let request = timed("r", at, 100, (200, 1_000, 1_040));
+        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, AHEAD);
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 7, 0, NEW_YEAR + 2 * DAY).unwrap();
+        assert_eq!(row(&db, at, STANDARD_BAND).output_tps_hist.count(), 0);
+    }
+
+    /// The state a band re-fold that stopped after its first page leaves, from 1,000 to 2,000: the first held request
+    /// of 1,500 prompt tokens in the standard band, as the pass moved it, the second a day later in the long band,
+    /// each folded under no rule, and a request that stays in each row. The start then loads 1,200, which bands
+    /// 1,500 long.
+    #[test]
+    fn the_rules_pass_bands_each_request_by_the_side_of_a_stopped_band_refolds_cursor_it_stands_on()
+    {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let (day1, day2) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
+        let (source, target) = (list(Some(1_000)), list(Some(2_000)));
+        let first = slowed(timed("r1", day1, 1_500, (21_000, 21_500, 30_000)), 20_000);
+        let second = slowed(timed("r2", day2, 1_500, (22_000, 22_500, 30_000)), 20_000);
+        store(&db, &first, &target, FoldRules::NONE, 0);
+        store(&db, &second, &source, FoldRules::NONE, 0);
+        for request in [
+            timed("s1", day1 + 1_000, 500, (6_000, 6_500, 9_000)),
+            timed("l1", day1 + 2_000, 2_500, (5_000, 5_500, 9_000)),
+            timed("s2", day2 + 1_000, 500, (6_000, 6_500, 9_000)),
+            timed("l2", day2 + 2_000, 2_500, (5_000, 5_500, 9_000)),
+        ] {
+            store(&db, &request, &source, FoldRules::NONE, 0);
+        }
+        db.write(|c| {
+            let tx = begin_write(c)?;
+            write_meta(
+                &tx,
+                PRICE_BANDS_KEY,
+                &Mark {
+                    since: NEW_YEAR,
+                    revisions: thresholds_of(&source),
+                },
+            )?;
+            write_meta(
+                &tx,
+                PRICE_BANDS_REFOLD_KEY,
+                &Cursor {
+                    source: thresholds_of(&source),
+                    target: thresholds_of(&target),
+                    after: After {
+                        received_at: day1,
+                        id: "r1".into(),
+                    },
+                },
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        let now = NEW_YEAR + 3 * DAY;
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, now).unwrap();
+        refold_bands(&db, &list(Some(1_200)), 0, 0, now).unwrap();
+        let ttfb = |at: i64| {
+            (
+                row(&db, at, LONG_BAND).ttfb_hist,
+                row(&db, at, STANDARD_BAND).ttfb_hist,
+            )
+        };
+        assert_eq!(
+            (ttfb(day1), ttfb(day2)),
+            (
+                (sampled(&[1_000.0, 5_000.0]), sampled(&[6_000.0])),
+                (sampled(&[2_000.0, 5_000.0]), sampled(&[6_000.0]))
+            )
         );
     }
 }

@@ -10,11 +10,11 @@ use phoebis_ledger::{
     member_spends, moves_by_reason, placements, pool_traffic, pools_traffic, price_shares,
     read_account_rollups, read_rollups, refusal_categories, rewrite_series, run_retention_blocking,
     series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
-    EventRecord, FundingFilter, GroupBy, GroupRow, Histogram, InputTransformation, KeepaliveDelta,
-    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables, PriceRevisions,
-    PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
-    Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
-    PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    EventRecord, FoldRules, FundingFilter, GroupBy, GroupRow, Histogram, InputTransformation,
+    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
+    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
+    RollupSelect, SeriesFilter, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING, NO_CLASS,
+    OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
@@ -189,7 +189,7 @@ fn aggregate(
 ) -> BTreeMap<String, RollupRow> {
     let mut out: BTreeMap<String, RollupRow> = BTreeMap::new();
     for (request, attempts) in rows {
-        for delta in deltas_of(request, attempts, &PRICES) {
+        for delta in deltas_of(request, attempts, &PRICES, FoldRules::ALL) {
             let key = group(&delta);
             out.entry(key.clone())
                 .and_modify(|row| row.add(&delta))

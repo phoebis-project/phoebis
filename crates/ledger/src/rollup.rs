@@ -539,6 +539,34 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
     }
 }
 
+/// The shortest span from the first content to the end that records a tokens-per-second sample.
+pub const THROUGHPUT_FLOOR_MS: u64 = 500;
+
+/// The fold rules a request's deltas are computed under. The landing applies `FoldRules::ALL`, and the re-fold
+/// pass computes a stored request's old deltas under the rules it was folded under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoldRules {
+    /// A tokens-per-second sample needs a span of at least `THROUGHPUT_FLOOR_MS`.
+    pub throughput_floor: bool,
+    /// A sample past 100,000 files in its own bucket of the 84 rather than in bucket 63.
+    pub wide_edges: bool,
+    /// The three millisecond samples leave out the request's slow-down wait.
+    pub slow_down_hold: bool,
+}
+
+impl FoldRules {
+    pub const ALL: FoldRules = FoldRules {
+        throughput_floor: true,
+        wide_edges: true,
+        slow_down_hold: true,
+    };
+    pub const NONE: FoldRules = FoldRules {
+        throughput_floor: false,
+        wide_edges: false,
+        slow_down_hold: false,
+    };
+}
+
 /// One delta per distinct (band, speed, funding) triple among the attempts with usage, the band from the attempt's
 /// own prompt against the revision in force at the request's `received_at`, the speed the attempt's own and the
 /// funding `funding_of` reads off the attempt's four facts, each delta summing its attempts' five counts,
@@ -546,11 +574,12 @@ fn subtract_counts(into: &mut BTreeMap<String, u64>, from: &BTreeMap<String, u64
 /// `failovers`, the cache figures, the histograms and the errors sit on the serving attempt's delta alone (its band,
 /// its speed, its funding). A request with no attempt with usage files one delta under `STANDARD_BAND` keyed by the
 /// serving attempt's speed and funding. The tier is the serving attempt's on every delta, so a fast retry beside a
-/// standard answer prices at the fast cells and a standard one at the standard cells.
+/// standard answer prices at the fast cells and a standard one at the standard cells. The samples follow `rules`.
 pub fn deltas_of(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
     prices: &PriceRevisions,
+    rules: FoldRules,
 ) -> Vec<RollupRow> {
     let table = prices.in_force(request.received_at);
     let model = request.canonical_model.as_str();
@@ -696,7 +725,8 @@ pub fn deltas_of(
     // A held probe and a refused request asked no account and reached no cache, so neither counts under a request
     // figure, a timing or an error code the rate should count.
     if counted {
-        if let Some(held_ms) = slow_down_held_ms(request.held.as_deref()) {
+        let slowed_ms = slow_down_held_ms(request.held.as_deref());
+        if let Some(held_ms) = slowed_ms {
             d.slow_down_held_ms = held_ms;
             d.slow_down_held = 1;
         }
@@ -707,23 +737,43 @@ pub fn deltas_of(
         } else {
             d.uncached_requests = 1
         }
+        let record = |hist: &mut Histogram, value: f64| {
+            if rules.wide_edges {
+                hist.record(value)
+            } else {
+                hist.record_narrow(value)
+            }
+        };
+        // The slow-down's waits leave the samples, since the held chart shows them, and a `cap`, `reset` or
+        // `rewrite` wait stays in, which no chart shows.
+        let hold = slowed_ms.filter(|_| rules.slow_down_hold).unwrap_or(0);
+        let less_hold = |ms: i64| u64::try_from(ms).unwrap_or(0).saturating_sub(hold) as f64;
         if let Some(t) = request.ttfb_ms {
-            d.ttfb_hist.record(t as f64);
+            record(&mut d.ttfb_hist, less_hold(t));
         }
         if let Some(t) = request.ttfc_ms {
-            d.ttfc_hist.record(t as f64);
+            record(&mut d.ttfc_hist, less_hold(t));
         }
         if let Some(t) = request.duration_ms {
-            d.duration_hist.record(t as f64);
+            record(&mut d.duration_hist, less_hold(t));
         }
+        // Both stored samples carry the same wait, so the span between them stands without the hold.
         if let (Some(out), Some(duration), Some(ttfc)) = (
             last.and_then(|a| a.output_tokens),
             request.duration_ms,
             request.ttfc_ms,
         ) {
-            let span_s = (duration - ttfc) as f64 / 1_000.0;
-            if span_s > 0.0 {
-                d.output_tps_hist.record(out as f64 / span_s);
+            let floor = if rules.throughput_floor {
+                THROUGHPUT_FLOOR_MS
+            } else {
+                1
+            };
+            let span_ms = u64::try_from(duration - ttfc).ok();
+            if let Some(span_ms) = span_ms.filter(|span_ms| *span_ms >= floor) {
+                record(
+                    &mut d.output_tps_hist,
+                    out as f64 / (span_ms as f64 / 1_000.0),
+                );
             }
         }
         if let Some(code) = request.error_code.as_ref().filter(|_| !client_left) {
@@ -903,11 +953,11 @@ pub fn fold_request(
     // in both rows, and a later request's row otherwise, where the counters saturate at zero while the totals still
     // balance. Accepted for a record replaced across one restart.
     if let Some((old_request, old_attempts)) = previous {
-        for old in deltas_of(old_request, old_attempts, prices) {
+        for old in deltas_of(old_request, old_attempts, prices, FoldRules::ALL) {
             unfold(tx, &old)?;
         }
     }
-    for delta in deltas_of(request, attempts, prices) {
+    for delta in deltas_of(request, attempts, prices, FoldRules::ALL) {
         fold_delta(tx, &delta)?;
     }
     for a in attempts {
@@ -2578,7 +2628,7 @@ mod tests {
         attempts: &[AttemptRecord],
         prices: &PriceRevisions,
     ) -> RollupRow {
-        let mut deltas = deltas_of(r, attempts, prices);
+        let mut deltas = deltas_of(r, attempts, prices, FoldRules::ALL);
         assert_eq!(deltas.len(), 1, "{deltas:?}");
         deltas.remove(0)
     }
@@ -2825,6 +2875,70 @@ mod tests {
             (d.client_canceled, d.failed, d.errors.get("client_gone")),
             (0, 1, Some(&1))
         );
+    }
+
+    /// A histogram holding the one sample `value`.
+    fn sampled(value: f64) -> Histogram {
+        let mut h = Histogram::new();
+        h.record(value);
+        h
+    }
+
+    /// `request`'s answer with its first content at 300 ms and its end at `duration_ms`, ten tokens out.
+    #[test]
+    fn a_tokens_per_second_sample_needs_500_ms_from_the_first_content_to_the_end() {
+        let ended = |duration_ms: i64| RequestRecord {
+            duration_ms: Some(duration_ms),
+            ..request("succeeded", Some(200), Some("k"))
+        };
+        let answered = [attempt(1, "a", None, None, Some(10))];
+        assert_eq!(
+            one_delta(&ended(799), &answered, &prices())
+                .output_tps_hist
+                .count(),
+            0,
+            "a span of 499 ms records no sample"
+        );
+        assert_eq!(
+            one_delta(&ended(800), &answered, &prices()).output_tps_hist,
+            sampled(20.0),
+            "ten tokens over 500 ms"
+        );
+    }
+
+    /// A request whose one wait carries `reason`, held `held_ms` before its first byte at `ttfb_ms`.
+    fn held(reason: &str, held_ms: u64, ttfb_ms: i64) -> RequestRecord {
+        RequestRecord {
+            held: Some(format!(
+                r#"{{"waits":[{{"reason":"{reason}","held_ms":{held_ms}}}]}}"#
+            )),
+            ttfb_ms: Some(ttfb_ms),
+            ..request("succeeded", Some(200), Some("k"))
+        }
+    }
+
+    #[test]
+    fn the_millisecond_samples_leave_out_the_slow_down_wait_and_keep_any_other() {
+        let answered = [attempt(1, "a", None, None, Some(10))];
+        assert_eq!(
+            one_delta(&held("slow_down", 119_991, 121_318), &answered, &prices()).ttfb_hist,
+            sampled(1_327.0)
+        );
+        assert_eq!(
+            one_delta(&held("reset", 30_000, 31_000), &answered, &prices()).ttfb_hist,
+            sampled(31_000.0)
+        );
+    }
+
+    /// `request`'s duration is 900 ms.
+    #[test]
+    fn a_slow_down_wait_longer_than_the_duration_records_it_in_bucket_0() {
+        let d = one_delta(
+            &held("slow_down", 1_000, 100),
+            &[attempt(1, "a", None, None, Some(10))],
+            &prices(),
+        );
+        assert_eq!(d.duration_hist, sampled(0.0));
     }
 
     /// The fixed filters narrow the read in SQL: with a pool and an account named, the planner seeks the member
@@ -3548,6 +3662,7 @@ mod tests {
                 },
             ],
             &prices(),
+            FoldRules::ALL,
         );
         let seen: Vec<_> = deltas
             .iter()
@@ -3640,6 +3755,7 @@ mod tests {
             &r,
             &[prompted(1, "a", over + 1), unanswered(2, "b")],
             &prices(),
+            FoldRules::ALL,
         );
         let seen: Vec<_> = deltas
             .iter()
@@ -3753,6 +3869,7 @@ mod tests {
             &r,
             &[million(1, "fast"), million(2, STANDARD_SPEED)],
             &prices(),
+            FoldRules::ALL,
         );
         let seen: Vec<_> = deltas
             .iter()

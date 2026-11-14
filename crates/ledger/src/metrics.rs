@@ -1,5 +1,5 @@
 //! Prometheus text format, rendered by hand: a handful of counters and gauges with bounded label sets, and
-//! one histogram over the same 64 buckets the rollups use.
+//! one histogram over the same 84 buckets the rollups use.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -28,7 +28,7 @@ const LOCK_POISONED: &str = "metrics registry poisoned by a prior panic";
 
 type Labels = Vec<(&'static str, String)>;
 
-/// One model's TTFB series: the 64 finite buckets, the observations past the last edge, and the sum in seconds.
+/// One model's TTFB series: the 84 finite buckets, the observations past the last edge, and the sum in seconds.
 /// The overflow is kept apart so `+Inf` can carry what no finite bound answers for.
 struct Series {
     buckets: [u64; BUCKET_COUNT],

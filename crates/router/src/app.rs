@@ -220,6 +220,21 @@ pub async fn run_until(
             );
         }
     }
+    phoebis_ledger::mark_fold_rules(&ledger_db)
+        .context("marking the fold rules this build applies")?;
+    let refolded = phoebis_ledger::refold_rules(
+        &ledger_db,
+        config.stats.retention_days,
+        config.stats.rollup_retention_days,
+        clock(),
+    )
+    .context("re-folding the requests folded before a fold rule")?;
+    if refolded > 0 {
+        tracing::info!(
+            requests = refolded,
+            "re-folded the requests folded before a fold rule of this build"
+        );
+    }
     let refolded = phoebis_ledger::refold_bands(
         &ledger_db,
         &pricing.revisions(),
