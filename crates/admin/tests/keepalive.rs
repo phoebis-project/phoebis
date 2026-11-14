@@ -1552,6 +1552,7 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
             auxiliary_only: false,
             effort: None,
             ended: false,
+            thinking_sums: Default::default(),
         })
         .unwrap();
     let parts = common::admin_parts_full_on(seed.store.clone()).await;
@@ -1603,6 +1604,7 @@ fn line_pin(session: &str, agent: &str, model: &str, key_generation: i64) -> pho
         auxiliary_only: false,
         effort: None,
         ended: false,
+        thinking_sums: Default::default(),
     }
 }
 

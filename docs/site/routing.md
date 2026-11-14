@@ -539,18 +539,19 @@ the demand is the achieved burn. A placement's own read leaves the session's own
 of the fit and the Pace score, while every other read keeps it.
 
 A session's runway on an account is the time until that account's projection, with the session's cold rewrite (its last
-prompt as one cache write) added now and its burn added to the account's, reaches the ceiling of a window's kind,
-`five_hour_ceiling` or `weekly_ceiling`: none when the rewrite alone takes a window there, unbounded when nothing burns,
-and unbounded on the Sessions route and in the decision record's fit table where it reaches past the window's next
-reset, while the fit's verdict reads the computed figure against the horizon and the strategy's tie-break ranks by it. A
-move reads its runway to the ceiling less half the session's own burn over the time to the horizon, so the line that
-admits a moved session sits under the line that sheds one. A session's burn average under-reads the burn its window then
-takes by more than half often enough that a destination whose room covers that burn with less than half of it to spare
-would fill before the horizon, and the next round would shed the session back. A fresh placement reads the ceiling. The
-session fits the account when the runway reaches the horizon on every window its model draws that the account's window
-set holds, `five_hour` where the set has it, `seven_day` and the model's own week where it has one, so an approved Ultra
-account is judged on its 7-day window and the model week alone. An API-key account fits while its worst live rate-limit
-bucket reads under 1.0. A usage-based seat fits as an API-key account does: with no bucket to read, it has room.
+prompt as one cache write, sized for that account as [What a move drops](#what-a-move-drops) says) added now and its
+burn added to the account's, reaches the ceiling of a window's kind, `five_hour_ceiling` or `weekly_ceiling`: none when
+the rewrite alone takes a window there, unbounded when nothing burns, and unbounded on the Sessions route and in the
+decision record's fit table where it reaches past the window's next reset, while the fit's verdict reads the computed
+figure against the horizon and the strategy's tie-break ranks by it. A move reads its runway to the ceiling less half
+the session's own burn over the time to the horizon, so the line that admits a moved session sits under the line that
+sheds one. A session's burn average under-reads the burn its window then takes by more than half often enough that a
+destination whose room covers that burn with less than half of it to spare would fill before the horizon, and the next
+round would shed the session back. A fresh placement reads the ceiling. The session fits the account when the runway
+reaches the horizon on every window its model draws that the account's window set holds, `five_hour` where the set has
+it, `seven_day` and the model's own week where it has one, so an approved Ultra account is judged on its 7-day window
+and the model week alone. An API-key account fits while its worst live rate-limit bucket reads under 1.0. A usage-based
+seat fits as an API-key account does: with no bucket to read, it has room.
 
 A move or a placement books its rewrite and its burn, on the windows its model draws that the destination's set holds,
 as a reservation, which the destination's prediction and burn count until the request's usage replaces it, the request
@@ -812,6 +813,31 @@ left (`from_account_id`). The pin of a session idle past its TTL stays an expiry
 pin replaced on its own account: each records `pin_expired` with `reasons` and `pin_created`, and its placement names no
 source. A deleted account's pins leave when the router reloads, as `pin_expired` with `deleted`, so a session that sat
 on one is placed afresh and its placement names no source.
+
+#### What a move drops
+
+A model can bind the thinking blocks of an answer to the account that produced them. A move over such a pair of accounts
+drops the blocks of the account it leaves from the session's prompt, and the destination reads its own blocks the
+session still carries from an earlier stay there again, so the prompt the destination writes is smaller by the one and
+larger by the other.
+
+The router learns the binding per model and unordered pair of accounts. Each pin keeps, per account, the thinking tokens
+that account's answers reported for the session (`output_tokens_details.thinking_tokens`), and a request that carries
+`x-claude-code-context-compacted` sets each sum to zero, since its compacted prompt holds no earlier block. The sums
+travel with the session: a move keeps them, and the landing after a failover takes the lost pin's. When a selection
+lands a session on another account than its pin stood on, and the pin holds thinking of the account it leaves, the
+first answer with usage on the new account settles the pair. Its `input_transformations` member reads the pair bound
+where it lists a block dropped as `end_user_binding_mismatch` or `organization_binding_mismatch`, and kept where it
+lists neither, since the client's standing `prefix_binding_mismatch` entry is no drop the move caused. An answer
+without the member reads the pair bound where its prompt is smaller than the last prompt before the move, and settles
+nothing otherwise. The newest answer replaces what the pair held, and the registry keeps each pair's fact across a
+restart, while a move whose answer has not come yet is forgotten. A pair with no fact of its own reads bound once the
+model holds a bound pair, and unobserved otherwise.
+
+A move over a pair that reads bound prices its rewrite as the last prompt, less the pin's sum for the account it
+leaves, plus its sum for the destination, never under zero. A pair that reads kept or unobserved, a session with no pin
+and a pin no answer has renewed with usage price their rewrite as above. The shedding round orders its pins by the
+whole last prompt of each, and the `rewrite` of a planned move in the round's record reads the smaller size.
 
 ### Slow-down
 

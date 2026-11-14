@@ -11,7 +11,8 @@ pub use phoebis_store::EvidenceSource;
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
     FirstSeenRow, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember,
-    PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, StateCause, WindowRow, WindowSetRow,
+    PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, StateCause, ThinkingBindingRow, WindowRow,
+    WindowSetRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -439,6 +440,8 @@ pub enum StateWrite {
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
+    /// A pair's fact as an observation closed it, in place of the one the pair held.
+    ReplaceThinkingBinding(ThinkingBindingRow),
     /// A pool's shedding round on an account: the round's time, which replaces the pool's previous one on the account
     /// so the dwell survives a restart. The marks travel on the pin rows the round writes beside it.
     ShedRound {
@@ -516,6 +519,17 @@ pub struct DroppedBlocks {
     pub blocks: u64,
     /// The lowest index `i` of the dropped blocks' `messages.{i}` paths.
     pub first_message: u64,
+}
+
+/// What the engine learned of a model's thinking blocks between two accounts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Binding {
+    /// The account a session moves to drops the blocks the other produced.
+    Bound,
+    /// The account a session moves to keeps them.
+    Kept,
+    /// No move of the model has shown either.
+    Unobserved,
 }
 
 /// The share of an account's own window a completed request consumed, priced through the ledger's tables, which
@@ -1607,6 +1621,9 @@ pub struct RoutingState {
     /// The source and the reset of each usage-based account's share as a poll or a head of this run set it, by
     /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
     spend_shares: HashMap<String, SpendShare>,
+    /// Each pair's learned fact by model, then by the pair with the smaller id first: true where the pair is bound.
+    /// Written through and loaded at the start.
+    thinking_bindings: HashMap<String, BTreeMap<(String, String), bool>>,
     /// The pin of each session's turn that ended last, by key and session id, as the renewal report at a client
     /// stream's end names it, with the account and incarnation it ran on: what a classifier call that follows within
     /// milliseconds judges. Memory only: after a restart the pins' own stamps stand in until the session's next turn
@@ -1629,6 +1646,15 @@ pub(crate) struct TurnEnd {
 struct WeekHours {
     incarnation: u64,
     hours: BTreeMap<i64, f64>,
+}
+
+/// Two accounts as the facts key their unordered pair: the smaller id first.
+fn pair(account: &str, other: &str) -> (String, String) {
+    if account <= other {
+        (account.to_string(), other.to_string())
+    } else {
+        (other.to_string(), account.to_string())
+    }
 }
 
 /// The clock hour `at` falls in: the instant in milliseconds over `HOUR_MS`, floored.
@@ -1686,6 +1712,14 @@ impl RoutingState {
                 .or_default();
             record.incarnation = row.incarnation;
             record.hours.insert(row.hour, row.share);
+        }
+        let mut thinking_bindings: HashMap<String, BTreeMap<(String, String), bool>> =
+            HashMap::new();
+        for row in load.thinking_bindings {
+            thinking_bindings
+                .entry(row.model)
+                .or_default()
+                .insert((row.account_a, row.account_b), row.bound);
         }
         RoutingState {
             accounting_degraded: false,
@@ -1756,6 +1790,7 @@ impl RoutingState {
             slow_downs: HashMap::new(),
             spend_heads: HashMap::new(),
             spend_shares: HashMap::new(),
+            thinking_bindings,
             turn_ends: HashMap::new(),
         }
     }
@@ -2357,6 +2392,55 @@ impl RoutingState {
     pub fn drop_usage_based_overage(&mut self, snapshot: &RegistrySnapshot) {
         self.overage
             .retain(|account_id, _| !snapshot.usage_based(account_id));
+    }
+
+    /// Drops each loaded pin's thinking sum of an account the registry no longer holds: no move can land there to
+    /// read it again.
+    pub fn drop_absent_thinking_sums(&mut self, snapshot: &RegistrySnapshot) {
+        for pin in self.pins.values_mut() {
+            pin.thinking_sums
+                .retain(|account_id, _| snapshot.account(account_id).is_some());
+        }
+    }
+
+    /// What the engine learned of `model`'s thinking blocks between two accounts: the pair's own row, else bound
+    /// where the model holds a bound row for another pair, else unobserved.
+    pub fn binding(&self, model: &str, account: &str, other: &str) -> Binding {
+        let Some(pairs) = self.thinking_bindings.get(model) else {
+            return Binding::Unobserved;
+        };
+        match pairs.get(&pair(account, other)) {
+            Some(true) => Binding::Bound,
+            Some(false) => Binding::Kept,
+            // One drop says the upstream binds the model's blocks to the account that produced them, which reaches
+            // every pair until the pair's own move shows otherwise.
+            None if pairs.values().any(|bound| *bound) => Binding::Bound,
+            None => Binding::Unobserved,
+        }
+    }
+
+    /// Records what a move of `model`'s session from `left` to `served` showed, in place of the pair's fact, and
+    /// answers the row the store writes.
+    pub(crate) fn learn_binding(
+        &mut self,
+        model: &str,
+        left: &str,
+        served: &str,
+        bound: bool,
+        at: i64,
+    ) -> ThinkingBindingRow {
+        let (account_a, account_b) = pair(left, served);
+        self.thinking_bindings
+            .entry(model.to_string())
+            .or_default()
+            .insert((account_a.clone(), account_b.clone()), bound);
+        ThinkingBindingRow {
+            model: model.to_string(),
+            account_a,
+            account_b,
+            bound,
+            observed_at: at,
+        }
     }
 
     /// Every live cooldown row of one account, whatever its scope, in no particular order. `cooldown` answers
@@ -4481,6 +4565,7 @@ mod tests {
             auxiliary_only: false,
             effort: None,
             ended: false,
+            thinking_sums: Default::default(),
         };
         (pin, Some(burn))
     }

@@ -1496,6 +1496,7 @@ async fn a_pin_the_ledger_has_no_row_for_reads_a_zero_request_count() {
                 auxiliary_only: false,
                 effort: None,
                 ended: false,
+                thinking_sums: Default::default(),
             })
             .unwrap();
     }
@@ -1594,6 +1595,7 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
             auxiliary_only: false,
             effort: None,
             ended: false,
+            thinking_sums: Default::default(),
         })
         .unwrap();
     let parts = common::admin_parts_full_on(store).await;
@@ -1793,6 +1795,7 @@ async fn a_sessions_placements_count_mains_placements_and_moves_and_no_other_age
                 auxiliary_only: false,
                 effort: None,
                 ended: false,
+                thinking_sums: Default::default(),
             })
             .unwrap();
     }
@@ -6766,6 +6769,7 @@ async fn the_sessions_route_and_a_decision_record_name_why_the_pin_was_stamped()
         auxiliary_only: false,
         effort: None,
         ended: false,
+        thinking_sums: Default::default(),
     };
     seed.store.upsert_pin(&stamped).unwrap();
     // A round marked the second session's pin on the subscription account it still stands on, and no move stamped it.

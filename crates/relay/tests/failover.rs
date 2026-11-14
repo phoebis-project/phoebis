@@ -3466,6 +3466,182 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_move_back_prices_the_thinking_each_account_produced_from_the_answers_the_relay_read() {
+    let up = FakeUpstream::start(vec![]).await;
+    // Ten hours past NOW in Unix seconds, so the spent rule moves the pin rather than waiting for the reset.
+    let reset = (NOW / 1_000 + 10 * 3_600).to_string();
+    let spent = |body: &str| Respond::Json {
+        status: 200,
+        headers: vec![
+            (
+                "anthropic-ratelimit-unified-5h-utilization".into(),
+                "1.0".into(),
+            ),
+            ("anthropic-ratelimit-unified-5h-reset".into(), reset.clone()),
+        ],
+        body: body.as_bytes().to_vec(),
+    };
+    up.push_credential_rule(
+        A,
+        "/v1/messages",
+        spent(
+            r#"{"id":"msg_a01","type":"message","content":[],"usage":{"input_tokens":100000,"output_tokens":41000,"output_tokens_details":{"thinking_tokens":40000}}}"#,
+        ),
+    );
+    up.push_credential_rule(
+        B,
+        "/v1/messages",
+        spent(
+            r#"{"id":"msg_b01","type":"message","content":[],"usage":{"input_tokens":120000,"output_tokens":11000,"output_tokens_details":{"thinking_tokens":10000}},"input_transformations":[{"type":"thinking_dropped","reason":"end_user_binding_mismatch","path":"messages.1"}]}"#,
+        ),
+    );
+    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_a02"));
+    // As `priced_harness` builds its own, with a write at either TTL priced, since the fixture's markers ask for an
+    // hour.
+    let accounts = [oauth("a", A, 0), oauth("b", B, 1)];
+    let h = harness_with_router_config(
+        &up,
+        &accounts,
+        PoolSpec::default(),
+        RouterConfig {
+            share: SharePricer::new(|_, _, tier, _, usage, _| {
+                (tier == TIER)
+                    .then(|| (usage.input + usage.write_5m + usage.write_1h) as f64 / 10_000_000.0)
+            }),
+            ..RouterConfig::default()
+        },
+    )
+    .await;
+    for account in &accounts {
+        h.store
+            .set_profile(
+                account.id,
+                "{}",
+                &SubscriptionRow {
+                    tier: Some(TIER.into()),
+                    ..SubscriptionRow::default()
+                },
+            )
+            .unwrap();
+    }
+    h.router.reload().await.unwrap();
+    let poll = |account: &str, five_hour: f64, at: i64| {
+        let reading = |utilization: f64, reset: i64| WindowReading {
+            utilization,
+            reset: Some(reset),
+            observed_at: at,
+            source: WindowSource::Poll,
+            plan: None,
+            tier: None,
+        };
+        Report::Sample {
+            account_id: account.into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(five_hour, at + 3 * 3_600_000))
+                .with(SEVEN_DAY, reading(0.1, at + 72 * 3_600_000)),
+            incarnation: 1,
+            source_request_id: None,
+        }
+    };
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "a");
+    resp.into_body().collect().await.unwrap();
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.last_input_tokens == 100_000)
+    })
+    .await;
+    h.router.report(poll("b", 0.3, NOW)).await;
+    // Past the poll, so b's head replaces its reading.
+    h.clock
+        .store(NOW + 30_000, std::sync::atomic::Ordering::SeqCst);
+
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome(&resp).account_id,
+        "b",
+        "the spent rule moves the pin off a"
+    );
+    resp.into_body().collect().await.unwrap();
+    wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.last_input_tokens == 120_000)
+    })
+    .await;
+    h.clock
+        .store(NOW + 60_000, std::sync::atomic::Ordering::SeqCst);
+    h.router.report(poll("a", 0.1, NOW + 60_000)).await;
+    wait_for_async(Duration::from_secs(5), || async {
+        let samples = h.router.samples().await.unwrap();
+        let five_hour = |account: &str| {
+            samples
+                .iter()
+                .find(|(id, _)| id == account)
+                .and_then(|(_, sample)| sample.reading(FIVE_HOUR))
+                .map(|reading| reading.utilization)
+        };
+        (five_hour("a") == Some(0.1) && five_hour("b") >= Some(1.0)).then_some(())
+    })
+    .await;
+
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    let moved = outcome(&resp);
+    assert_eq!(
+        moved.account_id, "a",
+        "the spent rule moves the pin back off b"
+    );
+    let request_id = moved.request_id;
+    resp.into_body().collect().await.unwrap();
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == request_id)
+    })
+    .await;
+    let (_, record) = decisions_of(&seen, &request_id)
+        .pop()
+        .expect("the move's decision");
+    assert_eq!(
+        (record.outcome.kind, record.outcome.rule),
+        ("moved", Some("spent"))
+    );
+    let booked = record
+        .outcome
+        .reservation
+        .as_ref()
+        .and_then(|booked| booked.rewrite.get(FIVE_HOUR).copied());
+    // 120,000 less b's 10,000 plus a's 40,000, a ten-millionth each.
+    assert!(
+        booked.is_some_and(|share| (share - 0.015).abs() < 1e-9),
+        "{booked:?}"
+    );
+    up.shutdown().await;
+}
+
 /// The first-party fixture with a stamp this build does not compute, and with a version suffix that does not
 /// reproduce over a body re-signed so its hash does: one body per drift, with the trigger each files.
 fn drifted_first_party_bodies() -> [(Vec<u8>, &'static str); 2] {

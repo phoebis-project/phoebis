@@ -1,5 +1,6 @@
 //! Routing state that survives a restart: session pins, cooldowns, and the overage evidence per account.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -123,6 +124,8 @@ pub struct PinRow {
     /// The pin's agent ended and its next request has not arrived: a subagent's turn answered with `end_turn`, or an
     /// agent the companion released. The pool's keep leaves such a pin out of every figure until that request.
     pub ended: bool,
+    /// The thinking tokens each account produced for the session on the pin's model, by account id.
+    pub thinking_sums: BTreeMap<String, u64>,
 }
 
 impl PinRow {
@@ -416,6 +419,17 @@ pub struct ModelWeekHourRow {
     pub share: f64,
 }
 
+/// What a move of one model's session between two accounts showed of its thinking blocks: `bound` where the account
+/// moved to dropped the blocks the other produced. The pair is unordered, so `account_a` holds the smaller id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ThinkingBindingRow {
+    pub model: String,
+    pub account_a: String,
+    pub account_b: String,
+    pub bound: bool,
+    pub observed_at: i64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct RoutingLoad {
     pub affinity: Vec<AffinityRow>,
@@ -427,6 +441,7 @@ pub struct RoutingLoad {
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
     pub shed_rounds: Vec<ShedRoundRow>,
+    pub thinking_bindings: Vec<ThinkingBindingRow>,
     pub window_sets: Vec<WindowSetRow>,
     pub windows: Vec<WindowRow>,
 }
@@ -474,7 +489,7 @@ impl Store {
                     mark: mark_from(r)?,
                     entrypoint: none_if_empty(r.get("entrypoint")?),
                     auxiliary_only: r.get("auxiliary_only")?, effort: none_if_empty(r.get("effort")?),
-                    ended: r.get("ended")?,
+                    ended: r.get("ended")?, thinking_sums: sums_from(r)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: all_resolutions(&tx)?,
@@ -488,6 +503,13 @@ impl Store {
                 .query_map([], |r| Ok(ShedRoundRow {
                     pool_id: r.get(0)?, account_id: r.get(1)?, incarnation: r.get::<_, i64>(2)? as u64,
                     round_at: r.get(3)?,
+                }))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            thinking_bindings: tx.prepare("SELECT model, account_a, account_b, bound, observed_at FROM thinking_bindings \
+                 ORDER BY model, account_a, account_b")?
+                .query_map([], |r| Ok(ThinkingBindingRow {
+                    model: r.get(0)?, account_a: r.get(1)?, account_b: r.get(2)?, bound: r.get(3)?,
+                    observed_at: r.get(4)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's set is never loaded.
@@ -779,6 +801,32 @@ impl RoutingTx<'_> {
         replace_shed_round_on(self.tx, pool_id, account_id, incarnation, round_at)
     }
 
+    /// Writes the pair's fact in place of the one it held. Only from the router's batches. Answers whether a row was
+    /// written.
+    pub fn replace_thinking_binding(
+        &mut self,
+        row: &ThinkingBindingRow,
+    ) -> Result<bool, StoreError> {
+        // A pair whose account left between the observation and the write lands nowhere, rather than failing the
+        // batch on the reference the cascade would have cleared.
+        let written = self
+            .tx
+            .prepare_cached(
+                "INSERT OR REPLACE INTO thinking_bindings (model, account_a, account_b, bound, observed_at) \
+                 SELECT ?1, ?2, ?3, ?4, ?5 \
+                 WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2) \
+                 AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3)",
+            )?
+            .execute(params![
+                row.model,
+                row.account_a,
+                row.account_b,
+                row.bound,
+                row.observed_at
+            ])?;
+        Ok(written > 0)
+    }
+
     pub fn set_state_if_generations(
         &mut self,
         id: &str,
@@ -881,7 +929,7 @@ const PIN_COLUMNS: &str = "key_id, session_id, agent_id, model, account_id, epoc
      burn_fast_cache_read, burn_fast_input, burn_fast_output, burn_fast_write_1h, burn_fast_write_5m, \
      burn_unmetered_cache_read, burn_unmetered_input, burn_unmetered_output, burn_unmetered_write_1h, \
      burn_unmetered_write_5m, burn_unmetered_model, \
-     marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended";
+     marked_at, marked_on, marked_window, entrypoint, shed_reason, auxiliary_only, effort, ended, thinking_sums";
 
 // Each burn copy's columns, in `PinBurn`'s field order: `burn_from` takes them by position.
 const BURN_COLUMNS: [&str; 5] = [
@@ -1030,9 +1078,23 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         pin.shed.as_ref().and_then(|shed| shed.reason.as_ref()),
         pin.auxiliary_only,
         pin.effort.as_deref().unwrap_or_default(),
-        pin.ended
+        pin.ended,
+        serde_json::to_string(&pin.thinking_sums)?
     ])?;
     Ok(())
+}
+
+/// The pin's thinking sums from their JSON object. A text that does not parse fails the row's read.
+fn sums_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<BTreeMap<String, u64>> {
+    let column = r.as_ref().column_index("thinking_sums")?;
+    let text: String = r.get(column)?;
+    serde_json::from_str(&text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            column,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
 }
 
 /// An optional pin column read back: the write stores `None` as the empty text, since the column is `NOT NULL`.

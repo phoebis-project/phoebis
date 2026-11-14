@@ -87,11 +87,13 @@ fn rename(
 }
 
 /// The eighth step taken back on a file this build wrote, which every case that takes a file back past version 8
-/// runs first, since on reopen the step refuses its table and its two new pool columns as duplicates and finds no
-/// `window_ceiling` to rename.
+/// runs first, since on reopen the step refuses its two tables, its two new pool columns and its pin column as
+/// duplicates and finds no `window_ceiling` to rename.
 fn eighth_step_taken_back(conn: &rusqlite::Connection) {
     conn.execute_batch(
-        "ALTER TABLE pools DROP COLUMN weekly_ceiling;
+        "DROP TABLE thinking_bindings;
+         ALTER TABLE pins DROP COLUMN thinking_sums;
+         ALTER TABLE pools DROP COLUMN weekly_ceiling;
          ALTER TABLE pools RENAME COLUMN five_hour_ceiling TO window_ceiling;
          DROP TABLE model_week_hours;
          ALTER TABLE pools DROP COLUMN thinking_diagnostics;",
@@ -177,6 +179,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
                 auxiliary_only: true,
                 effort: Some("high".into()),
                 ended: false,
+                thinking_sums: Default::default(),
             })
             .unwrap();
         let incarnation = store.account("a").unwrap().unwrap().incarnation;
@@ -326,6 +329,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
         auxiliary_only: false,
         effort: None,
         ended: false,
+        thinking_sums: Default::default(),
     };
     // A classifier call renewed this pin last under the fifth step, so its count is that call's prompt, which the
     // seed below flags.
@@ -604,6 +608,7 @@ fn a_pin_with_a_distinct_value_in_every_integer_column_and_every_optional_group_
         auxiliary_only: false,
         effort: None,
         ended: false,
+        thinking_sums: Default::default(),
     };
     store.upsert_pin(&before).unwrap();
     assert_eq!(

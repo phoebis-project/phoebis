@@ -41,6 +41,7 @@ fn pin(key_id: &str, session_id: &str, model: &str, account_id: &str) -> PinRow 
         auxiliary_only: false,
         effort: None,
         ended: false,
+        thinking_sums: Default::default(),
     }
 }
 
@@ -968,7 +969,9 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE pools DROP COLUMN weekly_ceiling;
+        "DROP TABLE thinking_bindings;
+         ALTER TABLE pins DROP COLUMN thinking_sums;
+         ALTER TABLE pools DROP COLUMN weekly_ceiling;
          ALTER TABLE pools RENAME COLUMN five_hour_ceiling TO window_ceiling;
          DROP TABLE model_week_hours;
          ALTER TABLE pools DROP COLUMN thinking_diagnostics;

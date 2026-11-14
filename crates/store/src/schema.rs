@@ -4,8 +4,8 @@
 //! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
 //! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
-//! adds `model_week_hours`, `pools.thinking_diagnostics` and `pools.weekly_ceiling`, and renames
-//! `pools.window_ceiling` to `five_hour_ceiling`.
+//! adds `model_week_hours`, `pins.thinking_sums`, `pools.thinking_diagnostics`, `pools.weekly_ceiling` and
+//! `thinking_bindings`, and renames `pools.window_ceiling` to `five_hour_ceiling`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -334,7 +334,8 @@ ALTER TABLE accounts ADD COLUMN limit_resets_epoch INTEGER NOT NULL DEFAULT 0;
 /// switch for the thinking-binding beta is not null with a default, since the pool's read takes a boolean and a pool
 /// stored before the step would read null. The pool's one ceiling becomes the 5-hour window's, and the weekly windows
 /// read 1.0 on a row at the old default 0.95 and the row's own fraction on any other, since an operator who lowered
-/// the one fraction held a weekly reserve that way.
+/// the one fraction held a weekly reserve that way. A pin stored before the step holds no thinking sum and the router
+/// has learned no binding, so each move prices the session's whole last prompt until an answer says more.
 const V8: &str = r#"
 CREATE TABLE model_week_hours (
     account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -348,6 +349,15 @@ ALTER TABLE pools ADD COLUMN thinking_diagnostics INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE pools RENAME COLUMN window_ceiling TO five_hour_ceiling;
 ALTER TABLE pools ADD COLUMN weekly_ceiling REAL NOT NULL DEFAULT 1.0;
 UPDATE pools SET weekly_ceiling = five_hour_ceiling WHERE five_hour_ceiling <> 0.95;
+ALTER TABLE pins ADD COLUMN thinking_sums TEXT NOT NULL DEFAULT '{}';
+CREATE TABLE thinking_bindings (
+    model       TEXT NOT NULL,
+    account_a   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    account_b   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    bound       INTEGER NOT NULL,
+    observed_at INTEGER NOT NULL,
+    PRIMARY KEY (model, account_a, account_b)
+);
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or

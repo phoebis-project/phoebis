@@ -27,8 +27,8 @@ use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off,
     load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell, shed_cap,
     shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, standing_mark, warm,
-    BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation, RoutingState,
-    StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
+    BandSegment, Binding, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation,
+    RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
     IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use crate::windows::{window_for, window_length_ms, MODEL_WINDOWS};
@@ -889,19 +889,57 @@ fn budget_unknown(
 }
 
 /// The prompt size a pin's burn is divided by and its move rewrites: the pin's own prompt, else the request's own body
-/// where no call has renewed it with usage.
-fn prompt_size(pin: &PinRow, request: &SelectRequest) -> u64 {
-    if pin.last_input_tokens > 0 {
-        pin.last_input_tokens
+/// where no call has renewed it with usage. A move to `destination` over a pair whose thinking blocks are bound drops
+/// the blocks the pin's account produced and keeps the destination's own, so its size is the last prompt less the
+/// pin's sum for its account plus its sum for the destination, never under zero.
+fn prompt_size(
+    state: &RoutingState,
+    pin: &PinRow,
+    request: &SelectRequest,
+    destination: Option<&str>,
+) -> u64 {
+    if pin.last_input_tokens == 0 {
+        return request.body_tokens;
+    }
+    let bound = destination
+        .filter(|destination| *destination != pin.account_id)
+        .filter(|destination| {
+            state.binding(&pin.model, &pin.account_id, destination) == Binding::Bound
+        });
+    match bound {
+        Some(destination) => {
+            let sum = |account: &str| pin.thinking_sums.get(account).copied().unwrap_or(0);
+            pin.last_input_tokens
+                .saturating_add(sum(destination))
+                .saturating_sub(sum(&pin.account_id))
+        }
+        None => pin.last_input_tokens,
+    }
+}
+
+/// The thinking sums a selection writes on the session's row from the row it stood on, each entry at zero for a
+/// compacted request, whose prompt holds no earlier block.
+pub(crate) fn handed_sums(row: &PinRow, request: &SelectRequest) -> BTreeMap<String, u64> {
+    if request.context_compacted {
+        row.thinking_sums
+            .keys()
+            .map(|account| (account.clone(), 0))
+            .collect()
     } else {
-        request.body_tokens
+        row.thinking_sums.clone()
     }
 }
 
 /// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
 /// session or a pin never renewed with usage, as one cache write at the lane's TTL (five minutes until a pin reports
-/// one). The gate's booking and the pick's figure price the same tokens through it.
-pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> PinUsage {
+/// one), sized for `destination` where the caller knows it. The gate's booking and the pick's figure price the same
+/// tokens through it.
+pub(crate) fn rewrite_write(
+    state: &RoutingState,
+    request: &SelectRequest,
+    pin: Option<&PinRow>,
+    destination: Option<&str>,
+) -> PinUsage {
     // The plan windows see nothing of the client's classifier call, so its body is no rewrite to fit or to book. A
     // renewed pin's own context stays the session's, since a move still rewrites it.
     let body = if request.classifier {
@@ -912,7 +950,10 @@ pub(crate) fn rewrite_write(request: &SelectRequest, pin: Option<&PinRow>) -> Pi
     // A pin never renewed with usage reads its context from the body, as a fresh session does, and a fresh
     // session's TTL is unknown before a pin exists, so its write prices at five minutes.
     let (tokens, ttl_ms) = match pin {
-        Some(pin) => (prompt_size(pin, request), pin.cache_ttl_ms),
+        Some(pin) => (
+            prompt_size(state, pin, request, destination),
+            pin.cache_ttl_ms,
+        ),
         None => (body, FIVE_MINUTES_MS),
     };
     if ttl_ms >= ONE_HOUR_MS {
@@ -951,7 +992,7 @@ pub(crate) fn pin_figures<'a>(
     let share = state.share();
     let model = request.canonical_model.as_str();
     let average_ms = burn_average_ms(pool);
-    let write = rewrite_write(request, figures.pin());
+    let write = rewrite_write(state, request, figures.pin(), Some(account_id));
     let priced = |window: &str, entrypoint: Option<&str>, p: &PinRow| {
         share
             .rate(window, entrypoint, tier, &p.model, &p.burn, now)
@@ -2690,9 +2731,9 @@ fn replace_expired(
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
 /// and the word a shed move or a failover's landing stamps. `moving` is the row a move takes off its source or a
-/// failover took off its account, whose burn averages, the classifier copy's model and the last prompt the new row
-/// carries, so the destination's projection counts the pin from the moment it lands, the copy keeps its price and a
-/// later move prices its rewrite from a figure.
+/// failover took off its account, whose burn averages, the classifier copy's model, the last prompt and the thinking
+/// sums the new row carries, so the destination's projection counts the pin from the moment it lands, the copy keeps
+/// its price and a later move prices its rewrite from a figure.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
@@ -2741,6 +2782,7 @@ fn fresh_pin(
         auxiliary_only: placed_auxiliary_only(request),
         effort: request.effort.clone(),
         ended: false,
+        thinking_sums: moving.map(|m| handed_sums(m, request)).unwrap_or_default(),
     };
     stamp_hashes(&mut row, request);
     row
@@ -5212,7 +5254,7 @@ pub(crate) fn move_cost(
             window_for(model),
             req.entrypoint.as_deref(),
             model,
-            rewrite_write(req, Some(pin)),
+            rewrite_write(state, req, Some(pin), None),
             now,
         )
         .filter(|share| *share > 0.0)
@@ -5430,7 +5472,8 @@ fn shed_round(
                 });
             // Each pin's rewrite cost read off its own request in the round, as `rewrite_write` reads it. A pin with no
             // prompt size reported yet ranks as the cheapest rewrite.
-            let prompt = prompt_size(&p, &pin_request(request, &p, is_current(&p))).max(1) as f64;
+            let prompt = prompt_size(state, &p, &pin_request(request, &p, is_current(&p)), None)
+                .max(1) as f64;
             // A window-share round orders its pins by the figure the walk prices, so on a span the band crosses the
             // record lists the rows in the order of the figures it shows. A `usd` round keeps the dollar burn at
             // `now`, which counts the fast and classifier usage the account pays for beside the row's copy.
@@ -5548,7 +5591,7 @@ fn shed_round(
         let model = req.canonical_model.as_str();
         read.cost = move_cost(state, &req, p, now);
         // The record shows the Pro-week figure, one unit for every pin.
-        let write = rewrite_write(&req, Some(p));
+        let write = rewrite_write(state, &req, Some(p), Some(&destination));
         read.rewrite = state
             .share()
             .equivalent(SEVEN_DAY, req.entrypoint.as_deref(), model, write, now)
@@ -5930,6 +5973,7 @@ fn renew(
         renewed.entrypoint.clone_from(&request.entrypoint);
         renewed.effort.clone_from(&request.effort);
     }
+    renewed.thinking_sums = handed_sums(renewed, request);
     let renewed = renewed.clone();
     let handed = pin_ref(&renewed);
     let (refresh_stamped, hashes_stamped) = (

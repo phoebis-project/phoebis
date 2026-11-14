@@ -25,10 +25,10 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    budget_facts, burn_unit, decide, lane_is_fast, mark_cleared_of, move_cost, move_word, obstacle,
-    pace_of, passes_reset, projection_of, projections_of, release_reasons, slow_down_ramp,
-    standing_request, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest,
-    SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    budget_facts, burn_unit, decide, handed_sums, lane_is_fast, mark_cleared_of, move_cost,
+    move_word, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
+    slow_down_ramp, standing_request, BurnRead, Decided, FailedOver, Obstacle, Refusal,
+    SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -89,6 +89,44 @@ impl Invalidated {
     fn within(&self, now: i64) -> bool {
         now - self.at <= MIGRATION_WINDOW_MS
     }
+}
+
+/// A landing that took a session off an account whose thinking it held, open until the landed row's first report with
+/// usage says whether the account moved to dropped those blocks.
+struct Observation {
+    /// The landed row's epoch, which a report on that row carries.
+    epoch: u64,
+    left: String,
+    /// The row's last prompt before the move, which an answer with no member is measured against.
+    last_prompt: u64,
+}
+
+impl Observation {
+    /// What the answer shows of the pair, `None` where it shows nothing: its member where it carries one, bound where
+    /// the member lists a block dropped for an account reason and kept where it lists none, and without one a `prompt`
+    /// smaller than the last one before the move reads bound. The client's standing prefix entry is no drop the move
+    /// caused.
+    fn binding(
+        &self,
+        prompt: u64,
+        dropped: Option<&BTreeMap<String, DroppedBlocks>>,
+    ) -> Option<bool> {
+        match dropped {
+            Some(dropped) => Some(dropped.keys().any(|key| under_account_reason(key))),
+            None => (prompt < self.last_prompt).then_some(true),
+        }
+    }
+}
+
+/// Whether a dropped-blocks key names one of the two account reasons, read off the key's suffix: a word of the key can
+/// hold a dot, so a split at a dot could cut the type or the reason.
+fn under_account_reason(key: &str) -> bool {
+    [
+        ".end_user_binding_mismatch",
+        ".organization_binding_mismatch",
+    ]
+    .iter()
+    .any(|reason| key.ends_with(reason))
 }
 
 /// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
@@ -1989,6 +2027,9 @@ struct Task {
     /// The reloads the running load answers, those that were waiting when it started, and `None` while no registry
     /// load runs. At most one does.
     load_waiters: Option<Vec<oneshot::Sender<Result<(), String>>>>,
+    /// The moves whose first answer has yet to say whether the account moved to dropped the thinking of the account
+    /// left, by the pin's key. Memory only, so a restart inside one teaches nothing.
+    observations: HashMap<PinKey, Observation>,
     /// While set the loop skips the purge tick, so no purge runs. `Command::ReleasePurge` clears it, and the first
     /// purge runs at the first tick after it.
     purge_held: bool,
@@ -2051,6 +2092,7 @@ pub fn spawn(
     let load_counts = LoadCounts::of(&load, &initial, now);
     let mut state = RoutingState::from_load(load);
     state.drop_usage_based_overage(&initial);
+    state.drop_absent_thinking_sums(&initial);
     let snapshot = Arc::new(RwLock::new(initial));
     // A restored wall keeps the anchor its stored pair gives it: without the seed every within-margin head after a
     // restart would move the clamp's anchor onto its own instant and hold the account spent past the window's length.
@@ -2162,6 +2204,7 @@ pub fn spawn(
         handle_tx: tx.downgrade(),
         invalidated: HashMap::new(),
         load_waiters: None,
+        observations: HashMap::new(),
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
         purge_held,
@@ -2617,6 +2660,9 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
                 tx.purge_stale_windows()?;
             }
             StateWrite::Rekey(rekey) => tx.rekey_resolution(rekey)?,
+            StateWrite::ReplaceThinkingBinding(row) => {
+                tx.replace_thinking_binding(row)?;
+            }
             StateWrite::ShedRound {
                 pool_id,
                 account_id,
@@ -3381,6 +3427,13 @@ impl Task {
                         ));
                     }
                     _ => {}
+                }
+                if selected {
+                    // A failover's landing finds no row under the key, since the failover took it.
+                    let stood_on = before
+                        .as_ref()
+                        .or(request.failed_over.as_ref().map(|failed| &failed.row));
+                    self.observe_landing(&pin_key, stood_on, &request);
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
                 // The mark the selection cleared (a heal, the move that consumed it, or the pool's switch turned off),
@@ -4168,8 +4221,8 @@ impl Task {
                 cache_ttl_ms,
                 fast,
                 turn_end,
-                thinking_tokens: _,
-                input_transformations: _,
+                thinking_tokens,
+                input_transformations,
             } => {
                 let key = self.canonical_pin(&mut pin);
                 if let Some(current) = self.state.pin(&key) {
@@ -4203,6 +4256,7 @@ impl Task {
                         .then(|| self.state.pin_mut(&key))
                         .flatten();
                     if let Some(renewed) = renewed {
+                        let mut learned = None;
                         renewed.last_used_at = now;
                         renewed.cache_ttl_ms = cache_ttl_ms;
                         // A turn's stream end with its usage is the turn's end a classifier call that follows judges:
@@ -4251,6 +4305,23 @@ impl Task {
                                     window_ms,
                                 );
                                 renewed.last_input_tokens = usage.prompt_tokens();
+                                if let Some(tokens) = thinking_tokens.filter(|tokens| *tokens > 0) {
+                                    *renewed
+                                        .thinking_sums
+                                        .entry(renewed.account_id.clone())
+                                        .or_default() += tokens;
+                                }
+                                learned = self
+                                    .observations
+                                    .remove(&key)
+                                    .filter(|observation| observation.epoch == renewed.epoch)
+                                    .and_then(|observation| {
+                                        let bound = observation.binding(
+                                            usage.prompt_tokens(),
+                                            input_transformations.as_ref(),
+                                        )?;
+                                        Some((observation.left, renewed.account_id.clone(), bound))
+                                    });
                             }
                         }
                         let row = renewed.clone();
@@ -4260,6 +4331,12 @@ impl Task {
                                 .note_turn_end(&key, &row.account_id, row.incarnation);
                         }
                         self.write(vec![StateWrite::UpsertPin(row)]);
+                        if let Some((left, served, bound)) = learned {
+                            let fact = self
+                                .state
+                                .learn_binding(&key.model, &left, &served, bound, now);
+                            self.write(vec![StateWrite::ReplaceThinkingBinding(fact)]);
+                        }
                     } else if marked {
                         // A renewal of another epoch or of a lane the pin left writes no row, so the marked row is
                         // written alone.
@@ -4779,6 +4856,40 @@ impl Task {
         cleared
     }
 
+    /// Opens the observation of a selection that landed the session under `key` on another account than the row it
+    /// stood on, where that row's sum for the account it left is above zero, in place of the key's open one.
+    fn observe_landing(
+        &mut self,
+        key: &PinKey,
+        stood_on: Option<&PinRow>,
+        request: &SelectRequest,
+    ) {
+        let (Some(stood_on), Some(landed)) = (stood_on, self.state.pin(key)) else {
+            return;
+        };
+        if landed.epoch == stood_on.epoch {
+            return;
+        }
+        let (epoch, moved) = (landed.epoch, landed.account_id != stood_on.account_id);
+        self.observations.remove(key);
+        // The sum as the selection handed it on: a compacted prompt holds no earlier block, so its answer drops none
+        // and would teach the pair a false `kept`.
+        let held = handed_sums(stood_on, request)
+            .get(&stood_on.account_id)
+            .copied()
+            .unwrap_or(0);
+        if moved && held > 0 {
+            self.observations.insert(
+                key.clone(),
+                Observation {
+                    epoch,
+                    left: stood_on.account_id.clone(),
+                    last_prompt: stood_on.last_input_tokens,
+                },
+            );
+        }
+    }
+
     /// Whether a pin of the session sits in a failover gap at `now`. Reads the window itself, since the purge's
     /// expiry asks before the retain drops the lapsed entries.
     fn gapped(&self, key_id: &str, session_id: &str, now: i64) -> bool {
@@ -4838,6 +4949,12 @@ impl Task {
             pins = purged.pins.len(),
             "purged expired and orphaned routing state"
         );
+        // A landed row that left before its first report with usage closes nothing.
+        self.observations.retain(|key, observation| {
+            self.state
+                .pin(key)
+                .is_some_and(|row| row.epoch == observation.epoch)
+        });
         let mut lapsed = Vec::new();
         self.invalidated.retain(|key, entry| {
             let within = entry.within(now);
@@ -5444,6 +5561,12 @@ enum DeferredKey {
         pool_id: String,
         account_id: String,
     },
+    /// A model's pair of accounts: a later observation replaces the held one, as the store's write does.
+    ThinkingBinding {
+        model: String,
+        account_a: String,
+        account_b: String,
+    },
     /// A window's row: a held drop and a later held restore of the window keep the last write.
     Window {
         account_id: String,
@@ -5457,13 +5580,13 @@ enum DeferredKey {
 /// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
 /// first-seen record's last insert or delete, a window's last upsert or delete, a window set's last upsert per
 /// account, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
-/// affinity row's last upsert or delete per key, a pool's last round per account, a model week hour's last sum, one
-/// round purge, one hour purge, one stale-window sweep, and every rekey in order. A rekey closes the rows before it
-/// into a segment of their own, so a pin's write dated after a resolution never lands ahead of the rekey that moved its
-/// rows. A round may land on either side of the pin writes held beside it: a mark is read back only for the pin and the
-/// epoch its row names. A segment lands in map order, so a record's delete and its insert share the record's key: a
-/// session that ends and returns writes the return's record over the end's delete, and the end never lands behind the
-/// return to take its row.
+/// affinity row's last upsert or delete per key, a pool's last round per account, a model week hour's last sum, a
+/// model's pair's last fact, one round purge, one hour purge, one stale-window sweep, and every rekey in order. A rekey
+/// closes the rows before it into a segment of their own, so a pin's write dated after a resolution never lands ahead
+/// of the rekey that moved its rows. A round may land on either side of the pin writes held beside it: a mark is read
+/// back only for the pin and the epoch its row names. A segment lands in map order, so a record's delete and its insert
+/// share the record's key: a session that ends and returns writes the return's record over the end's delete, and the
+/// end never lands behind the return to take its row.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5602,6 +5725,14 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::PurgeShedRounds { .. } => one(DeferredKey::PurgeShedRounds, write),
         StateWrite::PurgeStaleWindows => one(DeferredKey::PurgeStaleWindows, write),
         StateWrite::Rekey(rekey) => Err(Box::new(rekey)),
+        StateWrite::ReplaceThinkingBinding(ref row) => one(
+            DeferredKey::ThinkingBinding {
+                model: row.model.clone(),
+                account_a: row.account_a.clone(),
+                account_b: row.account_b.clone(),
+            },
+            write,
+        ),
         StateWrite::ShedRound {
             ref pool_id,
             ref account_id,
@@ -5927,6 +6058,7 @@ mod tests {
             auxiliary_only: false,
             effort: None,
             ended: false,
+            thinking_sums: Default::default(),
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -5981,6 +6113,7 @@ mod tests {
             auxiliary_only: false,
             effort: None,
             ended: false,
+            thinking_sums: Default::default(),
         };
         assert_eq!(
             rates.price_pin(BurnUnit::Usd, &pin, FIVE_HOUR),
@@ -6344,6 +6477,7 @@ mod tests {
                 auxiliary_only: false,
                 effort: None,
                 ended: false,
+                thinking_sums: Default::default(),
             }],
             ..RoutingLoad::default()
         });
