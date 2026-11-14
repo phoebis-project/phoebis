@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import type { Account, AccountSlowDown, ExtraUsage, LimitResetsRead, QuotaPoll, QuotaSnapshot, RateLimitWindow, Spend, WindowId } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
@@ -202,34 +202,15 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   const marks = resetMarks(account.limitResets);
   const [opening, setOpening] = useState<LimitResetsRead | null>(null);
   const [readingResets, setReadingResets] = useState(false);
-  const resetButton = useRef<HTMLButtonElement>(null);
-  // Use reset is disabled while its read runs, so the browser drops its focus and the dialog records no opener to hand
-  // it back to. The card hands it back itself once the read ended with no dialog or the dialog closed.
-  const refocus = useRef(false);
-  useEffect(() => {
-    if (opening !== null || readingResets || !refocus.current) return;
-    refocus.current = false;
-    // The dialog's own close ran in a child's effect before this one, so its restore cannot undo this focus, and a
-    // control the operator moved to meanwhile keeps it. A browser that focuses no button on a click puts the focus on
-    // the card, which is no such control.
-    const active = document.activeElement;
-    const unmoved = active === null || active === document.body || active.closest('dialog:not([open])') !== null || active === resetButton.current?.closest('.qcard');
-    if (unmoved && resetButton.current !== null && !resetButton.current.disabled) resetButton.current.focus();
-  }, [opening, readingResets]);
   const openResets = async () => {
     setReadingResets(true);
     // The stored block stands in where the fresh read fails, so the click always gets an answer.
     const read = await api.readLimitResets(account.id).catch((e: unknown): LimitResetsRead => ({ error: messageOf(e), limitResets: account.limitResets }));
     setReadingResets(false);
-    if ((read.limitResets?.grants.length ?? 0) === 0) {
-      refocus.current = true;
-      onRefreshed();
-    } else setOpening(read);
+    if ((read.limitResets?.grants.length ?? 0) === 0) onRefreshed();
+    else setOpening(read);
   };
-  const closeResets = () => {
-    refocus.current = true;
-    setOpening(null);
-  };
+  const closeResets = () => setOpening(null);
   const resetWindow = (id: WindowId) => <WindowChip className="reset-dialog__chip" id={id} now={now} resettable={marks.includes(id)} window={windowOf(account, id)} />;
   // Windows the card holds are drawn whatever the last read said. The error takes their place only with none, where a
   // spend reading with neither amounts nor a share counts as none.
@@ -328,12 +309,17 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         </div>
         {chip && (
           <Button
-            ref={resetButton}
             size="sm"
             className="qcard__use"
-            disabled={chip.usable === null || readingResets}
+            disabled={chip.usable === null}
+            aria-disabled={readingResets || undefined}
             title={chip.usable ? `Clears ${listWords(chip.usable.clears.map(windowTag))} on ${account.label}` : upperFirst(chip.state)}
-            onClick={() => void openResets()}
+            onClick={(e) => {
+              if (readingResets) return;
+              // Focused before the read, so the dialog records this button as its opener in every browser.
+              e.currentTarget.focus();
+              void openResets();
+            }}
           >
             {readingResets ? 'Reading…' : 'Use reset'}
           </Button>

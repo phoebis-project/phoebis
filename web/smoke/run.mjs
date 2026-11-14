@@ -2486,6 +2486,30 @@ const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use'
   });
 }
 {
+  // Use reset keeps its place in the tab order while its read runs, so a click then must do nothing of its own: a
+  // second POST of the read would answer again and set the dialog's opening anew, which resets its page and its claim.
+  // primary's reset is usable (`RESET_BLOCKS` in `web/src/mock/resets.ts`), and the read is held open through the call
+  // layer while both clicks land.
+  const held = deferNextCall('readLimitResets');
+  resetButtonOf('primary')?.click();
+  await m.settle(200);
+  const button = resetButtonOf('primary');
+  const during = { aria: button?.getAttribute('aria-disabled') ?? null, disabled: button?.disabled ?? null, text: button?.textContent?.trim() ?? 'no button' };
+  button?.click();
+  await m.settle(200);
+  const reads = held.calls.length;
+  held.release();
+  await m.settle(600);
+  held.restore();
+  const opened = resetDialogs().length;
+  await escapeOn(m);
+  results.push({
+    name: '/quota Use reset stays in the tab order while its resets are read, and a second click reads nothing',
+    ok: during.aria === 'true' && during.disabled === false && reads === 1 && opened === 1 && resetDialogs().length === 0,
+    missing: [JSON.stringify({ during, opened, reads })],
+  });
+}
+{
   // nightly's card keeps its chip from the list while the fresh read lists no grant, the one state in which the
   // click must open nothing.
   const member = (await api.listAccounts()).find((a) => a.id === 'nightly').limitResets;

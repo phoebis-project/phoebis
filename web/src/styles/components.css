@@ -329,7 +329,7 @@
   background: var(--accent);
 }
 
-.btn--primary:hover:not(:disabled) {
+.btn--primary:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--accent-ink);
 }
 
@@ -339,7 +339,7 @@
   border-color: var(--hairline);
 }
 
-.btn--secondary:hover:not(:disabled) {
+.btn--secondary:hover:not(:disabled, [aria-disabled='true']) {
   background: var(--surface-2);
   border-color: var(--hairline-strong);
 }
@@ -349,7 +349,7 @@
   background: transparent;
 }
 
-.btn--ghost:hover:not(:disabled) {
+.btn--ghost:hover:not(:disabled, [aria-disabled='true']) {
   color: var(--ink);
   background: var(--surface-3);
 }
@@ -359,9 +359,14 @@
   background: var(--critical-soft);
 }
 
-.btn--danger:hover:not(:disabled) {
+.btn--danger:hover:not(:disabled, [aria-disabled='true']) {
   color: var(--on-critical);
   background: var(--critical);
+}
+
+button.btn[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .pill {
