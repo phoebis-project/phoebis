@@ -12225,7 +12225,11 @@ export const FIXTURES: Record<string, Fixture> = {
             "walls": 1,
             "windows": [
               "five_hour"
-            ]
+            ],
+            "setting_values": {
+              "shed_cap": 0.2,
+              "window_ceiling": 0.95
+            }
           }
         },
         {
@@ -12253,7 +12257,10 @@ export const FIXTURES: Record<string, Fixture> = {
             ],
             "windows": [
               "five_hour"
-            ]
+            ],
+            "setting_values": {
+              "window_ceiling": 0.95
+            }
           }
         },
         {

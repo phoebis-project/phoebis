@@ -106,7 +106,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     let parts = common::admin_parts_full().await;
     let app = &parts.app;
     let cookie = login(app, "admin-secret").await;
-    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","window_ceiling":0.9,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
+    post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","shed_cap":0.3,"window_ceiling":0.9,"members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
     post(
         app,
         "/admin/pools",
@@ -353,9 +353,9 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         (
             &j!({ "page": "accounts", "id": "business" }),
             &j!(["main"]),
-            None
+            Some(&j!({ "shed_cap": 0.3, "window_ceiling": 0.9 }))
         ),
-        "an account's condition opens the account and names its setting with no pool's value"
+        "an account's condition opens the account and names its settings with the values of the account's pool"
     );
 }
 

@@ -931,10 +931,12 @@ fn reset_ending(
 /// `meter_drift`, `wall_reached`, `destination_spent` and `slowed_long`, each holding where a row names its subject,
 /// with the row's `since` and its detail, so `destination_spent` ends where the fold read a `window_cleared` after the
 /// spent window. A row whose pool the snapshot holds gains `setting_values`, that pool's value of each setting the
-/// row's `setting` names, since the ledger reads no registry. A holding `wall_reached` of an account the registry holds
-/// gains `reset` from the account's stored limit resets and the snapshot `usage` holds for it. Both are joined at each
-/// read. A subject the registry no longer holds keeps its row's condition, labeled by its id and opening nothing, until
-/// the fold no longer writes the row.
+/// row's `setting` names, since the ledger reads no registry. A `wall_reached` or a `destination_spent` row that names
+/// no pool takes the values of the pool its account sits in at the read, where the account sits in exactly one pool
+/// that the registry holds. A holding `wall_reached` of an account the registry holds gains `reset` from the account's
+/// stored limit resets and the snapshot `usage` holds for it. Both are joined at each read. A subject the registry no
+/// longer holds keeps its row's condition, labeled by its id and opening nothing, until the fold no longer writes the
+/// row.
 fn routing_conditions(
     snapshot: &RegistrySnapshot,
     pools_of: &HashMap<String, Vec<String>>,
@@ -952,12 +954,18 @@ fn routing_conditions(
             .or_insert(r);
     }
     let row = |kind: RoutingKind, id: &str| by_subject.get(&(kind, id)).copied();
-    let detail_of = |row: Option<&RoutingCondition>, cleared: serde_json::Value| {
+    let detail_of = |row: Option<&RoutingCondition>,
+                     cleared: serde_json::Value,
+                     account_pool: Option<&PoolRow>| {
         let Some(row) = row else {
             return cleared;
         };
         let mut detail = row.detail.clone();
-        if let Some(pool) = row.pool_id.as_deref().and_then(|id| snapshot.pool(id)) {
+        let pool = match row.pool_id.as_deref() {
+            Some(id) => snapshot.pool(id),
+            None => account_pool,
+        };
+        if let Some(pool) = pool {
             let values: serde_json::Map<String, serde_json::Value> = detail["setting"]
                 .as_array()
                 .into_iter()
@@ -999,6 +1007,7 @@ fn routing_conditions(
             detail_of(
                 held,
                 json!({ "accounts": [], "rounds": 0, "setting": CEILING_SETTING }),
+                None,
             ),
         ));
     }
@@ -1052,9 +1061,19 @@ fn routing_conditions(
             .get(&account_id)
             .map(Vec::as_slice)
             .unwrap_or_default();
+        // A list's first id would be an arbitrary pick, since `account_pools` lists an account's pools in hash order.
+        // Only an account the registry holds in exactly one pool names the pool whose values a row with none reads.
+        let account_pool = match pools {
+            [only] if live => snapshot.pool(only),
+            _ => None,
+        };
         for (kind, routing, cleared) in &account_kinds {
             let held = routing.and_then(|routing| row(routing, &account_id));
-            let mut detail = detail_of(held, cleared.clone());
+            // The wall and the spent destination alone: a `meter_drift` row names no setting, and a `slowed_long`
+            // row carries the pool of its newest span.
+            let fallback =
+                account_pool.filter(|_| matches!(kind, Kind::WallReached | Kind::DestinationSpent));
+            let mut detail = detail_of(held, cleared.clone(), fallback);
             if *kind == Kind::WallReached && held.is_some() {
                 // Joined at each read, as `setting_values` is: the fold writes the wall once an hour, so a member
                 // written there would offer a reset for up to an hour after it was used.

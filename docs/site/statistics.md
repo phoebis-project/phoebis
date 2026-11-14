@@ -875,23 +875,23 @@ from the reset's passing for a wall that goes on past its reset. The ledger fold
 events once an hour and at start into one table, which the gauge and `GET /admin/attention` read, so a condition clears
 at the first fold whose trailing day holds none of its events. The subject is the account, and the item dates from the
 oldest wall of the day. The detail counts the walls, names their windows and the settings `shed_cap` and
-`window_ceiling`, and names one figure by the trigger of the newest shedding round on the wall's window within that
-window's length before the wall: after a projection round the projection error, one less the round's projection, after a
-slow-down round the time the wall arrived before the reset (0 at or after it), and neither with no round. The ledger
-also keeps each account's longest early wall of the hour under a slow-down round, so the figure outlives the trailing
-day. The item opens the [routing log](console.md#routing-log) on the account's spent windows since the condition began.
-A holding wall's detail also carries `reset` (`clears`, `grant` and `label`) while the usage poll reads the account, a
-limit reset of the account is usable now and one of the windows it clears reads at its limit in the account's newest
-usage reading. The member is joined at each read and never folded, so it leaves at the read after the reset was used.
-The dashboard's line then adds `, a reset can clear it` and opens the account's card on the [Quota](console.md#quota)
-view in place of the routing log.
+`window_ceiling` with the values of the pool the account sits in at the read, and names one figure by the trigger of the
+newest shedding round on the wall's window within that window's length before the wall: after a projection round the
+projection error, one less the round's projection, after a slow-down round the time the wall arrived before the reset (0
+at or after it), and neither with no round. The ledger also keeps each account's longest early wall of the hour under a
+slow-down round, so the figure outlives the trailing day. The item opens the [routing log](console.md#routing-log) on
+the account's spent windows since the condition began. A holding wall's detail also carries `reset` (`clears`, `grant`
+and `label`) while the usage poll reads the account, a limit reset of the account is usable now and one of the windows
+it clears reads at its limit in the account's newest usage reading. The member is joined at each read and never folded,
+so it leaves at the read after the reset was used. The dashboard's line then adds `, a reset can clear it` and opens the
+account's card on the [Quota](console.md#quota) view in place of the routing log.
 
 **`destination_spent`** holds while a move landed on the account in the last 24 hours and a `window_spent` event of any
 source followed on it within the hour, until a `window_cleared` event on the same account and window follows that spent
 event. It is folded as `wall_reached` is. The subject is the destination account, and the item dates from the oldest
 such move. The detail counts the moves, gives their destination fits with a count each and names the spent windows and
-the setting `window_ceiling`. The item opens the routing log on the account's moves and spent windows since the
-condition began.
+the setting `window_ceiling` with the value of the pool the account sits in at the read. The item opens the routing log
+on the account's moves and spent windows since the condition began.
 
 **`shed_no_runway`** holds while a shedding round of the pool marked nothing for want of a destination with runway (the
 outcome `nothing_to_mark` with the reason `no_runway`) in the last 24 hours, one round being enough. A round stops

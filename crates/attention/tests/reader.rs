@@ -1347,6 +1347,13 @@ async fn a_round_that_marked_nothing_for_want_of_runway_holds_the_condition_on_i
 async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_on_that_account() {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
+    // The pool's own ceiling, so the value the condition carries beside the setting is the case's.
+    let mut pool = rig.store.pool("main").unwrap().unwrap();
+    pool.window_ceiling = 0.85;
+    rig.store
+        .update_pool_with_members_and_guardrails(&pool, pool.updated_at, None, None, "test")
+        .unwrap();
+    rig.router.reload().await.unwrap();
     routing_event(
         &rig,
         NOW - 50 * MINUTE,
@@ -1388,10 +1395,12 @@ async fn a_move_whose_destination_was_spent_within_the_hour_holds_the_condition_
                 "fits": { "fits": 1 },
                 "moves": 1,
                 "setting": ["window_ceiling"],
+                "setting_values": { "window_ceiling": 0.85 },
                 "windows": ["five_hour"],
             })
         ),
-        "the condition dates from the move, opens the account and names the setting with no pool's value"
+        "the condition dates from the move, opens the account and names the setting with the value of the \
+         account's pool"
     );
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(status, 200);
@@ -1453,6 +1462,14 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
 ) {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
+    // The pool's own values, so the values the condition carries beside its settings are the case's.
+    let mut pool = rig.store.pool("main").unwrap().unwrap();
+    pool.shedding.shed_cap = 0.3;
+    pool.window_ceiling = 0.9;
+    rig.store
+        .update_pool_with_members_and_guardrails(&pool, pool.updated_at, None, None, "test")
+        .unwrap();
+    rig.router.reload().await.unwrap();
     // A round two hours before the wall projected the 5-hour window at 0.97, so the wall came 0.03 past it.
     routing_event(
         &rig,
@@ -1499,11 +1516,13 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
                 "early_ms": null,
                 "projection_error": 1.0 - 0.97,
                 "setting": ["shed_cap", "window_ceiling"],
+                "setting_values": { "shed_cap": 0.3, "window_ceiling": 0.9 },
                 "walls": 1,
                 "windows": ["five_hour"],
             })
         ),
-        "a predicted wall counts, and the error is how far under the wall the round projected"
+        "a predicted wall counts, the error is how far under the wall the round projected, and the settings carry \
+         the values of the account's pool"
     );
     let (status, text) = scrape(&rig, &attention).await;
     assert_eq!(status, 200);
