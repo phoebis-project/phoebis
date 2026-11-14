@@ -2710,7 +2710,6 @@ textarea.input {
 }
 
 /* Decision card and event detail */
-/* The candidate and pin cell rules stay in pages.css, after the routing log's cell rules they tie with. */
 /* The decision card spans the open row's tint, so its candidate table is the log's card less 16 px either side. The
    event detail is a bordered panel on the same tint. Chips in both are one line high. */
 .decision-card,
@@ -2782,6 +2781,113 @@ textarea.input {
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-2);
+}
+
+.decision-card .chip.decision-card__hash,
+.strip-popover .chip.decision-card__hash {
+  font-size: 11.5px;
+}
+
+/* Packed cells so the nine columns fit the card at both viewports with nothing to scroll sideways. */
+.decision-card__candidates {
+  font-size: 12.5px;
+}
+
+.decision-card__candidates th,
+.decision-card__candidates td {
+  padding: 6px;
+  vertical-align: top;
+}
+
+.decision-card__candidates th:first-child,
+.decision-card__candidates td:first-child {
+  padding-left: 10px;
+}
+
+.decision-card__candidates th:last-child,
+.decision-card__candidates td:last-child {
+  padding-right: 12px;
+}
+
+.decision-card__candidates tbody tr.is-chosen td {
+  background: var(--accent-soft);
+}
+
+.decision-card__candidates .sub,
+.decision-card__candidates td.num,
+.decision-card__window {
+  white-space: nowrap;
+}
+
+.decision-card__candidates .sub {
+  line-height: 16px;
+}
+
+/* The prefix cell stacks the hash over its warmth, one value a line, as the window cells do. */
+.decision-card__prefix .chip {
+  display: flex;
+  width: max-content;
+  margin-bottom: 2px;
+}
+
+.decision-card__why {
+  display: block;
+  margin-top: 3px;
+}
+
+.decision-card__folds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.decision-card__fold summary {
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.decision-card__fold .kv,
+.decision-card__fold > p {
+  margin: 8px 0 4px 16px;
+  font-size: 12.5px;
+}
+
+/* The settings in force: one setting a row, laid in two pairs of columns so twenty fields stay short. */
+.decision-card__fold .kv.decision-card__settings {
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+}
+
+.decision-card__foot,
+.event-detail__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.decision-card__foot .link-btn {
+  padding: 0;
+}
+
+.decision-card__record {
+  margin-left: auto;
+}
+
+.event-detail__pins {
+  width: auto;
+  font-size: 12.5px;
+}
+
+.event-detail__pins th,
+.event-detail__pins td {
+  padding: 5px 12px 5px 0;
+}
+
+.event-detail__pins th:first-child,
+.event-detail__pins td:first-child {
+  padding-left: 12px;
 }
 
 /* Decision strip */

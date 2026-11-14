@@ -510,16 +510,17 @@ transitions cut. It walks the states in the light and the dark theme, each under
 with `phoebis.palette` written beside `phoebis.theme`. The views of `VIEWS` are read at rest at 360, 375, 400, 720 and
 1280 px wide. The routing log filtered on five kinds is read at 360 and 1280, since no view at rest draws a filter chip
 and this one's values cut at the chip's width. The open surfaces are read at 1280: Add filter on the request log, the
-Sort control on Accounts, a Sessions row's menu, a routing log decision's strip popover, the pool chart's tooltip and
-the attempt trail's hover card. The Create guardrail, Create key and Create pool dialogs are read at 720, where a
-grouped dialog's rail turns into two strips, and at 1280. The pool dialog is read on its Members group, whose unchecked
-rows hold disabled fields. A state whose opener the page lacks, or whose surface never appears, is skipped with a
-printed note. A write that skipped a state lists the skipped states, stops with exit 2 and leaves the baseline
-untouched, and a comparison lists such a state as read in the baseline alone. A page that fails mid-walk, such as a load
-or a click that times out, stops the run with exit 2 and names the state. A server or a browser that does not start, a
-baseline line that is no state and a file the run cannot read or finish writing stop it with exit 2 too, leaving no
-partial baseline or list behind. `views.mjs` runs its pass on import, so `styles.mjs` keeps its own copy of the views'
-paths and waits, and a view added to `VIEWS` reaches no state until its row joins that copy.
+Sort control on Accounts, a Sessions row's menu, a routing log decision's strip popover, a shedding round's open row
+with its pins (and the rounds' list at rest), the pool chart's tooltip and the attempt trail's hover card. The Create
+guardrail, Create key and Create pool dialogs are read at 720, where a grouped dialog's rail turns into two strips, and
+at 1280. The pool dialog is read on its Members group, whose unchecked rows hold disabled fields. A state whose opener
+the page lacks, or whose surface never appears, is skipped with a printed note. A write that skipped a state lists the
+skipped states, stops with exit 2 and leaves the baseline untouched, and a comparison lists such a state as read in the
+baseline alone. A page that fails mid-walk, such as a load or a click that times out, stops the run with exit 2 and
+names the state. A server or a browser that does not start, a baseline line that is no state and a file the run cannot
+read or finish writing stop it with exit 2 too, leaving no partial baseline or list behind. `views.mjs` runs its pass on
+import, so `styles.mjs` keeps its own copy of the views' paths and waits, and a view added to `VIEWS` reaches no state
+until its row joins that copy.
 
 The baseline holds one JSON object per line, one line per state:
 `{"key":"<theme>/<palette>/<state>@<width>","elements":{...}}`. Each element is keyed by its path from the document

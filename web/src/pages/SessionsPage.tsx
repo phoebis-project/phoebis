@@ -596,7 +596,7 @@ function CostCell({ accountId, burn = null, cost, spend }: { accountId: string |
       title = spendHover(spend, cost.week, cost.scale, hint);
       body = (
         <>
-          <span className="srow__pin srow__pin--wraps">
+          <span className="srow__pin">
             {cell.main}
             <BilledBadge usd={reading.billed} />
             {reading.accounts.length > 0 && (
@@ -647,7 +647,7 @@ function AccountLink({ account, id }: { account: Account | null; id: string }) {
 function RowAccount({ accent, account, others, session, speed }: { accent: boolean; account: Account | null; others: { accountId: string; agentId: string; model: string }[]; session: Session; speed: ReturnType<typeof memberSpeed> }) {
   if (session.accountId === null) return <span className="muted">-</span>;
   return (
-    <span className="srow__pin srow__pin--wraps">
+    <span className="srow__pin">
       <AccountLink account={account} id={session.accountId} />
       {/* An unpinned row on a slowed account carries no speed, so the row's own speed gates the chip. */}
       {session.speed !== null && <SpeedChip {...speed} />}
@@ -931,7 +931,7 @@ function SessionRows({
         )}
         {visible.has('model') && (
           <td className="mono nowrap col-fit" title={session.model === null ? undefined : modelTitle(session.model)}>
-            <span className="srow__pin srow__pin--wraps">
+            <span className="srow__pin">
               {session.model === null ? <span className="muted">-</span> : shortModel(session.model)}
               <OtherPins accent={filtered.model && otherModels.some((l) => l.matched)} agents={otherModels} lead="Agents on another model:" />
             </span>

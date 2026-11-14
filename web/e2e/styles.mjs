@@ -1,10 +1,10 @@
 // The computed-style comparison: the computed style of every element each state draws, in both themes and under both
 // palettes, against a baseline the same script writes. A rule section that moves between stylesheets, or a palette's
 // second token set, must leave every drawn value as it was, and the states reach past the views at rest at 1280 to the
-// narrow widths, a filter chip, the open popovers, menus and hover cards, and three dialogs. It exits 0 on no
-// difference, 1 on a difference and 2 on a refusal: a bad argument, a baseline inside the repository, a missing mock
-// bundle, a baseline line that is no state, a path two elements share, a state a write could not draw, or a server, a
-// browser, a page or a file that failed on the way.
+// narrow widths, a filter chip, a shedding round's open row with its pins, the open popovers, menus and hover cards,
+// and three dialogs. It exits 0 on no difference, 1 on a difference and 2 on a refusal: a bad argument, a baseline
+// inside the repository, a missing mock bundle, a baseline line that is no state, a path two elements share, a state a
+// write could not draw, or a server, a browser, a page or a file that failed on the way.
 import { execFileSync } from 'node:child_process';
 import { once } from 'node:events';
 import { closeSync, createReadStream, createWriteStream, existsSync, mkdirSync, openSync, readSync, readlinkSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
@@ -155,10 +155,14 @@ const STATES = [
   { open: null, path: '/meter', slug: 'meter', wait: '.meter-table', widths: AT_REST },
   // No view at rest draws a filter chip. Five kinds that name no preset run past a chip's 240 px, so its values cut.
   { open: null, path: '/routing-log?kinds=moved,mark_cleared,wind_down_started,slow_down_started,slow_down_ended', slug: 'routing-log-filtered', wait: '.chip--filter', widths: [360, 1280] },
+  // The open round below takes its load's wait from this state, since no view at rest filters on the shedding rounds.
+  { open: null, path: '/routing-log?range=24h&kinds=shedding_round', slug: 'routing-log-rounds', wait: '.routing-log__table', widths: [1280] },
   { open: [{ click: '.filter-bar__row > button', text: 'Add filter' }], path: '/requests', slug: 'requests-add-filter', wait: '.popover', widths: [1280] },
   { open: [{ click: 'button[aria-label="Sort"]' }], path: '/accounts', slug: 'accounts-sort', wait: '.popover', widths: [1280] },
   { open: [{ click: '.srow .menu__trigger' }], path: '/sessions', slug: 'sessions-row-menu', wait: '.menu__list', widths: [1280] },
   { open: [{ click: DECISION_ROW }, { click: '.routing-log__panel .decision-card .strip-station' }], path: '/routing-log', slug: 'routing-log-strip-popover', wait: '.strip-popover', widths: [1280] },
+  // The pins are the one table an event row's panel nests in the log's table.
+  { open: [{ click: '.routing-log__table tbody tr.routing-log__row td.routing-log__kind' }], path: '/routing-log?range=24h&kinds=shedding_round', slug: 'routing-log-round-pins', wait: '.routing-log__panel .event-detail__pins', widths: [1280] },
   { open: [{ hover: '.pool .pool__chart .recharts-wrapper' }], path: '/pools', slug: 'pools-chart-tip', wait: '.chart-tip', widths: [1280] },
   { open: [{ hover: '.requests__table tbody .trail-count' }], path: '/requests', slug: 'requests-trail-card', wait: '.trail-pop', widths: [1280] },
   // The 720 px strip is where a grouped dialog's rail turns into two strips above its body.
