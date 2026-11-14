@@ -14980,6 +14980,7 @@ async fn a_factor_under_one_emits_slow_down_started_once_and_a_return_to_one_end
         duration_ms,
         factor_min,
         held_ms,
+        holds: _,
         at,
     } = ended
     else {

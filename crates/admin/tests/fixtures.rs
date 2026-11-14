@@ -3701,6 +3701,7 @@ async fn routing_stories(
             duration_ms: 1_080_000,
             factor_min: 0.35,
             held_ms: 240_000,
+            holds: 2,
             at: at(32),
         },
     ];

@@ -271,6 +271,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             duration_ms,
             factor_min,
             held_ms,
+            holds,
             at,
         } => EventRecord {
             at: *at,
@@ -282,6 +283,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                     "duration_ms": duration_ms,
                     "factor_min": factor_min,
                     "held_ms": held_ms,
+                    "holds": holds,
                 })
                 .to_string(),
             ),
@@ -1282,6 +1284,7 @@ mod tests {
                     duration_ms: 1,
                     factor_min: 0.5,
                     held_ms: 0,
+                    holds: 0,
                     at: 1,
                 },
                 "slow_down_ended",
@@ -1863,6 +1866,7 @@ mod tests {
             duration_ms: 2_700_000,
             factor_min: 0.35,
             held_ms: 600_000,
+            holds: 4,
             at: 2_828_000,
         })
         .expect("a slow-down row");
@@ -1884,7 +1888,9 @@ mod tests {
         );
         assert_eq!(
             detail_of(&row),
-            json!({"since": 8_000, "duration_ms": 2_700_000, "factor_min": 0.35, "held_ms": 600_000})
+            json!({
+                "since": 8_000, "duration_ms": 2_700_000, "factor_min": 0.35, "held_ms": 600_000, "holds": 4
+            })
         );
     }
 

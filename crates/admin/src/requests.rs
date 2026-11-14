@@ -499,7 +499,8 @@ pub(crate) struct Event {
     ///   entry cleared by the window's reset, dropped at the purge, or dropped with the 5-hour window by a clean poll,
     ///   with the span's `since`, `duration_ms` (to the factor's return, to the passed reset of the window it slowed
     ///   for where the reset cleared the entry, or to the entry's last read where the purge or the poll dropped it
-    ///   before either), `factor_min`, the lowest factor of the span, and `held_ms`, the time its new holds waited.
+    ///   before either), `factor_min`, the lowest factor of the span, `held_ms`, the time its new holds waited, and
+    ///   `holds`, the count of those holds, where a request that joined a standing wait counts with the hold it joined.
     /// - `slow_down_started`: the account's factor on the pool read under 1 for the first time since the span last
     ///   closed, with the read's `factor`, `stretch_ms`, `threshold_ms`, `demand` (share of the 5-hour window per
     ///   hour) and the window's `reset`. A dip back under 1 inside the safety wait continues the open span and adds

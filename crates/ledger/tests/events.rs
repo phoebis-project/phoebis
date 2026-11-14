@@ -2241,6 +2241,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
             duration_ms: 1,
             factor_min: 0.5,
             held_ms: 0,
+            holds: 0,
             at: 1,
         },
         RouterEvent::WarmPrefixExpired {

@@ -24029,7 +24029,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "since": 1791718120000,
             "duration_ms": 1080000,
             "factor_min": 0.35,
-            "held_ms": 240000
+            "held_ms": 240000,
+            "holds": 2
           }
         },
         {

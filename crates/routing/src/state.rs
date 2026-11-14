@@ -1119,6 +1119,9 @@ pub struct SlowDownState {
     /// The new holds answered since `slowed_since`, each from its arrival to its deadline, summed, 0 outside a span. A
     /// request rejoining a standing deadline adds nothing, since its wait is the hold already counted.
     pub held_ms: i64,
+    /// The count of the new holds `held_ms` sums, 0 outside a span. A request rejoining a standing deadline counts
+    /// with the hold it rejoined.
+    pub holds: u64,
     /// The read's stretch, kept beside its factor so the pages read the figures the holds apply.
     pub stretch_ms: i64,
     /// The threshold the read compared the stretch to, the pool's `slow_down_stretch_seconds` at the read.
@@ -1153,12 +1156,15 @@ pub enum SlowDownEdge {
     /// The span closed, its length running from `since` to the instant the factor returned to 1, to the passed reset
     /// of the window it slowed for where the reset cleared the entry, or to the entry's last read where the purge or
     /// a clean poll's drop of the 5-hour window dropped the entry before either: the wait that closes a span is not
-    /// slowed time.
+    /// slowed time. `held_ms` sums the waits of the span's new holds, and `holds` counts them.
     Ended {
         since: i64,
         duration_ms: i64,
         factor_min: f64,
         held_ms: i64,
+        /// The count of the span's holds, the waits `held_ms` sums. A request that joined a standing wait counts with
+        /// the hold it joined.
+        holds: u64,
     },
 }
 
@@ -3028,6 +3034,7 @@ impl RoutingState {
                         duration_ms: clear - since,
                         factor_min: entry.factor_min,
                         held_ms: entry.held_ms,
+                        holds: entry.holds,
                     });
                     entry.slowed_since = None;
                 }
@@ -3041,6 +3048,7 @@ impl RoutingState {
                         entry.clear_since = None;
                         entry.factor_min = read.factor;
                         entry.held_ms = 0;
+                        entry.holds = 0;
                         opened = true;
                     }
                     (false, Some(_)) => {
@@ -3059,6 +3067,7 @@ impl RoutingState {
                 clear_since: None,
                 factor_min: read.factor.min(1.0),
                 held_ms: 0,
+                holds: 0,
                 stretch_ms: read.stretch_ms,
                 threshold_ms: read.threshold_ms,
             });
@@ -3102,10 +3111,12 @@ impl RoutingState {
                     duration_ms: clear - since,
                     factor_min: entry.factor_min,
                     held_ms: entry.held_ms,
+                    holds: entry.holds,
                 };
                 entry.slowed_since = None;
                 entry.factor_min = 1.0;
                 entry.held_ms = 0;
+                entry.holds = 0;
                 Some((pool_id.clone(), account_id.clone(), edge))
             })
             .collect();
@@ -3115,9 +3126,9 @@ impl RoutingState {
         edges
     }
 
-    /// Adds a slow-down hold's length to the entry's `held_ms`, the span's held time. Nothing while no span is open:
-    /// the time belongs to a span that stands, and a request rejoining a standing deadline is not passed here, so two
-    /// requests of one pin waiting to one instant count once.
+    /// Adds a slow-down hold's length to the entry's `held_ms`, the span's held time, and counts the hold in `holds`.
+    /// Nothing while no span is open: the hold belongs to a span that stands, and a request rejoining a standing
+    /// deadline is not passed here, so two requests of one pin waiting to one instant count once.
     pub fn add_slow_down_held(&mut self, pool_id: &str, account_id: &str, held_ms: i64) {
         if let Some(entry) = self
             .slow_downs
@@ -3125,6 +3136,7 @@ impl RoutingState {
             .filter(|entry| entry.slowed_since.is_some())
         {
             entry.held_ms = entry.held_ms.saturating_add(held_ms);
+            entry.holds = entry.holds.saturating_add(1);
         }
     }
 
@@ -4273,6 +4285,7 @@ impl RoutingState {
                     duration_ms: end - since,
                     factor_min: entry.factor_min,
                     held_ms: entry.held_ms,
+                    holds: entry.holds,
                 },
             ));
         }
@@ -6451,6 +6464,7 @@ mod tests {
                         duration_ms: 2 * MINUTE,
                         factor_min: 0.4,
                         held_ms: 0,
+                        holds: 0,
                     }
                 ),
             ],
@@ -6517,6 +6531,7 @@ mod tests {
                     duration_ms: MINUTE,
                     factor_min: 0.6,
                     held_ms: 0,
+                    holds: 0,
                 }),
                 edge(started(0.5)),
             ],
@@ -6596,6 +6611,7 @@ mod tests {
                 duration_ms: MINUTE,
                 factor_min: 0.6,
                 held_ms: 0,
+                holds: 0,
             }],
             "the span ends at the return, not at the last read"
         );
@@ -6621,6 +6637,7 @@ mod tests {
                 duration_ms: 30_000,
                 factor_min: 0.5,
                 held_ms: 0,
+                holds: 0,
             }],
             "the factor never returned, so the span ends at the entry's last read"
         );

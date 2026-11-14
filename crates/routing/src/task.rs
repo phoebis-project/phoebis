@@ -287,8 +287,8 @@ pub enum RouterEvent {
     /// The factor read 1 for the safety wait, the window's reset cleared the entry, the purge dropped it, or a clean
     /// poll dropped it with the 5-hour window, announced at that poll: the span from `since` to the instant the factor
     /// returned to 1, to the passed reset of the window it slowed for where the reset cleared the entry, or to the
-    /// entry's last read where the purge or the poll dropped the entry before either, with the lowest factor read in it
-    /// and the time its new holds waited.
+    /// entry's last read where the purge or the poll dropped the entry before either, with the lowest factor read in
+    /// it, the time its new holds waited and the count of those holds.
     SlowDownEnded {
         account_id: String,
         pool_id: String,
@@ -296,6 +296,9 @@ pub enum RouterEvent {
         duration_ms: i64,
         factor_min: f64,
         held_ms: i64,
+        /// The count of the span's holds, the waits `held_ms` sums. A request that joined a standing wait counts with
+        /// the hold it joined.
+        holds: u64,
         at: i64,
     },
     /// The credits read answered differently before and after a credits reading landed: `blocked_before` as the
@@ -3079,6 +3082,7 @@ impl Task {
                     duration_ms,
                     factor_min,
                     held_ms,
+                    holds,
                 } => RouterEvent::SlowDownEnded {
                     account_id,
                     pool_id,
@@ -3086,6 +3090,7 @@ impl Task {
                     duration_ms,
                     factor_min,
                     held_ms,
+                    holds,
                     at: now,
                 },
             });

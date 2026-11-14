@@ -24054,6 +24054,71 @@ fn a_second_request_of_the_pin_inside_the_deadline_rejoins_it_and_folds_nothing(
 }
 
 #[test]
+fn a_span_ends_with_the_count_of_its_new_holds_and_the_next_span_counts_its_own() {
+    let (off, on) = held_pools(120);
+    // At 0.96 a's window stands at the ceiling, so the factor reads 0 and each new hold waits the pool's cap.
+    let mut st = slowed_s1(0.96);
+    cycled(&mut st, &off, "s1", 10 * SECOND, T + 10 * SECOND);
+    let first = main_turn(&on, "s1", T + 20 * SECOND);
+    let until = held_on(&decide(&mut st, &on, &first, &mut rng()))
+        .1
+        .until
+        .expect("the first hold's deadline");
+    // A request past the first deadline is a new hold, and a retry inside the second deadline joins its wait.
+    let second = SelectRequest {
+        request_id: "r-2".into(),
+        ..main_turn(&on, "s1", until + SECOND)
+    };
+    let until = held_on(&decide(&mut st, &on, &second, &mut rng()))
+        .1
+        .until
+        .expect("the second hold's deadline");
+    let retry = SelectRequest {
+        request_id: "r-3".into(),
+        ..main_turn(&on, "s1", until - MINUTE)
+    };
+    assert_eq!(
+        held_on(&decide(&mut st, &on, &retry, &mut rng())).1.until,
+        Some(until),
+        "the retry waits to the second hold's instant"
+    );
+    // The factor returns to 1 at `at` and reads 1 for the safety wait, so the drain closes the span: the counts its
+    // ends carry.
+    let close = |st: &mut RoutingState, at: i64| -> Vec<u64> {
+        st.write_slow_down("p", "a", &seeded_read(1.0, at), 1.0, at, AVERAGE_MS);
+        st.take_slow_down_edges(at + SLOW_DOWN_WAIT_MS)
+            .into_iter()
+            .filter_map(|(_, _, edge)| match edge {
+                SlowDownEdge::Ended { holds, .. } => Some(holds),
+                SlowDownEdge::Started { .. } => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        close(&mut st, until + SECOND),
+        vec![2],
+        "two new holds, the retry counted with the hold it joined"
+    );
+
+    let reopened = until + SECOND + SLOW_DOWN_WAIT_MS;
+    reading(&mut st, "a", 0.96, 2 * HOUR, reopened);
+    let until = held_on(&decide(
+        &mut st,
+        &on,
+        &main_turn(&on, "s1", reopened),
+        &mut rng(),
+    ))
+    .1
+    .until
+    .expect("the next span's hold");
+    assert_eq!(
+        close(&mut st, until + SECOND),
+        vec![1],
+        "the next span counts its own hold alone"
+    );
+}
+
+#[test]
 fn a_request_carrying_its_slow_down_hold_renews_and_is_not_held_again() {
     let (off, on) = held_pools(120);
     let mut st = slowed_s1(0.80);
@@ -25420,6 +25485,7 @@ fn slowed_span_ended(duration_ms: i64) -> (String, String, SlowDownEdge) {
             duration_ms,
             factor_min: 0.38,
             held_ms: 0,
+            holds: 0,
         },
     )
 }
@@ -25625,6 +25691,7 @@ fn the_purge_drops_an_entry_no_selection_has_written_for_the_reclaim_hour() {
                 duration_ms: 0,
                 factor_min: 0.38,
                 held_ms: 0,
+                holds: 0,
             }
         )],
         "a span whose factor never returned ends at the entry's last read"

@@ -1647,8 +1647,9 @@ the account's end and `under the ceiling` at the five-hour bound,
 (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's prediction`. A slow-down started
 panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`), Demand (`12.0 %/h`), Reset and the
 Effect `requests of the account's sessions wait their cycle times the slow-down up to the hold`, and a slow-down ended
-panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the Effect
-`requests of the account's sessions pass unheld again`. The kinds and what each row records:
+panel Lasted, Slowest (`0.35x`), Held (the waits of the span's holds summed, with the count of the holds beside it,
+labeled "holds") and the Effect `requests of the account's sessions pass unheld again`. Held can pass Lasted, since the
+span's holds can overlap. The kinds and what each row records:
 
 | Event | What it records |
 | --- | --- |
@@ -1682,7 +1683,7 @@ panel Lasted, Slowest (`0.35x`), Held (the time the span held requests) and the 
 | reservation expired | A request ended without usage or its booking turned an hour old, so the share it reserved left the destination's prediction. |
 | router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
 | shedding round | A round ran on an account whose projection on a plan window read over the ceiling, or over the wall where the round tested it, at the window's horizon, or whose stretch stood over the slow-down's threshold for the safety wait, with the pins it marked or why it marked none, and kept its marks across a restart. |
-| slow-down ended | An account's slow-down span closed: its factor read 1 again for the safety wait, the window it slowed for passed its reset, or its entry left at the purge, with the span's length, its lowest factor and the time it held requests. |
+| slow-down ended | An account's slow-down span closed: its factor read 1 again for the safety wait, the window it slowed for passed its reset, or its entry left at the purge, with the span's length, its lowest factor, the waits of its holds summed, which can pass the span's length, and the count of those holds. |
 | slow-down started | An account's slow-down began: its factor read under 1, so requests of its sessions wait their cycle times the slow-down up to the hold. |
 | stream interrupted | A stream ended short after its head, with the cut's code and the error's words. |
 | warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL. |
