@@ -560,11 +560,6 @@ impl FoldRules {
         wide_edges: true,
         slow_down_hold: true,
     };
-    pub const NONE: FoldRules = FoldRules {
-        throughput_floor: false,
-        wide_edges: false,
-        slow_down_hold: false,
-    };
 }
 
 /// One delta per distinct (band, speed, funding) triple among the attempts with usage, the band from the attempt's

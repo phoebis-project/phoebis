@@ -183,8 +183,8 @@ fn rules_pass(
         let done = db.write(|c| {
             let tx = begin_write(c)?;
             let requests = requests_after(&tx, walk.from, after.as_ref(), PAGE)?;
-            for (request, attempts) in &requests {
-                let landed_at = landed_at(&tx, &request.id)?;
+            let stamps = landed_after(&tx, walk.from, after.as_ref(), PAGE)?;
+            for ((request, attempts), landed_at) in requests.iter().zip(stamps) {
                 let (old, new) = folded_under(&open, &names, landed_at);
                 if old == new {
                     continue;
@@ -271,12 +271,6 @@ fn folded_under(
         }
     }
     (old, new)
-}
-
-fn landed_at(conn: &Connection, id: &str) -> Result<Option<i64>, LedgerError> {
-    Ok(conn
-        .prepare_cached("SELECT landed_at FROM requests WHERE id = ?1")?
-        .query_row(params![id], |r| r.get(0))?)
 }
 
 /// The thresholds the rows of the retained requests stand under, read before a rules pass.
@@ -644,6 +638,16 @@ fn first_difference(old: &PriceRevisions, new: &PriceRevisions, floor: i64) -> O
     })
 }
 
+/// A page of the walk: the requests received at or after `?1`, past `(?2, ?3)`, at most `?4` of them in
+/// `(received_at, id)` order.
+const WALK_PAGE: &str =
+    "WHERE received_at >= ?1 AND (received_at, id) > (?2, ?3) ORDER BY received_at, id LIMIT ?4";
+
+/// The `(received_at, id)` a page starts past.
+fn past(after: Option<&After>) -> (i64, &str) {
+    after.map_or((i64::MIN, ""), |a| (a.received_at, a.id.as_str()))
+}
+
 /// The next page of requests received at or after `from`, past `after`, in `(received_at, id)` order, each with its
 /// attempts.
 fn requests_after(
@@ -652,10 +656,8 @@ fn requests_after(
     after: Option<&After>,
     page: usize,
 ) -> Result<Vec<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
-    let (after_at, after_id) = after.map_or((i64::MIN, ""), |a| (a.received_at, a.id.as_str()));
-    let mut stmt = conn.prepare(&format!(
-        "{REQUEST_SELECT} WHERE received_at >= ?1 AND (received_at, id) > (?2, ?3) ORDER BY received_at, id LIMIT ?4"
-    ))?;
+    let (after_at, after_id) = past(after);
+    let mut stmt = conn.prepare(&format!("{REQUEST_SELECT} {WALK_PAGE}"))?;
     let requests = stmt
         .query_map(
             params![from, after_at, after_id, page as i64],
@@ -663,6 +665,22 @@ fn requests_after(
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     with_attempts(conn, requests)
+}
+
+/// The `landed_at` of each request `requests_after` answers for the same arguments, in its order: run in the same
+/// transaction, the two statements read the same rows.
+fn landed_after(
+    conn: &Connection,
+    from: i64,
+    after: Option<&After>,
+    page: usize,
+) -> Result<Vec<Option<i64>>, LedgerError> {
+    let (after_at, after_id) = past(after);
+    let mut stmt = conn.prepare(&format!("SELECT landed_at FROM requests {WALK_PAGE}"))?;
+    let stamps = stmt
+        .query_map(params![from, after_at, after_id, page as i64], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(stamps)
 }
 
 pub(crate) fn read_meta<T: for<'de> Deserialize<'de>>(
@@ -1391,6 +1409,13 @@ mod tests {
         );
     }
 
+    /// The fold of a build that held none of the rules.
+    const NO_RULES: FoldRules = FoldRules {
+        throughput_floor: false,
+        wide_edges: false,
+        slow_down_hold: false,
+    };
+
     /// `request` written with its landing stamp from `now` and folded under `rules` at the thresholds of `prices`,
     /// as a build that applied those rules filed it.
     fn store(
@@ -1462,7 +1487,7 @@ mod tests {
         let db = LedgerDb::open_in_memory().unwrap();
         let at = NEW_YEAR + DAY;
         let request = timed("r", at, 100, (200, 1_000, 1_040));
-        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, 0);
+        store(&db, &request, &list(Some(1_000)), NO_RULES, 0);
         mark_fold_rules(&db).unwrap();
         refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
         assert_eq!(row(&db, at, STANDARD_BAND).output_tps_hist.count(), 0);
@@ -1473,7 +1498,7 @@ mod tests {
         let db = LedgerDb::open_in_memory().unwrap();
         let at = NEW_YEAR + DAY;
         let request = timed("r", at, 100, (200, 1_000, 150_000));
-        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, 0);
+        store(&db, &request, &list(Some(1_000)), NO_RULES, 0);
         mark_fold_rules(&db).unwrap();
         refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
         assert_eq!(
@@ -1487,7 +1512,7 @@ mod tests {
         let db = LedgerDb::open_in_memory().unwrap();
         let at = NEW_YEAR + DAY;
         let request = slowed(timed("r", at, 100, (21_000, 21_500, 30_000)), 20_000);
-        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, 0);
+        store(&db, &request, &list(Some(1_000)), NO_RULES, 0);
         mark_fold_rules(&db).unwrap();
         refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
         assert_eq!(row(&db, at, STANDARD_BAND).ttfb_hist, sampled(&[1_000.0]));
@@ -1501,7 +1526,7 @@ mod tests {
         let at = NEW_YEAR + DAY;
         let mut other = timed("a", at, 100, (100, 500, 1_500));
         other.1[0].output_tokens = Some(250);
-        store(&db, &other, &list(Some(1_000)), FoldRules::NONE, 0);
+        store(&db, &other, &list(Some(1_000)), NO_RULES, 0);
         mark_fold_rules(&db).unwrap();
         let late = timed("b", at + 1_000, 100, (200, 1_000, 1_040));
         store(&db, &late, &list(Some(1_000)), FoldRules::ALL, 0);
@@ -1525,8 +1550,8 @@ mod tests {
         );
         let other = timed("r3", at + 2_000, 100, (5_000, 5_500, 9_000));
         store(&db, &first, &list(Some(1_000)), FoldRules::ALL, 0);
-        store(&db, &second, &list(Some(1_000)), FoldRules::NONE, 0);
-        store(&db, &other, &list(Some(1_000)), FoldRules::NONE, 0);
+        store(&db, &second, &list(Some(1_000)), NO_RULES, 0);
+        store(&db, &other, &list(Some(1_000)), NO_RULES, 0);
         mark_fold_rules(&db).unwrap();
         db.write(|c| {
             let tx = begin_write(c)?;
@@ -1569,7 +1594,7 @@ mod tests {
         let long = timed("l", at + 1_000, 2_500, (5_000, 5_500, 9_000));
         let short = timed("s", at + 2_000, 500, (6_000, 6_500, 9_000));
         for request in [&held, &long, &short] {
-            store(&db, request, &list(Some(1_000)), FoldRules::NONE, 0);
+            store(&db, request, &list(Some(1_000)), NO_RULES, 0);
         }
         mark_fold_rules(&db).unwrap();
         refold_rules(&db, 0, 0, now).unwrap();
@@ -1592,7 +1617,7 @@ mod tests {
         let db = LedgerDb::open_in_memory().unwrap();
         let at = NEW_YEAR + DAY;
         let request = timed("r", at, 100, (200, 1_000, 1_040));
-        store(&db, &request, &list(Some(1_000)), FoldRules::NONE, AHEAD);
+        store(&db, &request, &list(Some(1_000)), NO_RULES, AHEAD);
         mark_fold_rules(&db).unwrap();
         refold_rules(&db, 7, 0, NEW_YEAR + 2 * DAY).unwrap();
         assert_eq!(row(&db, at, STANDARD_BAND).output_tps_hist.count(), 0);
@@ -1610,15 +1635,15 @@ mod tests {
         let (source, target) = (list(Some(1_000)), list(Some(2_000)));
         let first = slowed(timed("r1", day1, 1_500, (21_000, 21_500, 30_000)), 20_000);
         let second = slowed(timed("r2", day2, 1_500, (22_000, 22_500, 30_000)), 20_000);
-        store(&db, &first, &target, FoldRules::NONE, 0);
-        store(&db, &second, &source, FoldRules::NONE, 0);
+        store(&db, &first, &target, NO_RULES, 0);
+        store(&db, &second, &source, NO_RULES, 0);
         for request in [
             timed("s1", day1 + 1_000, 500, (6_000, 6_500, 9_000)),
             timed("l1", day1 + 2_000, 2_500, (5_000, 5_500, 9_000)),
             timed("s2", day2 + 1_000, 500, (6_000, 6_500, 9_000)),
             timed("l2", day2 + 2_000, 2_500, (5_000, 5_500, 9_000)),
         ] {
-            store(&db, &request, &source, FoldRules::NONE, 0);
+            store(&db, &request, &source, NO_RULES, 0);
         }
         db.write(|c| {
             let tx = begin_write(c)?;
@@ -1662,6 +1687,110 @@ mod tests {
                 (sampled(&[1_000.0, 5_000.0]), sampled(&[6_000.0])),
                 (sampled(&[2_000.0, 5_000.0]), sampled(&[6_000.0]))
             )
+        );
+    }
+
+    /// The state a pass that stopped before the two other rules were marked leaves: its cursor names the slow-down
+    /// hold alone and stands at the first held request, which it folded under the hold alone, and the second held
+    /// request stands as the old fold filed it, beside a request that no rule moves. Each held request's duration lies
+    /// past 100,000 once the hold of 20,000 comes out.
+    #[test]
+    fn a_resumed_pass_folds_for_its_cursors_rules_and_a_second_pass_for_the_other_open_rules() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let at = NEW_YEAR + DAY;
+        let first = slowed(timed("r1", at, 100, (21_000, 21_500, 150_000)), 20_000);
+        let second = slowed(
+            timed("r2", at + 1_000, 100, (22_000, 22_500, 160_000)),
+            20_000,
+        );
+        let other = timed("r3", at + 2_000, 100, (5_000, 5_500, 9_000));
+        let hold_alone = FoldRules {
+            slow_down_hold: true,
+            ..NO_RULES
+        };
+        store(&db, &first, &list(Some(1_000)), hold_alone, 0);
+        store(&db, &second, &list(Some(1_000)), NO_RULES, 0);
+        store(&db, &other, &list(Some(1_000)), NO_RULES, 0);
+        mark_fold_rules(&db).unwrap();
+        db.write(|c| {
+            let tx = begin_write(c)?;
+            write_meta(
+                &tx,
+                FOLD_RULES_REFOLD_KEY,
+                &RulesCursor {
+                    rules: vec!["slow_down_hold".into()],
+                    after: After {
+                        received_at: at,
+                        id: "r1".into(),
+                    },
+                },
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
+        let hour = row(&db, at, STANDARD_BAND);
+        assert_eq!(
+            (hour.duration_hist, hour.ttfb_hist),
+            (
+                sampled(&[130_000.0, 140_000.0, 9_000.0]),
+                sampled(&[1_000.0, 2_000.0, 5_000.0])
+            ),
+            "each held request once, less the hold, with the rules the cursor does not name applied to both"
+        );
+    }
+
+    /// A request retention of 0 keeps both requests while a rollup retention of seven days drops the hour the purge's
+    /// cutoff splits. Each request sends ten tokens over 40 ms.
+    #[test]
+    fn the_rules_pass_writes_no_row_back_into_an_hour_the_rollup_purge_removed() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let dropped = timed("dropped", IN_THE_SPLIT_HOUR, 100, (200, 1_000, 1_040));
+        let kept = timed("kept", IN_THE_NEXT_HOUR, 100, (200, 1_000, 1_040));
+        store(&db, &dropped, &list(Some(1_000)), NO_RULES, 0);
+        store(&db, &kept, &list(Some(1_000)), NO_RULES, 0);
+        purge(&db, 0, 7, SPLIT_NOW, &[]);
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 7, SPLIT_NOW).unwrap();
+        assert_eq!(
+            rows(&db)
+                .iter()
+                .map(|r| (r.hour, r.output_tps_hist.count()))
+                .collect::<Vec<_>>(),
+            [(crate::rollup::hour_of(IN_THE_NEXT_HOUR), 0)],
+            "the hour the purge removed gets no row back, and the kept hour loses its sample"
+        );
+    }
+
+    /// A band mark whose `since` lies after both held requests of 1,500 prompt tokens: the first landed before `since`
+    /// under the migration's standard band, the second after it in the long band at 1,000. Each row holds a request
+    /// that stays, of 500 and of 2,500 prompt tokens.
+    #[test]
+    fn the_rules_pass_bands_a_request_received_before_the_band_mark_by_when_it_landed() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        let (at, since) = (NEW_YEAR + DAY, NEW_YEAR + 2 * DAY);
+        let early = slowed(timed("r1", at, 1_500, (21_000, 21_500, 30_000)), 20_000);
+        let late = slowed(
+            timed("r2", at + 1_000, 1_500, (32_000, 32_500, 40_000)),
+            20_000,
+        );
+        let short = timed("s", at + 2_000, 500, (6_000, 6_500, 9_000));
+        let long = timed("l", at + 3_000, 2_500, (5_000, 5_500, 9_000));
+        store(&db, &early, &list(None), NO_RULES, 0);
+        store(&db, &short, &list(None), NO_RULES, 0);
+        refold_bands(&db, &list(Some(1_000)), 0, 0, since).unwrap();
+        store(&db, &late, &list(Some(1_000)), NO_RULES, since + 1_000);
+        store(&db, &long, &list(Some(1_000)), NO_RULES, since + 2_000);
+        mark_fold_rules(&db).unwrap();
+        refold_rules(&db, 0, 0, NEW_YEAR + 3 * DAY).unwrap();
+        assert_eq!(
+            (
+                row(&db, at, STANDARD_BAND).ttfb_hist,
+                row(&db, at, LONG_BAND).ttfb_hist
+            ),
+            (sampled(&[1_000.0, 6_000.0]), sampled(&[32_000.0, 5_000.0])),
+            "the request that landed before the mark moves in the standard band, the one that landed after stays as folded"
         );
     }
 }

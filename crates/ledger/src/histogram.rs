@@ -138,7 +138,7 @@ mod tests {
         }
     }
 
-    /// 150,000 lies in bucket 66, which spans about 143,301 to 171,488.
+    /// 150,000 lies in bucket 66, which spans about 143,301 to 171,544.
     #[test]
     fn a_sample_past_100_seconds_reads_its_percentile_from_its_own_bucket() {
         let mut h = Histogram::new();
