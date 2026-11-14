@@ -3557,6 +3557,7 @@ async fn routing_stories(
                 trigger: "projection",
                 stretch_ms: None,
                 threshold_ms: None,
+                fable_reservation: None,
                 factor: None,
                 unit: "window_share",
                 rewrite_unit: "pro_week",

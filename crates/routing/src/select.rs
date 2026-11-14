@@ -25,13 +25,13 @@ use crate::record::{
 };
 use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off,
-    load_shedding, mark_holds, plan_windows, return_to_plan_dwell_ms, round_in_dwell, shed_cap,
-    shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms, standing_mark, warm,
-    BandSegment, Binding, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage, Reservation,
-    RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, HOUR_MS,
-    IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    load_shedding, mark_holds, plan_windows, reservation_shedding, return_to_plan_dwell_ms,
+    round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
+    standing_mark, warm, BandSegment, Binding, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
+    Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
+    HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
-use crate::windows::{window_for, window_length_ms, MODEL_WINDOWS};
+use crate::windows::{model_week, window_for, window_length_ms, MODEL_WINDOWS};
 use crate::{paid_source, term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 
 /// Who sent the request, as the record and a refused request carry it: `claude-code/*` is Claude Code,
@@ -4310,7 +4310,9 @@ fn move_of<'a>(
     // its hold does. A wait or the hold holds back the round alone, so a standing mark moves below while a window waits
     // or is held as it does under a fired one. The line names every projection it read whether or not one fired, with
     // its horizon and the wall instant its burn reaches, the stamp and the wait of each window inside its wait and the
-    // 5-hour window's age and hold inside the hold.
+    // 5-hour window's age and hold inside the hold. On a pool that sheds on the Fable reservation, the reservation's
+    // test runs once no window fired, with a stamp of its own and the projection's wait, and its wait holds back the
+    // round alone as a window's does.
     let source = current.account_id.as_str();
     let tier = snapshot.priced_tier(source).unwrap_or_default();
     let projections = projections_of(
@@ -4341,6 +4343,14 @@ fn move_of<'a>(
             now,
         );
     }
+    let reservation = if reservation_shedding(pool) {
+        let read = reservation_read(state, snapshot, pool, source, now);
+        let over = read.as_ref().is_some_and(ReservationRead::over);
+        state.note_reservation(&pool.id, source, over, now);
+        read
+    } else {
+        None
+    };
     // The hold on the 5-hour round: each pin's burn average still carries the previous window's burst over the reset,
     // and the projection applies that rate to a horizon of up to five hours, so a round inside the first two averages
     // of a window would fire on the old window's burst. The age is read from the stored reading at each selection, so
@@ -4369,6 +4379,17 @@ fn move_of<'a>(
         &|window| state.projection_over_since(&pool.id, source, window),
         now,
     );
+    let (trigger, reservation_waits) = match trigger {
+        Some(trigger) => (Some(trigger), None),
+        None => reservation_trigger(
+            pool,
+            &projections,
+            reservation.as_ref(),
+            state.reservation_over_since(&pool.id, source),
+            slowed,
+            now,
+        ),
+    };
     let mut facts = Vec::new();
     for window in &windows {
         let (Some(projection), Some(at), Some(until)) = (
@@ -4396,6 +4417,13 @@ fn move_of<'a>(
         facts.push(Fact::int("age_five_hour", age).unit("ms"));
         facts.push(Fact::int("hold_five_hour", hold_ms).unit("ms"));
     }
+    if let Some(read) = reservation.as_ref().filter(|read| read.over()) {
+        facts.push(Fact::number("fable_reservation", read.reservation).unit("percent"));
+    }
+    if let Some(waits) = &reservation_waits {
+        facts.push(Fact::int("over_since_fable_reservation", waits.over_since).unit("time"));
+        facts.push(Fact::int("wait_fable_reservation", waits.wait_ms).unit("ms"));
+    }
     // The line tests windows of both kinds, so it carries both ceilings.
     facts.push(Fact::number("five_hour_ceiling", pool.five_hour_ceiling).unit("percent"));
     facts.push(Fact::number("weekly_ceiling", pool.weekly_ceiling).unit("percent"));
@@ -4408,7 +4436,9 @@ fn move_of<'a>(
     if let Some(trigger) = trigger {
         facts.push(Fact::text("trigger", trigger.window));
         facts.push(Fact::text("fired_by", trigger.source));
-        facts.push(Fact::number("excess", trigger.excess * 3_600.0).unit("percent_per_hour"));
+        if let Some(excess) = trigger.excess {
+            facts.push(Fact::number("excess", excess * 3_600.0).unit("percent_per_hour"));
+        }
         if state
             .last_shed(&pool.id, source)
             .is_none_or(|at| !round_in_dwell(pool, at, now))
@@ -4449,7 +4479,11 @@ fn move_of<'a>(
         } else {
             facts.push(Fact::text("round", "within_dwell"));
         }
-    } else if waiting.is_empty() && stretch_waits.is_none() && young.is_none() {
+    } else if waiting.is_empty()
+        && stretch_waits.is_none()
+        && young.is_none()
+        && reservation_waits.is_none()
+    {
         rule_line(rec, MigrateReason::Shed, "no", facts, &slow_down_facts);
         return MoveVerdict::Stay;
     }
@@ -4902,8 +4936,8 @@ pub(crate) fn burn_unit(
     )
 }
 
-/// What fired a round: the first plan window, in the trigger's order, whose test read over past its wait. `excess` is
-/// share per second on `window`.
+/// What fired a round: the first plan window, in the trigger's order, whose test read over past its wait, else the
+/// Fable reservation's test past its wait on `seven_day`. `excess` is share per second on `window`.
 pub(crate) struct Trigger {
     pub window: &'static str,
     /// The prediction at the round's instant.
@@ -4913,9 +4947,14 @@ pub(crate) struct Trigger {
     /// The limit the test read: the wall where the projection's horizon is the account's end or the window's own
     /// reset, the window's ceiling at the five-hour bound and under the stretch.
     pub ceiling: f64,
-    pub excess: f64,
-    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did.
+    /// `None` under the Fable reservation, whose test reads a room and no rate, so its round's target is the shed
+    /// cap's share of the walked burn alone.
+    pub excess: Option<f64>,
+    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did,
+    /// `fable_reservation` when the account's 7-day room read under its Fable reservation.
     pub source: &'static str,
+    /// The account's Fable reservation, under `fable_reservation`.
+    pub fable_reservation: Option<f64>,
     /// The account's stretch and the pool's threshold, under `slow_down`.
     pub stretch_ms: Option<i64>,
     pub threshold_ms: Option<i64>,
@@ -5052,8 +5091,9 @@ fn trigger_of(
                 projection,
                 horizon,
                 ceiling: limit,
-                excess: (projection - limit) / to_horizon.max(1.0),
+                excess: Some((projection - limit) / to_horizon.max(1.0)),
                 source: "slow_down",
+                fable_reservation: None,
                 stretch_ms: Some(read.stretch_ms),
                 threshold_ms: Some(read.threshold_ms),
                 factor: Some(read.factor),
@@ -5084,8 +5124,11 @@ fn trigger_of(
             horizon: projection.horizon,
             ceiling: limit,
             // A horizon at `now` would divide by nothing: the excess then reads the whole overrun as one second's.
-            excess: (projection.at_horizon - limit) / seconds(projection.horizon - now).max(1.0),
+            excess: Some(
+                (projection.at_horizon - limit) / seconds(projection.horizon - now).max(1.0),
+            ),
             source: "projection",
+            fable_reservation: None,
             stretch_ms: None,
             threshold_ms: None,
             factor: read.map(|read| read.factor),
@@ -5099,6 +5142,93 @@ fn trigger_of(
         .iter()
         .find_map(|window| test(window).filter(|_| !(*window == FIVE_HOUR && young.is_some())));
     TriggerRead { fired, waiting }
+}
+
+/// The Fable reservation's test on an account: its 7-day room and the reservation Pace holds back from that room for a
+/// `seven_day` request.
+struct ReservationRead {
+    room: f64,
+    reservation: f64,
+}
+
+impl ReservationRead {
+    /// Strictly under, since a room equal to the reservation still holds the whole of it.
+    fn over(&self) -> bool {
+        self.room < self.reservation
+    }
+}
+
+/// `account_id`'s reservation test under `pool`, read through `pace_of` as the pools route reads the member's score,
+/// `None` where no reservation applies: a paid source, an account with no Fable reading, a pricer with no factor for
+/// the Fable week.
+fn reservation_read(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    now: i64,
+) -> Option<ReservationRead> {
+    let candidate = Candidate {
+        account_id: account_id.to_string(),
+        incarnation: snapshot.incarnation(account_id).unwrap_or(0),
+        // Pace's figures read the account and its holder and never the member's priority.
+        priority: 0,
+        upstream_model: String::new(),
+    };
+    let pace = pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None);
+    pace.fable_reservation.map(|reservation| ReservationRead {
+        room: pace.remaining,
+        reservation,
+    })
+}
+
+/// What the Fable reservation's test fires once every window's test fired nothing: a round on `seven_day` once the
+/// account's room has read under its reservation since `since` for the projection's wait,
+/// `min((reset - since) / 4, 2 * burn_average_ms)` with `reset` the 7-day window's, the cap alone where its reading
+/// names none, else the stamp and the wait while the room reads short inside it. The round reads its window's figures
+/// off the 7-day projection as a projection round does, so an account with no 7-day projection fires nothing.
+fn reservation_trigger(
+    pool: &PoolRow,
+    projections: &BTreeMap<String, Projection>,
+    read: Option<&ReservationRead>,
+    since: Option<i64>,
+    slowed: Option<&SlowDownRead>,
+    now: i64,
+) -> (Option<Trigger>, Option<Waiting>) {
+    let (Some(read), Some(projection)) =
+        (read.filter(|read| read.over()), projections.get(SEVEN_DAY))
+    else {
+        return (None, None);
+    };
+    // The shed rule stamped the test before it ran, so a missing stamp starts the wait now.
+    let since = since.unwrap_or(now);
+    let cap = burn_average_ms(pool).saturating_mul(2);
+    let wait_ms = projection
+        .reset
+        .map_or(cap, |reset| (reset.saturating_sub(since) / 4).min(cap));
+    if now - since < wait_ms {
+        let waits = Waiting {
+            window: SEVEN_DAY,
+            over_since: since,
+            wait_ms,
+        };
+        return (None, Some(waits));
+    }
+    let fired = Trigger {
+        window: SEVEN_DAY,
+        utilization: projection.predicted,
+        projection: projection.at_horizon,
+        horizon: projection.horizon,
+        ceiling: projection.limit,
+        excess: None,
+        source: "fable_reservation",
+        fable_reservation: Some(read.reservation),
+        stretch_ms: None,
+        threshold_ms: None,
+        factor: slowed.map(|read| read.factor),
+        speed: slowed.map(|read| read.speed),
+    };
+    (Some(fired), None)
 }
 
 /// What the heal check read when it cleared a mark: the healing projection, with the stretch and the threshold where
@@ -5123,8 +5253,10 @@ pub(crate) enum Healed {
 /// prediction where that instant has passed, since no horizon lies ahead to price. Every other mark heals when the
 /// projection on its window at its horizon, on the achieved burn, reads under the round's limit for that horizon,
 /// strictly, since a reading at the line leaves the pin's next turn no room: the wall at the account's end or the
-/// window's own reset, where the quota left is lost, and the ceiling at the five-hour bound. `None` for a mark that
-/// stands or whose window the account has no read of.
+/// window's own reset, where the quota left is lost, and the ceiling at the five-hour bound. On a pool that sheds on
+/// the Fable reservation, a `seven_day` mark on a pin whose model draws no model week also stands while the account's
+/// 7-day room reads under its reservation, since a mark of the reservation's round would otherwise heal on the
+/// projection alone before its pin moved. `None` for a mark that stands or whose window the account has no read of.
 fn healed(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5156,7 +5288,12 @@ fn healed(
         now,
         BurnRead::Achieved,
     )?;
-    (projection.at_horizon < projection.limit).then_some(Healed::Projection {
+    let reserved = window == SEVEN_DAY
+        && model_week(&pin.model).is_none()
+        && reservation_shedding(pool)
+        && reservation_read(state, snapshot, pool, &pin.account_id, now)
+            .is_some_and(|read| read.over());
+    (projection.at_horizon < projection.limit && !reserved).then_some(Healed::Projection {
         projection: projection.at_horizon,
         limit: projection.limit,
     })
@@ -5477,9 +5614,11 @@ pub(crate) fn standing_move_read(
 /// the rest by burn over the dropped thinking at the weight of output, then warm by burn over the rewrite plus that
 /// weighted drop, each move read at the pin's own destination, bounded by `warm_sessions`, a fast-lane pin out of a
 /// window-share round, and a pin whose model does not draw the trigger's window and a pin with no priced burn on it out
-/// of any round, since none of them has a share of it to shed, and a pin whose agent ended out of any round too, since
-/// its agent sends no new turn and marking its decayed burn relieves nothing), then walked while the removed burn is
-/// under the target, `min(excess, shed_cap x burn_sum)` on the trigger's window. Once one pin's burn covers what the
+/// of any round, since none of them has a share of it to shed, a pin whose model draws a model week out of a round the
+/// Fable reservation fired (`fable_model`), since its use is what the reservation keeps room for, and a pin whose agent
+/// ended out of any round too, since its agent sends no new turn and marking its decayed burn relieves nothing), then
+/// walked while the removed burn is under the target, `min(excess, shed_cap x burn_sum)` on the trigger's window, and
+/// `shed_cap x burn_sum` under the reservation, whose test names no excess. Once one pin's burn covers what the
 /// target still asks, the walk marks the covering pin whose move costs the least, `cheapest` on the record, rather than
 /// the next in the order: a warm pin's rewrite plus the share of the thinking its move drops, and a cold pin's share of
 /// that thinking alone. Where no covering pin has a destination, the walk marks the pin at its position only where its
@@ -5561,6 +5700,13 @@ fn shed_round(
     // since it has no plan share at all.
     let off_window = |p: &PinRow| !plan_windows(&p.model).any(|window| window == trigger.window);
     pins = leave_out(pins, "off_window", &off_window);
+    // A round the Fable reservation fired sheds the 7-day room that the account's Fable use is expected to need, so a
+    // pin whose model draws a model week is that use and stays, though it draws the 7-day window too.
+    if trigger.fable_reservation.is_some() {
+        pins = leave_out(pins, "fable_model", &|p: &PinRow| {
+            model_week(&p.model).is_some()
+        });
+    }
     // The keep left a pin whose agent ended out of every figure, so the round lists it for its record and walks it
     // nowhere, its pin and cache kept for a respawn. A fast-lane pin and a pin off the window keep their words whatever
     // their agent did.
@@ -5704,7 +5850,9 @@ fn shed_round(
     let per_hour = |share: f64| share * 3_600.0;
     let burn_sum: f64 = ordered.iter().filter_map(|p| p.share).sum();
     let cap = shed_cap(pool);
-    let target = trigger.excess.min(cap * burn_sum);
+    let target = trigger
+        .excess
+        .map_or(cap * burn_sum, |excess| excess.min(cap * burn_sum));
     let dwell_ms = shed_dwell_ms(pool);
     // The round never takes nearly all of an account's burn: a mark is refused where the other unmarked priced pins
     // would hold under `SHED_MARK_SHARE` of the round's burn sum. An unpriced pin's burn is unknown and not none, so
@@ -5898,10 +6046,10 @@ fn shed_round(
         reads[index] = read;
     }
     let (outcome, reason) = if marks.is_empty() {
-        // The deepest class in the order `no_runway`, `sliver`, `off_window`, `ended`, `no_burn`, `unpriced`,
-        // `last_pin`, `standing`: a walked pin's skip, or where no pin was walked a left-out pin's own word.
-        // `unpriced` where neither names a class, since no priced burn was there to remove. `no_runway` leads, the
-        // word the attention list's shed condition reads.
+        // The deepest class in the order `no_runway`, `sliver`, `off_window`, `fable_model`, `ended`, `no_burn`,
+        // `unpriced`, `last_pin`, `standing`: a walked pin's skip, or where no pin was walked a left-out pin's own
+        // word. `unpriced` where neither names a class, since no priced burn was there to remove. `no_runway` leads,
+        // the word the attention list's shed condition reads.
         let mut skips: Vec<&'static str> = reads.iter().filter_map(|read| read.skip).collect();
         if ordered.is_empty() {
             // `fast_lane` names no class of the list.
@@ -5911,6 +6059,7 @@ fn shed_round(
             "no_runway",
             "sliver",
             "off_window",
+            "fable_model",
             "ended",
             "no_burn",
             "unpriced",
@@ -5924,8 +6073,8 @@ fn shed_round(
     } else {
         (format!("marked {}", marks.len()), None)
     };
-    // A left-out pin's row (`fast_lane`, `off_window`, `ended` or `no_burn`) carries no share and no read, so its
-    // figures follow the partition's word and never what the pricer answers for it.
+    // A left-out pin's row (`fast_lane`, `off_window`, `fable_model`, `ended` or `no_burn`) carries no share and no
+    // read, so its figures follow the partition's word and never what the pricer answers for it.
     let pin_facts = |p: &PinRow, walked: Option<(usize, &RoundPin)>, left: Option<&'static str>| {
         let position = walked.map(|(i, _)| i);
         let read = position.map(|i| &reads[i]);
@@ -5993,13 +6142,15 @@ fn shed_round(
         trigger: trigger.source,
         stretch_ms: trigger.stretch_ms,
         threshold_ms: trigger.threshold_ms,
+        fable_reservation: trigger.fable_reservation,
         factor: trigger.factor,
         unit: unit.as_str(),
         rewrite_unit: "pro_week",
         burn_average_seconds: whole_seconds(average_ms),
         shed_cap: cap,
         burn_sum: per_hour(burn_sum),
-        excess: per_hour(trigger.excess),
+        // The reservation's test names no rate, and every pin the round walked spends the reserved room.
+        excess: per_hour(trigger.excess.unwrap_or(burn_sum)),
         target: per_hour(target),
         mark_share: SHED_MARK_SHARE,
         removed: per_hour(removed),

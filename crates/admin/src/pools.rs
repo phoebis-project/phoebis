@@ -166,6 +166,10 @@ pub(crate) struct PoolInput {
     /// Default `true`. Off, no shedding round runs. The spent move keeps `migrate_when_spent`.
     #[serde(default)]
     load_shedding: Option<bool>,
+    /// Default `false`. On a `pace` pool with `load_shedding` on, a round also fires on an account whose 7-day room has
+    /// stood under its Fable reservation for the projection's wait, and walks the account's non-Fable pins alone.
+    #[serde(default)]
+    fable_reservation_shedding: Option<bool>,
     /// `0.1` to `1.0`, default `0.5`.
     #[serde(default)]
     shed_cap: Option<f64>,
@@ -469,6 +473,9 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     }
     if let Some(on) = input.load_shedding {
         row.shedding.load_shedding = on;
+    }
+    if let Some(on) = input.fable_reservation_shedding {
+        row.shedding.fable_reservation_shedding = on;
     }
     if let Some(cap) = input.shed_cap {
         if !(0.1..=1.0).contains(&cap) {
@@ -923,9 +930,12 @@ pub(crate) struct Pool {
     pub weekly_ceiling: f64,
     #[schema(value_type = Vec<crate::openapi::ModelRuleView>)]
     pub model_rules: Vec<phoebis_store::ModelRule>,
-    /// The first of the shedding fields, with `shed_cap`, `burn_average_seconds`, `shed_dwell_seconds`,
-    /// `migrate_when_spent` and `warm_sessions`.
+    /// The first of the shedding fields, with `fable_reservation_shedding`, `shed_cap`, `burn_average_seconds`,
+    /// `shed_dwell_seconds`, `migrate_when_spent` and `warm_sessions`.
     pub load_shedding: bool,
+    /// Whether a round also fires on an account whose 7-day room stands under its Fable reservation, on a `pace` pool
+    /// with `load_shedding` on.
+    pub fable_reservation_shedding: bool,
     pub shed_cap: f64,
     pub burn_average_seconds: u64,
     pub shed_dwell_seconds: u64,
@@ -1177,6 +1187,11 @@ pub(crate) struct PoolMemberView {
     /// non-Fable pins alone), the room its worst live bucket leaves for an api_key member. A member's score reads no
     /// model, and the 7-day window is the one every model draws. Null while the router does not answer.
     pub pace_score: Option<f64>,
+    /// The share of the member's 7-day room Pace holds back for its expected Fable use, the reservation `pace_score`
+    /// subtracts. A pool with `fable_reservation_shedding` on sheds the member's non-Fable sessions while the room
+    /// stands under it. Null where no reservation applies (an api_key member, a usage-based seat, a member with no
+    /// Fable reading) and while the router does not answer.
+    pub fable_reservation: Option<f64>,
     /// The pins' burn on the member's 7-day window under this pool, in share per hour, null for an api_key member and
     /// a member with no reading of the window.
     pub burn: Option<f64>,
@@ -1253,6 +1268,7 @@ fn member_json(
         spends: reports,
         active_pins,
         pace_score: projection.map(|p| p.pace_score),
+        fable_reservation: projection.and_then(|p| p.fable_reservation),
         burn: projection
             .and_then(|p| p.windows.get(phoebis_routing::SEVEN_DAY))
             .map(|w| w.burn),
@@ -1520,6 +1536,7 @@ pub(crate) fn pool_json_from(context: &PoolContext, row: &PoolRow) -> Pool {
         weekly_ceiling: row.weekly_ceiling,
         model_rules: row.model_rules.clone(),
         load_shedding: row.shedding.load_shedding,
+        fable_reservation_shedding: row.shedding.fable_reservation_shedding,
         shed_cap: row.shedding.shed_cap,
         burn_average_seconds: row.shedding.burn_average_seconds,
         shed_dwell_seconds: row.shedding.shed_dwell_seconds,
@@ -1670,6 +1687,7 @@ mod tests {
         weekly_ceiling: f64,
         model_rules: Vec<ModelRuleView>,
         load_shedding: bool,
+        fable_reservation_shedding: bool,
         shed_cap: f64,
         burn_average_seconds: u64,
         shed_dwell_seconds: u64,

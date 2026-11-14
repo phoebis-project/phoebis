@@ -8111,6 +8111,93 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
 }
 
 #[tokio::test]
+async fn a_pool_member_with_a_fable_hour_answers_its_fable_reservation_and_a_paid_member_answers_null(
+) {
+    use common::{login, post, wait_json, NOW};
+    const HOUR: i64 = 3_600_000;
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&seeding)).await;
+    // A hundredth of the Fable week in the clock hour that ended before the rig's clock, which the router loads at its
+    // start.
+    seed.store
+        .write_routing(|tx| {
+            tx.upsert_model_week_hour(&phoebis_store::ModelWeekHourRow {
+                account_id: "business".into(),
+                incarnation: 1,
+                window: phoebis_routing::SEVEN_DAY_FABLE.into(),
+                hour: NOW / HOUR - 1,
+                share: 0.01,
+            })
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on_week_factor(seed.store.clone(), 0.25).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Over the fifty hours to the reset the hour reads half the Fable week, past the room of 0.4 the reading leaves, so
+    // the factor of a quarter holds back 0.1 of the week.
+    read_windows(
+        &parts,
+        "business",
+        &[
+            (phoebis_routing::SEVEN_DAY, 0.5, Some(NOW + 50 * HOUR)),
+            (phoebis_routing::SEVEN_DAY_FABLE, 0.6, Some(NOW + 50 * HOUR)),
+        ],
+    )
+    .await;
+    read_windows(
+        &parts,
+        "direct",
+        &[("itpm:claude-opus-5-5", 0.7, Some(NOW + 30_000))],
+    )
+    .await;
+    let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        pool_member(v, "business")["fable_reservation"].is_number()
+    })
+    .await;
+    assert!(
+        within(
+            pool_member(&pools, "business")["fable_reservation"].as_f64(),
+            0.1
+        ),
+        "{pools}"
+    );
+    assert_eq!(
+        pool_member(&pools, "direct")["fable_reservation"],
+        serde_json::Value::Null,
+        "a paid member holds no reservation: {pools}"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_patched_with_the_fable_reservation_shedding_option_on_answers_it_on_the_next_read()
+{
+    use common::{get, json, login, patch, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let patched = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"fable_reservation_shedding":true}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patched.status(), 200);
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    assert_eq!(
+        pools["pools"][0]["fable_reservation_shedding"].as_bool(),
+        Some(true),
+        "{pools}"
+    );
+}
+
+#[tokio::test]
 async fn a_pool_member_the_router_has_not_loaded_reads_unknown_while_a_paused_one_reads_unavailable(
 ) {
     use common::{get, json, login, post};

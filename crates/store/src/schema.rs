@@ -4,8 +4,9 @@
 //! `model_resolutions`, `overage_state`, `pins`, `pool_members`, `pool_tombstones`, `pools`, `refresh_attempts`,
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
 //! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
-//! adds `model_week_hours`, `pins.thinking_sums`, `pools.thinking_diagnostics`, `pools.weekly_ceiling` and
-//! `thinking_bindings`, renames `pools.window_ceiling` to `five_hour_ceiling` and drops `session_first_seen`.
+//! adds `model_week_hours`, `pins.thinking_sums`, `pools.fable_reservation_shedding`, `pools.thinking_diagnostics`,
+//! `pools.weekly_ceiling` and `thinking_bindings`, renames `pools.window_ceiling` to `five_hour_ceiling` and drops
+//! `session_first_seen`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -338,6 +339,7 @@ ALTER TABLE accounts ADD COLUMN limit_resets_epoch INTEGER NOT NULL DEFAULT 0;
 /// the one fraction held a weekly reserve that way. A pin stored before the step holds no thinking sum and the router
 /// has learned no binding, so each move prices the session's whole last prompt until an answer says more. The
 /// first-seen table has no reader left, since the Sessions route reads a session's first request from the ledger.
+/// The pool's option to shed on the Fable reservation starts off, as a pool stored before the step ran without it.
 const V8: &str = r#"
 CREATE TABLE model_week_hours (
     account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -361,6 +363,7 @@ CREATE TABLE thinking_bindings (
     PRIMARY KEY (model, account_a, account_b)
 );
 DROP TABLE session_first_seen;
+ALTER TABLE pools ADD COLUMN fable_reservation_shedding INTEGER NOT NULL DEFAULT 0;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or

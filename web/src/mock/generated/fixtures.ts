@@ -14346,6 +14346,7 @@ export const FIXTURES: Record<string, Fixture> = {
             }
           ],
           "load_shedding": true,
+          "fable_reservation_shedding": false,
           "shed_cap": 0.2,
           "burn_average_seconds": 1800,
           "shed_dwell_seconds": 900,
@@ -14430,6 +14431,7 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "active_pins": 5,
               "pace_score": 0.005952380952380952,
+              "fable_reservation": null,
               "burn": null,
               "factor": null,
               "speed": null
@@ -14451,6 +14453,7 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "active_pins": 2,
               "pace_score": 1,
+              "fable_reservation": null,
               "burn": null,
               "factor": null,
               "speed": null
@@ -14466,6 +14469,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "spends": [],
               "active_pins": 0,
               "pace_score": 1,
+              "fable_reservation": null,
               "burn": null,
               "factor": null,
               "speed": null
@@ -14747,6 +14751,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "weekly_ceiling": 1,
           "model_rules": [],
           "load_shedding": true,
+          "fable_reservation_shedding": false,
           "shed_cap": 0.5,
           "burn_average_seconds": 1800,
           "shed_dwell_seconds": 900,
@@ -14823,6 +14828,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "spends": [],
               "active_pins": 0,
               "pace_score": 42,
+              "fable_reservation": null,
               "burn": 0,
               "factor": null,
               "speed": null
@@ -23798,6 +23804,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "burn_average_seconds": 1800,
               "shed_dwell_seconds": 900,
               "load_shedding": true,
+              "fable_reservation_shedding": false,
               "migrate_when_spent": true,
               "warm_sessions": "when_needed",
               "slow_down": false,
@@ -23939,6 +23946,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "burn_average_seconds": 1800,
               "shed_dwell_seconds": 900,
               "load_shedding": true,
+              "fable_reservation_shedding": false,
               "migrate_when_spent": true,
               "warm_sessions": "when_needed",
               "slow_down": false,
@@ -24633,6 +24641,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "trigger": "projection",
             "stretch_ms": null,
             "threshold_ms": null,
+            "fable_reservation": null,
             "factor": null,
             "unit": "window_share",
             "rewrite_unit": "pro_week",

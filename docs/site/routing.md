@@ -70,6 +70,7 @@ outside its bound gets:
 | `weekly_ceiling` | `1.0` | 0.5 to 1: `weekly_ceiling is between 0.5 and 1.0`. The ceiling of the 7-day window and each model week. See The projection under Selection |
 | `model_rules` | empty | an ordered list of `{pattern, not}`, at most 256: `model_rules holds at most 256 entries`. See Model rules |
 | `load_shedding` | `true` | a switch: off, no round runs. See Moves |
+| `fable_reservation_shedding` | `false` | a switch: on a `pace` pool with `load_shedding` on, a round also fires on an account whose 7-day room stands under its Fable reservation. See Moves |
 | `shed_cap` | `0.5` | 0.1 to 1: `shed_cap is between 0.1 and 1.0`. See Moves |
 | `burn_average_seconds` | `1800` | 600 to 7200: `burn_average_seconds is between 600 and 7200`. See Moves |
 | `shed_dwell_seconds` | `900` | 300 to 7200: `shed_dwell_seconds is between 300 and 7200`. See Moves |
@@ -673,6 +674,25 @@ With `load_shedding` off no round runs and nothing is marked, and a mark already
 next request, which renews the pin in place. The destination gate, the reservations and the two ceilings on every move
 and placement stay in force. The spent move has its own toggle, `migrate_when_spent`, which the switch does not touch.
 
+With `fable_reservation_shedding` on as well, on a pool whose `strategy` is `pace`, the shed rule runs one more test
+once no window fired: the Fable reservation, the share of the 7-day window Pace holds back for the account's expected
+Fable use (see `pace` under [Selection](#selection)). The test reads over where the account's 7-day room, the share of
+the window its prediction leaves, is smaller than its reservation, strictly, so a room equal to the reservation still
+holds all of it. An account no reservation applies to, an API-key account, a usage-based seat or an account with no
+Fable reading, never reads over. The test keeps a stamp of its own from its first reading over and fires once the room
+has read short for the projection's wait: a quarter of the time from the stamp to the 7-day reset, at most twice
+`burn_average_seconds`. The wait holds back the round alone, as a window's wait does, so a mark already standing moves
+at its pin's next request. One dwell paces this round and a window's round alike on an account. The round's window is
+`seven_day`, and its record reads that window's prediction, projection, horizon and ceiling as a projection round's
+does, names its trigger `fable_reservation` and states the reservation as `fable_reservation`. The round walks the pins
+whose model draws no model week, since the account's Fable use is what the reservation keeps room for, so a Fable pin
+stays out of it as `fable_model`, though it draws the 7-day window. Every walked pin's burn spends the reserved room, so
+the round's target is `shed_cap` of their burn, and its record states that burn as the excess. The order, the pick, the
+guards and the destination gate are the round's own, and each mark carries the window `seven_day`. While the room reads
+short, the shed rule's line in the routing log's record of the selection names the reservation (`fable_reservation`),
+inside the wait the stamp and the wait (`over_since_fable_reservation`, `wait_fable_reservation`), and once the test
+fires `trigger` `seven_day` and `fired_by` `fable_reservation`, with no `excess`, which a window's trigger alone names.
+
 The round orders the pool's pins on the account, cold ones first, those whose move drops no thinking by burn and then
 the others by burn over the thinking they drop, then warm ones by burn over their move's size. A move's size is the
 prompt it rewrites on the destination the gate finds for it before the walk plans any move, as [What a move
@@ -722,9 +742,10 @@ only where its burn covers at least a tenth of what the target still asks, warm 
 it is (`sliver`), since its move relieves too little of the rest, and the round's record names the share as
 `mark_share`. A pin whose burn carries the removed burn past the target stays marked, and the walk stops there. A round
 that marks nothing records why: `no_runway` when no priced pin had a destination, `sliver` when the order left a pin
-under a tenth of the rest, `off_window`, `ended` or `no_burn` when it walked no pin and a pin it left out carried that
-word, `unpriced` when no burn was priced, `last_pin` when every pin the target asked for would have left too little burn
-unmarked, and `standing` when every pin walked was a pending move. Either way the round is recorded, so the dwell holds.
+under a tenth of the rest, `off_window`, `fable_model`, `ended` or `no_burn` when it walked no pin and a pin it left out
+carried that word, `unpriced` when no burn was priced, `last_pin` when every pin the target asked for would have left
+too little burn unmarked, and `standing` when every pin walked was a pending move. Either way the round is recorded, so
+the dwell holds.
 
 A marked session moves at its next request, the request that ran the round included, since the mark check follows the
 round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
@@ -737,11 +758,14 @@ can hold one model alone. An unmarked pin never moves for utilization. A mark ho
 expires, or its account heals: when the account's projection on the marked window reads under the line its horizon sets
 (the wall at the account's end or the window's own reset, the window's own ceiling at the five-hour bound) at the pin's
 next request, or, for a mark the stretch made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark
-clears and the pin stays. A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus
-has two roles, the pause between two rounds on one account and the time a shed session keeps off the account that shed
-it. The marks live on the pins' rows in the registry, beside each account's last round, so a restart neither forgets a
-mark nor starts a fresh round inside the dwell. A held request does not survive one (the relay's open connection closes
-and the client retries), and the routing log's router started row says so.
+clears and the pin stays. On a pool that sheds on the Fable reservation, a `seven_day` mark on a pin whose model draws
+no model week heals only once the account's 7-day room also reads at or above its reservation, so a mark of the
+reservation's round stands while either test reads over and does not clear on the projection alone before its pin
+moves. A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the
+pause between two rounds on one account and the time a shed session keeps off the account that shed it. The marks live
+on the pins' rows in the registry, beside each account's last round, so a restart neither forgets a mark nor starts a
+fresh round inside the dwell. A held request does not survive one (the relay's open connection closes and the client
+retries), and the routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and

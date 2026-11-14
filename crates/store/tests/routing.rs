@@ -815,7 +815,8 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "CREATE TABLE session_first_seen (
+        "ALTER TABLE pools DROP COLUMN fable_reservation_shedding;
+         CREATE TABLE session_first_seen (
            key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
            PRIMARY KEY (key_id, session_id, agent_id)
          );

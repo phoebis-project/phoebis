@@ -23,6 +23,7 @@
           }
         ],
         "load_shedding": true,
+        "fable_reservation_shedding": false,
         "shed_cap": 0.2,
         "burn_average_seconds": 1800,
         "shed_dwell_seconds": 900,
@@ -107,6 +108,7 @@
             ],
             "active_pins": 5,
             "pace_score": 0.005952380952380952,
+            "fable_reservation": null,
             "burn": null,
             "factor": null,
             "speed": null
@@ -128,6 +130,7 @@
             ],
             "active_pins": 2,
             "pace_score": 1.0,
+            "fable_reservation": null,
             "burn": null,
             "factor": null,
             "speed": null
@@ -143,6 +146,7 @@
             "spends": [],
             "active_pins": 0,
             "pace_score": 1.0,
+            "fable_reservation": null,
             "burn": null,
             "factor": null,
             "speed": null
@@ -424,6 +428,7 @@
         "weekly_ceiling": 1.0,
         "model_rules": [],
         "load_shedding": true,
+        "fable_reservation_shedding": false,
         "shed_cap": 0.5,
         "burn_average_seconds": 1800,
         "shed_dwell_seconds": 900,
@@ -500,6 +505,7 @@
             "spends": [],
             "active_pins": 0,
             "pace_score": 42.0,
+            "fable_reservation": null,
             "burn": 0.0,
             "factor": null,
             "speed": null

@@ -1379,6 +1379,9 @@ pub struct AccountProjection {
     /// `pace_of`'s score whatever the account's kind: the spare rate on `seven_day` for an OAuth account, the
     /// remaining worst bucket for an api_key account (whose `windows` is empty).
     pub pace_score: f64,
+    /// The share of the account's 7-day room `pace_of` holds back for its expected Fable use on `seven_day`, the
+    /// figure `pace_score` subtracts, `None` where no reservation applies.
+    pub fable_reservation: Option<f64>,
     /// The slow-down entry in force for the account at the ask's instant, read through `slow_down_in_force`: `None`
     /// where the pool's switch is off, the account is an api_key one, an untiered one or one with no 5-hour reading,
     /// the entry was read before its window's passed reset, or no pinned selection has read it since the last purge or
@@ -2801,10 +2804,10 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
 /// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
-/// so each window is built once per read, with `pace_of`'s spare rate on each, the score from `pace_of` on
-/// `seven_day`, the window Pace reads for a model without a week of its own, the slow-down entry in force, which
-/// the last pinned selection on the account wrote, the selector's obstacle on the account and the member's budgets.
-/// Empty for a pool the snapshot does not hold.
+/// so each window is built once per read, with `pace_of`'s spare rate on each, the score and the Fable reservation
+/// from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its own, the slow-down entry in
+/// force, which the last pinned selection on the account wrote, the selector's obstacle on the account and the
+/// member's budgets. Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2871,10 +2874,12 @@ fn projections(
                     ))
                 })
                 .collect();
+            let pace = pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None);
             AccountProjection {
                 account_id: account_id.to_string(),
                 windows,
-                pace_score: pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None).score,
+                pace_score: pace.score,
+                fable_reservation: pace.fable_reservation,
                 slow_down: state
                     .slow_down_in_force(pool, account_id, now)
                     .map(|entry| AccountSlowDown {

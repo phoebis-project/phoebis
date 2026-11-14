@@ -1121,6 +1121,270 @@ fn a_member_with_recorded_fable_hours_and_no_fable_reading_takes_no_fable_reserv
     assert!(close(pace.score, 0.9 / 24.0), "{pace:?}");
 }
 
+/// Twenty minutes past `RESERVED_AT`: the reservation's wait on `reserving_pool`, twice its burn average of 600
+/// seconds, since a quarter of the day to the 7-day reset is longer.
+const RESERVATION_WAITED: i64 = RESERVED_AT + 20 * MINUTE;
+
+/// A pool over `a` and `b` on `TIER` under `strategy`, with the option to shed on the Fable reservation as `option`
+/// names, the weekly ceiling at 0.95 and a burn average of 600 seconds.
+fn reserving_pool(strategy: Strategy, option: bool) -> RegistrySnapshot {
+    tiered(Pool {
+        strategy,
+        members: vec![("a", 0), ("b", 1)],
+        shedding: Shedding {
+            fable_reservation_shedding: option,
+            burn_average_seconds: 600,
+            ..Shedding::default()
+        },
+        ..Pool::default()
+    })
+}
+
+/// A pin burning `x` input tokens a second burns `x / 2^20` of each plan window a second on `TIER`, a figure the
+/// round's sums and its target hold exactly, and the Fable week's factor is a half. A rewrite prices as
+/// `hourly_pricer`'s.
+fn reserving_pricer() -> SharePricer {
+    hourly_pricer()
+        .with_rate(|window, _, tier, _, burn, _| {
+            (tier == TIER && [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE].contains(&window))
+                .then(|| burn.input / 1_048_576.0)
+        })
+        .with_week_factor(|window, _| (window == SEVEN_DAY_FABLE).then_some(0.5))
+}
+
+/// A poll of `a` observed at `at`: the 7-day window at `seven_day` and the Fable week at a half, both resetting a day
+/// past `RESERVED_AT`.
+fn reserved_read(seven_day: f64, at: i64) -> UtilizationSample {
+    let reading = |utilization| WindowReading {
+        utilization,
+        reset: Some(RESERVED_AT + 24 * HOUR),
+        observed_at: at,
+        source: WindowSource::Poll,
+        plan: None,
+        tier: None,
+    };
+    UtilizationSample {
+        observed_at: at,
+        poll: true,
+        ..Default::default()
+    }
+    .with(SEVEN_DAY, reading(seven_day))
+    .with(SEVEN_DAY_FABLE, reading(0.5))
+}
+
+/// `pins` on the state, `a` read through `reserved_read` at `RESERVED_AT` with its record holding a twentieth of the
+/// Fable week in the hour that just ended, and `b` at a tenth of its 5-hour window and its week, fitting every pin.
+/// Over the day to the reset that hour reads past a's Fable room of a half, so the factor of a half holds back a
+/// quarter of a's week.
+fn reserving(seven_day: f64, pins: Vec<PinRow>) -> RoutingState {
+    loaded_with_hours(
+        vec![fable_hour("a", 99, 0.05)],
+        pins,
+        reserving_pricer(),
+        vec![
+            ("a", reserved_read(seven_day, RESERVED_AT)),
+            (
+                "b",
+                refreshing(
+                    0.1,
+                    RESERVED_AT + HOUR,
+                    RESERVED_AT + 24 * HOUR,
+                    RESERVED_AT,
+                ),
+            ),
+        ],
+    )
+}
+
+/// Three cold Sonnet pins on `a` burning 4, 2 and 2 input tokens a second, folded at `RESERVATION_WAITED` so neither
+/// selection of a case decays their burn. Their 8 tokens a second take a's week from its reading by 0.14 over the five
+/// hours to its horizon, under the ceiling, and the shed cap's half of them is `s1`'s 4.
+fn reserved_pins() -> Vec<PinRow> {
+    vec![
+        burning("s1", "a", 4.0, false, RESERVATION_WAITED),
+        burning("s2", "a", 2.0, false, RESERVATION_WAITED),
+        burning("s3", "a", 2.0, false, RESERVATION_WAITED),
+    ]
+}
+
+/// Two selections of `session`'s pin a wait apart, the first at `RESERVED_AT`, answering the second.
+fn reserved_round(st: &mut RoutingState, s: &RegistrySnapshot, session: &str) -> Decided {
+    decide(st, s, &auxiliary(s, session, RESERVED_AT), &mut rng());
+    decide(
+        st,
+        s,
+        &auxiliary(s, session, RESERVATION_WAITED),
+        &mut rng(),
+    )
+}
+
+#[test]
+fn a_seven_day_room_under_the_fable_reservation_fires_a_round_past_the_wait_and_a_room_equal_to_it_fires_none(
+) {
+    let s = reserving_pool(Strategy::Pace, true);
+    // A room of 0.24 under the reservation of 0.25.
+    let mut st = reserving(0.76, reserved_pins());
+    let d = reserved_round(&mut st, &s, "s3");
+    let round = &d.shed_round.as_ref().expect("the reservation fires").facts;
+    assert_eq!(
+        (round.window.as_str(), round.trigger),
+        ("seven_day", "fable_reservation")
+    );
+    assert!(
+        round.fable_reservation.is_some_and(|r| close(r, 0.25)),
+        "{round:?}"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(fact(shed, "trigger"), &FactValue::Text("seven_day".into()));
+    assert_eq!(
+        fact(shed, "fired_by"),
+        &FactValue::Text("fable_reservation".into())
+    );
+    assert!(close(number(fact(shed, "fable_reservation")), 0.25));
+    assert!(
+        no_fact(shed, "excess"),
+        "the room's test names no rate to remove: {:?}",
+        shed.facts
+    );
+
+    // A room of 0.25, the reservation itself.
+    let mut st = reserving(0.75, reserved_pins());
+    let d = reserved_round(&mut st, &s, "s3");
+    assert!(
+        d.shed_round.is_none(),
+        "{:?}",
+        line(&d.record, "move:shed").facts
+    );
+}
+
+#[test]
+fn the_fable_reservations_test_fires_no_round_at_the_selection_that_first_reads_the_room_short() {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(0.76, reserved_pins());
+    let d = decide(&mut st, &s, &auxiliary(&s, "s3", RESERVED_AT), &mut rng());
+    assert!(
+        d.shed_round.is_none(),
+        "{:?}",
+        line(&d.record, "move:shed").facts
+    );
+}
+
+#[test]
+fn a_short_room_fires_no_round_with_the_fable_reservation_option_off_or_on_a_pool_that_ranks_by_priority(
+) {
+    let s = reserving_pool(Strategy::Pace, false);
+    let mut st = reserving(0.76, reserved_pins());
+    let d = reserved_round(&mut st, &s, "s3");
+    assert!(
+        d.shed_round.is_none(),
+        "the option is off: {:?}",
+        line(&d.record, "move:shed").facts
+    );
+
+    let s = reserving_pool(Strategy::Priority, true);
+    let mut st = reserving(0.76, reserved_pins());
+    let d = reserved_round(&mut st, &s, "s3");
+    assert!(
+        d.shed_round.is_none(),
+        "only Pace holds a reservation back: {:?}",
+        line(&d.record, "move:shed").facts
+    );
+}
+
+#[test]
+fn a_fable_reservation_round_leaves_the_fable_pin_out_and_marks_at_most_the_shed_caps_share_of_the_other_pins_burn(
+) {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut pins = reserved_pins();
+    pins.push(PinRow {
+        model: "claude-fable-5-1".into(),
+        ..burning("f", "a", 2.0, false, RESERVATION_WAITED)
+    });
+    let mut st = reserving(0.76, pins);
+    let d = reserved_round(&mut st, &s, "s3");
+    let round = d.shed_round.expect("the reservation fires").facts;
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .find(|p| p.session_id == "f")
+            .map(|p| p.skip),
+        Some(Some("fable_model")),
+        "{:?}",
+        round.pins
+    );
+    // The three Sonnet pins' 8 tokens a second are 8 x 3,600 / 2^20 of the week an hour, the cap's half of it is
+    // s1's own 4 tokens a second, and the round marks s1 alone.
+    assert_eq!(
+        (round.excess, round.target, round.removed),
+        (0.0274658203125, 0.01373291015625, 0.01373291015625),
+        "{round:?}"
+    );
+}
+
+#[test]
+fn a_fable_reservation_mark_moves_while_the_room_is_short_and_heals_once_the_room_grows_back_to_the_reservation(
+) {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(0.76, reserved_pins());
+    reserved_round(&mut st, &s, "s3");
+    assert!(marked(&st, "s1"));
+    // The week's projection reads 0.897 at its horizon, under the ceiling of 0.95, while the room stays short.
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s1", RESERVATION_WAITED + SECOND),
+        &mut rng(),
+    );
+    assert_eq!(landed(d.result), ("b".into(), Some(MigrateReason::Shed)));
+
+    let mut st = reserving(0.76, reserved_pins());
+    reserved_round(&mut st, &s, "s3");
+    st.record_sample("a", reserved_read(0.75, RESERVATION_WAITED), 0);
+    let d = decide(
+        &mut st,
+        &s,
+        &auxiliary(&s, "s1", RESERVATION_WAITED + SECOND),
+        &mut rng(),
+    );
+    assert_eq!(landed(d.result.clone()), ("a".into(), None));
+    assert_eq!(
+        d.record.outcome.mark_cleared.as_ref().map(|c| c.reason),
+        Some("healed"),
+        "a room equal to the reservation holds it whole"
+    );
+}
+
+#[test]
+fn a_standing_seven_day_mark_moves_while_the_fable_reservations_test_waits() {
+    let s = reserving_pool(Strategy::Pace, true);
+    let mut st = reserving(
+        0.76,
+        vec![
+            PinRow {
+                mark: Some(PinMark {
+                    at: RESERVED_AT - HOUR,
+                    on: "a".into(),
+                    window: SEVEN_DAY.into(),
+                }),
+                ..burning("s1", "a", 4.0, false, RESERVATION_WAITED)
+            },
+            burning("s2", "a", 2.0, false, RESERVATION_WAITED),
+        ],
+    );
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", RESERVED_AT), &mut rng());
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (
+            fact(shed, "over_since_fable_reservation"),
+            fact(shed, "wait_fable_reservation")
+        ),
+        (&FactValue::Int(RESERVED_AT), &FactValue::Int(20 * MINUTE)),
+        "the test reads the room short for the first time"
+    );
+    assert_eq!(landed(d.result), ("b".into(), Some(MigrateReason::Shed)));
+}
+
 #[test]
 fn a_fable_request_skips_a_spent_fable_window_under_every_strategy_and_orders_by_its_reset() {
     let mut st = RoutingState::from_load(RoutingLoad::default());

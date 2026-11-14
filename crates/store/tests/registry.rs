@@ -87,11 +87,12 @@ fn rename(
 }
 
 /// The eighth step taken back on a file this build wrote, which every case that takes a file back past version 8
-/// runs first, since on reopen the step refuses its two tables, its two new pool columns and its pin column as
+/// runs first, since on reopen the step refuses its two tables, its three new pool columns and its pin column as
 /// duplicates and finds no `window_ceiling` to rename and no `session_first_seen` to drop.
 fn eighth_step_taken_back(conn: &rusqlite::Connection) {
     conn.execute_batch(
-        "CREATE TABLE session_first_seen (
+        "ALTER TABLE pools DROP COLUMN fable_reservation_shedding;
+         CREATE TABLE session_first_seen (
            key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
            PRIMARY KEY (key_id, session_id, agent_id)
          );

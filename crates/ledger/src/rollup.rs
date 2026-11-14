@@ -1514,12 +1514,13 @@ struct Held {
 /// oldest span counted, which a span open from before the cutoff dates before the day. A wall reads the newest round on
 /// the account's newest wall's window inside that window's length before the wall: after a projection round its
 /// `projection_error` is one less the round's projection, after a stretch round its `early_ms` is the reset the wall's
-/// `window_spent` names less the wall's instant, 0 at or after the reset, and with no round both are null. The fifth,
-/// `meter_drift`, reads the reconciled windows that ended inside `DRIFT_HOLD_MS` of `now`: per account, the newest row
-/// of each window with a rise of at least `MIN_RISE`, held while any reads outside `RATIO_LOW` to `RATIO_HIGH` over a
-/// priced share of at least `MIN_RISE`, `since` the oldest off row's `window_end` or `now` where that end lies after
-/// it, its detail naming the off windows and the cost model `tables` holds, since the fix is that file rather than a
-/// pool setting. The ledger reads no registry, so a detail names its settings and the reader adds a pool's values.
+/// `window_spent` names less the wall's instant, 0 at or after the reset, and after a round the Fable reservation fired
+/// or with no round both are null. The fifth, `meter_drift`, reads the reconciled windows that ended inside
+/// `DRIFT_HOLD_MS` of `now`: per account, the newest row of each window with a rise of at least `MIN_RISE`, held while
+/// any reads outside `RATIO_LOW` to `RATIO_HIGH` over a priced share of at least `MIN_RISE`, `since` the oldest off
+/// row's `window_end` or `now` where that end lies after it, its detail naming the off windows and the cost model
+/// `tables` holds, since the fix is that file rather than a pool setting. The ledger reads no registry, so a detail
+/// names its settings and the reader adds a pool's values.
 pub fn fold_routing_conditions(
     tx: &Transaction<'_>,
     tables: &PlanTables,
@@ -1730,9 +1731,16 @@ pub fn fold_routing_conditions(
         // A projection round's projection that came true reads 1.0 at the wall, so the error is how far under the wall
         // the round projected it. A stretch round's projection is the demand's at a moved horizon and measures nothing
         // at the reset, where the slow-down paces the window to arrive, so its wall reads how early it came instead.
+        // The Fable reservation fires its round on the account's room while the projection can read far under the
+        // wall, so no projection predicted that wall and the round reads no error either.
         let projection = round
             .as_ref()
-            .filter(|round| round["trigger"] != "slow_down")
+            .filter(|round| {
+                !matches!(
+                    round["trigger"].as_str(),
+                    Some("slow_down" | "fable_reservation")
+                )
+            })
             .and_then(|round| round["projection"].as_f64());
         held.insert(
             (RoutingKind::WallReached, "account", account.to_string()),

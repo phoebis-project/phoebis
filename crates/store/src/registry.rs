@@ -53,6 +53,9 @@ text_enum! {
 pub struct Shedding {
     /// Off, no shedding round runs. The move off a spent account keeps `migrate_when_spent` as its own toggle.
     pub load_shedding: bool,
+    /// On a Pace pool with `load_shedding` on, a round also fires on an account whose 7-day room has fallen under its
+    /// Fable reservation. Off by default.
+    pub fable_reservation_shedding: bool,
     pub shed_cap: f64,
     pub burn_average_seconds: u64,
     pub shed_dwell_seconds: u64,
@@ -64,6 +67,7 @@ impl Default for Shedding {
     fn default() -> Self {
         Shedding {
             load_shedding: true,
+            fable_reservation_shedding: false,
             shed_cap: 0.5,
             burn_average_seconds: 1800,
             shed_dwell_seconds: 900,
@@ -828,7 +832,7 @@ fn json_text<T: serde::de::DeserializeOwned>(raw: &str, idx: usize) -> rusqlite:
     })
 }
 
-/// The 35 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
+/// The 36 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
 /// them in this order too, so `row_to_pool` indexes each column by its bind.
 macro_rules! pool_columns {
     () => {
@@ -838,7 +842,7 @@ macro_rules! pool_columns {
          overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, \
          subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, \
          slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, \
-         thinking_diagnostics, weekly_ceiling"
+         thinking_diagnostics, weekly_ceiling, fable_reservation_shedding"
     };
 }
 
@@ -861,7 +865,7 @@ macro_rules! guardrail_params {
     };
 }
 
-/// The binds `?1` to `?35` the pool insert and the pool update share, in their column order, then each statement's
+/// The binds `?1` to `?36` the pool insert and the pool update share, in their column order, then each statement's
 /// own tail.
 macro_rules! pool_params {
     ($row:ident, $($tail:expr),+ $(,)?) => {
@@ -901,6 +905,7 @@ macro_rules! pool_params {
             $row.failover.return_to_plan_dwell_seconds,
             $row.thinking_diagnostics,
             $row.weekly_ceiling,
+            $row.shedding.fable_reservation_shedding,
             $($tail),+
         ]
     };
@@ -1023,7 +1028,7 @@ impl Store {
                 "INSERT INTO pools (",
                 pool_columns!(),
                 ", created_at, updated_at, incarnation) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?36, ?37)"
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?37, ?38)"
             ),
             pool_params!(row, now, incarnation as i64),
         )
@@ -2058,7 +2063,7 @@ static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "UPDATE pools SET {set}, updated_at = ?36 WHERE id = ?1 AND updated_at = ?37 AND incarnation = ?38"
+        "UPDATE pools SET {set}, updated_at = ?37 WHERE id = ?1 AND updated_at = ?38 AND incarnation = ?39"
     )
 });
 
@@ -2127,14 +2132,15 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
         body_capture_hours: r.get(9)?,
-        created_at: r.get(35)?,
-        updated_at: r.get(36)?,
+        created_at: r.get(36)?,
+        updated_at: r.get(37)?,
         prefer_subscription: r.get(10)?,
         shedding: Shedding {
             shed_cap: r.get(11)?,
             burn_average_seconds: r.get::<_, i64>(12)? as u64,
             shed_dwell_seconds: r.get::<_, i64>(13)? as u64,
             load_shedding: r.get(14)?,
+            fable_reservation_shedding: r.get(35)?,
             migrate_when_spent: r.get(15)?,
             warm_sessions: r.get(16)?,
         },
@@ -2161,7 +2167,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(26)? as u64,
         },
         auto_mode_server: r.get(27)?,
-        incarnation: r.get::<_, i64>(37)? as u64,
+        incarnation: r.get::<_, i64>(38)? as u64,
     })
 }
 
@@ -2258,6 +2264,7 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
         "burn_average_seconds": row.shedding.burn_average_seconds,
         "shed_dwell_seconds": row.shedding.shed_dwell_seconds,
         "load_shedding": row.shedding.load_shedding,
+        "fable_reservation_shedding": row.shedding.fable_reservation_shedding,
         "migrate_when_spent": row.shedding.migrate_when_spent,
         "warm_sessions": row.shedding.warm_sessions.as_str(),
         "slow_down": row.slow_down.slow_down,

@@ -1495,6 +1495,64 @@ fn a_wall_after_a_slow_down_round_reads_how_early_it_came_and_the_account_rollup
     );
 }
 
+#[test]
+fn a_wall_after_a_round_the_fable_reservation_fired_reads_no_projection_error() {
+    const HOUR: i64 = 3_600_000;
+    let t = 1_000 * HOUR;
+    let db = LedgerDb::open_in_memory().unwrap();
+    for row in [
+        // The account's room fired the round while its week projected 0.6, an hour before the week was spent.
+        EventRecord {
+            at: t,
+            kind: "shedding_round".into(),
+            account_id: Some("a".into()),
+            pool_id: Some("p".into()),
+            detail: Some(
+                serde_json::json!({
+                    "window": "seven_day",
+                    "projection": 0.6,
+                    "trigger": "fable_reservation",
+                    "outcome": "marked 1",
+                    "reason": null,
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+        EventRecord {
+            at: t + HOUR,
+            kind: "window_spent".into(),
+            account_id: Some("a".into()),
+            detail: Some(
+                serde_json::json!({ "window": "seven_day", "source": "poll" }).to_string(),
+            ),
+            ..Default::default()
+        },
+    ] {
+        db.insert_event(&row).unwrap();
+    }
+    let tables = phoebis_ledger::test_tables::subscription_costs();
+    db.write(|c| {
+        let tx = c.transaction()?;
+        phoebis_ledger::fold_routing_conditions(&tx, &tables, t + 2 * HOUR)?;
+        tx.commit()?;
+        Ok(())
+    })
+    .unwrap();
+    let rows = db
+        .read_blocking(phoebis_ledger::routing_conditions)
+        .unwrap();
+    let wall = rows
+        .iter()
+        .find(|r| r.kind.as_str() == "wall_reached" && r.subject_id == "a")
+        .unwrap_or_else(|| panic!("no wall on a: {rows:?}"));
+    assert_eq!(
+        wall.detail["projection_error"],
+        serde_json::Value::Null,
+        "no projection fired the round: {wall:?}"
+    );
+}
+
 /// A slow-down span's start as the router's mirror writes it, with the factor the read opened it at, under a pool whose
 /// threshold puts the bar at the floor.
 fn slow_down_started(at: i64, account: &str, pool: &str, factor: f64) -> EventRecord {
@@ -2364,6 +2422,7 @@ fn every_event_kind_the_router_emits_is_listed_once_in_the_kinds_alphabetically(
                 trigger: "slow_down",
                 stretch_ms: Some(2_400_000),
                 threshold_ms: Some(1_800_000),
+                fable_reservation: None,
                 factor: Some(0.4),
                 unit: "window_share",
                 rewrite_unit: "pro_week",

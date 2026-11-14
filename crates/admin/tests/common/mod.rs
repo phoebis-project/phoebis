@@ -275,6 +275,32 @@ pub async fn admin_parts_full_on_rated(
     )
 }
 
+/// The full harness over a store the caller holds, its router's pricer answering `factor` for the Fable week through
+/// `SharePricer::with_week_factor`, the builder the router's start wires the cost model's factor through, where the
+/// default pricer answers none: a case reads a Fable reservation worked from its own factor.
+pub async fn admin_parts_full_on_week_factor(store: Arc<Store>, factor: f64) -> Full {
+    full_from(
+        build_app_routed(
+            None,
+            ACCOUNT_UUID,
+            false,
+            Some(store),
+            None,
+            None,
+            None,
+            None,
+            RouterConfig {
+                share: SharePricer::default().with_week_factor(move |window, _| {
+                    (window == phoebis_routing::SEVEN_DAY_FABLE).then_some(factor)
+                }),
+                ..RouterConfig::default()
+            },
+            LedgerConfig::default(),
+        )
+        .await,
+    )
+}
+
 /// The full harness with its ledger on `ledger_config`, whose two day counts the settings route mirrors: a case that
 /// sets them apart tells each member from the other, which the default's two equal figures cannot.
 pub async fn admin_parts_full_retained(ledger_config: LedgerConfig) -> Full {

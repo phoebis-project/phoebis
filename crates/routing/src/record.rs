@@ -677,24 +677,30 @@ pub struct PinKeyFacts {
 
 /// What a shedding round read and did, for the round's event. The record keeps the marks alone. The trigger is the
 /// projection of `window` at `horizon` over `ceiling`, `window` the first plan window in the trigger's order to read
-/// so. `burn_sum`, `excess`, `target` and `removed` are shares of that window per hour.
+/// so, or the Fable reservation over the account's 7-day room, `window` then `seven_day`. `burn_sum`, `excess`,
+/// `target` and `removed` are shares of that window per hour.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedRoundFacts {
     pub window: String,
     /// The prediction at the round's instant.
     pub utilization: f64,
-    /// The projection at `horizon` that fired the round.
+    /// The projection at `horizon` that fired the round, or under `fable_reservation` the 7-day window's projection
+    /// at its horizon.
     pub projection: f64,
     pub horizon: i64,
     pub ceiling: f64,
-    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did.
-    /// Under `slow_down` the horizon is the reset less the threshold, and the projection, the excess and the pins' burn
-    /// are the demand's.
+    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did,
+    /// `fable_reservation` when the account's 7-day room read under its Fable reservation. Under `slow_down` the
+    /// horizon is the reset less the threshold, and the projection, the excess and the pins' burn are the demand's.
+    /// Under `fable_reservation` the excess is the burn of the pins the round walked.
     pub trigger: &'static str,
     /// The account's stretch when the stretch fired the round, `None` under `projection`.
     pub stretch_ms: Option<i64>,
     /// The pool's `slow_down_stretch_seconds` when the stretch fired the round, `None` under `projection`.
     pub threshold_ms: Option<i64>,
+    /// The account's Fable reservation, a share of its 7-day window, when the reservation fired the round, `None`
+    /// under another trigger.
+    pub fable_reservation: Option<f64>,
     /// The account's factor at the round, `None` where the account has no slow-down read.
     pub factor: Option<f64>,
     /// `window_share` or `usd`, the unit the round read its pins in: the span's average share of the window that fired,
@@ -719,18 +725,18 @@ pub struct ShedRoundFacts {
     /// `marked N` or `nothing_to_mark`.
     pub outcome: String,
     /// `None` after marks, else the deepest skip class any walked pin reached (`last_pin`, `no_runway`, `sliver`,
-    /// `standing` or `unpriced`), or where no pin was walked the word a left-out pin carries (`ended`, `no_burn` or
-    /// `off_window`), else `unpriced`.
+    /// `standing` or `unpriced`), or where no pin was walked the word a left-out pin carries (`ended`, `no_burn`,
+    /// `off_window` or `fable_model`), else `unpriced`.
     pub reason: Option<&'static str>,
     pub dwell_seconds: u64,
     pub dwell_until: i64,
 }
 
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out (a
-/// fast-lane pin, a pin whose model does not draw the trigger's window, a pin whose agent ended and a pin with no
-/// priced burn on the window). A pin there under a key of a pool the account left is in no round and is not listed
-/// here. `burn` and `per_rewrite` are shares of the trigger's window, the burn per hour, and `rewrite` the Pro-week
-/// figure of the pin's rewrite.
+/// fast-lane pin, a pin whose model does not draw the trigger's window, under the Fable reservation a pin whose model
+/// draws a model week, a pin whose agent ended and a pin with no priced burn on the window). A pin there under a key
+/// of a pool the account left is in no round and is not listed here. `burn` and `per_rewrite` are shares of the
+/// trigger's window, the burn per hour, and `rewrite` the Pro-week figure of the pin's rewrite.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -754,7 +760,8 @@ pub struct ShedPinFacts {
     /// The destination the round found for the pin.
     pub planned: Option<String>,
     pub runway_ms: Option<i64>,
-    /// `ended`, `fast_lane`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `sliver`, `standing` or `unpriced`.
+    /// `ended`, `fast_lane`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `fable_model`, `sliver`, `standing` or
+    /// `unpriced`.
     pub skip: Option<&'static str>,
     /// `cheapest` for the pin the round marked as the cheapest one whose burn covers what the target still asked,
     /// else `current` for the request's own pin.

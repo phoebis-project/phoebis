@@ -486,15 +486,19 @@ pub(crate) struct Event {
     ///   before it, and `holds_lost`, since no held request survives a restart. A clock reset or a wind-down the
     ///   previous run announced before that row is not written again.
     /// - `shedding_round`: a pool's shedding round ran on one of its member accounts, with the window that fired it and
-    ///   what fired it (the projection over the ceiling after its wait, or the slow-down's stretch over its threshold),
-    ///   the excess and the target, `mark_share`, the least share of what is left to shed that a pin marked in place of
-    ///   a covering one burns, the pool's pins on that account in the round's order with their burn, their last
-    ///   prompt, their rewrite as the Pro-week figure of the pin's rewrite, with the window the pick compared on named,
-    ///   and `rewrite_unit` `pro_week`, absent on an event of an earlier build, their planned destination and their
-    ///   mark, then the pins it left out, each pin's skip word among `ended`, `fast_lane`, `last_pin`, `no_burn`,
-    ///   `no_runway`, `off_window`, `sliver`, `standing` and `unpriced` and its note among `cheapest` and `current`,
-    ///   and the outcome with its reason among `ended`, `last_pin`, `no_burn`, `no_runway`, `off_window`, `sliver`,
-    ///   `standing` and `unpriced`. The marks and the dwell are the pool's on that account.
+    ///   what fired it (`projection`, the projection over the ceiling after its wait, `slow_down`, the slow-down's
+    ///   stretch over its threshold, or `fable_reservation`, the account's 7-day room under its Fable reservation
+    ///   after the projection's wait, on `seven_day`), `fable_reservation`, the reservation such a round read and
+    ///   null on a round another test fired, the excess, the walked pins' burn under `fable_reservation`, and the
+    ///   target, `mark_share`, the least share of what is left to shed that a pin marked in place of a covering one
+    ///   burns, the pool's pins on that account in the round's order with their burn, their last prompt, their
+    ///   rewrite as the Pro-week figure of the pin's rewrite, with the window the pick compared on named, and
+    ///   `rewrite_unit` `pro_week`, absent on an event of an earlier build, their planned destination and their mark,
+    ///   then the pins it left out, each pin's skip word among `ended`, `fast_lane`, `last_pin`, `no_burn`,
+    ///   `no_runway`, `off_window`, `fable_model`, `sliver`, `standing` and `unpriced` and its note among `cheapest`
+    ///   and `current`, and the outcome with its reason among `ended`, `last_pin`, `no_burn`, `no_runway`,
+    ///   `off_window`, `fable_model`, `sliver`, `standing` and `unpriced`. The marks and the dwell are the pool's on
+    ///   that account.
     /// - `slow_down_ended`: the account's slow-down on the pool ended, its factor back at 1 for the safety wait, its
     ///   entry cleared by the window's reset, dropped at the purge, or dropped with the 5-hour window by a clean poll,
     ///   with the span's `since`, `duration_ms` (to the factor's return, to the passed reset of the window it slowed

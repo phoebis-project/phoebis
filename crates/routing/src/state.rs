@@ -11,7 +11,7 @@ pub use phoebis_store::EvidenceSource;
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CooldownScope, CreditsRow,
     ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, StateCause, ThinkingBindingRow, WindowRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, StateCause, Strategy, ThinkingBindingRow, WindowRow,
     WindowSetRow,
 };
 use tokio::sync::Notify;
@@ -1263,6 +1263,14 @@ pub fn load_shedding(pool: &PoolRow) -> bool {
     pool.shedding.load_shedding
 }
 
+/// Whether the pool sheds on the Fable reservation: the option on a Pace pool that runs shedding rounds, since only
+/// Pace holds a reservation back and the option adds a test to the round that the switch runs.
+pub(crate) fn reservation_shedding(pool: &PoolRow) -> bool {
+    pool.strategy == Strategy::Pace
+        && load_shedding(pool)
+        && pool.shedding.fable_reservation_shedding
+}
+
 /// Whether the pool slows its pins' requests on the 5-hour window.
 pub fn slow_down(pool: &PoolRow) -> bool {
     pool.slow_down.slow_down
@@ -1583,6 +1591,10 @@ pub struct RoutingState {
     /// created a pin releases the pin only while its key is absent here: a renewal means the pin serves another
     /// turn, however close in time. Memory only, since no request outlives a restart to report on a loaded pin.
     renewed: HashSet<PinKey>,
+    /// When the Fable reservation's test first read an account's 7-day room under its reservation at a pinned
+    /// selection, keyed by pool id and account id, beside the windows' stamps in `projection_over`. Memory only, as
+    /// they are.
+    reservation_over: HashMap<(String, String), i64>,
     /// The moves and placements in flight, by request id: what `predicted` adds beside the charges until the usage
     /// or the end releases each. Memory only, with the in-flight requests it belongs to.
     reservations: HashMap<String, Reservation>,
@@ -1756,6 +1768,7 @@ impl RoutingState {
             projection_over: HashMap::new(),
             rates: BurnRates::default(),
             renewed: HashSet::new(),
+            reservation_over: HashMap::new(),
             reservations: HashMap::new(),
             resolutions: load
                 .resolutions
@@ -3817,6 +3830,31 @@ impl RoutingState {
         }
     }
 
+    /// When the Fable reservation's test first read the account's 7-day room under its reservation on `pool_id`,
+    /// `None` while it reads the room at or above the reservation or no selection has read it.
+    pub(crate) fn reservation_over_since(&self, pool_id: &str, account_id: &str) -> Option<i64> {
+        self.reservation_over
+            .get(&(pool_id.to_string(), account_id.to_string()))
+            .copied()
+    }
+
+    /// Sets the reservation's stamp at the first reading under the reservation and clears it at a reading that is
+    /// not. A 7-day reset refunds the room, so the reading after it clears the stamp and no reset is kept beside it.
+    pub(crate) fn note_reservation(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        over: bool,
+        now: i64,
+    ) {
+        let key = (pool_id.to_string(), account_id.to_string());
+        if over {
+            self.reservation_over.entry(key).or_insert(now);
+        } else {
+            self.reservation_over.remove(&key);
+        }
+    }
+
     /// Stamps `window` on the account as over the ceiling since `at` under the reading's `reset`, so a test reaches a
     /// window past its wait without a selection a wait before its instant. No production path stamps but the note, so
     /// it is compiled under `test` and the `debug-hooks` feature alone.
@@ -4314,9 +4352,18 @@ impl RoutingState {
     /// 5-hour stamps of a pool that slows its pins, whose 5-hour test is the stretch, and the stamps of an account that
     /// holds no pin of the pool, so a flipped switch or a quiet account starts its wait afresh. No age drops a stamp,
     /// since a window that reads over for hours keeps the stamp of its first reading over and the round after the
-    /// dwell waits no second time.
+    /// dwell waits no second time. The Fable reservation's stamps leave on the same terms, a pool that does not shed
+    /// on the reservation counting as one whose shedding is off.
     fn purge_projection_over(&mut self, snapshot: &RegistrySnapshot) {
         let pins = &self.pins;
+        let pinned = |pool_id: &str, account_id: &str| {
+            pins.values().any(|pin| {
+                pin.account_id == account_id
+                    && snapshot
+                        .key(&pin.key_id)
+                        .is_some_and(|key| key.pool_id == pool_id)
+            })
+        };
         self.projection_over
             .retain(|(pool_id, account_id, window), _| {
                 let Some(pool) = snapshot.pool(pool_id).filter(|pool| load_shedding(pool)) else {
@@ -4325,13 +4372,11 @@ impl RoutingState {
                 if window == FIVE_HOUR && slow_down(pool) {
                     return false;
                 }
-                pins.values().any(|pin| {
-                    pin.account_id == *account_id
-                        && snapshot
-                            .key(&pin.key_id)
-                            .is_some_and(|key| key.pool_id == *pool_id)
-                })
+                pinned(pool_id, account_id)
             });
+        self.reservation_over.retain(|(pool_id, account_id), _| {
+            snapshot.pool(pool_id).is_some_and(reservation_shedding) && pinned(pool_id, account_id)
+        });
     }
 }
 
