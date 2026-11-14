@@ -2912,10 +2912,10 @@ fn projections(
 /// Each of `pins` with its burn decayed to `now` by its pool's burn average (the default preset's for a key whose pool
 /// left the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool,
 /// account and set of windows, since the account's projection already holds every pin's burn and every pin drawing
-/// those windows there reads the same runway. Each pin reads its account's factor and realized speed from the
-/// slow-down entry in force under that pool and its cycle from its pace. Its burn unit is the selector's read of its
-/// account, an overage whose evidence names no reset standing for `fallback_ms` past its observation. The unit and the slow-down entry depend on the account and the
-/// pool alone, so each is read once beside the runway.
+/// those windows there reads the same runway. Each pin reads its account's factor and realized speed from the slow-down
+/// entry in force under that pool and its cycle from its pace. Its burn unit is the selector's read of its account, an
+/// overage whose evidence names no reset standing for `fallback_ms` past its observation. The unit and the slow-down
+/// entry depend on the account and the pool alone, so each is read once beside the runway.
 fn pins_standing(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,

@@ -1575,6 +1575,63 @@ async fn a_delete_arriving_while_the_backlog_holds_the_pins_upsert_never_recreat
 }
 
 #[tokio::test]
+async fn a_return_arriving_while_the_backlog_holds_the_pins_release_lands_the_returns_row() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    // The placement and `WRITER_DEPTH - 1` fillers fill the channel, so the last filler, the release and the return
+    // wait in the backlog.
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    for index in 0..WRITER_DEPTH {
+        fill(&handle, index).await;
+    }
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(Report::PinReleased {
+            pin,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    handle
+        .select(SelectRequest {
+            request_id: "r-2".into(),
+            ..request(&handle, Some("s1"), 2_000)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        2,
+        "the last filler and the pin's row, where the return's upsert replaced the release"
+    );
+    hold.release();
+    wait_for(DRAINED, || {
+        let landed = store.load_routing().unwrap().cooldowns.len();
+        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH).then_some(())
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    assert_eq!(
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| (p.session_id, p.created_at))
+            .collect::<Vec<_>>(),
+        [("s1".to_string(), 2_000)],
+        "the return's row lands over the release it replaced in the backlog"
+    );
+}
+
+#[tokio::test]
 async fn a_shutdown_with_a_full_writer_channel_lands_every_deferred_write() {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
