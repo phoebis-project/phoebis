@@ -9591,7 +9591,6 @@ async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from
         "no conversation pin stands, so the row reads the ledger's model and serving account: {row}"
     );
     for member in [
-        "epoch",
         "created_at",
         "last_used_at",
         "burn",

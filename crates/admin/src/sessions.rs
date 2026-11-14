@@ -31,7 +31,10 @@ pub(crate) struct Session {
     pub agent_id: Option<String>,
     pub model: Option<String>,
     pub account_id: Option<String>,
-    pub epoch: Option<u64>,
+    /// The placements of the session's main agent under the key: the ledger's `pin_created` and `pin_migrated` events
+    /// of main, at or after `key_generation` and, on a historical row whose key id a live key holds, before that key's
+    /// generation. 0 where the ledger holds none, as for a session the engine knows from a registration alone.
+    pub placements: u64,
     /// The first placement of the session's main agent under the key and session, kept until the session's last pin
     /// leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin.
     pub created_at: Option<i64>,
@@ -40,7 +43,16 @@ pub(crate) struct Session {
     pub pinned_at: Option<i64>,
     /// The newest use across the session's conversation pins, main's and its agents', null without a pin.
     pub last_used_at: Option<i64>,
+    /// The session's newest client request under its key over its life, refused ones included and probes out, null
+    /// where the ledger holds none.
     pub last_request_at: Option<i64>,
+    /// The session's newest request that is neither a probe nor a token count, refused ones included, over the span
+    /// `last_request_at` reads, so it is never later than that member. Null while the ledger holds none, as before a
+    /// first turn.
+    pub last_inference_at: Option<i64>,
+    /// The session's first request under its key and generation that is no probe, refused ones included, with no
+    /// expiry bound. It moves when the purge removes the first requests. Null where the ledger holds none.
+    pub first_request_at: Option<i64>,
     /// The user agent of the session's newest client request as the client sent it, the newest served one's where the
     /// session has one.
     pub user_agent: Option<String>,
@@ -358,6 +370,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // session whichever pass surfaced it. Only the sessions the retain below can keep are named: every engine
     // session, and one with a pin use or a request at or after `idle_bound`.
     let cursor = state.spend.cursor(&state.tables, now);
+    let live_keys = phoebis_ledger::LiveKeys(live.clone());
     let read = state.ledger.db().read(move |c| {
         // One WAL snapshot for every statement: `read` lends a connection and starts no transaction, and a request
         // landing between the first fill and the incremental read would be dropped by the filled-session rule and
@@ -380,12 +393,13 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         Ok((
             activity,
             phoebis_ledger::session_identities(&tx, &keys)?,
+            phoebis_ledger::session_placements(&tx, &keys, &live_keys)?,
             poll,
         ))
     });
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
     let (reported, read) = tokio::join!(crate::routes::reported_samples(state), read);
-    let (activity, identities, poll) = match read {
+    let (activity, identities, placements, poll) = match read {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
@@ -472,7 +486,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             Session {
                 agent_id: Some(p.agent_id.clone()),
                 account_id: Some(p.account_id.clone()),
-                epoch: Some(p.epoch),
                 last_used_at: standings.iter().map(|s| s.pin.last_used_at).max(),
                 pinned: true,
                 burn: priced.burn,
@@ -529,12 +542,13 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             )
         });
         entry.last_request_at = Some(a.last_request_at);
+        entry.last_inference_at = a.last_inference_at;
         if entry.account_id.is_none() {
             // Without a pin the serving account is the ledger's: the newest attempt of the newest request.
             entry.account_id = a.account_id;
         }
-        // The fold's spend rows leave a refused request out, so a session whose every request was refused keeps the
-        // agent of its newest one, and the fold's own replaces it below where the fold counted a client request.
+        // The fold picks its user agent among the served requests alone, so a session whose every request was refused
+        // keeps the agent of its newest one, and the fold's own replaces it below where the fold holds a served one.
         entry.user_agent = a.user_agent;
     }
     for (key, view) in &engine {
@@ -714,15 +728,19 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         let identity = identity_by_key.get(key);
         entry.forked_from = identity.and_then(|i| i.forked_from.clone());
         entry.fork_depth = identity.and_then(|i| i.fork_depth);
+        entry.first_request_at = identity.and_then(|i| i.first_request_at);
+        entry.placements = placements.get(key).copied().unwrap_or(0);
     }
     // The spend is the fold's over the session's life and carries the count Requests reads, so Requests and Cost read
-    // the same requests. The activity's `last_request_at` stays, which the listing's cutoff and the retention above
-    // read.
+    // the same requests. The two newest instants take the later of the activity's and the fold's over the session's
+    // life, after the retention above read the activity's alone, so the rows it keeps do not move.
     let fold = state.spend.read();
     for (key, entry) in rows.iter_mut() {
         let Some(figures) = fold.answer(key, now) else {
             continue;
         };
+        entry.last_request_at = entry.last_request_at.max(figures.last_request_at);
+        entry.last_inference_at = entry.last_inference_at.max(figures.last_inference_at);
         if let Some(user_agent) = figures.user_agent {
             entry.user_agent = user_agent;
         }

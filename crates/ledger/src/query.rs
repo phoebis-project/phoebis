@@ -9,8 +9,8 @@ use phoebis_bus::Kind;
 use phoebis_oauth::ClaimOutcome;
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
-    model_week, BurnUnit, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, REFRESHING_CLASSES,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    model_week, BurnUnit, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, MAIN_AGENT,
+    REFRESHING_CLASSES, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{canonical_id, AccountKind, AttachmentSubject, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
@@ -3738,6 +3738,8 @@ pub struct SessionActivity {
     pub key_generation: i64,
     pub session_id: String,
     pub last_request_at: i64,
+    /// The newest request of the window that is no token count, null where every one was.
+    pub last_inference_at: Option<i64>,
     pub model: String,
     pub account_id: Option<String>,
     /// The newest request of the session presented the retired secret, and under which rotation.
@@ -3748,33 +3750,37 @@ pub struct SessionActivity {
 }
 
 /// Every (key, key generation, session) with a client request since `since`, with the canonical model, the serving
-/// account and the user agent of its newest request. Grouped by generation as well as id, so a key id created again
-/// never merges its sessions with an earlier holder's. One pass over the window's client requests: the newest request
-/// of a session is inside the window whenever any of its requests is, so the window alone answers the newest request's
-/// facts. Refused requests stay in the partition, so a session whose every request was refused keeps its newest request
-/// and is listed.
+/// account and the user agent of its newest request, and the receipt of its newest request that is no token count.
+/// Grouped by generation as well as id, so a key id created again never merges its sessions with an earlier holder's.
+/// One pass over the window's client requests: the newest request of a session is inside the window whenever any of
+/// its requests is, so the window alone answers the newest request's facts. Refused requests stay in the partition, so
+/// a session whose every request was refused keeps its newest request and is listed.
 pub fn session_activity(
     conn: &Connection,
     since: i64,
 ) -> Result<Vec<SessionActivity>, LedgerError> {
-    let mut stmt = conn.prepare(
+    let count_tokens = Kind::CountTokens.as_str();
+    let mut stmt = conn.prepare(&format!(
         "WITH recent AS (SELECT id, key_id, key_generation, session_id AS grp, received_at, canonical_model, \
-         presented_retired, rotation_at, serving_account_id, user_agent FROM requests \
+         presented_retired, rotation_at, serving_account_id, user_agent, kind FROM requests \
          WHERE key_id IS NOT NULL AND session_id IS NOT NULL AND kind != 'probe' AND received_at >= ?1), \
          ranked AS (SELECT recent.*, \
-         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth \
+         ROW_NUMBER() OVER (PARTITION BY key_id, key_generation, grp ORDER BY received_at DESC, id DESC) AS nth, \
+         MAX(CASE WHEN kind != '{count_tokens}' THEN received_at END) \
+         OVER (PARTITION BY key_id, key_generation, grp) AS last_inference_at \
          FROM recent) \
          SELECT key_id, key_generation, grp, received_at, canonical_model, \
          serving_account_id, \
-         presented_retired, rotation_at, user_agent \
+         presented_retired, rotation_at, user_agent, last_inference_at \
          FROM ranked WHERE nth = 1 ORDER BY received_at DESC",
-    )?;
+    ))?;
     let rows = stmt.query_map(params![since], |r| {
         Ok(SessionActivity {
             key_id: r.get(0)?,
             key_generation: r.get(1)?,
             session_id: r.get(2)?,
             last_request_at: r.get(3)?,
+            last_inference_at: r.get(9)?,
             model: r.get(4)?,
             account_id: r.get(5)?,
             on_retired_secret: r.get(6)?,
@@ -3794,11 +3800,13 @@ pub struct SessionIdentity {
     pub session_id: String,
     pub forked_from: Option<String>,
     pub fork_depth: Option<u32>,
+    /// The receipt of the session's first request that is no probe, refused ones included, oldest by receipt and id.
+    pub first_request_at: Option<i64>,
 }
 
-/// At three bound parameters per named session, 900 sessions bind 2,700 parameters, a wide margin under the
-/// bundled SQLite's 32,766-parameter default cap: a call over more sessions than this chunks and merges rather
-/// than tripping the cap.
+/// At three bound parameters per named session, four in `session_placements`, 900 sessions bind at most 3,600
+/// parameters, a wide margin under the bundled SQLite's 32,766-parameter default cap: a call over more sessions than
+/// this chunks and merges rather than tripping the cap.
 const SESSION_IDENTITY_CHUNK: usize = 900;
 
 /// For each `SessionSpendKey` named, with no time bound: a pin-only session (one whose
@@ -3845,10 +3853,10 @@ fn named_sessions(sessions: &[SessionSpendKey]) -> (String, Vec<rusqlite::types:
 }
 
 /// `session_identities_chunk`'s statement and its binds, spelled once so the plan test explains the statement the
-/// read runs. Each named session costs two seeks of the session index, the `EXISTS` and the marking request's lookup,
-/// each stopping early, and the two fork facts are read off the marking row by primary key. The index is named: the
-/// lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs them by
-/// statistics the file may lack or that a key holding most rows can mislead.
+/// read runs. Each named session costs three seeks of the session index, the `EXISTS`, the marking request's lookup and
+/// the first request's, each stopping early, and the two fork facts are read off the marking row by primary key. The
+/// index is named: the lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs
+/// them by statistics the file may lack or that a key holding most rows can mislead.
 pub(crate) fn session_identities_statement(
     sessions: &[SessionSpendKey],
 ) -> (String, Vec<rusqlite::types::Value>) {
@@ -3863,12 +3871,16 @@ pub(crate) fn session_identities_statement(
                   (SELECT r.id FROM requests r INDEXED BY requests_session \
                     WHERE r.session_id = n.session_id AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
                       AND r.kind != 'probe' AND (r.request_class IS NULL OR r.request_class IN ({refreshing})) \
-                    ORDER BY r.received_at ASC, r.id ASC LIMIT 1) AS marking_id \
+                    ORDER BY r.received_at ASC, r.id ASC LIMIT 1) AS marking_id, \
+                  (SELECT r.received_at FROM requests r INDEXED BY requests_session \
+                    WHERE r.session_id = n.session_id AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
+                      AND r.kind != 'probe' \
+                    ORDER BY r.received_at ASC, r.id ASC LIMIT 1) AS first_request_at \
              FROM named n \
             WHERE EXISTS (SELECT 1 FROM requests r INDEXED BY requests_session \
                            WHERE r.session_id = n.session_id AND r.key_id = n.key_id \
                              AND r.key_generation = n.key_generation AND r.kind != 'probe')) \
-         SELECT m.key_id, m.key_generation, m.session_id, r.forked_from, r.fork_depth \
+         SELECT m.key_id, m.key_generation, m.session_id, r.forked_from, r.fork_depth, m.first_request_at \
            FROM marked m LEFT JOIN requests r ON r.id = m.marking_id"
     );
     (sql, binds)
@@ -3890,7 +3902,83 @@ fn session_identities_chunk(
             session_id: r.get(2)?,
             forked_from: r.get(3)?,
             fork_depth: r.get::<_, Option<i64>>(4)?.map(|n| n as u32),
+            first_request_at: r.get(5)?,
         })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Main's placements under each named session's key, keyed by the session: the count of its `pin_created` and
+/// `pin_migrated` events at or after the session's key generation and, where a live key holds the id under another
+/// generation, before that live generation, so a historical row counts its own holder's events alone. A session the
+/// ledger holds no such event of reads 0. Each named session binds four values, the key, its generation, the session
+/// and the live generation that bounds it, and seeks the events' session index, chunked as `session_identities`
+/// chunks its own.
+pub fn session_placements(
+    conn: &Connection,
+    sessions: &[SessionSpendKey],
+    live: &LiveKeys,
+) -> Result<BTreeMap<SessionSpendKey, u64>, LedgerError> {
+    let mut out = BTreeMap::new();
+    for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {
+        out.extend(session_placements_chunk(conn, chunk, live)?);
+    }
+    Ok(out)
+}
+
+fn session_placements_chunk(
+    conn: &Connection,
+    sessions: &[SessionSpendKey],
+    live: &LiveKeys,
+) -> Result<Vec<(SessionSpendKey, u64)>, LedgerError> {
+    if sessions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut binds = Vec::with_capacity(sessions.len() * 4);
+    let values: Vec<String> = sessions
+        .iter()
+        .map(|key| {
+            let until = live
+                .0
+                .get(&key.key_id)
+                .filter(|&&generation| generation != key.key_generation);
+            format!(
+                "({})",
+                bind_all(
+                    &[
+                        rusqlite::types::Value::Text(key.key_id.clone()),
+                        rusqlite::types::Value::Integer(key.key_generation),
+                        rusqlite::types::Value::Text(key.session_id.clone()),
+                        until.map_or(rusqlite::types::Value::Null, |&generation| {
+                            rusqlite::types::Value::Integer(generation)
+                        }),
+                    ],
+                    &mut binds,
+                )
+            )
+        })
+        .collect();
+    let kinds = sql_list(&[PIN_CREATED, PIN_MIGRATED]);
+    let sql = format!(
+        "WITH named(key_id, key_generation, session_id, live_generation) AS (VALUES {}) \
+         SELECT n.key_id, n.key_generation, n.session_id, \
+                (SELECT COUNT(*) FROM events e INDEXED BY events_session \
+                  WHERE e.session_id = n.session_id AND e.at >= n.key_generation \
+                    AND (n.live_generation IS NULL OR e.at < n.live_generation) \
+                    AND e.key_id = n.key_id AND e.agent_id = '{MAIN_AGENT}' AND e.kind IN ({kinds})) \
+           FROM named n",
+        values.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(binds), |r| {
+        Ok((
+            SessionSpendKey {
+                key_id: r.get(0)?,
+                key_generation: r.get(1)?,
+                session_id: r.get(2)?,
+            },
+            clamped_count(r, 3)?,
+        ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -5236,9 +5324,10 @@ pub struct SessionSpendKey {
 }
 
 /// A request the session fold prices, with its serving attempt where an account served it. The reads hand its key
-/// beside it, so the fold's row names none. Neither read answers a refused request, which the spend leaves out, or one
-/// with no key or no session, which has no row to land on, as the activity read drops it. The first fill answers them
-/// by session, `received_at` and request id, the incremental read by `landed_at`.
+/// beside it, so the fold's row names none. Both reads answer a refused request with its flag, which the fold reads
+/// for the session's newest instants and its agent's first request alone, and neither answers one with no key or no
+/// session, which has no row to land on, as the activity read drops it. The first fill answers them by session,
+/// `received_at` and request id, the incremental read by `landed_at`.
 #[derive(Debug)]
 pub struct SessionSpendRow {
     /// The request's id, which orders two requests of one instant for the session fold's newest pick.
@@ -5251,6 +5340,8 @@ pub struct SessionSpendRow {
     pub kind: String,
     pub received_at: i64,
     pub landed_at: i64,
+    /// The router refused the request before it asked any account, so no attempt joins it.
+    pub refused: bool,
     pub attempt: Option<SpendAttempt>,
 }
 
@@ -5278,10 +5369,10 @@ impl SpendAttempt {
 /// `SessionSpendRow::read` reads them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
-     r.user_agent, r.request_class, r.landed_at, a.account_id, r.kind";
+     r.user_agent, r.request_class, r.landed_at, a.account_id, r.kind, r.refused";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
-const SESSION_SPEND_PRICED_FROM: usize = 11;
+const SESSION_SPEND_PRICED_FROM: usize = 12;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
@@ -5319,16 +5410,17 @@ impl SessionSpendRow {
                 canonical_model: row.get(first + PricedAttempt::MODEL)?,
                 received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
                 kind: row.get(10)?,
+                refused: row.get(11)?,
                 attempt,
             },
         ))
     }
 }
 
-/// `session_spend_rows_since`'s statement: every request landed after the watermark with a key and a session and not
-/// refused, with its serving attempt, oldest landing first, through the landing index the writer's poll rule names.
-/// The index is named so the seek holds whatever statistics a file carries. The request id keeps the two statements'
-/// orders one shape.
+/// `session_spend_rows_since`'s statement: every request landed after the watermark with a key and a session, a
+/// refused one with its flag, with its serving attempt, oldest landing first, through the landing index the writer's
+/// poll rule names. The index is named so the seek holds whatever statistics a file carries. The request id keeps the
+/// two statements' orders one shape.
 pub(crate) fn session_spend_since_statement(
     landed_after: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
@@ -5336,15 +5428,15 @@ pub(crate) fn session_spend_since_statement(
         "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM requests r INDEXED BY requests_landed_at \
          LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
-         WHERE r.landed_at > ? AND r.key_id IS NOT NULL AND r.session_id IS NOT NULL AND r.refused = 0 \
+         WHERE r.landed_at > ? AND r.key_id IS NOT NULL AND r.session_id IS NOT NULL \
          ORDER BY r.landed_at, r.id"
     );
     (sql, vec![rusqlite::types::Value::Integer(landed_after)])
 }
 
-/// `session_spend_rows_of`'s statement for one chunk of named sessions: every request of each under its key lifetime
-/// and not refused, with its serving attempt, seeking the session index per named session as the identities read
-/// does, each session's rows oldest first. The key and its generation scope the rows, as
+/// `session_spend_rows_of`'s statement for one chunk of named sessions: every request of each under its key lifetime,
+/// a refused one with its flag, with its serving attempt, seeking the session index per named session as the
+/// identities read does, each session's rows oldest first. The key and its generation scope the rows, as
 /// `session_identities_statement` scopes its own. The named sessions hold the outer loop through `CROSS JOIN`: the
 /// session index yields the order the statement sorts by, and on statistics that make a session look large the
 /// planner would walk the whole index in that order to spare the sort.
@@ -5358,14 +5450,13 @@ pub(crate) fn session_spend_of_statement(
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
          LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
-         WHERE r.refused = 0 \
          ORDER BY r.session_id, r.received_at, r.id"
     );
     (sql, binds)
 }
 
-/// Every request landed after `landed_after` with a key and a session and not refused, with its serving attempt, each
-/// beside its `SessionSpendKey`.
+/// Every request landed after `landed_after` with a key and a session, a refused one with its flag, with its serving
+/// attempt, each beside its `SessionSpendKey`.
 pub fn session_spend_rows_since(
     conn: &Connection,
     landed_after: i64,
@@ -5758,11 +5849,12 @@ mod tests {
         assert_eq!(served(since), [Some("d".to_string())]);
     }
 
-    /// The fold prices the requests an account served under a key and a session, so a refused request, a request with
-    /// no key and a request with no session stay out of both reads: the incremental read drops each in its statement,
-    /// and the fill's key join leaves the keyless and the sessionless ones out on its own.
+    /// The fold reads a refused request for the session's newest instants and its agent's first request, so both reads
+    /// answer it with its flag. A request with no key or no session has no row to land on and stays out of both: the
+    /// incremental read drops each in its statement, and the fill's key join leaves them out on its own.
     #[test]
-    fn the_session_spend_reads_leave_refused_keyless_and_sessionless_requests_out() {
+    fn the_session_spend_reads_answer_a_refused_request_with_its_flag_and_leave_keyless_and_sessionless_ones_out(
+    ) {
         let db = LedgerDb::open_in_memory().unwrap();
         let request =
             |id: &str, received_at: i64, key: Option<&str>, session: Option<&str>| RequestRecord {
@@ -5810,7 +5902,7 @@ mod tests {
         .unwrap();
         let receipts = |rows: Vec<(SessionSpendKey, SessionSpendRow)>| {
             rows.into_iter()
-                .map(|(_, row)| row.received_at)
+                .map(|(_, row)| (row.received_at, row.refused))
                 .collect::<Vec<_>>()
         };
         let sessions = [SessionSpendKey {
@@ -5821,11 +5913,11 @@ mod tests {
         let filled = db
             .read_blocking(|c| session_spend_rows_of(c, &sessions))
             .unwrap();
-        assert_eq!(receipts(filled), [1_000]);
+        assert_eq!(receipts(filled), [(1_000, false), (2_000, true)]);
         let since = db
             .read_blocking(|c| session_spend_rows_since(c, 0))
             .unwrap();
-        assert_eq!(receipts(since), [1_000]);
+        assert_eq!(receipts(since), [(1_000, false), (2_000, true)]);
     }
 
     #[test]

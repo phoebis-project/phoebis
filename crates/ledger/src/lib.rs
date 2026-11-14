@@ -62,6 +62,7 @@ pub use pricing::{
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_tables;
+pub use query::session_placements;
 pub use query::{
     account_request_counts, add_figures, breakdown_paged, bucket_seconds, burn_groups_paged,
     burn_series_over, dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil,

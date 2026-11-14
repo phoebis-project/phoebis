@@ -1,11 +1,13 @@
 //! The sessions route's figures over each session's life under its key: its spend apart from its probes', its agents'
-//! entries, its newest client request's user agent and the hours of its last day, folded behind the ledger's landing
-//! watermark, so a poll reads the rows landed since the last one and fills a session's whole history once.
+//! entries, its two newest instants, its newest served client request's user agent and the hours of its last day,
+//! folded behind the ledger's landing watermark, so a poll reads the rows landed since the last one and fills a
+//! session's whole history once.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
+use phoebis_bus::Kind;
 use phoebis_ledger::{
     add_figures, hour_of, Connection, Funding, LedgerError, PlanTables, PriceRevisions,
     RequestPrice, SessionSpendKey, SessionSpendRow, PROBE_KIND,
@@ -80,14 +82,17 @@ pub(crate) struct AgentRequests {
     pub account_id: Option<String>,
     /// The newest client request.
     pub last_request_at: Option<i64>,
+    /// The agent's first client request over the session's life, refused ones included, null where the ledger holds
+    /// no request of the agent that is no probe. It moves when the purge removes the first requests.
+    pub first_request_at: Option<i64>,
     /// The agent's client requests and their spend over every model it ran, `spend.requests` their count.
     pub spend: SessionSpend,
 }
 
 /// The sessions route's running totals behind the ledger's landed-at watermark: per session its spend, its probes'
-/// spend, its agents' entries, its newest client request's user agent and 25 hourly buckets of its last day, so a
-/// 5-second poll reads the rows written since its last read and nothing older. Public with its fields private, since
-/// the router and the admin harness build `AdminState` with one.
+/// spend, its agents' entries, its two newest instants, its newest served client request's user agent and 25 hourly
+/// buckets of its last day, so a 5-second poll reads the rows written since its last read and nothing older. Public
+/// with its fields private, since the router and the admin harness build `AdminState` with one.
 #[derive(Default)]
 pub struct SessionSpendFold {
     inner: Mutex<Inner>,
@@ -111,9 +116,14 @@ struct Accumulator {
     probes: Sums,
     /// Keyed by agent id, each agent's sums over every model it ran.
     agents: BTreeMap<String, AgentSums>,
-    /// The newest client request's receipt and its own user agent, null included, so an older string never stands
-    /// in for a newest request that sent none.
-    user_agent: Option<(i64, Option<String>)>,
+    /// The newest served client request's receipt, its id and its own user agent, null included, so an older string
+    /// never stands in for a newest request that sent none. A request of the same instant replaces the pick where its
+    /// id is greater, as `NewestRequest::keep_newest` does, so the pick holds whichever order a read visits them.
+    user_agent: Option<(i64, String, Option<String>)>,
+    /// The newest client request's receipt, refused ones included.
+    last_request_at: Option<i64>,
+    /// The newest receipt of a client request that is no token count, refused ones included.
+    last_inference_at: Option<i64>,
     /// Keyed by `hour_of(received_at)`, client requests alone.
     hours: BTreeMap<i64, HourSums>,
     /// The newest poll that filled or listed the session, which `retain` measures the expiry from.
@@ -156,6 +166,9 @@ struct AgentSums {
     newest: Option<NewestRequest>,
     /// The agent's newest probe, whose model names the entry while the ledger holds no client request of the agent.
     newest_probe: Option<NewestRequest>,
+    /// The agent's oldest client request's receipt, refused ones included. A refused request keeps it while the agent
+    /// holds nothing else, since the fill visits a session's rows oldest first and the agent's served one can follow.
+    first_request_at: Option<i64>,
 }
 
 /// An agent's newest request: its receipt, its id, its model, its agent type and its serving account.
@@ -293,12 +306,15 @@ impl Accumulator {
             probes: Sums::default(),
             agents: BTreeMap::new(),
             user_agent: None,
+            last_request_at: None,
+            last_inference_at: None,
             hours: BTreeMap::new(),
             listed_at: now,
         }
     }
 
-    /// One request, priced by the serving attempt the request log takes.
+    /// One request, priced by the serving attempt the request log takes. A refused request moves the session's two
+    /// newest instants and its agent's first request and nothing else.
     fn fold(
         &mut self,
         row: SessionSpendRow,
@@ -306,6 +322,23 @@ impl Accumulator {
         tables: &PlanTables,
         now: i64,
     ) {
+        if row.kind != PROBE_KIND {
+            self.last_request_at = self.last_request_at.max(Some(row.received_at));
+            if row.kind != Kind::CountTokens.as_str() {
+                self.last_inference_at = self.last_inference_at.max(Some(row.received_at));
+            }
+            if let Some(agent_id) = &row.agent_id {
+                let first = &mut self
+                    .agents
+                    .entry(agent_id.clone())
+                    .or_default()
+                    .first_request_at;
+                *first = Some(first.map_or(row.received_at, |at| at.min(row.received_at)));
+            }
+        }
+        if row.refused {
+            return;
+        }
         let attempt = row.attempt.as_ref();
         let price = attempt.and_then(|a| a.price(prices, tables, now));
         let served = attempt
@@ -335,9 +368,9 @@ impl Accumulator {
         if self
             .user_agent
             .as_ref()
-            .is_none_or(|(at, _)| *at <= row.received_at)
+            .is_none_or(|(at, id, _)| (newest.at, newest.id.as_str()) > (*at, id.as_str()))
         {
-            self.user_agent = Some((row.received_at, row.user_agent));
+            self.user_agent = Some((newest.at, newest.id.clone(), row.user_agent));
         }
         if let Some(agent) = agent {
             agent.spend.add(served);
@@ -368,13 +401,17 @@ impl Accumulator {
             money.merge(&hour.money);
         }
         SessionFigures {
-            user_agent: self.user_agent.as_ref().map(|(_, ua)| ua.clone()),
+            user_agent: self.user_agent.as_ref().map(|(_, _, ua)| ua.clone()),
+            last_request_at: self.last_request_at,
+            last_inference_at: self.last_inference_at,
             spend: (self.spend.requests > 0 || self.probes.requests > 0)
                 .then(|| spend_of(&self.spend, &self.probes)),
             day: money.day(classes),
             agent_requests: self
                 .agents
                 .iter()
+                // An agent whose every request was refused holds a first request alone and makes no entry.
+                .filter(|(_, sums)| sums.newest.is_some() || sums.newest_probe.is_some())
                 .map(|(agent_id, sums)| {
                     let newest = sums.newest.as_ref();
                     AgentRequests {
@@ -387,6 +424,7 @@ impl Accumulator {
                         agent_type: newest.and_then(|n| n.agent_type.clone()),
                         account_id: newest.and_then(|n| n.account_id.clone()),
                         last_request_at: newest.map(|n| n.at),
+                        first_request_at: sums.first_request_at,
                         spend: spend_of(&sums.spend, &sums.probes),
                     }
                 })
@@ -415,11 +453,15 @@ pub(crate) struct PollRows {
     pub newest: i64,
 }
 
-/// The row's four members, as the fold answers them for one session.
+/// The row's six members, as the fold answers them for one session.
 pub(crate) struct SessionFigures {
-    /// The newest client request's user agent, null included, `None` where the fold holds no client request, so the
-    /// route keeps the activity's agent there.
+    /// The newest served client request's user agent, null included, `None` where the fold holds no served client
+    /// request, so the route keeps the activity's agent there.
     pub user_agent: Option<Option<String>>,
+    /// The fold's halves of the row's two newest instants, refused requests included, which the route takes the later
+    /// of beside the activity's.
+    pub last_request_at: Option<i64>,
+    pub last_inference_at: Option<i64>,
     pub spend: Option<SessionSpend>,
     pub day: SessionDay,
     pub agent_requests: Vec<AgentRequests>,
@@ -555,7 +597,7 @@ impl SessionSpendFold {
 pub(crate) struct FoldRead<'a>(MutexGuard<'a, Inner>);
 
 impl FoldRead<'_> {
-    /// The row's four members at `now`, `None` where the fold holds nothing for the session.
+    /// The row's six members at `now`, `None` where the fold holds nothing for the session.
     pub(crate) fn answer(&self, key: &SessionSpendKey, now: i64) -> Option<SessionFigures> {
         Some(self.0.sessions.get(key)?.figures(now))
     }
@@ -653,6 +695,7 @@ mod tests {
                 kind: "inference".into(),
                 received_at,
                 landed_at,
+                refused: false,
                 attempt: None,
             },
         )

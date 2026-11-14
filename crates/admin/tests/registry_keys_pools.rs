@@ -772,10 +772,9 @@ async fn a_session_with_pins_on_two_models_shows_the_one_it_used_last() {
     assert_eq!(
         (
             sessions[0]["model"].as_str(),
-            sessions[0]["account_id"].as_str(),
-            sessions[0]["epoch"].as_u64()
+            sessions[0]["account_id"].as_str()
         ),
-        (Some("claude-opus-5"), Some("direct"), Some(4)),
+        (Some("claude-opus-5"), Some("direct")),
         "the row is the most recently used pin, not the alphabetically last model"
     );
 }
@@ -845,10 +844,9 @@ async fn a_main_agents_two_pins_show_whichever_it_used_last_even_when_the_older_
     assert_eq!(
         (
             sessions[0]["model"].as_str(),
-            sessions[0]["account_id"].as_str(),
-            sessions[0]["epoch"].as_u64()
+            sessions[0]["account_id"].as_str()
         ),
-        (Some("claude-sonnet-4-5"), Some("business"), Some(3)),
+        (Some("claude-sonnet-4-5"), Some("business")),
         "the row is the most recently used pin, even though its model sorts after the older pin's"
     );
 }
@@ -1055,13 +1053,7 @@ async fn sessions_list_live_pins_and_leave_out_a_pin_older_than_the_expiry() {
         1,
         "a pin older than sessions.expire_after_seconds is not listed"
     );
-    assert_eq!(
-        (
-            sessions[0]["session_id"].as_str(),
-            sessions[0]["epoch"].as_u64()
-        ),
-        (Some("s1"), Some(3))
-    );
+    assert_eq!(sessions[0]["session_id"].as_str(), Some("s1"));
 }
 
 /// The day, week and lifetime totals read through the end of the current hour, so a request landed on the hour's

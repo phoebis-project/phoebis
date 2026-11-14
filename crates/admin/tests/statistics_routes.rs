@@ -1156,7 +1156,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             Some("business")
         )
     );
-    assert!(rows[0]["epoch"].is_null() && rows[0]["created_at"].is_null());
+    assert!(rows[0]["created_at"].is_null());
 }
 
 /// The harness on the ledger's test cost model, where `claude-mystery-2` sits in a tier that weighs no model and
@@ -1622,6 +1622,365 @@ async fn the_sessions_route_prices_from_the_snapshots_tier_so_a_failed_store_tie
         (&row["burn_unit"], &row["burn"]),
         (&serde_json::json!("window_share"), &serde_json::json!(0.0)),
         "the pin prices as a share of the snapshot's Ultra window: {row}"
+    );
+}
+
+/// `record_at`'s request of `agent` and `kind` on `session` under the desktop key's `key_generation`.
+fn agent_request(
+    id: &str,
+    at: i64,
+    session: &str,
+    agent: &str,
+    kind: &str,
+    key_generation: i64,
+) -> Record {
+    let Record::Request {
+        request, attempts, ..
+    } = record_at(id, at, "claude-sonnet-5", session, key_generation)
+    else {
+        unreachable!("record_at builds a request")
+    };
+    let origin = if kind == phoebis_ledger::PROBE_KIND {
+        "keepalive"
+    } else {
+        "client"
+    };
+    Record::Request {
+        request: RequestRecord {
+            agent_id: Some(agent.into()),
+            kind: kind.into(),
+            origin: origin.into(),
+            ..request
+        },
+        attempts,
+        bodies: None,
+    }
+}
+
+/// `agent_request`'s inference request, refused by the router with no attempt. `finish` sets the flag and the
+/// outcome on a refusal, and the harness's `record` skips the assembler, so the request spells both.
+fn refused_request(id: &str, at: i64, session: &str, agent: &str, key_generation: i64) -> Record {
+    let Record::Request { request, .. } =
+        agent_request(id, at, session, agent, "inference", key_generation)
+    else {
+        unreachable!("agent_request builds a request")
+    };
+    Record::Request {
+        request: RequestRecord {
+            refused: true,
+            outcome: "rejected".into(),
+            status: None,
+            attempts: 0,
+            ..request
+        },
+        attempts: Vec::new(),
+        bodies: None,
+    }
+}
+
+/// The harness with the pool `main` over `business` and the key `desktop`, and the key's generation.
+async fn sessions_on_desktop() -> (common::Full, String, i64) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    (parts, cookie, generation)
+}
+
+fn sessions_row(sessions: &serde_json::Value, session: &str) -> serde_json::Value {
+    sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_id"] == session)
+        .unwrap_or_else(|| panic!("no row for {session}: {sessions}"))
+        .clone()
+}
+
+/// The companion keeps the session listed with no request inside the session expiry, so only a read over the
+/// session's life finds its newest request.
+#[tokio::test]
+async fn a_companion_sessions_last_request_reads_its_newest_request_past_the_session_expiry() {
+    let (parts, cookie, generation) = sessions_on_desktop().await;
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            generation,
+            phoebis_keepalive::Event {
+                event: "session_start".into(),
+                session_id: "s-companion".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            }
+            .try_into()
+            .unwrap(),
+        )
+        .unwrap();
+    let at = common::NOW - 25 * HOUR;
+    parts.ledger.record(agent_request(
+        "r-old",
+        at,
+        "s-companion",
+        "main",
+        "inference",
+        generation,
+    ));
+    common::landed(&parts, "r-old").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-companion");
+    assert_eq!(
+        row["last_request_at"].as_i64(),
+        Some(at),
+        "the newest request 25 hours back, past the 24-hour expiry: {row}"
+    );
+}
+
+/// Main was placed, the subagent was placed next, and main moved twice, so main's pin holds the router's fourth
+/// number. Each event stands at or after the key's generation.
+#[tokio::test]
+async fn a_sessions_placements_count_mains_placements_and_moves_and_no_other_agents() {
+    // The router loads the pins at spawn, so the pool, the key and the pins are written through one harness and
+    // the store is handed to the one under test.
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let generation = common::generation(&seed.store, "desktop");
+    let now = common::NOW;
+    for (agent, epoch) in [("main", 4), ("worker-1", 2)] {
+        seed.store
+            .upsert_pin(&phoebis_store::PinRow {
+                key_id: "desktop".into(),
+                session_id: "s-placed".into(),
+                agent_id: agent.into(),
+                model: "claude-sonnet-5".into(),
+                account_id: "business".into(),
+                epoch,
+                created_at: now - 10,
+                last_used_at: now - 5,
+                key_generation: generation,
+                incarnation: 1,
+                burn: phoebis_store::PinBurn::default(),
+                burn_at: None,
+                burn_banded: phoebis_store::PinBurn::default(),
+                burn_fast: phoebis_store::PinBurn::default(),
+                burn_unmetered: phoebis_store::PinBurn::default(),
+                burn_unmetered_model: None,
+                last_input_tokens: 0,
+                last_refresh_at: 0,
+                cache_ttl_ms: 300_000,
+                shed: None,
+                static_hash: None,
+                tail_hash: None,
+                lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+                entrypoint: None,
+                mark: None,
+                auxiliary_only: false,
+                effort: None,
+                ended: false,
+            })
+            .unwrap();
+    }
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (at, kind, agent) in [
+        (generation, "pin_created", "main"),
+        (generation + 100, "pin_created", "worker-1"),
+        (generation + 200, "pin_migrated", "main"),
+        (generation + 300, "pin_migrated", "main"),
+    ] {
+        parts.ledger.record(Record::Event(EventRecord {
+            at,
+            kind: kind.into(),
+            account_id: Some("business".into()),
+            key_id: Some("desktop".into()),
+            session_id: Some("s-placed".into()),
+            agent_id: Some(agent.into()),
+            ..Default::default()
+        }));
+    }
+    // The writer lands its channel in order, so the events stand once the request does.
+    parts.ledger.record(agent_request(
+        "r-placed",
+        now - 1_000,
+        "s-placed",
+        "main",
+        "inference",
+        generation,
+    ));
+    common::landed(&parts, "r-placed").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-placed");
+    assert_eq!(
+        row["placements"].as_u64(),
+        Some(3),
+        "main's placement and its two moves, the subagent's placement left out: {row}"
+    );
+}
+
+#[tokio::test]
+async fn a_sessions_last_inference_reads_its_turn_and_its_last_request_the_later_token_count_past_a_probe(
+) {
+    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let now = common::NOW;
+    for (id, at, kind) in [
+        ("r-turn", now - 3_000, "inference"),
+        ("r-count", now - 2_000, "count_tokens"),
+        ("r-probe", now - 1_000, phoebis_ledger::PROBE_KIND),
+    ] {
+        parts
+            .ledger
+            .record(agent_request(id, at, "s-kinds", "main", kind, generation));
+    }
+    common::landed(&parts, "r-probe").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-kinds");
+    assert_eq!(
+        (
+            row["last_inference_at"].as_i64(),
+            row["last_request_at"].as_i64()
+        ),
+        (Some(now - 3_000), Some(now - 2_000)),
+        "the turn is the newest inference, the token count the newest request, the probe neither: {row}"
+    );
+}
+
+/// The session holds no pin. Main's refused request two days back is the session's first, the subagent's refused
+/// request a day later is its own first, ahead of its served one, and main's served request inside the hour keeps
+/// the session listed.
+#[tokio::test]
+async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_past_the_expiry() {
+    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let now = common::NOW;
+    let day = 24 * HOUR;
+    for request in [
+        refused_request(
+            "r-main-refused",
+            now - 2 * day,
+            "s-first",
+            "main",
+            generation,
+        ),
+        refused_request(
+            "r-worker-refused",
+            now - day,
+            "s-first",
+            "worker-1",
+            generation,
+        ),
+        agent_request(
+            "r-worker-served",
+            now - day + HOUR,
+            "s-first",
+            "worker-1",
+            "inference",
+            generation,
+        ),
+        agent_request(
+            "r-main-served",
+            now - 1_000,
+            "s-first",
+            "main",
+            "inference",
+            generation,
+        ),
+    ] {
+        parts.ledger.record(request);
+    }
+    common::landed(&parts, "r-main-served").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-first");
+    assert_eq!(
+        (row["pinned"].as_bool(), row["first_request_at"].as_i64()),
+        (Some(false), Some(now - 2 * day)),
+        "the session's first request is main's refused one, two days back: {row}"
+    );
+    let worker = row["agent_requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["agent_id"] == "worker-1")
+        .unwrap_or_else(|| panic!("no entry for worker-1: {row}"))
+        .clone();
+    assert_eq!(
+        (
+            worker["first_request_at"].as_i64(),
+            worker["spend"]["requests"].as_u64()
+        ),
+        (Some(now - day), Some(1)),
+        "the subagent's first request is its own refused one, and its count holds the served one alone: {worker}"
+    );
+    assert_eq!(
+        row["day"]["requests"],
+        serde_json::json!({ "other": 2 }),
+        "the day holds the two served requests, the subagent's refused one in its first hour left out: {row}"
+    );
+}
+
+/// The first poll fills the session, so the two later requests reach the fold through the read of the rows landed
+/// since, in landing order: `r-tie-b` lands first and `r-tie-a` last.
+#[tokio::test]
+async fn two_requests_of_one_instant_landing_after_a_poll_answer_the_greater_ids_user_agent() {
+    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let now = common::NOW;
+    let sent = |id: &str, at: i64, user_agent: &str| {
+        let Record::Request {
+            request, attempts, ..
+        } = agent_request(id, at, "s-tie", "main", "inference", generation)
+        else {
+            unreachable!("agent_request builds a request")
+        };
+        Record::Request {
+            request: RequestRecord {
+                user_agent: Some(user_agent.into()),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        }
+    };
+    parts.ledger.record(sent(
+        "r-tie-0",
+        now - 5_000,
+        "claude-cli/2.1.300 (external, cli)",
+    ));
+    common::landed(&parts, "r-tie-0").await;
+    let first = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    assert_eq!(
+        sessions_row(&first, "s-tie")["spend"]["requests"].as_u64(),
+        Some(1)
+    );
+    for (id, user_agent) in [
+        ("r-tie-b", "claude-cli/2.1.302 (external, cli)"),
+        ("r-tie-a", "claude-cli/2.1.301 (external, cli)"),
+    ] {
+        parts.ledger.record(sent(id, now - 1_000, user_agent));
+        common::landed(&parts, id).await;
+    }
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-tie");
+    assert_eq!(
+        (
+            row["spend"]["requests"].as_u64(),
+            row["user_agent"].as_str()
+        ),
+        (Some(3), Some("claude-cli/2.1.302 (external, cli)")),
+        "the greater id of the one instant names the user agent, whichever landed last: {row}"
     );
 }
 
