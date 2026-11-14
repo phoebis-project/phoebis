@@ -345,7 +345,9 @@ const speedChips = (root, whereOf) =>
  * The window bars of one account's card with the reset and the phrase each should read: the reset's relative words, and
  * the projection's words at `at`, compact or whole as the bar draws them, from the mock's own windows, null for a
  * window that carries none or whose reset has passed. A bar names its window by its label (`5h` or `5-hour`, `7d` or
- * `7-day`, `Fable`, else the window's key).
+ * `7-day`, `Fable`, else the window's key). A window with no reset reads its state in the reset's place, spelled out
+ * here rather than read from the console's own rule: `not open` at a utilization of 0, which draws no projection, and
+ * `not reported` at any other.
  */
 const barPhrases = (bars, account, at, compact) =>
   bars
@@ -355,8 +357,9 @@ const barPhrases = (bars, account, at, compact) =>
       const id = { '5-hour': '5h', '5h': '5h', '7-day': '7d', '7d': '7d' }[label] ?? label;
       const w = label === 'Fable' ? account.fableWindow : (account.windows.find((x) => x.id === id) ?? null);
       const expired = w !== null && w.resetsAt !== null && Date.parse(w.resetsAt) < at;
-      const reset = w === null ? null : compact ? fmtRelative(w.resetsAt, at) : `resets ${fmtRelative(w.resetsAt, at)}`;
-      return { compact, label, reset, text: b.querySelector('.wbar__reset')?.textContent ?? '', want: w === null || expired ? null : projectionWords(w, at, compact) };
+      const state = w === null || w.resetsAt !== null ? null : w.utilization === 0 ? 'not open' : 'not reported';
+      const reset = w === null ? null : (state ?? (compact ? fmtRelative(w.resetsAt, at) : `resets ${fmtRelative(w.resetsAt, at)}`));
+      return { compact, label, reset, text: b.querySelector('.wbar__reset')?.textContent ?? '', want: w === null || expired || state === 'not open' ? null : projectionWords(w, at, compact) };
     });
 /**
  * The bars of `barPhrases` that misread their line: a compact bar reads its phrase alone in the reset's place, a whole
@@ -1179,9 +1182,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const strays = ['7d', '7d_fable'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare' || n === 'sunset').map((n) => `${n} on the ${id} ring`));
   // The contract and zenith seeds are usage-based seats, which the router prices no tier for and which report no plan
   // window, so both rings name them with the gate's word. The Pro seeds carry no Fable week, so the Fable ring names
-  // them too.
+  // them too, zephyr last in the list's order.
   const seat = ['contract: a usage-based seat', 'zenith: a usage-based seat'];
-  const fableNamed = ['secondary: no Fable week', 'reserve: no Fable week', ...seat];
+  const fableNamed = ['secondary: no Fable week', 'reserve: no Fable week', ...seat, 'zephyr: no Fable week'];
   results.push({
     name: '/ every listed tier is sized on both rings, so the 7-day ring names the usage-based seats alone and the Fable ring the Pro seeds without a Fable week beside them',
     ok: lineOf('7d') !== '' && lineOf('7d_fable') !== '' && JSON.stringify(named('7d')) === JSON.stringify(seat) && JSON.stringify(named('7d_fable')) === JSON.stringify(fableNamed) && JSON.stringify(fF.leftOut.map((o) => `${o.label}: ${o.reason}`)) === JSON.stringify(fableNamed) && strays.length === 0,
@@ -1389,13 +1392,13 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 {
   // Each remaining list reads in its ring's order, the account with the most of its own window left first, so the
   // shares it prints run down the list. On the story the registry's order runs down on neither ring, which weighs the
-  // six routable subscription accounts on the 7-day window and the four that carry the Fable week on the other.
+  // seven routable subscription accounts on the 7-day window and the four that carry the Fable week on the other.
   const listOf = (title) => {
     const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
     return [...(card?.querySelectorAll('.remaining__list li') ?? [])].map((li) => [li.querySelector('a')?.textContent ?? '', li.querySelector('.num')?.textContent ?? '']);
   };
   const lists = [
-    { count: 6, rows: listOf('7d remaining'), title: '7d remaining' },
+    { count: 7, rows: listOf('7d remaining'), title: '7d remaining' },
     { count: 4, rows: listOf('Fable week remaining'), title: 'Fable week remaining' },
   ];
   const descending = (rows) => rows.every(([, share], i) => i === 0 || Number.parseFloat(share) <= Number.parseFloat(rows[i - 1][1]));
@@ -1822,10 +1825,10 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 {
   // The bar's sort control on a bare /quota. The recovery orders are written from the story's accounts (`SEEDS` in
   // `web/src/mock/accounts.ts`) at the mount's frozen clock: their resets still ahead of it, reserve's 5-hour window
-  // run out, no Fable window on secondary or reserve, no 5-hour window on workshop, and contract and zenith usage-based
-  // seats with no plan window. An account without the key's reset reads after every one with it under either direction,
-  // by label, the seats among them. Default order has no direction, so its button draws no arrow and both direction
-  // rows stand disabled and unchecked.
+  // run out, zephyr's not open, no Fable window on secondary, reserve or zephyr, no 5-hour window on workshop, and
+  // contract and zenith usage-based seats with no plan window. An account without the key's reset reads after every
+  // one with it under either direction, by label, the seats among them. Default order has no direction, so its button
+  // draws no arrow and both direction rows stand disabled and unchecked.
   const name = "/quota the sort control reads Default order with no direction, and each recovery order files the cards by that window's reset, the soonest first, its address read back on a reload";
   const page = await mount('/quota', { now: CLOCK_ORIGIN });
   const button = () => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -1865,11 +1868,11 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   const reloaded = read(again);
   again.unmount();
   const shown = (arrow, cards, search, label, word) => ({ arrow, cards, search, text: `Sort: ${label}`, title: word === null ? `Sorted by ${label}` : `Sorted by ${label}, ${word}` });
-  const descending = shown('down', ['nightly', 'primary', 'studio', 'secondary', 'contract', 'reserve', 'workshop', 'zenith'], '?sort=reset5h&dir=desc', '5-hour recovery', 'descending');
+  const descending = shown('down', ['nightly', 'primary', 'studio', 'secondary', 'contract', 'reserve', 'workshop', 'zenith', 'zephyr'], '?sort=reset5h&dir=desc', '5-hour recovery', 'descending');
   const wantPicks = {
-    reset7d: { ...shown('up', ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract', 'zenith'], '?sort=reset7d', '7-day recovery', 'ascending'), open: false },
-    resetFable: { ...shown('up', ['nightly', 'primary', 'workshop', 'studio', 'contract', 'reserve', 'secondary', 'zenith'], '?sort=resetFable', '7-day Fable recovery', 'ascending'), open: false },
-    reset5h: { ...shown('up', ['secondary', 'studio', 'primary', 'nightly', 'contract', 'reserve', 'workshop', 'zenith'], '?sort=reset5h', '5-hour recovery', 'ascending'), open: false },
+    reset7d: { ...shown('up', ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'zephyr', 'contract', 'zenith'], '?sort=reset7d', '7-day recovery', 'ascending'), open: false },
+    resetFable: { ...shown('up', ['nightly', 'primary', 'workshop', 'studio', 'contract', 'reserve', 'secondary', 'zenith', 'zephyr'], '?sort=resetFable', '7-day Fable recovery', 'ascending'), open: false },
+    reset5h: { ...shown('up', ['secondary', 'studio', 'primary', 'nightly', 'contract', 'reserve', 'workshop', 'zenith', 'zephyr'], '?sort=reset5h', '5-hour recovery', 'ascending'), open: false },
     reset5hDesc: { ...descending, open: false },
   };
   const wantRadios = [
@@ -1879,7 +1882,7 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   results.push({
     name,
     ok:
-      JSON.stringify(bare) === JSON.stringify(shown('no arrow', ['primary', 'secondary', 'nightly', 'studio', 'reserve', 'contract', 'workshop', 'zenith'], '', 'Default order', null)) &&
+      JSON.stringify(bare) === JSON.stringify(shown('no arrow', ['primary', 'secondary', 'nightly', 'studio', 'reserve', 'contract', 'workshop', 'zenith', 'zephyr'], '', 'Default order', null)) &&
       JSON.stringify(radios) === JSON.stringify(wantRadios) &&
       JSON.stringify(picks) === JSON.stringify(wantPicks) &&
       JSON.stringify(reloaded) === JSON.stringify(descending),
@@ -2275,7 +2278,9 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
     return { parts: [...(reset?.querySelectorAll('.qwin__part') ?? [])].map((p) => p.textContent ?? ''), text: words, title: reset?.getAttribute('title') ?? '' };
   };
   const windowsOf = (a) => [['5h', a.windows.find((w) => w.id === '5h') ?? null], ['7d', a.windows.find((w) => w.id === '7d') ?? null], ['Fable', a.fableWindow]];
-  const live = accounts.flatMap((a) => windowsOf(a).filter(([, w]) => w !== null && !(w.resetsAt !== null && Date.parse(w.resetsAt) < at)).map(([name, w]) => ({ account: a.label, name, w, ...cellOf(a.label, name) })));
+  // A window with no reset names its state in the label's place, which the zephyr case reads, so the walk takes the
+  // windows whose reset lies ahead.
+  const live = accounts.flatMap((a) => windowsOf(a).filter(([, w]) => w !== null && w.resetsAt !== null && Date.parse(w.resetsAt) >= at).map(([name, w]) => ({ account: a.label, name, w, ...cellOf(a.label, name) })));
   const projected = live.filter((r) => projectionWords(r.w, at) !== null);
   const offPhrase = projected.filter((r) => !/^resets in \S+( \S+)?, /.test(r.text) || r.text !== `${r.text.split(', ')[0]}, ${projectionWords(r.w, at)}`);
   results.push({
@@ -2678,16 +2683,17 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
     ok: withShare.length > 0 && withoutShare.length > 0 && withShare.every((c) => ['tl-chip--good', 'tl-chip--low', 'tl-chip--warn'].includes(c.tone) && c.pct === 'none') && withoutShare.every((c) => c.tone === 'none' && c.pct === 'none'),
     missing: [...new Set(chips.map((c) => `${c.text}: ${c.tone} ${c.pct}`))],
   });
-  // A lane chip without a share carries no tone where the card chip of that window reads absent.
-  const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
-  const chipOff = laneChipTones.filter((c) => c.tone !== cardTone(c.label, c.window)).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
-  results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
+  // A lane chip without a share carries no tone where the card chip of that window reads absent. A window that has not
+  // opened draws its lane chip on the grey surface, while its card chip reads the full share in its tone.
+  const laneChipTones = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip')].map((c, i) => ({ label: l.querySelector('.lane__name')?.textContent?.trim() ?? '', pct: c.querySelector('.tl-chip__pct')?.textContent?.trim() ?? '', tone: [...c.classList].find((n) => n.startsWith('tl-chip--'))?.slice('tl-chip--'.length) ?? 'absent', window: ['5h', '7d', 'fable'][i % 3] })));
+  const chipOff = laneChipTones.filter((c) => c.tone !== (c.pct === 'not open' ? 'absent' : cardTone(c.label, c.window))).map((c) => `${c.label} ${c.window}: ${c.tone} where the card chip reads ${cardTone(c.label, c.window)}`);
+  results.push({ name: "/quota each timeline chip carries the tone of the same account's card chip for its window, and none where that chip has no share or its window has not opened", ok: laneChipTones.length > 0 && chipOff.length === 0, missing: chipOff });
   const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
   results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
   results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
   const shares = planLanes.flatMap((l) => [...l.querySelectorAll('.tl-chip__pct')]).map((e) => e.textContent?.trim() ?? '');
   const liveShares = live.filter((l) => l.includes('%'));
-  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
+  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset' && t !== 'not open'), ...liveShares].filter((t) => !/\d+% left/.test(t));
   results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
   const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
   results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
@@ -2793,6 +2799,31 @@ await forView('/quota', async () => {
     missing: [`focus on ${focused?.tagName.toLowerCase() ?? 'nothing'}#${focused?.id ?? ''}`, `section ${landed.container.querySelector('.quota-section')?.id ?? 'none'}`, nightly ? 'nightly drawn' : 'no card for nightly'],
   });
   landed.unmount();
+});
+await forView(['/quota', '/accounts'], async () => {
+  // The zephyr seed (`SEEDS` in `web/src/mock/accounts.ts`) is a Pro login whose 5-hour window has not opened: a
+  // utilization of 0 with no reset. The card's row, the lane under the 5-hour zoom and the Usage card's bar each name
+  // the state, and the lane builds no bar from the missing reset.
+  const page = await mount('/quota', { now: CLOCK_ORIGIN });
+  const card = [...page.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'zephyr');
+  const chip = [...(card?.querySelectorAll('.qcard__windows .qwin__chip') ?? [])].find((c) => c.querySelector('.qchip__name')?.textContent === '5h');
+  const row = { chip: chip?.querySelector('.qchip__pct')?.textContent?.trim() ?? null, reset: chip?.nextElementSibling?.nextElementSibling?.textContent?.trim() ?? null };
+  await quotaSection(page, 'Quota windows');
+  [...page.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === '5-hour')?.click();
+  await page.settle();
+  const lane = [...page.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'zephyr');
+  const timeline = { bars: lane?.querySelectorAll('.lane__bar').length ?? null, chip: lane?.querySelector('.tl-chip')?.textContent?.trim() ?? null };
+  page.unmount();
+  const detail = await mount('/accounts/zephyr', { now: CLOCK_ORIGIN });
+  const usage = [...detail.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+  const bar = usage?.querySelector('.wbars--3 > .wbar .wbar__reset')?.textContent?.trim() ?? null;
+  detail.unmount();
+  const words = `${row.chip} ${row.reset}`;
+  results.push({
+    name: '/quota a window that has not opened reads not open on the card, the lane and the usage bar',
+    ok: row.chip === '100% left' && row.reset === 'not open' && !words.includes('resets') && !words.includes('left in') && timeline.chip === '5-hour limit not open' && timeline.bars === 0 && bar === 'not open',
+    missing: [JSON.stringify({ bar, row, timeline })],
+  });
 });
 await forView('/quota', async () => {
   // jsdom lays nothing out, so the cells row reads a browser's width here and each cell its equal share of it. At 316
@@ -7565,8 +7596,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
       await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    // The pool's members by priority, then every other account by label, the zenith seed last by its label.
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith'];
+    // The pool's members by priority, then every other account by label, the zephyr seed last by its label.
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith', 'zephyr'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -7576,7 +7607,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith', 'zephyr']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -8930,7 +8961,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
-  // The pool's members by priority, then every other account by label, the zenith seed last by its label.
+  // The pool's members by priority, then every other account by label, the zephyr seed last by its label.
   const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
@@ -8940,7 +8971,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith', 'zephyr']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -8963,14 +8994,14 @@ m.unmount();
   read.release();
   await m.settle(600);
   read.restore();
-  // The pool's members by priority, then every other account by label, the zenith seed last by its label.
+  // The pool's members by priority, then every other account by label, the zephyr seed last by its label.
   const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'contract', 'legacy', 'New workspace', 'Research workspace', 'reserve', 'studio', 'Studio annex', 'sunset', 'workshop', 'zenith', 'zephyr']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -24371,9 +24402,9 @@ await forView('/accounts', async () => {
 await forView('/accounts', async () => {
   // The bar's sort control on a bare /accounts. The usage and reset orders are written from the story's accounts
   // (`SEEDS` in `web/src/mock/accounts.ts`) at the mount's frozen clock: their windows' utilizations and the resets
-  // still ahead, the plan-ended sunset holding no window and spare gone with the Delete account case above. An account
-  // without a key's figure reads after every one with it under either direction, by label. A key's own direction leaves
-  // the address, so a pick of Most used writes `sort=usage` alone.
+  // still ahead, the plan-ended sunset holding no window, zephyr's 5-hour window not open with no reset, and spare gone
+  // with the Delete account case above. An account without a key's figure reads after every one with it under either
+  // direction, by label. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
   const name = "/accounts the sort control reads its key and its direction's arrow, lists the keys over the directions, and each pick writes the address and orders the rows";
   const accounts = await api.listAccounts();
   const usage = (a) => (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization)));
@@ -24381,13 +24412,13 @@ await forView('/accounts', async () => {
   const ordered = (rows, compare) => [...rows].sort((a, b) => compare(a, b) || byLabel(a, b)).map((a) => a.id);
   const want = {
     name: ordered(accounts, () => 0),
-    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'legacy', 'workshop', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
-    usageAsc: ['workshop', 'legacy', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'legacy', 'workshop', 'zephyr', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usageAsc: ['zephyr', 'workshop', 'legacy', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
     status: ordered(accounts, (a, b) => a.status.localeCompare(b.status)),
-    reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop', 'zenith'],
-    reset7d: ['nightly', 'legacy', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
-    resetFable: ['nightly', 'primary', 'workshop', 'studio', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith'],
-    resetFableDesc: ['studio', 'workshop', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith'],
+    reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop', 'zenith', 'zephyr'],
+    reset7d: ['nightly', 'legacy', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'zephyr', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    resetFable: ['nightly', 'primary', 'workshop', 'studio', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith', 'zephyr'],
+    resetFableDesc: ['studio', 'workshop', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith', 'zephyr'],
   };
   // Each order moves rows past the label order, and ties stand on usage and on status, so a sort left out or a tie
   // broken any other way than by label fails.
@@ -30275,14 +30306,14 @@ await forView('/', async () => {
       JSON.stringify(drawn.week) ===
         JSON.stringify({
           listAfter: true,
-          names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured', 'zenith: a usage-based seat'],
+          names: ['primary: Ultra 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 7-day capacity not measured', 'studio: Max 7-day capacity not measured', 'reserve: Pro 7-day capacity not measured', 'contract: a usage-based seat', 'workshop: Ultra 7-day capacity not measured', 'zenith: a usage-based seat', 'zephyr: Pro 7-day capacity not measured'],
           ring: false,
           sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.',
         }) &&
       JSON.stringify(drawn.fable) ===
         JSON.stringify({
           listAfter: true,
-          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat'],
+          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat', 'zephyr: no Fable week'],
           ring: false,
           sentence: 'Unpriced: the cost model holds no 7-day capacity for the Ultra week.',
         }),
@@ -30321,7 +30352,7 @@ await forView('/', async () => {
       JSON.stringify({
         fable: {
           listAfter: true,
-          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat'],
+          names: ['primary: Ultra Fable week capacity not measured', 'secondary: no Fable week', 'nightly: Max Fable week capacity not measured', 'studio: Max Fable week capacity not measured', 'reserve: no Fable week', 'contract: a usage-based seat', 'workshop: Ultra Fable week capacity not measured', 'zenith: a usage-based seat', 'zephyr: no Fable week'],
           ring: false,
           sentence: "No listed account's tier is sized for the Fable week.",
         },
@@ -30363,7 +30394,7 @@ await forView('/', async () => {
         key: 'No quota windows',
         fable: {
           listAfter: true,
-          names: ['primary: no Fable week', 'secondary: no Fable week', 'nightly: no Fable week', 'studio: no Fable week', 'reserve: not read yet', 'contract: a usage-based seat', 'workshop: no Fable week', 'zenith: a usage-based seat'],
+          names: ['primary: no Fable week', 'secondary: no Fable week', 'nightly: no Fable week', 'studio: no Fable week', 'reserve: not read yet', 'contract: a usage-based seat', 'workshop: no Fable week', 'zenith: a usage-based seat', 'zephyr: no Fable week'],
           ring: false,
           sentence: 'No account with a Fable week.',
         },

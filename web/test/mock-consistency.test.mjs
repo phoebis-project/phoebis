@@ -424,16 +424,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(reached, [], 'a retired name reaches a row');
   });
 
-  test(`every account the rings and the Quota windows lanes draw reads in a color of its own, at ${at}`, async () => {
+  test(`the accounts the rings and the Quota windows lanes draw share a color only where nine of them take eight slots, at ${at}`, async () => {
     const s = await story;
     const slotOf = accountSlots(s.accounts.map((a) => a.id));
     const slots = s.accounts.map((a) => slotOf(a.id));
-    // The eight series colors cycle past the eighth id, so the ids that wrap must be ones the rings and the Quota
-    // windows lanes never draw: the lanes draw a listed account with a window, routing or not, the rings the ones that
-    // route, and two of them on one slot read as one.
+    // The eight series colors cycle past the eighth id. The lanes draw a listed account with a window, routing or not,
+    // the rings the ones that route, and two of them on one slot read as one. Nine drawn accounts on eight slots put
+    // one pair on a slot: zephyr, the last of the sorted ids, takes reserve's, so no older account moves, and any
+    // other pair is a color the story could have kept apart.
     const drawn = s.accounts.filter((a) => s.lib.isQuotaListed(a));
     const shared = drawn.flatMap((a, i) => drawn.slice(i + 1).filter((b) => slotOf(b.id) === slotOf(a.id)).map((b) => `${a.id} and ${b.id} on slot ${slotOf(a.id)}`));
-    assert.deepEqual(shared, [], 'no two drawn accounts share a color');
+    assert.deepEqual(shared, ['reserve and zephyr on slot 7'], 'nine drawn accounts on eight slots share one, the last sorted id on the slot of the eighth');
     assert.ok(slots.every((slot) => slot !== null), 'every listed account has a slot');
   });
 
@@ -449,7 +450,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const oauth = s.accounts.filter((a) => a.kind === 'oauth');
     // Each stored profile's word: the usage-based class first, then the organization type, a Max organization read by
     // its tier's size, and none without a profile.
-    const resolved = { contract: 'usage_based', legacy: 'pro', nightly: 'max_5x', primary: 'max_20x', reserve: 'pro', secondary: 'pro', spare: null, studio: 'max_5x', sunset: 'free', workshop: 'max_20x', zenith: 'usage_based' };
+    const resolved = { contract: 'usage_based', legacy: 'pro', nightly: 'max_5x', primary: 'max_20x', reserve: 'pro', secondary: 'pro', spare: null, studio: 'max_5x', sunset: 'free', workshop: 'max_20x', zenith: 'usage_based', zephyr: 'pro' };
     for (const a of oauth) {
       const plan = a.subscription?.plan ?? null;
       assert.equal(plan, resolved[a.id], `${a.id}'s plan`);

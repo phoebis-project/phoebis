@@ -22,6 +22,13 @@ test("an account's slow-down draws while the speed its holds realized is under 1
   assert.equal(d.slowedOf({ slowDown: entry(0.6, 1), windows: live }, now), null, 'a factor under 1 whose holds realized full speed, as before a pin there has a cycle');
   assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: [] }, now), null, 'no 5-hour window to read it from');
   assert.equal(d.slowedOf({ slowDown: null, windows: live }, now), null, 'no entry');
+  assert.equal(d.slowedOf({ slowDown: entry(0.5), windows: [{ ...five(null)[0], utilization: 0 }] }, now), null, 'a 5-hour window that has not opened, so the entry was read from one that ended');
+  assert.deepEqual(d.slowedOf({ slowDown: entry(0.5), windows: [{ ...five(null)[0], utilization: 0.2 }] }, now), entry(0.5), 'a used 5-hour window the poll reported no reset for');
+});
+
+test('noResetWord reads a window with no reset by its utilization', () => {
+  assert.equal(d.noResetWord({ resetsAt: null, utilization: 0 }), 'not open', 'nothing used, so the window never started');
+  assert.equal(d.noResetWord({ resetsAt: null, utilization: 0.2 }), 'not reported', 'a used share with no reset');
 });
 
 test('a plan word the table lacks reads as sent, a key every plain object carries among them', () => {
@@ -285,6 +292,13 @@ test("the soonest reset of a usage-based seat is its spend window's, while that 
   assert.deepEqual(d.soonestResetAt(seatAccount(spendReading({ resetsAt: new Date(SPEND_NOW - 60_000).toISOString() })), SPEND_NOW), [], 'a reset already passed recovers nothing');
   assert.deepEqual(d.soonestResetAt(seatAccount(null), SPEND_NOW), [], 'a seat with no spend reading yet');
   assert.deepEqual(d.soonestResetAt(planAccount('plan', [planWindow('5h', 3_600_000), planWindow('7d', 86_400_000)]), SPEND_NOW), ['5h'], 'a plan account reads its soonest window');
+});
+
+test("soonestResetAt marks every window within the router's slack of the soonest reset", () => {
+  // The router's `same_reset` reads two resets at most 60,000 ms apart as one, inclusive at the bound.
+  const account = (fableAfterMs) => ({ ...planAccount('plan', [planWindow('7d', DAY)]), fableWindow: planWindow('7d_fable', DAY + fableAfterMs) });
+  assert.deepEqual(d.soonestResetAt(account(60_000), SPEND_NOW), ['7d', '7d_fable'], 'resets 60,000 ms apart');
+  assert.deepEqual(d.soonestResetAt(account(60_001), SPEND_NOW), ['7d'], 'resets 60,001 ms apart');
 });
 
 test("the timeline's input and its lanes take an account with a spend reading beside the plan accounts, under both zooms", () => {

@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { hasSpendReading, isExpired, isSubscription, meterTone, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
+import { NO_RESET_TITLE, hasSpendReading, isExpired, isSubscription, meterTone, noResetWord, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { slowDownChip } from '@/lib/selection';
 import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
@@ -8,12 +8,15 @@ import { SpeedChip } from './SpeedChip';
 
 /**
  * `slowDown` is a slowed account's slow-down, which the whole 5-hour bar alone reads: its speed chip follows the label.
+ * A window with no reset names its state muted on the reset line, under the hover the Quota card's row gives it.
  */
 export function WindowBar({ window: w, now, soon = false, showLabel = true, compact = false, slowDown = null }: { compact?: boolean; now: number; showLabel?: boolean; slowDown?: AccountSlowDown | null; soon?: boolean; window: RateLimitWindow }) {
   const remaining = remainingOf(w);
-  const reset = compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`;
-  // A window past its reset says nothing until its next reading, as the Quota cell's expired line does.
-  const projection = isExpired(w, now) ? null : projectionParts(w, now, compact);
+  const word = noResetWord(w);
+  const reset = word ?? (compact ? fmtRelative(w.resetsAt, now) : `resets ${fmtRelative(w.resetsAt, now)}`);
+  // A window past its reset says nothing until its next reading, as the Quota cell's expired line does, and one that
+  // has not opened has nothing to project, though the router answers its horizon.
+  const projection = isExpired(w, now) || word === 'not open' ? null : projectionParts(w, now, compact);
   return (
     <div className="wbar">
       <div className="wbar__head">
@@ -28,16 +31,20 @@ export function WindowBar({ window: w, now, soon = false, showLabel = true, comp
           a third of a card holds one of the two, and breaks it between its
           share and its horizon where even that is too wide. A whole bar keeps
           both and breaks between them where it is too narrow. */}
-      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`resets ${fmtAbsolute(w.resetsAt)}`}>
+      <div className={`wbar__reset ${projection !== null ? 'wbar__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : NO_RESET_TITLE[word]}>
         {projection === null ? (
-          reset
+          word === null ? (
+            reset
+          ) : (
+            <span className="muted">{word}</span>
+          )
         ) : compact ? (
           <>
             <span className="wbar__part">{projection[0]}</span> <span className="wbar__part">{projection[1]}</span>
           </>
         ) : (
           <>
-            <span className="wbar__part">{reset},</span> <span className="wbar__part">{projection.join(' ')}</span>
+            <span className={word === null ? 'wbar__part' : 'wbar__part muted'}>{reset},</span> <span className="wbar__part">{projection.join(' ')}</span>
           </>
         )}
       </div>

@@ -103,6 +103,7 @@ test('a new pool reads each member the way the pool route does', async () => {
     // The router has not loaded the key, so it answers no projection of it.
     youngest: 'unknown',
     zenith: 'spent',
+    zephyr: 'eligible',
   });
   // Two members, one half of the ended term each, since the sunset seed holds both halves at once.
   await api.updateAccount('sunset', { canceled: false, subscriptionEndsAt: null });

@@ -15,7 +15,7 @@ import { Badge, Button, EmptyState, ErrorState, Meter, MeterAbsent, Pill, Segmen
 import { QUOTA_CODEC, QUOTA_SORT_KEYS, sortDirOf, type QuotaAddress } from '@/lib/address';
 import { CELL_MIN_PX, cellsFit, fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtMinor, fmtMinute, fmtPct, fmtRelative, fmtShortHour, fmtShortTime, formatIn, getTimeFormat, listWords, messageOf, noun, plural, upperFirst } from '@/lib/format';
 import { useAsync, useHashSection, useNow, useQueryFilters, useResizeObserver } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
+import { NO_RESET_TITLE, STATUS_LABEL, STATUS_TONE, burnWords, canceledEndOf, endOf, extraUsageState, hasSpendReading, isExpired, isQuotaListed, leadOf, meterTone, noResetWord, onTimeline, paceWords, pollReading, projectionWords, remainingOf, remainingTimeShare, resetOf, slowedOf, soonestResetAt, spendLeftOf, spendResetTitle, timelineLanes, windowOf, type ExtraUsageState } from '@/lib/quota';
 import { readsFull, resetChip, resetMarks } from '@/lib/resets';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -383,14 +383,16 @@ function WindowChip({ id, window: w, className, now, resettable }: { className: 
  * row of its own under the meter. A slowed account's 5-hour window, passed its `slowDown`, closes its reset label with
  * the speed chip. A window the account's poll does not carry keeps its row, so the cards align, with the words
  * "no 5-hour window" muted in the reset label's place. A window a reset usable now clears, passed `resettable`,
- * carries the reset mark in its chip.
+ * carries the reset mark in its chip. A window with no reset names its state muted in the reset label's place.
  */
 function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soon }: { end: number | null; id: WindowId; now: number; resettable: boolean; slowDown?: AccountSlowDown | null; soon: boolean; window: RateLimitWindow | null }) {
   // The last reading describes a window that has since reset, so its share says nothing until the next one.
   const live = w && !isExpired(w, now) ? w : null;
   const pace = live ? paceWords(live, now, end) : null;
   const reading = live ? `${live.label}: ${fmtPct(remainingOf(live))} left${pace ? `, ${pace}` : ''}` : '';
-  const projection = live ? projectionWords(live, now) : null;
+  // A window that has not opened has nothing to project, though the router answers its horizon five hours out.
+  const word = live ? noResetWord(live) : null;
+  const projection = live && word !== 'not open' ? projectionWords(live, now) : null;
   const burn = live ? burnWords(live) : null;
   return (
     <>
@@ -401,11 +403,16 @@ function QuotaWindow({ end, id, window: w, now, resettable, slowDown = null, soo
         <MeterAbsent />
       )}
       {live ? (
-        <span className={`qwin__reset ${projection ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`} title={`${fmtAbsolute(live.resetsAt)}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}>
+        <span
+          className={`qwin__reset ${projection ? 'qwin__reset--split' : ''} ${soon ? 'is-soon' : ''}`}
+          title={word === 'not open' ? NO_RESET_TITLE[word] : `${word === null ? fmtAbsolute(live.resetsAt) : NO_RESET_TITLE[word]}${soon ? ', the first of this account to recover' : ''}${burn ? `, ${burn}` : ''}`}
+        >
           {projection ? (
             <>
-              <span className="qwin__part">resets {fmtRelative(live.resetsAt, now)},</span> <span className="qwin__part">{projection}</span>
+              <span className={word ? 'qwin__part muted' : 'qwin__part'}>{word ?? `resets ${fmtRelative(live.resetsAt, now)}`},</span> <span className="qwin__part">{projection}</span>
             </>
+          ) : word ? (
+            <span className="muted">{word}</span>
           ) : (
             `resets ${fmtRelative(live.resetsAt, now)}`
           )}
@@ -504,7 +511,7 @@ interface LaneFrame {
 }
 
 /** A pill naming the window and how much of it is left, toned by its share as the card chips are. Without a share
- *  it sits on the grey surface. */
+ *  it sits on the grey surface, and a window that has not opened names that state in the share's place. */
 function LaneChip({ label, window: w, now }: { label: string; now: number; window: RateLimitWindow | null }) {
   if (!w) {
     return (
@@ -520,9 +527,17 @@ function LaneChip({ label, window: w, now }: { label: string; now: number; windo
       </span>
     );
   }
+  const word = noResetWord(w);
+  if (word === 'not open') {
+    return (
+      <span className="tl-chip" title={`the ${label.toLowerCase()} has not opened, so it has no reset yet`}>
+        {label} <b className="tl-chip__pct muted">not open</b>
+      </span>
+    );
+  }
   const remaining = remainingOf(w);
   return (
-    <span className={`tl-chip tl-chip--${meterTone(remaining)}`} title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, resets ${fmtAbsolute(w.resetsAt)}`}>
+    <span className={`tl-chip tl-chip--${meterTone(remaining)}`} title={`${fmtPct(remaining)} of the ${label.toLowerCase()} left, ${word === null ? `resets ${fmtAbsolute(w.resetsAt)}` : 'no reset reported'}`}>
       {label} <b className="tl-chip__pct num">{fmtPct(remaining)} left</b>
     </span>
   );
@@ -687,16 +702,19 @@ function PlanLane({ account, color, frame, period, window: w }: { account: Accou
   const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
   const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / frame.width) * 100 : null;
   const bars: { end: number; start: number; stop: number }[] = [];
-  let start = resetAt - windowMs;
-  while (start > span.startMs) start -= windowMs;
-  for (; start < span.endMs; start += windowMs) {
-    const end = start + windowMs;
-    const stop = Math.min(end, endMs);
-    // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended at or
-    // before that start.
-    if (stop <= span.startMs) continue;
-    if (start >= endMs) continue;
-    bars.push({ start, end, stop });
+  // A window with no reset has no period to project, so its lane keeps its chips over an empty track.
+  if (noResetWord(w) === null) {
+    let start = resetAt - windowMs;
+    while (start > span.startMs) start -= windowMs;
+    for (; start < span.endMs; start += windowMs) {
+      const end = start + windowMs;
+      const stop = Math.min(end, endMs);
+      // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended at or
+      // before that start.
+      if (stop <= span.startMs) continue;
+      if (start >= endMs) continue;
+      bars.push({ start, end, stop });
+    }
   }
   return (
     <Lane

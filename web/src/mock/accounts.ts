@@ -563,6 +563,34 @@ const SEEDS = [
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
+  // A Pro login in no pool whose 5-hour window has not opened, which the router answers with no reset and a projection
+  // of 0 five hours out. After the older seeds, so every seed above keeps its history's draws, and its id sorts last,
+  // so every older account keeps its color: the palette's eight slots put it on reserve's.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'zephyr',
+    kind: 'oauth',
+    label: 'zephyr',
+    email: 'operator+zephyr@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    // `win` reads a 5-hour window's horizon off its reset, so the window takes the horizon of a reset five hours out
+    // and then drops the reset it lacks.
+    windows: [{ ...win('5h', 0, 5 * HOUR), resetsAt: null }, win('7d', 0.04, 5 * DAY + 3 * HOUR)],
+    fableWindow: null,
+    extraUsage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(6 * HOUR + 20 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(1 * HOUR + 40 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(60 * DAY),
+    },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', planDisplayName: null, rateLimitTier: 'default_claude_ai', since: ago(20 * DAY), trialEndsAt: null, endsAt: null },
+    requests: { last24h: 0, last7d: 0, lifetime: 0 },
+    cooldowns: [],
+  },
 ] satisfies Seed[];
 
 /** The word an organization type resolves to, the Max type's read by its tier. */
@@ -728,11 +756,18 @@ function carryLegacyEdges(account: (typeof ACCOUNTS)[number], w: RateLimitWindow
   });
 }
 
-// The samples are built from the literal's windows, since a flagged account answers none.
+// The samples are built from the literal's windows, since a flagged account answers none. A window with no reset has
+// no period to place samples in, so it answers none.
 export const QUOTA_HISTORY: QuotaHistory[] = SEEDS.flatMap((seed, i) =>
-  readWindows(seed).map((w) => ({
-    accountId: seed.id,
-    windowId: w.id,
-    samples: carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
-  })),
+  readWindows(seed).flatMap((w) =>
+    w.resetsAt === null
+      ? []
+      : [
+          {
+            accountId: seed.id,
+            windowId: w.id,
+            samples: carryLegacyEdges(ACCOUNTS[i], w, sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt), w.periodHours * HOUR, w.utilization, samplesEndOf(ACCOUNTS[i]))),
+          },
+        ],
+  ),
 );

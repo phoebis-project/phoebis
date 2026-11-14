@@ -8648,7 +8648,7 @@ async function planEndedLines(theme, path) {
   for (const what of compare(read.sentence, read.neighbor, ['fontSize', 'ink', 'left'], `the plan-ended account's ${kind} sentence against the neighboring ${kind}'s window bars and their first label`)) say(what);
   if (path === '/') {
     const seats = ['contract: a usage-based seat', 'zenith: a usage-based seat'];
-    const want = { '7d remaining': seats, 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', ...seats] };
+    const want = { '7d remaining': seats, 'Fable week remaining': ['secondary: no Fable week', 'reserve: no Fable week', ...seats, 'zephyr: no Fable week'] };
     for (const ring of read.rings) if (JSON.stringify(ring.names) !== JSON.stringify(want[ring.title] ?? null)) say(`the "${ring.title}" card names ${JSON.stringify(ring.names)} under its ring, not ${JSON.stringify(want[ring.title] ?? null)}`);
     if (read.rings.length !== 2) say(`${read.rings.length} remaining cards, expected 7d and Fable week`);
   }

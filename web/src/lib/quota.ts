@@ -102,12 +102,24 @@ export const planOverage = (account: Pick<Account, 'overage' | 'usageBased'>): A
 /** A window whose reset has passed with no reading since: the card and the timeline agree on this one test. */
 export const isExpired = (w: RateLimitWindow, now: number) => w.resetsAt !== null && Date.parse(w.resetsAt) < now;
 
+/** The state of a window with no reset: not open at a utilization of exactly 0, since the window never started, not
+ *  reported at any other utilization, and null for a window that carries a reset. */
+export const noResetWord = (w: Pick<RateLimitWindow, 'resetsAt' | 'utilization'>): 'not open' | 'not reported' | null =>
+  w.resetsAt !== null ? null : w.utilization === 0 ? 'not open' : 'not reported';
+
+/** The hover of a window with no reset by its state, which the card's row and the window bars share. */
+export const NO_RESET_TITLE: Readonly<Record<'not open' | 'not reported', string>> = {
+  'not open': 'this window has not opened, so it has no reset yet',
+  'not reported': 'the poll reported no reset for this window',
+};
+
 /** The slow-down a page draws the account's speed chip from: its entry while the speed the holds realized is under 1
- *  and the 5-hour window the entry was read from has not reset since, null otherwise. */
+ *  and the 5-hour window the entry was read from has not reset since, null otherwise. A 5-hour window that has not
+ *  opened means the one the entry was read from has ended. */
 export function slowedOf(account: Account, now: number): AccountSlowDown | null {
   const slowDown = account.slowDown ?? null;
   const w5 = windowOf(account, '5h');
-  return slowDown !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) ? slowDown : null;
+  return slowDown !== null && slowDown.speed < 1 && w5 !== null && !isExpired(w5, now) && noResetWord(w5) !== 'not open' ? slowDown : null;
 }
 
 /**
@@ -256,22 +268,21 @@ const aheadOf = (at: string | null | undefined, now: number): number | null => {
   return t > now ? t : null;
 };
 
-/** The soonest future reset over every window the poll read and a seat's spend window, with every window at that
- *  instant, so the card marks each. Empty where no reset lies ahead. */
+/** The span inside which two resets read as one reset, the router's `RESET_SLACK_MS` (crates/routing/src/task.rs),
+ *  inclusive at the bound. */
+export const RESET_SLACK_MS = 60_000;
+
+/** The soonest future reset over every window the poll read and a seat's spend window, with every window whose reset
+ *  lies within `RESET_SLACK_MS` after it, in the reading's order, so the card marks each. Empty where no reset lies
+ *  ahead. */
 export function soonestResetAt(account: Account, now: number): WindowId[] {
-  let at = Number.POSITIVE_INFINITY;
-  let ids: WindowId[] = [];
-  const take = (id: WindowId, resetsAt: string | null | undefined) => {
-    // A window the sampler reported without a reset time can never be the soonest to recover.
-    const t = aheadOf(resetsAt, now);
-    if (t === null || t > at) return;
-    ids = t === at ? [...ids, id] : [id];
-    at = t;
-  };
-  for (const w of readWindows(account)) take(w.id, w.resetsAt);
-  // A usage-based seat recovers at its spend window's reset, the one reset it carries.
-  take('spend', account.spend?.resetsAt);
-  return ids;
+  // A window the sampler reported without a reset time can never be the soonest to recover, and a usage-based seat
+  // recovers at its spend window's reset, the one reset it carries.
+  const read: { at: number | null; id: WindowId }[] = [...readWindows(account).map((w) => ({ at: aheadOf(w.resetsAt, now), id: w.id })), { at: aheadOf(account.spend?.resetsAt, now), id: 'spend' }];
+  const resets = read.flatMap((r) => (r.at === null ? [] : [{ at: r.at, id: r.id }]));
+  const soonest = Math.min(...resets.map((r) => r.at));
+  // Measured from the soonest reset, so a window within the slack of a marked one but past the soonest's is unmarked.
+  return resets.filter((r) => r.at - soonest <= RESET_SLACK_MS).map((r) => r.id);
 }
 
 /** One window's future reset, or null where the window is absent, expired or carries none. `'7d_fable'` reads
