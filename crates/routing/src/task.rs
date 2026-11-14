@@ -28,7 +28,7 @@ use crate::select::{
     budget_facts, burn_unit, decide, handed_sums, lane_is_fast, mark_cleared_of, move_cost,
     move_word, obstacle, pace_of, passes_reset, projection_of, projections_of, release_reasons,
     slow_down_ramp, standing_request, BurnRead, Decided, FailedOver, Obstacle, Refusal,
-    SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -73,8 +73,6 @@ const EVENTS: usize = 1_024;
 const MIGRATION_WINDOW_MS: i64 = 60_000;
 
 /// The pin a failover invalidated, kept for `MIGRATION_WINDOW_MS` so the landing reads its figures and names its cause.
-/// An entry holds its session's first-seen records while it stands inside `MIGRATION_WINDOW_MS`, since a pin in the
-/// gap has not left.
 struct Invalidated {
     account_id: String,
     /// `cooldown`, `fast_lane` or `mark`.
@@ -1459,10 +1457,6 @@ pub struct PinStanding {
     pub cycle_ms: Option<f64>,
     /// Only auxiliary requests have used the pin since its placement, read from the row.
     pub auxiliary_only: bool,
-    /// The first placement of the pin's agent under the key and session, `None` where no record stands.
-    pub first_seen_at: Option<i64>,
-    /// The first placement of the session's main agent, `None` where main never placed a pin.
-    pub session_first_seen_at: Option<i64>,
     /// The pin's lane is the fast lane, by the test a shedding round reads to leave a fast-lane pin out of a
     /// window-share round.
     pub fast: bool,
@@ -2085,9 +2079,6 @@ pub fn spawn(
         RegistrySnapshot::from_load(registry, store.digest_key(), now, 1)
             .with_guardrails(guardrails),
     );
-    // Here and never in the load, which a reader may take while a failover's landing is a selection away and the
-    // session holds no pin.
-    store.sweep_first_seen()?;
     let load = store.load_routing()?;
     let load_counts = LoadCounts::of(&load, &initial, now);
     let mut state = RoutingState::from_load(load);
@@ -2632,13 +2623,6 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeleteCooldown(account_id, scope) => {
                 tx.delete_cooldown(account_id, scope)?;
             }
-            StateWrite::DeleteFirstSeen {
-                key_id,
-                session_id,
-                agent_id,
-            } => {
-                tx.delete_first_seen_record(key_id, session_id, agent_id)?;
-            }
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
@@ -2649,7 +2633,6 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             } => {
                 tx.delete_window(account_id, window, *incarnation)?;
             }
-            StateWrite::InsertFirstSeen(row) => tx.insert_first_seen(row)?,
             StateWrite::PurgeModelWeekHours { before } => {
                 tx.purge_model_week_hours_before(*before)?;
             }
@@ -2930,9 +2913,8 @@ fn projections(
 /// left the registry) and its runway on its own account under that pool, read by `standing_runway` once per pool,
 /// account and set of windows, since the account's projection already holds every pin's burn and every pin drawing
 /// those windows there reads the same runway. Each pin reads its account's factor and realized speed from the
-/// slow-down entry in force under that pool, its cycle from its pace, and its agent's and its session's main agent's
-/// first placements. Its burn unit is the selector's read of its account, an overage whose evidence names no reset
-/// standing for `fallback_ms` past its observation. The unit and the slow-down entry depend on the account and the
+/// slow-down entry in force under that pool and its cycle from its pace. Its burn unit is the selector's read of its
+/// account, an overage whose evidence names no reset standing for `fallback_ms` past its observation. The unit and the slow-down entry depend on the account and the
 /// pool alone, so each is read once beside the runway.
 fn pins_standing(
     state: &RoutingState,
@@ -2987,8 +2969,6 @@ fn pins_standing(
             };
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let auxiliary_only = state.auxiliary_only(&pin.key());
-            let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
-            let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, MAIN_AGENT);
             let fast = lane_is_fast(&pin.lane);
             let cost = move_cost(state, &standing_request(&pin), &pin, now);
             PinStanding {
@@ -3000,8 +2980,6 @@ fn pins_standing(
                 slow_down,
                 cycle_ms,
                 auxiliary_only,
-                first_seen_at,
-                session_first_seen_at,
                 fast,
                 move_cost: cost,
             }
@@ -4195,7 +4173,6 @@ impl Task {
                 // placement rather than a move away from it.
                 self.state.remove_pin(&key);
                 let now = (self.clock)();
-                let deletes = self.first_seen_deletes(&key.key_id, &key.session_id, now);
                 let pool_id = key_pool_id(&self.snapshot(), &key.key_id);
                 self.emit(RouterEvent::pin_expired(
                     &key,
@@ -4207,11 +4184,7 @@ impl Task {
                 if let Some(event) = cleared_mark(&current, "released", pool_id, now) {
                     self.emit(event);
                 }
-                self.write(
-                    std::iter::once(StateWrite::DeletePin(key))
-                        .chain(deletes)
-                        .collect(),
-                );
+                self.write(vec![StateWrite::DeletePin(key)]);
             }
             Report::PinRenewed {
                 mut pin,
@@ -4890,34 +4863,6 @@ impl Task {
         }
     }
 
-    /// Whether a pin of the session sits in a failover gap at `now`. Reads the window itself, since the purge's
-    /// expiry asks before the retain drops the lapsed entries.
-    fn gapped(&self, key_id: &str, session_id: &str, now: i64) -> bool {
-        self.invalidated.iter().any(|(key, entry)| {
-            key.key_id == key_id && key.session_id == session_id && entry.within(now)
-        })
-    }
-
-    /// One delete per first-seen record the session's end dropped from memory. The records are held, as
-    /// `end_first_seen` reads it, where a pin of the session sits in a failover gap at `gap_at` (`gapped`).
-    fn first_seen_deletes(
-        &mut self,
-        key_id: &str,
-        session_id: &str,
-        gap_at: i64,
-    ) -> Vec<StateWrite> {
-        let held = self.gapped(key_id, session_id, gap_at);
-        self.state
-            .end_first_seen(key_id, session_id, held)
-            .into_iter()
-            .map(|agent_id| StateWrite::DeleteFirstSeen {
-                key_id: key_id.to_string(),
-                session_id: session_id.to_string(),
-                agent_id,
-            })
-            .collect()
-    }
-
     fn purge(&mut self) {
         let snapshot = self.snapshot();
         let now = (self.clock)();
@@ -4937,11 +4882,6 @@ impl Task {
             });
         }
         let purged = self.state.purge(&snapshot, now);
-        // After the takes, so a session whose last pin the purge took ends with it.
-        let mut deletes = Vec::new();
-        for (row, _) in &purged.pins {
-            deletes.extend(self.first_seen_deletes(&row.key_id, &row.session_id, now));
-        }
         self.slow_down_edges(now);
         tracing::debug!(
             affinity = purged.affinity.len(),
@@ -4955,19 +4895,7 @@ impl Task {
                 .pin(key)
                 .is_some_and(|row| row.epoch == observation.epoch)
         });
-        let mut lapsed = Vec::new();
-        self.invalidated.retain(|key, entry| {
-            let within = entry.within(now);
-            if !within {
-                lapsed.push(key.clone());
-            }
-            within
-        });
-        // A failover whose landing never came ends its session as an expiry does, unless another of its pins still
-        // sits in a gap. The invalidation already took the pin's row, so only the records leave.
-        for key in &lapsed {
-            deletes.extend(self.first_seen_deletes(&key.key_id, &key.session_id, now));
-        }
+        self.invalidated.retain(|_, entry| entry.within(now));
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
@@ -5002,7 +4930,6 @@ impl Task {
             .map(|(a, s)| StateWrite::DeleteCooldown(a, s))
             .collect();
         writes.extend(pin_ends);
-        writes.extend(deletes);
         if !purged.affinity.is_empty() {
             writes.push(StateWrite::DeleteAffinity(purged.affinity));
         }
@@ -5543,8 +5470,6 @@ enum DeferredKey {
         scope: CooldownScope,
     },
     Credits(String),
-    /// An agent's record by key id, session id and agent id.
-    FirstSeen(String, String, String),
     /// A model week's hour of an account: each write carries the hour's whole sum, so the last one stands for all.
     ModelWeekHour {
         account_id: String,
@@ -5577,16 +5502,13 @@ enum DeferredKey {
     },
 }
 
-/// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, an agent's
-/// first-seen record's last insert or delete, a window's last upsert or delete, a window set's last upsert per
-/// account, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
-/// affinity row's last upsert or delete per key, a pool's last round per account, a model week hour's last sum, a
-/// model's pair's last fact, one round purge, one hour purge, one stale-window sweep, and every rekey in order. A rekey
-/// closes the rows before it into a segment of their own, so a pin's write dated after a resolution never lands ahead
-/// of the rekey that moved its rows. A round may land on either side of the pin writes held beside it: a mark is read
-/// back only for the pin and the epoch its row names. A segment lands in map order, so a record's delete and its insert
-/// share the record's key: a session that ends and returns writes the return's record over the end's delete, and the
-/// end never lands behind the return to take its row.
+/// Writes the channel had no room for, the last write per row: a pin's last upsert, delete or end, a window's last
+/// upsert or delete, a window set's last upsert per account, a cooldown's last upsert or delete per scope, an overage,
+/// credits or account state per account, an affinity row's last upsert or delete per key, a pool's last round per
+/// account, a model week hour's last sum, a model's pair's last fact, one round purge, one hour purge, one stale-window
+/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
+/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of the
+/// pin writes held beside it: a mark is read back only for the pin and the epoch its row names.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -5693,14 +5615,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             },
             write,
         ),
-        StateWrite::DeleteFirstSeen {
-            ref key_id,
-            ref session_id,
-            ref agent_id,
-        } => one(
-            DeferredKey::FirstSeen(key_id.clone(), session_id.clone(), agent_id.clone()),
-            write,
-        ),
         StateWrite::DeletePin(ref key) => one(DeferredKey::Pin(key.clone()), write),
         StateWrite::DeleteWindow {
             ref account_id,
@@ -5711,14 +5625,6 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 account_id: account_id.clone(),
                 window: window.clone(),
             },
-            write,
-        ),
-        StateWrite::InsertFirstSeen(ref row) => one(
-            DeferredKey::FirstSeen(
-                row.key_id.clone(),
-                row.session_id.clone(),
-                row.agent_id.clone(),
-            ),
             write,
         ),
         StateWrite::PurgeModelWeekHours { .. } => one(DeferredKey::PurgeModelWeekHours, write),

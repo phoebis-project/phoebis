@@ -107,14 +107,13 @@ after about a second, a reused connection that died is retried at once, and a re
 after a predicted spent edge emits `window_cleared` as a stored reading's fall does, and the clear ends the attention
 condition the spent event built ([The windows the router works from](routing.md#the-windows-the-router-works-from)). A
 restored wall keeps its anchor across a restart, so within-margin readings after the start do not hold the account spent
-past the window's length ([The windows the router works from](routing.md#the-windows-the-router-works-from)). A
-session's creation time is its main agent's first placement, kept across a failover, a move and a second pin, so the
-Sessions view's order by creation is stable ([Routing](routing.md#selection)). A usage-based seat's old plan readings
-start no shedding round ([Routing](routing.md#moves)). An OAuth account's shared windows are the ones its newest clean
-poll carried, both before the first, so a poll that lacks the 5-hour window drops the account's reading of it and its
-charges, ends its slow-down entries and leaves the window out of the prediction, the projection, the reservation and the
-burn, while a head drops nothing and a head's reading of a window the account lacks does not land ([The windows the
-router works from](routing.md#the-windows-the-router-works-from)).
+past the window's length ([The windows the router works from](routing.md#the-windows-the-router-works-from)). The
+Sessions view's Created reads the session's first request in the ledger ([Sessions](console.md#sessions)). A usage-based
+seat's old plan readings start no shedding round ([Routing](routing.md#moves)). An OAuth account's shared windows are
+the ones its newest clean poll carried, both before the first, so a poll that lacks the 5-hour window drops the
+account's reading of it and its charges, ends its slow-down entries and leaves the window out of the prediction, the
+projection, the reservation and the burn, while a head drops nothing and a head's reading of a window the account lacks
+does not land ([The windows the router works from](routing.md#the-windows-the-router-works-from)).
 A decision record names a seat its spend cap holds out `spent` and an account the `never` policy holds out until its
 overage ends `overage`, in its standing facts, its trace, its candidates' obstacles and its probe line, as its
 exhausted line does ([Overage](routing.md#overage)). A client classifier call that runs off the account its judged turn

@@ -9036,14 +9036,14 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-/// An agent line as the route answers it, under the harness pins' five-minute TTL and with no first-seen record, with
-/// the agent's lifecycle word where the engine holds its record. The harness pins burn nothing, so a line's burn reads
-/// 0 with `burn_at` at the rig's clock, in the unit of the account its own pin sits on: a share of the 5-hour window
-/// on `business`, whose tier the harness names, with plan dollars of 0 on a model the harness's price list names, as
-/// it names every model these cases pin, and dollars with no window, no Pro-week figure and no plan dollars on the
-/// API-key account `direct`. A `context_pin` was written ten milliseconds before the rig's clock and refreshed at its
-/// last use, so its cache stays warm until that use plus the TTL. It rides the standard lane, and the harness's router
-/// prices no rewrite, so a line reads `fast` false and `move_cost` null.
+/// An agent line as the route answers it, under the harness pins' five-minute TTL, with the agent's lifecycle word
+/// where the engine holds its record. The harness pins burn nothing, so a line's burn reads 0 with `burn_at` at the
+/// rig's clock, in the unit of the account its own pin sits on: a share of the 5-hour window on `business`, whose tier
+/// the harness names, with plan dollars of 0 on a model the harness's price list names, as it names every model these
+/// cases pin, and dollars with no window, no Pro-week figure and no plan dollars on the API-key account `direct`. A
+/// `context_pin` was written ten milliseconds before the rig's clock and refreshed at its last use, so its cache stays
+/// warm until that use plus the TTL. It rides the standard lane, and the harness's router prices no rewrite, so a line
+/// reads `fast` false and `move_cost` null.
 // Each argument is a member the case pins, so a struct of them would only rename the call sites.
 #[allow(clippy::too_many_arguments)]
 fn agent_line(
@@ -9073,7 +9073,6 @@ fn agent_line(
         "burn_equivalent": plan.then_some(0.0),
         "burn_usd": plan.then_some(0.0),
         "burn_at": common::NOW,
-        "created_at": null,
         "pinned_at": common::NOW - 10,
         "ended": false,
         "fast": false,
@@ -9667,7 +9666,6 @@ async fn a_session_whose_one_pin_is_mains_auxiliary_one_reads_a_pinless_row_from
         "no conversation pin stands, so the row reads the ledger's model and serving account: {row}"
     );
     for member in [
-        "created_at",
         "last_used_at",
         "burn",
         "burn_unit",
@@ -9769,7 +9767,7 @@ async fn a_session_whose_every_request_was_refused_answers_its_newest_requests_c
 }
 
 #[tokio::test]
-async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and_a_second_pin_and_each_line_reads_its_own_agents(
+async fn across_a_failover_and_a_second_pin_the_row_answers_the_display_pins_model_and_pinned_at_and_each_line_its_own_pins(
 ) {
     use common::{get, json, login, NOW};
     use phoebis_routing::SelectResult;
@@ -9822,16 +9820,11 @@ async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = session_row(&sessions, "s2");
     assert_eq!(
-        (
-            row["model"].as_str(),
-            row["created_at"].as_i64(),
-            row["pinned_at"].as_i64()
-        ),
-        (Some("claude-opus-5"), Some(NOW), Some(NOW + 2_000)),
-        "the row reads main's newest conversation pin, the session's first placement and the instant that pin was \
-         written: {row}"
+        (row["model"].as_str(), row["pinned_at"].as_i64()),
+        (Some("claude-opus-5"), Some(NOW + 2_000)),
+        "the row reads main's newest conversation pin and the instant that pin was written: {row}"
     );
-    let lines: Vec<(&str, &str, Option<i64>, Option<i64>)> = row["agent_contexts"]
+    let lines: Vec<(&str, &str, Option<i64>)> = row["agent_contexts"]
         .as_array()
         .unwrap()
         .iter()
@@ -9839,7 +9832,6 @@ async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and
             (
                 line["agent_id"].as_str().unwrap(),
                 line["model"].as_str().unwrap(),
-                line["created_at"].as_i64(),
                 line["pinned_at"].as_i64(),
             )
         })
@@ -9847,142 +9839,11 @@ async fn a_sessions_creation_time_is_mains_first_placement_across_a_failover_and
     assert_eq!(
         lines,
         [
-            ("main", "claude-opus-5", Some(NOW), Some(NOW + 2_000)),
-            ("main", "claude-sonnet-5", Some(NOW), Some(NOW + 1_000)),
-            (
-                "worker-1",
-                "claude-sonnet-5",
-                Some(NOW + 3_000),
-                Some(NOW + 3_000)
-            ),
+            ("main", "claude-opus-5", Some(NOW + 2_000)),
+            ("main", "claude-sonnet-5", Some(NOW + 1_000)),
+            ("worker-1", "claude-sonnet-5", Some(NOW + 3_000)),
         ],
-        "each line reads its own agent's first placement and the instant its pin was written on its account, the \
-         failover's landing for main's first pin"
-    );
-}
-
-#[tokio::test]
-async fn a_pinless_row_whose_main_holds_an_auxiliary_pin_alone_reads_mains_record_as_its_creation_time(
-) {
-    use common::{login, wait_json, NOW};
-    use serde_json::json;
-    let seed = sessions_seed(|generation| {
-        vec![phoebis_store::PinRow {
-            auxiliary_only: true,
-            ..context_pin(
-                "s1",
-                "main",
-                "claude-haiku-4-5",
-                "business",
-                generation,
-                1_000,
-                NOW - 5,
-            )
-        }]
-    })
-    .await;
-    seed.store
-        .insert_first_seen(&phoebis_store::FirstSeenRow {
-            key_id: "desktop".into(),
-            session_id: "s1".into(),
-            agent_id: "main".into(),
-            first_seen_at: NOW - 1_000,
-        })
-        .unwrap();
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    parts.ledger.record(spelled_request(
-        "r-title",
-        "s1",
-        "main",
-        "claude-haiku-4-5",
-        NOW - 1_000,
-        common::generation(&parts.store, "desktop"),
-    ));
-    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        v["sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|r| r["session_id"] == "s1" && r["spend"]["requests"] == 1)
-    })
-    .await;
-    let row = session_row(&sessions, "s1");
-    assert_eq!(
-        (
-            row["pinned"].as_bool(),
-            row["created_at"].as_i64(),
-            row["agent_contexts"].clone()
-        ),
-        (Some(false), Some(NOW - 1_000), json!([])),
-        "the row holds no conversation pin and reads its creation time from main's record: {row}"
-    );
-}
-
-/// Main's auxiliary pin and the subagent's pin carry no record of main, as rows placed before the record existed do.
-#[tokio::test]
-async fn a_session_whose_main_has_no_record_reads_no_creation_time_while_its_subagents_line_reads_its_own(
-) {
-    use common::{login, wait_json, NOW};
-    let seed = sessions_seed(|generation| {
-        vec![
-            phoebis_store::PinRow {
-                auxiliary_only: true,
-                ..context_pin(
-                    "s1",
-                    "main",
-                    "claude-haiku-4-5",
-                    "business",
-                    generation,
-                    1_000,
-                    NOW - 5,
-                )
-            },
-            context_pin(
-                "s1",
-                "worker-1",
-                "claude-opus-5",
-                "direct",
-                generation,
-                25_000,
-                NOW - 50,
-            ),
-        ]
-    })
-    .await;
-    seed.store
-        .insert_first_seen(&phoebis_store::FirstSeenRow {
-            key_id: "desktop".into(),
-            session_id: "s1".into(),
-            agent_id: "worker-1".into(),
-            first_seen_at: NOW - 2_000,
-        })
-        .unwrap();
-    let parts = common::admin_parts_full_on(seed.store.clone()).await;
-    let cookie = login(&parts.app, "admin-secret").await;
-    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
-        v["sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|r| r["session_id"] == "s1")
-    })
-    .await;
-    let row = session_row(&sessions, "s1");
-    assert_eq!(
-        (
-            row["agent_id"].as_str(),
-            row["created_at"].clone(),
-            row["agent_contexts"][0]["agent_id"].as_str(),
-            row["agent_contexts"][0]["created_at"].as_i64()
-        ),
-        (
-            Some("worker-1"),
-            serde_json::Value::Null,
-            Some("worker-1"),
-            Some(NOW - 2_000)
-        ),
-        "the row reads the subagent's pin and no creation time, and the subagent's line its own record: {row}"
+        "each line reads the instant its pin was written on its account, the failover's landing for main's first pin"
     );
 }
 

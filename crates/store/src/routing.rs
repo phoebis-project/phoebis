@@ -397,15 +397,6 @@ pub struct ShedRoundRow {
     pub round_at: i64,
 }
 
-/// The first placement of an agent's pin under a key and session, kept until the session's last pin leaves.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FirstSeenRow {
-    pub key_id: String,
-    pub session_id: String,
-    pub agent_id: String,
-    pub first_seen_at: i64,
-}
-
 /// The share the router's own requests priced on one model week of an account in one clock hour, fenced by the
 /// account's incarnation as the window rows are.
 #[derive(Clone, Debug, PartialEq)]
@@ -435,7 +426,6 @@ pub struct RoutingLoad {
     pub affinity: Vec<AffinityRow>,
     pub cooldowns: Vec<CooldownRow>,
     pub credits: Vec<CreditsRow>,
-    pub first_seen: Vec<FirstSeenRow>,
     pub model_week_hours: Vec<ModelWeekHourRow>,
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
@@ -459,9 +449,6 @@ impl Store {
                  FROM usage_credits c JOIN accounts ON accounts.id = c.account_id AND accounts.incarnation = c.incarnation \
                  ORDER BY c.account_id")?
                 .query_map([], |r| Ok(CreditsRow { account_id: r.get(0)?, incarnation: r.get::<_, i64>(1)? as u64, enabled: r.get(2)?, disabled_reason: r.get(3)?, utilization: r.get(4)?, observed_at: r.get(5)? }))?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
-            first_seen: tx.prepare("SELECT key_id, session_id, agent_id, first_seen_at FROM session_first_seen ORDER BY key_id, session_id, agent_id")?
-                .query_map([], |r| Ok(FirstSeenRow { key_id: r.get(0)?, session_id: r.get(1)?, agent_id: r.get(2)?, first_seen_at: r.get(3)? }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's hours are never loaded.
             model_week_hours: tx.prepare("SELECT h.account_id, h.incarnation, h.window, h.hour, h.share \
@@ -579,12 +566,6 @@ impl Store {
         Ok(value)
     }
 
-    /// Deletes the first-seen rows of a session with no pin (an account's cascade, a lapsed failover), called by
-    /// `spawn` ahead of `load_routing`, never inside it.
-    pub fn sweep_first_seen(&self) -> Result<usize, StoreError> {
-        self.routing_transaction(|tx| sweep_first_seen_on(tx))
-    }
-
     pub fn purge_cooldowns_before(&self, now: i64) -> Result<usize, StoreError> {
         self.routing_transaction(|tx| {
             Ok(tx.execute("DELETE FROM cooldowns WHERE until < ?1", params![now])?)
@@ -621,18 +602,6 @@ impl Store {
     /// One transaction, as `upsert_pin` takes.
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
         self.routing_transaction(|tx| delete_pin_on(tx, key))
-    }
-
-    /// `INSERT OR REPLACE`: the router writes a record's row only when it creates the record, so a second write under
-    /// a key, session and agent follows the session's end, whose delete of the record a deferred write's fold may
-    /// have replaced with this write, and the new instant wins.
-    pub fn insert_first_seen(&self, row: &FirstSeenRow) -> Result<(), StoreError> {
-        self.routing_transaction(|tx| insert_first_seen_on(tx, row))
-    }
-
-    /// Every agent's row of the session, answering how many left.
-    pub fn delete_first_seen(&self, key_id: &str, session_id: &str) -> Result<usize, StoreError> {
-        self.routing_transaction(|tx| delete_first_seen_on(tx, key_id, session_id))
     }
 
     /// Every row lands or none does. A row under an existing (model, hash) replaces it.
@@ -744,30 +713,8 @@ impl RoutingTx<'_> {
         delete_cooldown_on(self.tx, account_id, scope)
     }
 
-    pub fn delete_first_seen(
-        &mut self,
-        key_id: &str,
-        session_id: &str,
-    ) -> Result<usize, StoreError> {
-        delete_first_seen_on(self.tx, key_id, session_id)
-    }
-
-    /// One agent's row of the session. Only the router's batches write it, so `Store` has no single-write form.
-    pub fn delete_first_seen_record(
-        &mut self,
-        key_id: &str,
-        session_id: &str,
-        agent_id: &str,
-    ) -> Result<usize, StoreError> {
-        delete_first_seen_record_on(self.tx, key_id, session_id, agent_id)
-    }
-
     pub fn delete_pin(&mut self, key: &PinKey) -> Result<bool, StoreError> {
         delete_pin_on(self.tx, key)
-    }
-
-    pub fn insert_first_seen(&mut self, row: &FirstSeenRow) -> Result<(), StoreError> {
-        insert_first_seen_on(self.tx, row)
     }
 
     /// Drops every model week hour numbered under `before`. Only the router's batches write the hours, so `Store` has
@@ -1102,57 +1049,12 @@ fn none_if_empty(text: String) -> Option<String> {
     Some(text).filter(|text| !text.is_empty())
 }
 
-/// The pin's row alone, whether it leaves for good or for a replacement: the session's first-seen rows leave by
-/// their records' own deletes.
+/// The pin's row alone, whether it leaves for good or for a replacement.
 fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
     let mut stmt = conn.prepare_cached(
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
     )?;
     Ok(stmt.execute(params![key.key_id, key.session_id, key.agent_id, key.model])? > 0)
-}
-
-fn sweep_first_seen_on(conn: &Connection) -> Result<usize, StoreError> {
-    Ok(conn.execute(
-        "DELETE FROM session_first_seen WHERE NOT EXISTS (SELECT 1 FROM pins WHERE pins.key_id = session_first_seen.key_id AND pins.session_id = session_first_seen.session_id)",
-        [],
-    )?)
-}
-
-fn insert_first_seen_on(conn: &Connection, row: &FirstSeenRow) -> Result<(), StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "INSERT OR REPLACE INTO session_first_seen (key_id, session_id, agent_id, first_seen_at) \
-         VALUES (?1, ?2, ?3, ?4)",
-    )?;
-    stmt.execute(params![
-        row.key_id,
-        row.session_id,
-        row.agent_id,
-        row.first_seen_at
-    ])?;
-    Ok(())
-}
-
-fn delete_first_seen_on(
-    conn: &Connection,
-    key_id: &str,
-    session_id: &str,
-) -> Result<usize, StoreError> {
-    Ok(conn.execute(
-        "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2",
-        params![key_id, session_id],
-    )?)
-}
-
-fn delete_first_seen_record_on(
-    conn: &Connection,
-    key_id: &str,
-    session_id: &str,
-    agent_id: &str,
-) -> Result<usize, StoreError> {
-    let mut stmt = conn.prepare_cached(
-        "DELETE FROM session_first_seen WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3",
-    )?;
-    Ok(stmt.execute(params![key_id, session_id, agent_id])?)
 }
 
 fn upsert_cooldown_on(conn: &Connection, row: &CooldownRow) -> Result<(), StoreError> {

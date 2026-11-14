@@ -1749,7 +1749,6 @@ fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) ->
         "burn_equivalent": 0.0,
         "burn_usd": 0.0,
         "burn_at": common::NOW,
-        "created_at": null,
         "pinned_at": common::NOW - 10,
         "ended": false,
         "fast": false,

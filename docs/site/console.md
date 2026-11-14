@@ -1267,9 +1267,9 @@ nothing for, since a partial sum would read as the whole, with `+ {dollars}` aft
 probes left out. The Session column is always drawn, and the sixteen others, which the bar's Columns control shows or
 hides, are Status, Agents, Model, Account, Requests, Cost, Last used and Cache, shown by default, then Companion,
 Context, Created, Effort, Key, Last request, Next probe and Runway, hidden by default. The rows follow the sort
-control: by the session's creation time, its first placement, by its last activity, the later of its last use and its
-last request, by the list dollars of its requests, which add across units, or by its requests, newest or largest first
-by default, ties by session id and a row without the value last, and the five-second re-read keeps a row's place under
+control: by the session's creation time, its first request, by its last activity, the later of its last use and its last
+request, by the list dollars of its requests, which add across units, or by its requests, newest or largest first by
+default, ties by session id and a row without the value last, and the five-second re-read keeps a row's place under
 Created. Session takes the card's free width and keeps at least 74 px, and a set of columns wider than the card scrolls
 inside it.
 
@@ -1320,7 +1320,7 @@ sentences and the next probe on hover. Of the optional columns, Companion reads 
 {ago}` under it, `silent` with how long it has been silent, or `none`. Context reads main's context in tokens, `184K`,
 with a dash for a session with no pin or no figure, and Effort the effort of its pin's last turn, `high`, with a dash
 for none, both from main's conversation pin (or, where main holds none, the newest conversation pin of another agent).
-Created reads the session's first placement as an age with the instant on hover, and Key links to the key's row in the
+Created reads the session's first request as an age with the instant on hover, and Key links to the key's row in the
 Keys view, with `deleted holder` under an earlier holder's. Last request reads the last request's instant, or `none`.
 Next probe reads the instant, "pending" or "not scheduled". Runway reads the time until the projection of the pin's
 account reaches the ceiling of the window that binds, among those the pin's model draws: a span such as `6 h 55 min`,
@@ -1338,29 +1338,29 @@ decisions an hour either side of its last activity.
 Opening a row reads, on a finished session, "The mod released every agent of this session. Each record leaves the engine
 one cache TTL after its release, and a record that held a slot of the agent cap keeps it until then." first, then two
 grids of facts side by side, one above the other where the open row is narrower than 620 px. Session reads Created
-(`{time}, {ago}`, the session's first placement, kept until its last pin leaves, or `unknown`), Key (`{key} in pool
-{pool}`, the key a link to its row in the Keys view, or `{key}, deleted holder` on an earlier holder's), Client (the
-client version, the user agent on hover), Fork (the base cut to 13 characters and whole on hover, a link to its row
-where the list holds it, the depth and the relation to the base's account, or `none`), Epoch and Companion, the
-Companion column's badge with `seen {ago}` or the time since it went silent. Routing reads Account (the link and
-`subscription` or `API key`, or `none`), Pinned since (the instant main's pin was written on the account it stands on,
-else the row's pin's, so a move starts it again), Shed mark (the `leaving` badge with the account the mark stands on and
-its window, or `none`), Moved (the stamp, a move that happened: `shed from {account}` after a shedding round or `failed
-over from {account}` after a failover's landing, with the instant, or `none`), Runway, Speed (the speed chip on a slowed
-session, else `full speed`) and Cycle (or `not measured yet`), and its title carries "View in routing log", the row
-menu's link.
+(`{time}, {ago}`, the first request the ledger holds of the session, which moves when the retention removes it, or
+`unknown` where it holds none), Key (`{key} in pool {pool}`, the key a link to its row in the Keys view, or `{key},
+deleted holder` on an earlier holder's), Client (the client version, the user agent on hover), Fork (the base cut to 13
+characters and whole on hover, a link to its row where the list holds it, the depth and the relation to the base's
+account, or `none`), Epoch and Companion, the Companion column's badge with `seen {ago}` or the time since it went
+silent. Routing reads Account (the link and `subscription` or `API key`, or `none`), Pinned since (the instant main's
+pin was written on the account it stands on, else the row's pin's, so a move starts it again), Shed mark (the `leaving`
+badge with the account the mark stands on and its window, or `none`), Moved (the stamp, a move that happened: `shed from
+{account}` after a shedding round or `failed over from {account}` after a failover's landing, with the instant, or
+`none`), Runway, Speed (the speed chip on a slowed session, else `full speed`) and Cycle (or `not measured yet`), and
+its title carries "View in routing log", the row menu's link.
 
 The Agents table under the facts lists one line per agent, main first (from its conversation pin or its recipe, or from
 the row where neither names main), then the lines with a lifecycle word grouped by that word (`busy` with `registered`,
 `idle`, `parked` with `unknown`, `released`), then the pins whose agent the mod does not report, inside each by the
-creation time or the last activity as the control orders the rows. Agent links to the request log on the session and the
-agent once the session has ledgered traffic, with the agent's last request and its pin's creation on hover. Type reads
-the agent's type from the ledger, breaking at its hyphen (`general-purpose`) where room runs out, and a dash on main.
-Model reads the line's model, short with the id on hover, and the effort of its pin's last turn under it. Account links
-to the line's account, its pin's or, where no pin stands, its recipe's, with its kind on hover, then the row's speed
-chip and `leaving` badge where the line sits on the row's account and the account's speed chip elsewhere while it is
-slowed, and reads `none` only where no pin stands and the recipe names no account. Context reads the pin's tokens, Burn
-the pin's burn per hour under the Unit setting as the Cost cell's line reads the row's, and Requests and Cost the
+agent's first request or the last activity as the control orders the rows. Agent links to the request log on the session
+and the agent once the session has ledgered traffic, with the agent's last request and its pin's creation on hover. Type
+reads the agent's type from the ledger, breaking at its hyphen (`general-purpose`) where room runs out, and a dash on
+main. Model reads the line's model, short with the id on hover, and the effort of its pin's last turn under it. Account
+links to the line's account, its pin's or, where no pin stands, its recipe's, with its kind on hover, then the row's
+speed chip and `leaving` badge where the line sits on the row's account and the account's speed chip elsewhere while it
+is slowed, and reads `none` only where no pin stands and the recipe names no account. Context reads the pin's tokens,
+Burn the pin's burn per hour under the Unit setting as the Cost cell's line reads the row's, and Requests and Cost the
 agent's requests over every model it ran and their spend, read as the row's Cost cell reads the session's, its "+N"
 naming the accounts other than the line's. Status reads the line's lifecycle word with its sentence and a parked agent's
 park on hover, or `unreported` where no mod reports the agent or the session, and Cache reads the pin's `warm` or `cold`

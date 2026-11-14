@@ -35,11 +35,8 @@ pub(crate) struct Session {
     /// of main, at or after `key_generation` and, on a historical row whose key id a live key holds, before that key's
     /// generation. 0 where the ledger holds none, as for a session the engine knows from a registration alone.
     pub placements: u64,
-    /// The first placement of the session's main agent under the key and session, kept until the session's last pin
-    /// leaves for good, so a failover, a move or a second pin leaves it alone. Null where main never placed a pin.
-    pub created_at: Option<i64>,
-    /// The instant the row's pin was written on the account it stands on, where `created_at` keeps the agent's first
-    /// placement under the key and session, which a move leaves alone. Null on a row with no pin.
+    /// The instant the row's pin was written on the account it stands on, which a move sets anew. Null on a row with
+    /// no pin.
     pub pinned_at: Option<i64>,
     /// The newest use across the session's conversation pins, main's and its agents', null without a pin.
     pub last_used_at: Option<i64>,
@@ -228,10 +225,7 @@ pub(crate) struct AgentContext {
     /// The instant the pin's served burn is decayed to, as the row's `burn_at`. Null for a pin never renewed with
     /// usage.
     pub burn_at: Option<i64>,
-    /// The first placement of the pin's agent under the key and session, null where no record stands.
-    pub created_at: Option<i64>,
-    /// The instant the pin was written on the account it stands on, as the row's `pinned_at`. `created_at` keeps
-    /// the agent's first placement.
+    /// The instant the pin was written on the account it stands on, as the row's `pinned_at`.
     pub pinned_at: i64,
     /// The pin's agent ended and its next request has not arrived. The router leaves such a pin out of a round.
     pub ended: bool,
@@ -446,12 +440,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         tables: &state.tables,
         now,
     };
-    // Every standing carries its session's creation time, an auxiliary-only one and one past the expiry among them,
-    // so a row reads it whichever pin, if any, the row shows.
-    let created: std::collections::BTreeMap<SessionSpendKey, i64> = pins
-        .iter()
-        .filter_map(|standing| Some((pin_key(&standing.pin)?, standing.session_first_seen_at?)))
-        .collect();
     // The router decays each pin's copies to the read and reads its runway in the same ask, so the burn priced below
     // and the runway are one instant's, and this crate projects nothing.
     for standing in pins.into_iter().filter(|s| s.pin.last_used_at >= cutoff) {
@@ -523,7 +511,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     key.key_generation,
                     &key.session_id,
                     Some(&p.model),
-                    created.get(key).copied(),
                 )
             },
         );
@@ -531,15 +518,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
         let key = activity_key(&a);
-        let created_at = created.get(&key).copied();
         let entry = rows.entry(key).or_insert_with(|| {
-            unpinned_row(
-                &a.key_id,
-                a.key_generation,
-                &a.session_id,
-                Some(&a.model),
-                created_at,
-            )
+            unpinned_row(&a.key_id, a.key_generation, &a.session_id, Some(&a.model))
         });
         entry.last_request_at = Some(a.last_request_at);
         entry.last_inference_at = a.last_inference_at;
@@ -553,13 +533,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     }
     for (key, view) in &engine {
         let entry = rows.entry(key.clone()).or_insert_with(|| {
-            unpinned_row(
-                &key.key_id,
-                key.key_generation,
-                &key.session_id,
-                None,
-                created.get(key).copied(),
-            )
+            unpinned_row(&key.key_id, key.key_generation, &key.session_id, None)
         });
         // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
         // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
@@ -666,7 +640,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     burn_equivalent: priced.equivalent,
                     burn_usd: priced.usd,
                     burn_at: priced.at,
-                    created_at: standing.first_seen_at,
                     pinned_at: pin.created_at,
                     ended: pin.ended,
                     fast: standing.fast,
@@ -876,14 +849,12 @@ fn unpinned_row(
     key_generation: i64,
     session_id: &str,
     model: Option<&str>,
-    created_at: Option<i64>,
 ) -> Session {
     Session {
         key_id: key_id.into(),
         key_generation,
         session_id: session_id.into(),
         model: model.map(String::from),
-        created_at,
         companion: NO_COMPANION.into(),
         ..Session::default()
     }

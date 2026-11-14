@@ -1156,7 +1156,6 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             Some("business")
         )
     );
-    assert!(rows[0]["created_at"].is_null());
 }
 
 /// The harness on the ledger's test cost model, where `claude-mystery-2` sits in a tier that weighs no model and

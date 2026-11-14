@@ -1442,10 +1442,6 @@ impl Store {
             params![SubjectKind::Key, id],
         )?;
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
-        tx.execute(
-            "DELETE FROM session_first_seen WHERE key_id = ?1",
-            params![id],
-        )?;
         // Nothing reads these rows again, since a key created under the id next takes a later generation;
         // dropping them here spares the retention purge a table of dead entries.
         tx.execute("DELETE FROM session_memory WHERE key_id = ?1", params![id])?;

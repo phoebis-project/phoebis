@@ -2653,10 +2653,8 @@ fn run(
                 request.now,
             );
         }
-        let first_seen = state.note_first_seen(&row, request.now);
         let handed = pin_ref(&row);
         writes.push(StateWrite::UpsertPin(row));
-        writes.extend(first_seen.map(StateWrite::InsertFirstSeen));
         handed
     });
     let mut trace_skipped: Vec<Skipped> = obstacles

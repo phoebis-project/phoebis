@@ -1,9 +1,9 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CompanionPermissions,
-    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, FirstSeenRow, OverageRow, PinBurn,
-    PinKey, PinMark, PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow,
-    ShedStamp, StorageKey, Store, WindowRow, WindowSetRow,
+    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, OverageRow, PinBurn, PinKey, PinMark,
+    PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey,
+    Store, WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -471,57 +471,10 @@ fn seed_key(store: &Store, id: &str) {
         .unwrap();
 }
 
-fn first_seen(key_id: &str, session_id: &str, agent_id: &str, first_seen_at: i64) -> FirstSeenRow {
-    FirstSeenRow {
-        key_id: key_id.into(),
-        session_id: session_id.into(),
-        agent_id: agent_id.into(),
-        first_seen_at,
-    }
-}
-
 #[test]
-fn the_first_seen_rows_keep_the_last_write_load_whole_and_leave_by_session_and_with_their_key() {
+fn a_keys_deletion_takes_its_pins_and_leaves_another_keys() {
     let store = store_with(&["a"]);
     seed_key(&store, "k");
-    store
-        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
-        .unwrap();
-    store
-        .insert_first_seen(&first_seen("k", "s", "main", 2_000))
-        .unwrap();
-    store
-        .insert_first_seen(&first_seen("k", "s", "sub-1", 1_500))
-        .unwrap();
-    store
-        .insert_first_seen(&first_seen("k", "t", "main", 3_000))
-        .unwrap();
-    store
-        .write_routing(|tx| tx.insert_first_seen(&first_seen("j", "s", "main", 4_000)))
-        .unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().first_seen,
-        [
-            first_seen("j", "s", "main", 4_000),
-            first_seen("k", "s", "main", 2_000),
-            first_seen("k", "s", "sub-1", 1_500),
-            first_seen("k", "t", "main", 3_000)
-        ],
-        "the load answers every row in key order, and a second write under one agent keeps its own instant"
-    );
-    assert_eq!(
-        store.delete_first_seen("k", "s").unwrap(),
-        2,
-        "every agent's row of the session leaves"
-    );
-    assert_eq!(
-        store.load_routing().unwrap().first_seen,
-        [
-            first_seen("j", "s", "main", 4_000),
-            first_seen("k", "t", "main", 3_000)
-        ],
-        "another session of the key and the session id under another key stay"
-    );
     store
         .upsert_pin(&pin("k", "t", "claude-opus-5-5", "a"))
         .unwrap();
@@ -529,123 +482,16 @@ fn the_first_seen_rows_keep_the_last_write_load_whole_and_leave_by_session_and_w
         .upsert_pin(&pin("j", "s", "claude-opus-5-5", "a"))
         .unwrap();
     store.delete_api_key("k", "test").unwrap();
-    let load = store.load_routing().unwrap();
-    assert_eq!(
-        (
-            load.first_seen,
-            load.pins
-                .into_iter()
-                .map(|p| (p.key_id, p.session_id))
-                .collect::<Vec<_>>()
-        ),
-        (
-            vec![first_seen("j", "s", "main", 4_000)],
-            vec![("j".to_string(), "s".to_string())]
-        ),
-        "the key's deletion takes its rows with its pins and leaves another key's"
-    );
     assert_eq!(
         store
-            .write_routing(|tx| tx.delete_first_seen("j", "s"))
-            .unwrap(),
-        1
-    );
-    assert!(store.load_routing().unwrap().first_seen.is_empty());
-}
-
-#[test]
-fn a_first_seen_records_delete_keeps_the_sessions_other_agent_and_the_agents_row_in_another_session(
-) {
-    let store = store_with(&["a"]);
-    for row in [
-        first_seen("k", "s", "main", 1_000),
-        first_seen("k", "s", "sub-1", 2_000),
-        first_seen("k", "t", "sub-1", 3_000),
-    ] {
-        store.insert_first_seen(&row).unwrap();
-    }
-    store
-        .write_routing(|tx| tx.delete_first_seen_record("k", "s", "sub-1"))
-        .unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().first_seen,
-        [
-            first_seen("k", "s", "main", 1_000),
-            first_seen("k", "t", "sub-1", 3_000)
-        ],
-        "the record's row leaves alone"
-    );
-}
-
-/// A guard: the plain delete is a replacement's, a move's or a failover's, whose new row lands after it.
-#[test]
-fn delete_pin_of_a_sessions_last_pin_keeps_its_first_seen_rows() {
-    let store = store_with(&["a"]);
-    let only = pin("k", "s", "claude-opus-5-5", "a");
-    store.upsert_pin(&only).unwrap();
-    store
-        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
-        .unwrap();
-    assert!(store.delete_pin(&only.key()).unwrap());
-    store.upsert_pin(&only).unwrap();
-    assert!(store
-        .write_routing(|tx| tx.delete_pin(&only.key()))
-        .unwrap());
-    let load = store.load_routing().unwrap();
-    assert_eq!(
-        (load.pins, load.first_seen),
-        (Vec::new(), vec![first_seen("k", "s", "main", 1_000)]),
-        "the pin leaves and the session's row stays"
-    );
-}
-
-/// A guard: a rekey deletes the pin under its spelling and writes it under the dated id in one transaction.
-#[test]
-fn a_rekey_moving_a_sessions_only_pin_keeps_its_first_seen_rows() {
-    let store = store_with(&["a"]);
-    store.upsert_pin(&spelling_pin()).unwrap();
-    store
-        .insert_first_seen(&first_seen("k", "s", "main", 1_000))
-        .unwrap();
-    store.rekey_resolution(&rekey_of_a()).unwrap();
-    let load = store.load_routing().unwrap();
-    assert_eq!(
-        (load.pins, load.first_seen),
-        (
-            rekey_of_a().upsert_pins,
-            vec![first_seen("k", "s", "main", 1_000)]
-        )
-    );
-}
-
-#[test]
-fn the_sweep_takes_the_first_seen_rows_of_a_session_whose_pins_an_accounts_deletion_cascaded_away()
-{
-    let store = store_with(&["a", "b"]);
-    store
-        .upsert_pin(&pin("k", "s", "claude-opus-5-5", "a"))
-        .unwrap();
-    store
-        .upsert_pin(&pin("k", "t", "claude-opus-5-5", "b"))
-        .unwrap();
-    for row in [
-        first_seen("k", "s", "main", 1_000),
-        first_seen("k", "s", "sub-1", 1_500),
-        first_seen("k", "t", "main", 2_000),
-    ] {
-        store.insert_first_seen(&row).unwrap();
-    }
-    store.delete_account("a", "test").unwrap();
-    assert_eq!(
-        store.load_routing().unwrap().first_seen.len(),
-        3,
-        "the load sweeps nothing, so a reader during a failover's gap keeps the session's rows"
-    );
-    assert_eq!(store.sweep_first_seen().unwrap(), 2);
-    assert_eq!(
-        store.load_routing().unwrap().first_seen,
-        [first_seen("k", "t", "main", 2_000)],
-        "a session that still holds a pin keeps its rows"
+            .load_routing()
+            .unwrap()
+            .pins
+            .into_iter()
+            .map(|p| (p.key_id, p.session_id))
+            .collect::<Vec<_>>(),
+        [("j".to_string(), "s".to_string())],
+        "the key's deletion takes its pins and leaves another key's"
     );
 }
 
@@ -969,7 +815,11 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "DROP TABLE thinking_bindings;
+        "CREATE TABLE session_first_seen (
+           key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
+           PRIMARY KEY (key_id, session_id, agent_id)
+         );
+         DROP TABLE thinking_bindings;
          ALTER TABLE pins DROP COLUMN thinking_sums;
          ALTER TABLE pools DROP COLUMN weekly_ceiling;
          ALTER TABLE pools RENAME COLUMN five_hour_ceiling TO window_ceiling;

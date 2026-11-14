@@ -127,9 +127,8 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, EvidenceSource,
-    FirstSeenRow, ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, RekeyWrite,
-    ResolutionRow, RoutingLoad, RoutingTx, ShedRoundRow, ShedStamp, ThinkingBindingRow, WindowRow,
-    WindowSetRow,
+    ModelWeekHourRow, OverageRow, PinBurn, PinKey, PinMark, PinRow, RekeyWrite, ResolutionRow,
+    RoutingLoad, RoutingTx, ShedRoundRow, ShedStamp, ThinkingBindingRow, WindowRow, WindowSetRow,
 };
 pub use schema::SCHEMA_VERSION;
 

@@ -792,7 +792,6 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines() {
             "burn_usd",
             "burn_window",
             "cache_ttl_ms",
-            "created_at",
             "effort",
             "ended",
             "fast",
@@ -806,25 +805,13 @@ async fn a_session_row_answers_its_effort_and_its_agent_lines() {
             "warm_until"
         ])
     );
-    for member in ["created_at", "effort"] {
-        assert!(
-            admits_null(&line["properties"][member]),
-            "AgentContext.{member}: a line answers null where the pin holds none: {line}"
-        );
-    }
+    assert!(
+        admits_null(&line["properties"]["effort"]),
+        "AgentContext.effort: a line answers null where the pin holds none: {line}"
+    );
     assert_eq!(
         line["properties"]["warm"]["type"], "boolean",
         "AgentContext.warm: {line}"
-    );
-}
-
-#[tokio::test]
-async fn a_session_rows_creation_time_answers_null_where_main_never_placed_a_pin() {
-    let (_app, _up, document) = document().await;
-    let schemas = &document["components"]["schemas"];
-    assert!(
-        admits_null(&schemas["Session"]["properties"]["created_at"]),
-        "a row whose main never placed a pin answers null"
     );
 }
 

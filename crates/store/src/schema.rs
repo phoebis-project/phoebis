@@ -5,7 +5,7 @@
 //! `registry_changes`, `session_memory`, `shed_rounds`, `usage_credits` and `usage_windows`, plus `meta` for the schema
 //! marker. Version 3 adds `usage_window_sets`. Version 7 adds the limit resets' three columns to `accounts`. Version 8
 //! adds `model_week_hours`, `pins.thinking_sums`, `pools.thinking_diagnostics`, `pools.weekly_ceiling` and
-//! `thinking_bindings`, and renames `pools.window_ceiling` to `five_hour_ceiling`.
+//! `thinking_bindings`, renames `pools.window_ceiling` to `five_hour_ceiling` and drops `session_first_seen`.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -263,7 +263,7 @@ CREATE INDEX IF NOT EXISTS guardrail_attachments_subject ON guardrail_attachment
 /// The pins carry the auxiliary-only mark, so a restart reads it from the row rather than deriving it from two
 /// stamps, and the effort of the request that placed or last renewed the pin, which the Sessions route answers.
 /// `session_first_seen` keeps when each agent of a session first placed a pin, a creation time a failover or a move
-/// leaves alone. The idle-return counters are kept per UTC day so the overview can answer a range, and the all-time
+/// leaves alone, until step 8 drops the table. The idle-return counters are kept per UTC day so the overview can answer a range, and the all-time
 /// rows leave with the old table, since a count with no day cannot be placed on one. The newest reading of each
 /// window keeps the plan and the tier it was taken under, so a reset prices a past week at that week's own tier.
 const V2: &str = r#"
@@ -335,7 +335,8 @@ ALTER TABLE accounts ADD COLUMN limit_resets_epoch INTEGER NOT NULL DEFAULT 0;
 /// stored before the step would read null. The pool's one ceiling becomes the 5-hour window's, and the weekly windows
 /// read 1.0 on a row at the old default 0.95 and the row's own fraction on any other, since an operator who lowered
 /// the one fraction held a weekly reserve that way. A pin stored before the step holds no thinking sum and the router
-/// has learned no binding, so each move prices the session's whole last prompt until an answer says more.
+/// has learned no binding, so each move prices the session's whole last prompt until an answer says more. The
+/// first-seen table has no reader left, since the Sessions route reads a session's first request from the ledger.
 const V8: &str = r#"
 CREATE TABLE model_week_hours (
     account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -358,6 +359,7 @@ CREATE TABLE thinking_bindings (
     observed_at INTEGER NOT NULL,
     PRIMARY KEY (model, account_a, account_b)
 );
+DROP TABLE session_first_seen;
 "#;
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
