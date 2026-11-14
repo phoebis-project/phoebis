@@ -9,7 +9,7 @@ import type {
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
-import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, ATTENTION_KIND_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
@@ -21,7 +21,7 @@ import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, type OrderKey } from '@/lib/requests';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, usageOf } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
-import { ATTENTION } from './attention';
+import { ATTENTION, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
@@ -878,20 +878,28 @@ export class MockApi implements Api {
     // until a disconnect deletes that credential.
     const held = pairing.label === undefined ? this.accounts.find((a) => a.id === pairing.accountId) : undefined;
     if (held?.id === 'legacy' && held.credential.refreshTokenExpiresAt !== null) throw new ApiError(409, `${held.label} holds a credential sealed under another storage key, so disconnect it before pairing again`, 'sealed_under_another_key');
+    // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
+    const tokens = { accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) };
     if (pairing.label !== undefined) {
       // The backstop for a create that landed between the start and the confirm.
       if (this.accounts.some((a) => a.id === pairing.accountId)) throw new ApiError(409, ACCOUNT_TAKEN, null);
       const row = this.newAccountRow({ id: pairing.accountId, kind: 'oauth', label: pairing.label, secret: null }, 'ready', 'operator+new@example.com');
-      // The confirm stores the tokens it exchanged, so the row carries both their expiries, as the router answers it.
-      this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, accessTokenExpiresAt: ahead(8 * HOUR), refreshTokenExpiresAt: ahead(30 * DAY) } }];
+      this.accounts = [...this.accounts, { ...row, credential: { ...row.credential, ...tokens } }];
     }
     // The router's confirm clears a plan-ended flag and records the plan found again only where the confirmed profile
     // reports a plan. The mock's profile is the stored document, so a document that names a free organization keeps
     // the flag, and a confirm that keeps it starts no first poll, since the poll's schedule reads no flagged account.
     const flagged = held !== undefined && held.planEndedAt !== null ? held : null;
     const kept = flagged !== null && !reportsPlan(flagged);
+    if (held !== undefined) {
+      // The router's pairing clears the stored reset block and moves its epoch, so the row reads no limit resets until
+      // the next read, whose member no token from before the pairing matches. The upstream's grants and uses stay in
+      // the block, since a pairing changes nothing upstream.
+      this.putAccount({ ...held, credential: { ...held.credential, ...tokens }, limitResets: null, ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
+      const block = lookup(this.resetBlocks, held.id);
+      if (block !== undefined) this.resetBlocks = { ...this.resetBlocks, [held.id]: { ...block, folds: block.folds + 1 } };
+    }
     if (flagged !== null && !kept) {
-      this.putAccount({ ...flagged, planEndedAt: null });
       const detail = { organization_type: flagged.subscription?.organizationType ?? null, rate_limit_tier: flagged.subscription?.rateLimitTier ?? null, source: 'pairing', subscription_status: 'active' };
       this.writeEvent('plan_restored', flagged.id, null, mockClock.now(), detail);
     }
@@ -1140,10 +1148,16 @@ export class MockApi implements Api {
 
   /**
    * The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them.
+   * The refresh tokens near their end are read off the live accounts, so a re-pair's new end clears its item, and they
+   * stand at their kind's rank, as the route ranks the kinds.
    */
   getAttention() {
     const { attention } = ledger();
-    return latency(this.parkedLanded ? attention.filter((i) => i.kind !== 'ledger_record_parked') : attention);
+    const listed = this.parkedLanded ? attention.filter((i) => i.kind !== 'ledger_record_parked') : attention;
+    const later: readonly string[] = ATTENTION_KIND_VALUES.slice(ATTENTION_KIND_VALUES.indexOf('pairing_expiring') + 1);
+    const ranked = listed.findIndex((i) => later.includes(i.kind));
+    const at = ranked < 0 ? listed.length : ranked;
+    return latency([...listed.slice(0, at), ...pairingExpiringOf(this.registry().accounts, NOW), ...listed.slice(at)]);
   }
 
   async getCapturedBodies(requestId: string) {
@@ -1394,12 +1408,15 @@ export class MockApi implements Api {
   async readLimitResets(accountId: string): Promise<LimitResetsRead> {
     const a = this.account(accountId);
     const at = mockClock.now();
-    const limitResets = decodeLimitResets(limitResetsWire(accountId, this.resetBlocks, at, incarnationOf(a)));
-    this.putAccount({ ...a, limitResets });
-    // The usage service refuses a read while the poll waits out a backoff, and the route answers the stored block.
+    // The usage service refuses a read while the poll waits out a backoff, and the route answers the stored block,
+    // which holds nothing once a pairing cleared it.
     const next = a.usage?.poll?.nextAttemptAt;
     const held = next !== null && next !== undefined && Date.parse(next) > at;
-    return latency({ error: held ? 'the account is waiting out a rate limit' : null, limitResets }, 400);
+    const error = held ? 'the account is waiting out a rate limit' : null;
+    if (held && a.limitResets === null) return latency({ error, limitResets: null }, 400);
+    const limitResets = decodeLimitResets(limitResetsWire(accountId, this.resetBlocks, at, incarnationOf(a)));
+    this.putAccount({ ...a, limitResets });
+    return latency({ error, limitResets }, 400);
   }
 
   refreshUsage(_accountId: string) {

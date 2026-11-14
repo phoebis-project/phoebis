@@ -6,6 +6,7 @@ import { useAppSettings } from '@/app/settings';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtDate, plural } from '@/lib/format';
 import { typedNumber, typedOf, type TypedField } from '@/lib/forms';
+import { fnv1a } from '@/lib/hash';
 import { useKeyedMap, useLatest } from '@/lib/hooks';
 import { floatAt, menuPlacement, type MenuAlign, type MenuPlacement } from '@/lib/menu';
 import type { BadgeTone } from '@/lib/quota';
@@ -15,13 +16,8 @@ import { useHold, useLeaveOnMove, useOutsidePress } from './overlay';
 import { blurLeaves, TABBABLE } from './Popover';
 
 const DescriptionHost = createContext<{ base: string; register: (text: string) => () => void } | null>(null);
-const fnv1a = (text: string): string => {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 0x01000193) >>> 0;
-  return hash.toString(16).padStart(8, '0');
-};
 // The id derives from the text, so a described element points at its entry in its first render, before the entry draws.
-const entryId = (base: string, text: string) => `${base}-${fnv1a(text)}`;
+const entryId = (base: string, text: string) => `${base}-${fnv1a(text).toString(16).padStart(8, '0')}`;
 
 /**
  * Holds the descriptions of the titled elements inside it in one hidden node after its content. A node beside each

@@ -45,5 +45,8 @@ export const foldSpeed = (r: Pick<RequestLog, 'attempts' | 'shape'>): string => 
 /** The serving attempt's cache-miss reason, the one the rollups count a request's reason on. */
 export const servedMissReason = (r: Pick<RequestLog, 'attempts'>): CacheMissReason | null => servingAttempt(r)?.cacheMissReason ?? null;
 
+/** An answer that read no cache though the diagnostics named no change, so its prefix expired between turns. */
+export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'usage'>): boolean => r.usage.cacheRead === 0 && servedMissReason(r) === 'none';
+
 /** The serving attempt's answer, where an attempt served the request. */
 export const servingResponse = (r: Pick<RequestLog, 'attempts'>): AttemptResponse | null => servingAttempt(r)?.response ?? null;

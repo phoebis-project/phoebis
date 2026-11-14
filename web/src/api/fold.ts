@@ -1,7 +1,7 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
+import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -309,7 +309,7 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else g.uncached += 1;
     const reason = servedMissReason(r);
     if (reason) g.cacheMissReasons[reason] = countOf(g.cacheMissReasons, reason) + 1;
-    if (reason === 'none' && r.usage.cacheRead === 0) g.expiredBetweenTurns += 1;
+    if (expiredBetweenTurns(r)) g.expiredBetweenTurns += 1;
   }
   for (const { group: g, rows: list } of groups.values()) {
     const pick = (read: (r: RequestLog) => number | null) => list.map(read).filter((v): v is number => v !== null);

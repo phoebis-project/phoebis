@@ -9,8 +9,9 @@ import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { NO_CLASS, NO_EFFORT, foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
+import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
@@ -29,18 +30,12 @@ const rng = createRng(7_331);
 const upstreamIds = createRng(9_191);
 const upstreamIdFrom = (stream: Rng) => (prefix: string) => `${prefix}${stream.uuid().replace(/-/g, '').slice(0, 22)}`;
 const upstreamId = upstreamIdFrom(upstreamIds);
-/** FNV-1a over a text: a figure taken from a row's own identity moves no seeded stream. */
-const hashOf = (text: string): number => {
-  let hash = 2_166_136_261;
-  for (let i = 0; i < text.length; i += 1) hash = Math.imul(hash ^ text.charCodeAt(i), 16_777_619) >>> 0;
-  return hash;
-};
 
 /**
  * A story attempt's upstream id, drawn from a stream seeded by the seed's id and the attempt's index, so a seed added
  * anywhere in the list moves no other row's ids. `storyRow` asks the message id first, then the request id.
  */
-const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) => string) => upstreamIdFrom(createRng(hashOf(`${seedId}/${attempt}`)));
+const storyUpstreamIds = (seedId: string, attempt: number): ((prefix: string) => string) => upstreamIdFrom(createRng(fnv1a(`${seedId}/${attempt}`)));
 // The instants inside a request (the write, the first content, the stream's close) draw from a stream of their own,
 // so they move no draw of the rows and no hint.
 const phaseRng = createRng(3_571);
@@ -2118,13 +2113,13 @@ function traceRequests() {
  * branched from another session the story seeds.
  */
 function identifyRequests() {
-  for (const r of REQUESTS) if (!STORY_IDS.has(r.id)) Object.assign(r, { forkDepth: null, forkedFrom: null });
+  for (const r of REQUESTS) if (drawnRow(r)) Object.assign(r, { forkDepth: null, forkedFrom: null });
   // A session's oldest row is its first request, and the rows run newest first, so the last one set per session
   // stays. A fork is a turn the log lists, never a probe, and its base another session the story seeds. Both forks
   // are pinned by identity, so neither moves with the load instant and the two never land on one row.
   // An unattended job's rows open no fork, since a fork is a turn an interactive session made.
   const oldest = new Map<string, RequestLog>();
-  for (const r of REQUESTS) if (r.sessionId !== null && r.keyId !== 'ci' && !STORY_IDS.has(r.id)) oldest.set(r.sessionId, r);
+  for (const r of REQUESTS) if (r.sessionId !== null && r.keyId !== 'ci' && drawnRow(r)) oldest.set(r.sessionId, r);
   const turnOf = (sessionId: string) => {
     const r = oldest.get(sessionId);
     return r?.kind === 'inference' ? r : undefined;
@@ -2387,7 +2382,7 @@ const HOUR_CLASSES: [string, number][] = [['auxiliary', 2], ['compaction', 1], [
 
 /** A class picked from the row's own identity rather than drawn, so no seeded stream moves. */
 function classOfHour(seed: string): string {
-  let roll = hashOf(seed) % HOUR_CLASSES.reduce((n, [, w]) => n + w, 0);
+  let roll = fnv1a(seed) % HOUR_CLASSES.reduce((n, [, w]) => n + w, 0);
   for (const [name, weight] of HOUR_CLASSES) {
     if (roll < weight) return name;
     roll -= weight;
@@ -2451,11 +2446,6 @@ function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
   const codes = emptyCounts();
   for (const r of rows) if (r.outcome === 'incomplete' && r.errorCode !== null) codes[r.errorCode] = countOf(codes, r.errorCode) + 1;
   return codes;
-}
-
-/** An answer that read no cache though the diagnostics named no change, so its prefix expired between turns. */
-export function expiredBetweenTurns(r: RequestLog): boolean {
-  return r.usage.cacheRead === 0 && servedMissReason(r) === 'none';
 }
 
 export function rollups(rows: RequestLog[]): HourlyRollup[] {

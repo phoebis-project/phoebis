@@ -650,6 +650,26 @@ test('a confirmed re-pair keeps a plan-ended flag and starts no first poll where
   }
 });
 
+test("a re-pair of a held account clears the row's limit resets and moves the revision of its resets, and a read during the poll's backoff keeps them cleared", async () => {
+  const api = await signedIn();
+  const repair = async (accountId) => {
+    const started = await api.startPairing({ accountId });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    return api.confirmPairing(started.id);
+  };
+  // Nightly holds a reset block, which the router's pairing clears from the store while it moves the block's epoch.
+  const before = (await api.readLimitResets('nightly')).limitResets.revision;
+  await repair('nightly');
+  assert.equal((await storyAccount(api, 'nightly')).limitResets, null, 'the confirm clears the limit resets the row read');
+  const after = (await api.readLimitResets('nightly')).limitResets.revision;
+  assert.notEqual(after, before, 'the next read answers a revision no token from before the pairing matches');
+  // Secondary's poll waits out a backoff that ends minutes past the story's clock, so the route answers the stored
+  // block, which the pairing cleared.
+  await repair('secondary');
+  const held = await api.readLimitResets('secondary');
+  assert.deepEqual([held.limitResets, (await storyAccount(api, 'secondary')).limitResets], [null, null], 'a read inside the backoff answers no member and stores none');
+});
+
 test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {
   const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';

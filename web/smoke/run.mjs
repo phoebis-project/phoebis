@@ -4755,7 +4755,9 @@ await forView(['/accounts', '/routing-log'], async () => {
   // and the mock's pending profile is that document, so its re-pair confirms a profile that reports no plan. The
   // router then keeps the plan-ended flag, writes no `plan_restored` event and starts no first poll: the detail keeps
   // its Plan ended row and the Usage card's plan-ended sentence, and the day's plan restored rows stay the story's own.
-  // The confirm stores nothing, so the checks after this one read the story as it was.
+  // The confirm stores the two token ends it exchanged and clears the row's limit resets, which sunset's ended plan
+  // already holds at none. Its new refresh token end lies 30 days out, past the three days that raise an item, as its
+  // seed's did, and no check after this one reads its token ends, so those checks read the story as it was.
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const day = { from: new Date(CLOCK_ORIGIN - 24 * 3_600_000).toISOString(), to: new Date(CLOCK_ORIGIN).toISOString() };
   const story = (await api.listRoutingLog({ ...day, kinds: ['plan_restored'] })).rows.map((e) => `event/${e.id}`);
