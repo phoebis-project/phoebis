@@ -4398,19 +4398,24 @@ fn a_fable_pin_moves_off_an_account_whose_five_hour_window_is_spent_though_its_f
         members: vec![("a", 0)],
         ..Pool::default()
     });
+    let d = decide(
+        &mut st,
+        &only_a,
+        &request(&only_a, Some("s2"), "claude-fable-5-1", true, &[], 3_000),
+        &mut rng(),
+    );
     assert_eq!(
-        select(
-            &mut st,
-            &only_a,
-            &request(&only_a, Some("s2"), "claude-fable-5-1", true, &[], 3_000),
-            &mut rng()
-        )
-        .0,
+        d.result,
         SelectResult::Exhausted(Exhaustion::Timed {
             deadline: 2 * HOUR,
             window: FIVE_HOUR.into()
         }),
         "a fresh Fable placement passes the account over, dated by the window that is spent"
+    );
+    assert_eq!(
+        ladder_of(&d.record),
+        None,
+        "the spent partition left no member, so the walk took no rung"
     );
 }
 
@@ -6648,7 +6653,8 @@ fn the_blocker_reads_each_candidate_itself_when_narrow_kept_the_wider_set() {
         ..Pool::default()
     });
     let mut st = RoutingState::from_load(RoutingLoad::default());
-    // Neither account has runway, so `no_fit` falls through to both.
+    // Neither account has runway, and both hold allowance at 0.96 with nothing burning, so the least-bad rung keeps
+    // both.
     st.record_sample("a", sample(0.96, 0.0, 1_000), 0);
     st.record_sample("b", sample(0.96, 0.0, 1_000), 0);
     seed_affinity(
@@ -20548,6 +20554,49 @@ fn the_least_bad_rung_lands_on_the_longest_runway_to_the_wall_over_a_higher_prio
 }
 
 #[test]
+fn a_runway_to_the_wall_past_its_reset_ranks_on_the_least_bad_rung_and_reads_unbounded_on_the_row()
+{
+    // a, spent on its 5-hour window, holds no allowance and carries the pool's one warm pin, whose ten-thousandth of
+    // the 5-hour window a second is a fresh session's burn. b outranks c.
+    let s = tiered(Pool {
+        members: vec![("a", 2), ("b", 0), ("c", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    // b: 0.97 and the body's rewrite of 0.02 leave 0.01 to 1.0, 100 s, past the 60 s to its 5-hour reset, and its
+    // week's 53 800 s pass its reset a minute out too. No window is short of its horizon, so the rank reads the
+    // shortest, 100 s, and the row, which leaves out a runway past its reset, reads none.
+    st.record_sample("b", refreshing(0.97, T + MINUTE, T + MINUTE, T - 500), 0);
+    // c: 0.96 and the rewrite leave 0.02, 200 s, short of the three hours to its reset.
+    st.record_sample(
+        "c",
+        refreshing(0.96, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    let d = decide(&mut st, &s, &placing(&s, "r-1", "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), None),
+        "b's 100 s past its reset still ranks it behind c's 200 s"
+    );
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("least_bad".into()))
+    );
+    assert_eq!(
+        fact(line(&d.record, "partitions"), "no_fit"),
+        &FactValue::Int(2)
+    );
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.fit, b.runway_ms, b.binding.as_deref()),
+        (Some("least_bad"), None, None),
+        "a runway past its window's reset reads unbounded on the row"
+    );
+}
+
+#[test]
 fn a_paid_member_with_a_full_bucket_ranks_at_zero_on_the_least_bad_rung() {
     // b, an api_key account, outranks c. a, spent on its 5-hour window, holds no allowance and carries the pool's one
     // warm pin, the fresh session's burn of a ten-thousandth of the 5-hour window a second.
@@ -20637,10 +20686,23 @@ fn a_member_inside_its_wind_down_with_allowance_takes_the_landing_over_a_spent_w
 
 #[test]
 fn with_no_member_holding_allowance_the_landing_stands_on_the_whole_set() {
-    let s = tiered(Pool {
-        members: vec![("a", 0), ("b", 1)],
-        ..Pool::default()
-    });
+    let mut terms = tier_terms(&["a", "b"]);
+    // b ends two hours out, inside its three hours of wind-down, and holds no allowance either, so it stays off the
+    // wind-down's rung.
+    terms[1].cancellation = Cancellation::On {
+        ends_at: Some(1_000 + 2 * HOUR),
+    };
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            failover: Failover {
+                wind_down_minutes: 180,
+                ..Failover::default()
+            },
+            ..Pool::default()
+        },
+        terms,
+    );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     st.record_sample("a", sample(0.1, 1.0, 1_000), 0);
     st.record_sample("b", sample(0.1, 1.0, 1_000), 0);

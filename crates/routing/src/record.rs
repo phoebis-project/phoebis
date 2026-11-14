@@ -301,7 +301,8 @@ pub struct CandidateFacts {
     pub verdict: &'static str,
     /// The request's fit on the member, filled where a move's gate read it or, for a placement, where the `no_fit`
     /// partition read it: the runway on the binding window (`None` for an unbounded one), the verdict (`ending`,
-    /// `fits`, `least_bad`, `rewrite_only`) and the window that binds.
+    /// `fits`, `least_bad`, `rewrite_only`) and the window that binds. On a landing a `least_bad` row states the
+    /// runway to 1.0 and its window.
     pub runway_ms: Option<i64>,
     pub fit: Option<&'static str>,
     pub binding: Option<String>,

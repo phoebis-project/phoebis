@@ -2442,7 +2442,8 @@ fn run(
         } else {
             ("every", Vec::new())
         };
-        ladder = Some(rung);
+        // A walk over no member takes no rung, so its record names none.
+        ladder = (!selection_set.is_empty()).then_some(rung);
         kept
     };
     partitions.push(narrow(
@@ -8410,8 +8411,9 @@ impl Readings<'_> {
             }
             "renewed" => (by("none", ""), self.renewal_fact()),
             "moved" => {
-                // A move continues as a fresh placement: its By says why it left, its Fact the runway the gate read
-                // on the destination, then where it landed, or the verdict in words when no candidate fit.
+                // A move continues as a fresh placement: its By says why it left, its Fact the runway of the
+                // destination's row (the gate's on a rule's move, the runway to 1.0 on a `least_bad` landing), then
+                // where it landed, or the verdict in words when no candidate fit.
                 let mut facts = Vec::new();
                 if let Some(member) = outcome.account_id.as_deref().and_then(|id| self.member(id)) {
                     facts.push(match member.runway_ms {

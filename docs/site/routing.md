@@ -392,10 +392,10 @@ ceiling, else those past the ceiling that hold allowance with the longest runway
 that hold allowance, else every account. An account holds no allowance where a shared window, or the model's own week on
 a request for such a model, reads at or above 1, so an account kept on extra usage under `allow` holds none. The longest
 runway reads across priorities, so an account of a lower priority with the longer runway takes the landing, and an
-API-key account whose bucket is full ranks at zero on the third rung. The decision record names the rung in the
-partitions line's `ladder` fact (`fits`, `rewrite_only`, `least_bad`, `ending` or `every`), and an account that reads
-`least_bad` states its runway to 1 on its row. An account winding down toward its subscription end (see
-**Subscription end**, below) is skipped for a fresh placement too while another account stands. A fresh session's fit
+API-key account whose bucket is full ranks at zero on the third rung. Where the walk holds an account, the decision
+record names the rung in the partitions line's `ladder` fact (`fits`, `rewrite_only`, `least_bad`, `ending` or `every`),
+and an account that reads `least_bad` states its runway to 1 on its row. An account winding down toward its subscription
+end (see **Subscription end**, below) is passed over while an account stands on a rung above it. A fresh session's fit
 reads the relay's estimate of the body's tokens as its rewrite and the median burn of the pool's warm sessions as its
 burn, each warm session's rate at the pace it would run unheld, and reads the account's own burn as the burn the
 sessions already on it would make unheld, so an account calm only because the slow-down holds its sessions reads as full
@@ -1332,11 +1332,12 @@ empty for a running plan, and the operator types the date the provider's billing
 A trial end still ahead counts as an end the same way, even on an account nobody has canceled.
 
 Inside `wind_down_minutes` (default 30) of its end, an account is no destination for any move, leaves the set a fresh
-placement keeps for its fit, takes a fresh session only as the last resort, and a cold pin moves off it once another
-account can serve ([Moves](#moves)). A warm session stays (the **Drain** rule of [Moves](#moves)). With
-`wind_down_minutes` at 0 nothing happens before the end, apart from the keepalive, which holds a probe whose interval
-passes the end ([Keepalive](keepalive.md)). Past the end, a canceled account is the obstacle `subscription_ended`, and
-the upstream refuses the dead credential, so the session's next request fails over to a sibling.
+placement keeps for its fit, takes a fresh session only where no account stands on a rung above it, and a cold pin moves
+off it once another account can serve ([Moves](#moves)). A warm session stays (the **Drain** rule of [Moves](#moves)).
+With `wind_down_minutes` at 0 nothing happens before the end, apart from the keepalive, which holds a probe whose
+interval passes the end ([Keepalive](keepalive.md)). Past the end, a canceled account is the obstacle
+`subscription_ended`, and the upstream refuses the dead credential, so the session's next request fails over to a
+sibling.
 
 An end that falls before a window's horizon becomes that horizon ([The windows the router works
 from](#the-windows-the-router-works-from)). Such a window sheds only once the account's projection at the end passes the

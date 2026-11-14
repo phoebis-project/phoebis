@@ -408,9 +408,9 @@ pub(crate) struct DecisionRecord {
     /// elsewhere), `window`, `until`), `partition`, `rank`, `score`, `verdict` (`chosen`, `renewed`, `held_on`,
     /// `source`, `destination`, `eligible`, `ranked`, `out` or `not_needed`), `runway_ms`, `fit` (`ending`, `fits`,
     /// `least_bad` or `rewrite_only`) and `binding` (the request's fit where a move's gate or the `no_fit` partition
-    /// read it, the runway null when unbounded), `burn` (the pins' burn by plan window, share per hour), `factor` (the
-    /// member's slow-down factor as the last pinned selection on it read it, null with no read or on a pool whose
-    /// slow-down is off).
+    /// read it, the runway null when unbounded, and on a landing a `least_bad` row's runway to 1.0 and its window),
+    /// `burn` (the pins' burn by plan window, share per hour), `factor` (the member's slow-down factor as the last
+    /// pinned selection on it read it, null with no read or on a pool whose slow-down is off).
     #[schema(value_type = Vec<Object>)]
     pub candidates: Vec<Value>,
     /// The steps in the order the engine ran them, each `step`, `verdict` and `facts`, each fact `key`, `value`,
