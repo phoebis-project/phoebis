@@ -213,7 +213,7 @@ pub(crate) fn same_lane(stored: &str, lane: &str) -> bool {
 }
 
 /// Whether `lane` is a fast one: its speed part, the second of the three after the model, reads `fast`.
-fn lane_is_fast(lane: &str) -> bool {
+pub(crate) fn lane_is_fast(lane: &str) -> bool {
     lane_parts(lane)[2] == Some("fast")
 }
 
@@ -5145,6 +5145,76 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
     }
 }
 
+/// The request a standing pin is read by outside a round, shaped from the pin's own facts as `pin_request` shapes
+/// another pin of a round: its key, its model, its lane with the lane's speed and its entrypoint. No request stands
+/// behind a standing, so it holds no body estimate and no candidates, and every other member reads empty.
+pub(crate) fn standing_request(pin: &PinRow) -> SelectRequest {
+    // Every member is written out, so a member the type gains states its value for a standing too.
+    SelectRequest {
+        request_id: String::new(),
+        attempt: 0,
+        seq: 0,
+        key_id: pin.key_id.clone(),
+        key_generation: pin.key_generation,
+        agent_id: pin.agent_id.clone(),
+        session_id: pin.session_id.clone(),
+        canonical_model: pin.model.clone(),
+        folded_model: pin.model.clone(),
+        candidates: Vec::new(),
+        portable: false,
+        credit_account: None,
+        attempted: Vec::new(),
+        now: 0,
+        received_at: 0,
+        fallback_ms: 0,
+        revision: 0,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        boundaries: Arc::from([]),
+        client: ClientClass::Other,
+        entrypoint: pin.entrypoint.clone(),
+        static_boundaries: Arc::from([]),
+        marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
+        failed_over: None,
+        dialed: false,
+        held_out: false,
+        lane: pin.lane.clone(),
+        fast: lane_is_fast(&pin.lane),
+        classifier: false,
+        body_tokens: 0,
+        effort: None,
+    }
+}
+
+/// The figure a shedding round's pick compares for a pin: the Pro share its rewrite spends on the week its model
+/// draws. None where the cost model weighs no rewrite of the model on that week or the pin holds no prompt size. The
+/// week is the scarce window, since the 5-hour window refills, and a Fable pin's cost carries its week's factor. The
+/// cost is the pin's alone, the same on every destination: a figure that read 0 on one kind of sibling would turn the
+/// pick into a destination preference, which is the gate's to make. `req` is the request `pin_request` shapes for the
+/// pin in a round, or `standing_request`'s for a standing pin.
+pub(crate) fn move_cost(
+    state: &RoutingState,
+    req: &SelectRequest,
+    pin: &PinRow,
+    now: i64,
+) -> Option<f64> {
+    let model = req.canonical_model.as_str();
+    state
+        .share()
+        .equivalent(
+            window_for(model),
+            req.entrypoint.as_deref(),
+            model,
+            rewrite_write(req, Some(pin)),
+            now,
+        )
+        .filter(|share| *share > 0.0)
+}
+
 /// The shed rule's destination for `pin` among the eligible siblings, as its own move would read it: the no-return
 /// keep, the allowance filter and the cap as `gate` applies them, the order `fits` alone ranked by the strategy with
 /// the longest runway breaking its tie, as `rank` reads them, so the plan names the account the pin's own move lands
@@ -5473,20 +5543,13 @@ fn shed_round(
         );
         read.runway_ms = fit.runway_ms;
         let model = req.canonical_model.as_str();
-        // The move's cost is the Pro share the rewrite spends on the scarce weekly window its model draws, since the
-        // 5-hour window refills, and a Fable pin's cost carries its week's factor. The cost is the pin's alone, the
-        // same on every destination: a figure that read 0 on one kind of sibling would turn the pick into a destination
-        // preference, which is the gate's to make. The record shows the Pro-week figure, one unit for every pin.
+        read.cost = move_cost(state, &req, p, now);
+        // The record shows the Pro-week figure, one unit for every pin.
         let write = rewrite_write(&req, Some(p));
-        let entrypoint = req.entrypoint.as_deref();
-        let pro_share = |window: &str| {
-            state
-                .share()
-                .equivalent(window, entrypoint, model, write, now)
-                .filter(|share| *share > 0.0)
-        };
-        read.cost = pro_share(window_for(model));
-        read.rewrite = pro_share(SEVEN_DAY);
+        read.rewrite = state
+            .share()
+            .equivalent(SEVEN_DAY, req.entrypoint.as_deref(), model, write, now)
+            .filter(|share| *share > 0.0);
         read.rewrite_window = read.cost.map(|_| window_for(model));
         let booking = Reservation {
             account_id: destination,

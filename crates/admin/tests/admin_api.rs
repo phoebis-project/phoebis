@@ -6949,6 +6949,81 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     .await;
 }
 
+/// A cost model that weighs Fable at 4 units a token and sizes the Fable week at half the 7-day window, so a Fable
+/// pin's rewrite reads twice the share on its week that it reads on the 7-day window.
+const FABLE_WEEK_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      default_claude_ai:      {five_hour: 1000000, seven_day: 10000000}
+      default_claude_max_20x: {five_hour: 20000000, seven_day: 200000000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-fable-5-1: 4
+    model_windows:
+      seven_day_fable: {capacity_factor: 0.5, of: seven_day}
+    overrides: {}
+    tier_order: [fable]
+    model_tier:
+      claude-fable-5-1: fable
+";
+
+#[tokio::test]
+async fn a_fable_pins_move_cost_reads_its_rewrites_pro_share_of_the_fable_week_on_the_row_and_its_line(
+) {
+    use common::{get, json, login};
+    let now = common::NOW;
+    let tables = phoebis_ledger::PlanTables {
+        revisions: phoebis_ledger::CostRevisions::from_yaml(FABLE_WEEK_COSTS)
+            .expect("the cost model with a Fable week parses"),
+        path: None,
+        source: "test".to_string(),
+    };
+    // A warm pin whose last prompt of 1,000 tokens a move rewrites as one 5-minute write.
+    let seed = sessions_seed(|generation| {
+        vec![phoebis_store::PinRow {
+            model: "claude-fable-5-1".into(),
+            lane: phoebis_routing::lane_key("claude-fable-5-1", "standard", "none", "-"),
+            ..burning_opus_pin("s1", "business", generation, now, 100.0, 145.0)
+        }]
+    })
+    .await;
+    let parts = common::admin_parts_full_on_equivalent(
+        seed.store.clone(),
+        tables,
+        phoebis_ledger::LedgerConfig::default(),
+    )
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let row = session_row(
+        &json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await,
+        "s1",
+    );
+    // 1,000 tokens at the 5-minute write's multiplier of 2 and Fable's weight of 4 are 8,000 units. Over the anchor's
+    // 10,000,000 on the week they are 0.0008 of the 7-day window, and over the Fable week's factor of 0.5 they are
+    // 0.0016 of the Fable week.
+    let fable_week_share = 0.0016;
+    let close = |a: Option<f64>| {
+        a.is_some_and(|a| (a - fable_week_share).abs() <= fable_week_share * 1e-12)
+    };
+    assert!(
+        close(row["move_cost"].as_f64()),
+        "the row answers the rewrite as its Pro share of the Fable week, twice the 7-day window's 0.0008: {row}"
+    );
+    let line = &row["agent_contexts"][0];
+    assert!(
+        close(line["move_cost"].as_f64()),
+        "the pin's line answers the row's figure: {line}"
+    );
+}
+
 #[tokio::test]
 async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects() {
     use common::{get, json, login, patch, wait_json};
@@ -8891,7 +8966,8 @@ fn dropped_members(row: &serde_json::Value) -> Vec<String> {
 /// on `business`, whose tier the harness names, with plan dollars of 0 on a model the harness's price list names, as
 /// it names every model these cases pin, and dollars with no window, no Pro-week figure and no plan dollars on the
 /// API-key account `direct`. A `context_pin` was written ten milliseconds before the rig's clock and refreshed at its
-/// last use, so its cache stays warm until that use plus the TTL.
+/// last use, so its cache stays warm until that use plus the TTL. It rides the standard lane, and the harness's router
+/// prices no rewrite, so a line reads `fast` false and `move_cost` null.
 // Each argument is a member the case pins, so a struct of them would only rename the call sites.
 #[allow(clippy::too_many_arguments)]
 fn agent_line(
@@ -8924,6 +9000,8 @@ fn agent_line(
         "created_at": null,
         "pinned_at": common::NOW - 10,
         "ended": false,
+        "fast": false,
+        "move_cost": null,
         "lifecycle": lifecycle,
     })
 }

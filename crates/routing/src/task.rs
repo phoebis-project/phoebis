@@ -25,9 +25,10 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    budget_facts, burn_unit, decide, mark_cleared_of, move_word, obstacle, pace_of, passes_reset,
-    projection_of, projections_of, release_reasons, slow_down_ramp, BurnRead, Decided, FailedOver,
-    Obstacle, Refusal, SelectRequest, SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
+    budget_facts, burn_unit, decide, lane_is_fast, mark_cleared_of, move_cost, move_word, obstacle,
+    pace_of, passes_reset, projection_of, projections_of, release_reasons, slow_down_ramp,
+    standing_request, BurnRead, Decided, FailedOver, Obstacle, Refusal, SelectRequest,
+    SelectResult, MAIN_AGENT, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -1386,6 +1387,15 @@ pub struct PinStanding {
     pub first_seen_at: Option<i64>,
     /// The first placement of the session's main agent, `None` where main never placed a pin.
     pub session_first_seen_at: Option<i64>,
+    /// The pin's lane is the fast lane, by the test a shedding round reads to leave a fast-lane pin out of a
+    /// window-share round.
+    pub fast: bool,
+    /// The figure a shedding round's pick compares for the pin, read from the pin's own facts: the Pro share its
+    /// rewrite spends on the week its model draws, the Fable week for a model that draws it and the 7-day window
+    /// otherwise. `None` where the round's figure is none: the cost model weighs no rewrite of the model on that week,
+    /// or the pin holds no prompt size. A reader takes a `None` as 0, as the pick does. The figure stands whatever the
+    /// pin's warmth, where the pick reads a cold pin's move at 0 unless the pool's `warm_sessions` is `always`.
+    pub move_cost: Option<f64>,
 }
 
 /// A standing pin's account as the slow-down entry in force reads it.
@@ -2881,6 +2891,8 @@ fn pins_standing(
             let auxiliary_only = state.auxiliary_only(&pin.key());
             let first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, &pin.agent_id);
             let session_first_seen_at = state.first_seen(&pin.key_id, &pin.session_id, MAIN_AGENT);
+            let fast = lane_is_fast(&pin.lane);
+            let cost = move_cost(state, &standing_request(&pin), &pin, now);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 burn_unit,
@@ -2892,6 +2904,8 @@ fn pins_standing(
                 auxiliary_only,
                 first_seen_at,
                 session_first_seen_at,
+                fast,
+                move_cost: cost,
             }
         })
         .collect()

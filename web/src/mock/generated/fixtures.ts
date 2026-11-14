@@ -24798,6 +24798,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_refresh_at": 1791721000000,
           "shed": null,
           "mark": null,
+          "ended": false,
+          "fast": false,
+          "move_cost": null,
           "historical": false,
           "companion": "none",
           "companion_since": null,
@@ -24822,6 +24825,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "created_at": 1791721000000,
               "pinned_at": 1791721000000,
               "ended": false,
+              "fast": false,
+              "move_cost": null,
               "lifecycle": null
             }
           ],
@@ -24903,6 +24908,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_refresh_at": 1791721000000,
           "shed": null,
           "mark": null,
+          "ended": false,
+          "fast": false,
+          "move_cost": null,
           "historical": false,
           "companion": "none",
           "companion_since": null,
@@ -24927,6 +24935,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "created_at": 1791721000000,
               "pinned_at": 1791721000000,
               "ended": false,
+              "fast": false,
+              "move_cost": null,
               "lifecycle": null
             }
           ],
@@ -24985,6 +24995,9 @@ export const FIXTURES: Record<string, Fixture> = {
             "reason": "cooldown"
           },
           "mark": null,
+          "ended": false,
+          "fast": false,
+          "move_cost": null,
           "historical": false,
           "companion": "none",
           "companion_since": null,
@@ -25009,6 +25022,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "created_at": 1791631000000,
               "pinned_at": 1791631001000,
               "ended": false,
+              "fast": false,
+              "move_cost": null,
               "lifecycle": null
             }
           ],
@@ -25095,6 +25110,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_refresh_at": 1791717340000,
           "shed": null,
           "mark": null,
+          "ended": false,
+          "fast": false,
+          "move_cost": 0.0010833333333333333,
           "historical": false,
           "companion": "reporting",
           "companion_since": null,
@@ -25119,6 +25137,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "created_at": 1791717340000,
               "pinned_at": 1791717340000,
               "ended": false,
+              "fast": false,
+              "move_cost": 0.0010833333333333333,
               "lifecycle": "busy"
             },
             {
@@ -25140,6 +25160,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "created_at": 1791717340000,
               "pinned_at": 1791717340000,
               "ended": false,
+              "fast": false,
+              "move_cost": 0.0006458333333333333,
               "lifecycle": "busy"
             },
             {
@@ -25161,6 +25183,8 @@ export const FIXTURES: Record<string, Fixture> = {
               "created_at": 1791717340000,
               "pinned_at": 1791717340000,
               "ended": true,
+              "fast": false,
+              "move_cost": 0.00038541666666666667,
               "lifecycle": "registered"
             }
           ],
@@ -25317,6 +25341,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_refresh_at": null,
           "shed": null,
           "mark": null,
+          "ended": null,
+          "fast": null,
+          "move_cost": null,
           "historical": false,
           "companion": "none",
           "companion_since": null,
@@ -25418,6 +25445,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_refresh_at": null,
           "shed": null,
           "mark": null,
+          "ended": null,
+          "fast": null,
+          "move_cost": null,
           "historical": false,
           "companion": "none",
           "companion_since": null,
@@ -25521,6 +25551,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "last_refresh_at": null,
           "shed": null,
           "mark": null,
+          "ended": null,
+          "fast": null,
+          "move_cost": null,
           "historical": true,
           "companion": "none",
           "companion_since": null,

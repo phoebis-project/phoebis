@@ -21,7 +21,7 @@ pub(crate) struct SessionList {
     pub sessions: Vec<Session>,
 }
 
-/// One session row. On a row with no pin `pinned_at` and the keys from `burn` to `mark` read null.
+/// One session row. On a row with no pin `pinned_at` and the keys from `burn` to `move_cost` read null.
 #[derive(Default, serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Session {
@@ -108,6 +108,17 @@ pub(crate) struct Session {
     pub shed: Option<SessionShed>,
     /// Null where the pin holds no mark and on a row with no pin.
     pub mark: Option<SessionMark>,
+    /// The display pin's agent ended and its next request has not arrived, as the line's `ended`. Null on a row with
+    /// no pin.
+    pub ended: Option<bool>,
+    /// The display pin's lane is the fast lane, as a shedding round tests it. Null on a row with no pin.
+    pub fast: Option<bool>,
+    /// The figure a shedding round's pick compares for the display pin: the Pro share its rewrite spends on the week
+    /// its model draws, the Fable week for a model that draws it and the 7-day window otherwise. Null where the
+    /// round's figure is none, since the cost model weighs no rewrite of the model on that week or the pin holds no
+    /// prompt size, and on a row with no pin. A reader takes a null as 0, as the pick does. The figure stands whatever
+    /// the pin's warmth, where the pick reads a cold pin's move at 0 unless the pool's `warm_sessions` is `always`.
+    pub move_cost: Option<f64>,
     pub historical: bool,
     /// `reporting`, `silent`, or `none`.
     #[schema(example = "reporting")]
@@ -212,6 +223,11 @@ pub(crate) struct AgentContext {
     pub pinned_at: i64,
     /// The pin's agent ended and its next request has not arrived. The router leaves such a pin out of a round.
     pub ended: bool,
+    /// The pin's lane is the fast lane, as the row's `fast`.
+    pub fast: bool,
+    /// The figure a shedding round's pick compares for this pin, as the row's `move_cost`. Null where the cost model
+    /// weighs no rewrite of the model on the week it draws or the pin holds no prompt size.
+    pub move_cost: Option<f64>,
     /// The agent's lifecycle word from the keepalive engine's record: `busy`, `idle`, `parked`, `registered`,
     /// `released` or `unknown`, where `registered` is an agent busy awaiting a real request since the mod registered it
     /// or started it again. Null where no mod reports it.
@@ -481,6 +497,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     at: mark.at,
                     window: mark.window.clone(),
                 }),
+                ended: Some(p.ended),
+                fast: Some(standing.fast),
+                move_cost: standing.move_cost,
                 pinned_at: Some(p.created_at),
                 ..unpinned_row(
                     &key.0,
@@ -626,6 +645,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                     created_at: standing.first_seen_at,
                     pinned_at: pin.created_at,
                     ended: pin.ended,
+                    fast: standing.fast,
+                    move_cost: standing.move_cost,
                     lifecycle: view
                         .and_then(|view| view.lifecycles.get(&pin.agent_id))
                         .map(|&lifecycle| lifecycle_word(lifecycle).into()),

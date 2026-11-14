@@ -1728,7 +1728,8 @@ async fn lines(
 /// lifecycle word where the engine holds its record. A `line_pin` burns nothing on the plan account `business`, whose
 /// tier `lines_harness` leaves unnamed, so its burn is a 5-hour share the route cannot size, its Pro-week figure 0 and
 /// its plan dollars 0 on a model the harness's price list names, as it names every model these cases pin. Its cache
-/// stays warm until its refresh five milliseconds back plus its TTL, and it was written ten milliseconds back.
+/// stays warm until its refresh five milliseconds back plus its TTL, and it was written ten milliseconds back. It rides
+/// the standard lane, and the harness's router prices no rewrite, so a line reads `fast` false and `move_cost` null.
 fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "agent_id": agent,
@@ -1749,6 +1750,8 @@ fn line(agent: &str, model: &str, last_used_at: i64, lifecycle: Option<&str>) ->
         "created_at": null,
         "pinned_at": common::NOW - 10,
         "ended": false,
+        "fast": false,
+        "move_cost": null,
         "lifecycle": lifecycle,
     })
 }

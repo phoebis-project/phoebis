@@ -183,8 +183,30 @@ pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
 /// The full harness over a store the caller holds, its ledger's event mirror ticking every `event_poll` rather than
 /// the default's 5 s, so a wait for the mirror's copy of a registry write costs a tick of that length. The same
 /// interval paces the writer's revision poll, which lands pending budget rows, and the retry of a failed spend read on
-/// the ledger's clock, so a budget row a seed provokes lands on that cadence as well.
+/// the ledger's clock, so a budget row a seed provokes lands on that cadence as well. Its router prices a pin's rewrite
+/// through the shipped cost model, as `admin_parts_full_on_equivalent` wires it.
 pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration) -> Full {
+    admin_parts_full_on_equivalent(
+        store,
+        PlanTables::shipped(),
+        LedgerConfig {
+            event_poll,
+            ..LedgerConfig::default()
+        },
+    )
+    .await
+}
+
+/// The full harness over a store the caller holds, reading the cost model `costs` and its ledger on `ledger_config`,
+/// with its router pricing a pin's rewrite as the Pro share of a window through `costs`, as the router's start wires
+/// `SharePricer::with_equivalent`, where the default pricer prices nothing: a case reads a move's cost worked from its
+/// own cost model.
+pub async fn admin_parts_full_on_equivalent(
+    store: Arc<Store>,
+    costs: PlanTables,
+    ledger_config: LedgerConfig,
+) -> Full {
+    let tables = costs.clone();
     full_from(
         build_app_routed(
             None,
@@ -194,12 +216,16 @@ pub async fn admin_parts_full_on_polled(store: Arc<Store>, event_poll: Duration)
             None,
             None,
             None,
-            None,
-            RouterConfig::default(),
-            LedgerConfig {
-                event_poll,
-                ..LedgerConfig::default()
+            Some(costs),
+            RouterConfig {
+                share: SharePricer::default().with_equivalent(
+                    move |window, entrypoint, model, usage, at| {
+                        tables.equivalent_at(window, entrypoint, model, usage, at, at, at)
+                    },
+                ),
+                ..RouterConfig::default()
             },
+            ledger_config,
         )
         .await,
     )
