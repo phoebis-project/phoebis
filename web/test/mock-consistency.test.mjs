@@ -995,9 +995,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(Date.parse(exhausted[0].nextProbeAt) > s.now, `its next probe ${exhausted[0].nextProbeAt} lies ahead of the story's now`);
     const overview = await s.api.getKeepaliveOverview();
     // The engine's cap counts every record it holds, the idle recipe of the row two hours back among them, which the
-    // route's list leaves out. The session specs the mod registered or a recipe warms hold 31 agents, the
+    // route's list leaves out. The session specs the mod registered or a recipe warms hold 32 agents, the
     // registration-only row none, and the auxiliary-only row its one subagent.
-    assert.equal(overview.limits.agents.count, 32, 'the cap counts every record');
+    assert.equal(overview.limits.agents.count, 33, 'the cap counts every record');
   });
 
   test(`the all-released session lists every record released, keeps its row and the pin its last probe renewed, at ${at}`, async () => {
@@ -2401,7 +2401,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok((kept.runwayMs ?? Number.POSITIVE_INFINITY) > (other.runwayMs ?? Number.POSITIVE_INFINITY), `${kept.runwayMs} over ${other.runwayMs}`);
   });
 
-  test(`the story lists three forks, one on its base's account, one on another and one without a pin, at ${at}`, async () => {
+  test(`the story lists three forks, at 14:30 two on their base's account and one without a pin, at 03:40 all three on their base's account, at ${at}`, async () => {
     const s = await story;
     const forks = s.sessions.filter((x) => x.forkedFrom !== null);
     assert.equal(forks.length, 3, `${forks.length} forks are listed`);
@@ -2410,15 +2410,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.ok(base, `${fork.sessionId}'s base ${fork.forkedFrom} is listed under ${fork.keyId}`);
       return { base, fork };
     });
-    // An unpinned drawn session's first turn takes the third fork, and its base is a session of its own key.
+    // A drawn first turn takes the third fork: at 14:30 on laptop's unpinned session 5eeed6ce, at depth 2 under a base
+    // of its own key, and at 03:40 on the desktop session whose failover the story pinned on primary.
+    const want = {
+      '2026-09-16T14:30:00Z': { pinless: [['5eeed6ce', 2]], same: 2 },
+      '2026-09-20T03:40:00Z': { pinless: [], same: 3 },
+    }[at];
     const pinless = pairs.filter((p) => !p.fork.pinned);
-    assert.equal(pinless.length, 1, 'one fork holds no pin');
-    assert.equal(pinless[0].fork.forkDepth, 2, "the pinless fork's depth");
+    assert.deepEqual(pinless.map((p) => [p.fork.sessionId.slice(0, 8), p.fork.forkDepth]), want.pinless, 'the forks that hold no pin, each with its depth');
     const pinned = pairs.filter((p) => p.fork.pinned);
     const same = pinned.filter((p) => p.fork.accountId === p.base.accountId);
     const other = pinned.filter((p) => p.fork.accountId !== p.base.accountId);
-    assert.equal(same.length, 1, "one fork sits on its base's account");
-    assert.equal(other.length, 1, 'one fork sits on another account than its base');
+    assert.equal(same.length, want.same, "the pinned forks that sit on their base's account");
+    assert.equal(other.length, 0, 'no pinned fork sits on another account than its base');
   });
 
   test(`one window of the story reads ahead of pace and one behind at ${at}`, async () => {

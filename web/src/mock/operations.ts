@@ -9,7 +9,7 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID } from './requests';
+import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
@@ -71,7 +71,9 @@ const ENDED_SUBAGENT = WRITTEN_SUBAGENTS[2];
 // use, and their account has been at its daily budget since its last served
 // request. Session 0 reads it so too, since its main still awaits the evidence of
 // its last request, so no probe has renewed the pin since and the row and the line
-// agree. `released` marks a session whose every agent, main included, the mod
+// agree. The two rows whose pin a move of the story wrote (`pinnedBy`) read the
+// later of their last request and that move, since the write of a pin stamps its
+// last use. `released` marks a session whose every agent, main included, the mod
 // released. `sessionId` writes out the id of a session past the story's ids whose
 // story row names it.
 const sessionSpec: ({
@@ -96,6 +98,11 @@ const sessionSpec: ({
   model: string;
   /** Main's requests named no effort, so its pin, the row and main's line read none. */
   noEffort?: true;
+  /**
+   * The story request whose move wrote the row's pin on its account. The row and main's line date their pin by the
+   * move, and `stamped` gives the row the no-return stamp the move left.
+   */
+  pinnedBy?: { requestId: string; stamped?: true };
   released?: true;
   sessionId?: string;
   state: Lifecycle | null;
@@ -117,13 +124,13 @@ const sessionSpec: ({
   // Its second subagent compacted, while its first stays paused on its cold probes.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', lastUseFromRows: true, subagents: { model: 'claude-sonnet-5', accountId: 'nightly' }, cause: 'awaiting_cache_evidence', compactedAgent: 2, subagentHold: 'repeated_cold_probe' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting', cause: 'expired' },
-  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'idle', agents: 2, companion: 'silent', lastUseFromRows: true, pinnedBy: { requestId: 'req_c41d0311-200' } },
   // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
   // session's agent stays retained, parked on a background command with its deadline.
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon' },
   // A subagent whose park ran past the pool's parked ceiling.
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
   // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5.
@@ -135,7 +142,8 @@ const sessionSpec: ({
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
   { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
   { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-4-5', state: null, agents: 1, companion: 'none' },
-  { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
+  // Only a report of the mod moves an agent off the busy word the engine sets on each request, and no mod reports it.
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'none', lastUseFromRows: true, pinnedBy: { requestId: 'req_1d9c3e55-0b2', stamped: true } },
   // Seen by the router but with nothing in the ledger, so the per-row jump to
   // analytics has no traffic to land on.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
@@ -415,8 +423,23 @@ const datedLines = (createdAt: string | null, session: string, lines: readonly U
 const noRecipe = (): Session['keepalive'] => ({ cause: null, nextProbeAt: null });
 /** A pin no round marked, and a row with no pin. */
 const NO_MARK: Pick<Session, 'mark'> = { mark: null };
-/** A pin with no no-return stamp, and a row with no pin. The story's stamping moves land on no pinned row it lists. */
+/**
+ * A pin with no no-return stamp, and a row with no pin. A row whose pin a failover of the story wrote reads that
+ * failover's stamp instead (`pinnedBy`).
+ */
 const NO_STAMP: Pick<Session, 'shed'> = { shed: null };
+/**
+ * The instant the story's move for `requestId` wrote a pin on `accountId`, and the no-return stamp it leaves where the
+ * row keeps one, from the account the pin left under the move's reason. A story that writes no such move fails the
+ * mock as it loads rather than reading a default.
+ */
+function storyPinWrite(requestId: string, accountId: string, stamped: boolean): { at: string } & Pick<Session, 'shed'> {
+  const move = REQUEST_EVENTS.get(requestId)?.find((e) => e.kind === 'pin_migrated' && e.accountId === accountId);
+  const from = move?.detail?.from_account;
+  const reason = move?.detail?.reason;
+  if (move === undefined || typeof from !== 'string' || typeof reason !== 'string') throw new Error(`the story moves no pin of ${requestId} onto ${accountId}`);
+  return { at: move.at, shed: stamped ? { at: move.at, from, reason } : null };
+}
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -426,12 +449,14 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
   const sessionId = spec.sessionId ?? drawnId;
   const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
+  const pinWrite = spec.pinnedBy === undefined ? null : storyPinWrite(spec.pinnedBy.requestId, spec.accountId, spec.pinnedBy.stamped === true);
   // Both rolls are drawn whatever the spec says, except on a fixed row, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
   const createdRoll = (written ? written.createdMinutes : rng.int(8, 9 * 60)) * MINUTE;
   const idleRoll = spec.fixed ? spec.idleMinutes * MINUTE : spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
   // Off the rows, a session the ledger holds no request of has no last use.
-  const lastFromRows = spec.lastUseFromRows ? (seen ? Date.parse(seen) : null) : undefined;
+  const seenAt = seen === null ? null : Date.parse(seen);
+  const lastFromRows = !spec.lastUseFromRows ? undefined : pinWrite === null ? seenAt : Math.max(seenAt ?? 0, Date.parse(pinWrite.at));
   const lastUsedAgo = typeof lastFromRows === 'number' ? NOW - lastFromRows : spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
   // A session the engine still keeps a recipe for is the one holding a pin on its account.
@@ -450,8 +475,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
-  // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none. No
-  // move took a drawn row's pin, so the pin was written at that first sighting.
+  // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none. A
+  // drawn row's pin was written at that first sighting, unless a move of the story wrote it later.
   const createdAt = pinned ? ago(createdAgo) : null;
   return {
     ...SESSION_SAMPLE,
@@ -465,7 +490,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     historical: false,
     keyGeneration,
     createdAt,
-    pinnedAt: createdAt,
+    pinnedAt: pinWrite?.at ?? createdAt,
     // An unpinned session's last use is what its own rows read.
     lastUsedAt: !pinned ? seen : lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen,
@@ -481,7 +506,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
     ...NO_MARK,
-    ...NO_STAMP,
+    shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
     // A row's lines are written once the recipes exist, so every row starts with none.
     agentContexts: [],
@@ -720,7 +745,7 @@ SESSIONS.forEach((pin, i) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
-        const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState };
+        const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
         return [pinLine(line, pin.keyId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;

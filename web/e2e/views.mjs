@@ -13213,16 +13213,20 @@ async function sessionForkBadges(theme) {
 
 /**
  * The Sessions row's badges and sub lines against each other: on the first row whose Status and Cache cells both draw a
- * badge, the Status badge in the face and height of the Cache badge, and the sub lines of the Agents, Requests, Cost
- * and Cache cells in the font family, size and line height of the Status cell's, the presence line's ink left free. The
- * story's rows draw both badges and every sub line, so only the mock's pass fails where they are missing.
+ * badge and whose Status cell draws its presence line, else the first that draws both badges, the Status badge in the
+ * face and height of the Cache badge, and the sub lines of the Agents, Requests, Cost and Cache cells in the font
+ * family, size and line height of the Status cell's, the presence line's ink left free. The story's rows a mod reports
+ * draw both badges and every sub line, so only the mock's pass fails where they are missing.
  */
 async function sessionsRowBadges(theme) {
   const say = (what) => failures.push(`${theme} /sessions row badges: ${what}`);
   const read = await page.evaluate(() => {
     const heads = [...document.querySelectorAll('.sessions-table thead th')].map((th) => th.textContent?.trim() ?? '');
     const cellOf = (tr, head) => (heads.includes(head) ? tr.children[heads.indexOf(head)] : null);
-    const row = [...document.querySelectorAll('.sessions-table tbody tr.srow')].find((tr) => cellOf(tr, 'Status')?.querySelector('.badge') && cellOf(tr, 'Cache')?.querySelector('.badge'));
+    const badged = [...document.querySelectorAll('.sessions-table tbody tr.srow')].filter((tr) => cellOf(tr, 'Status')?.querySelector('.badge') && cellOf(tr, 'Cache')?.querySelector('.badge'));
+    // A pinned row no mod reports draws its Status badge with no presence line, which leaves the sub lines nothing to
+    // be compared against.
+    const row = badged.find((tr) => cellOf(tr, 'Status')?.querySelector('.sub')) ?? badged[0];
     if (!row) return null;
     const face = (el) => {
       const s = getComputedStyle(el);

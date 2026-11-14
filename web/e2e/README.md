@@ -420,24 +420,25 @@ ends on the bare view: every row Expand all opens listing the lines on that mode
 filter hides reading the fold line's count, its toggle in the type size, weight and ink of the Cache warming line's, and
 the model chip's `(any agent)` suffix in the type size and ink of the chip's word), the fork badge's face (under the
 session id, in the face of the Status badges), the fork badges (inside their cell and whole), the row's badges (on the
-first row whose Status and Cache cells both draw one, the two in one face and height, and the Agents, Requests, Cost and
-Cache cells' sub lines in the type of the Status cell's), the badges' tones (on the bare view `busy` accent, `idle` and
-`warm` good, `parked`, `registered`, `cold`, `+$` and "+N" neutral, the `silent` sub line in `--warning-ink`, the
-`unreported` and `no pin` words in the ink of the bar's muted count, and the fork badge carrying `.srow__fork`), the
-session row's chevron (14 px square at the icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own
-under the mock's sessions failure switch: the notice 12 px under the bar naming the sessions with the read's message,
-and the card's error state, whose Try again the notice's matches in height, type size and weight), a finished session's
-line, found by its Status, the first line of its open detail, its words against the detail's type (mock pass, on a load
-of its own under the finished filter once the session list's shot is taken), the fork link, which is followed once the
-session list's shot is taken, the copy fallback (Copied on the Settings snippet with the clipboard API removed, on the
-Settings view's own load, and on a Key created dialog's secret in the mock pass, on a load of its own), the login
-screen's palette and its Stay logged in row (on every login, the first one's and each one's after a Log out: the root's
-`data-palette` against the stored palette, since the theme script alone sets it on that screen, then the secret field's,
-the row's, its box's, its label's and its hint's edges inside the card recorded, asserting nothing)). A check that opens
-an editor, a dialog or a row closes it again before the view's shot, and one that turns a column on turns it off again.
-The recent requests' table is fitted in the router pass and recorded in the mock pass, whose story's subscription rows
-read their figure in the Ultra week in the Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls
-inside its wrap there. The script exits non-zero with the list of failures when any of that does not hold.
+first row whose Status and Cache cells both draw one and whose Status cell draws its presence line, else the first with
+both, the two in one face and height, and the Agents, Requests, Cost and Cache cells' sub lines in the type of the
+Status cell's), the badges' tones (on the bare view `busy` accent, `idle` and `warm` good, `parked`, `registered`,
+`cold`, `+$` and "+N" neutral, the `silent` sub line in `--warning-ink`, the `unreported` and `no pin` words in the ink
+of the bar's muted count, and the fork badge carrying `.srow__fork`), the session row's chevron (14 px square at the
+icon's 1.75 stroke), the Sessions read error (mock pass, on loads of its own under the mock's sessions failure switch:
+the notice 12 px under the bar naming the sessions with the read's message, and the card's error state, whose Try again
+the notice's matches in height, type size and weight), a finished session's line, found by its Status, the first line of
+its open detail, its words against the detail's type (mock pass, on a load of its own under the finished filter once the
+session list's shot is taken), the fork link, which is followed once the session list's shot is taken, the copy fallback
+(Copied on the Settings snippet with the clipboard API removed, on the Settings view's own load, and on a Key created
+dialog's secret in the mock pass, on a load of its own), the login screen's palette and its Stay logged in row (on every
+login, the first one's and each one's after a Log out: the root's `data-palette` against the stored palette, since the
+theme script alone sets it on that screen, then the secret field's, the row's, its box's, its label's and its hint's
+edges inside the card recorded, asserting nothing)). A check that opens an editor, a dialog or a row closes it again
+before the view's shot, and one that turns a column on turns it off again. The recent requests' table is fitted in the
+router pass and recorded in the mock pass, whose story's subscription rows read their figure in the Ultra week in the
+Cost cell, wider than the card leaves at 1280 by 800, so the table scrolls inside its wrap there. The script exits
+non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.
