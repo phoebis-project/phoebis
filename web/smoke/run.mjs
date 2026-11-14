@@ -24562,7 +24562,7 @@ await forView('/keys', async () => {
   again.unmount();
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'ci', 'fleet', 'from-pool', 'bench', 'notebook', 'desktop', 'laptop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
-  const weeks = ['224 requests, 7d', '115 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  const weeks = ['226 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },

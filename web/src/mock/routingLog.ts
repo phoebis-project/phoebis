@@ -870,11 +870,11 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   // The one trigger: the first plan window, in the windows' order, whose projection at its horizon reads over the line
   // that horizon's bound sets, or on a pool that slows its pins the 5-hour window's stretch past the threshold once the
   // safety wait has passed, a 5-hour window under the hold yielding to the next. A round the story writes fires on the
-  // story's word, and the builder reads no wait for it. A decision inside a round's dwell reads the same trigger as the
-  // round, the first window over its line. Any other window over its line is inside its wait, which holds the round
-  // back and yields to the next window. The line names every projection it read with its horizon, its wall and its
-  // wait, the 5-hour window's age and hold inside the hold, and how long the stretch has read over while the safety
-  // wait holds.
+  // story's word, and the builder reads no projection wait for it. A decision inside a round's dwell reads the same
+  // trigger as the round, the first window over its line. Any other window over its line is inside its wait, which
+  // holds the round back and yields to the next window. The line names every projection it read with its horizon, its
+  // wall and its wait, the 5-hour window's age and hold inside the hold, and how long the stretch has read over while
+  // the safety wait holds.
   const newest = newestRound(source.accountId, at);
   const fires = spec.round !== undefined || (newest !== null && at - newest < pool.shedDwellSeconds * 1_000);
   const stretch = pool.slowDown ? stretchTriggerOf(source, pool, at) : null;
