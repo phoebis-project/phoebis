@@ -385,14 +385,22 @@ whose week or either shared window reads at or above 1 drops outright, unless th
 the poll has not read the account's extra usage as blocked, in which case it stays and orders behind every plan-funded
 account. An account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below.
 With every account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are
-preferences that fall back to the wider set rather than stranding the request: the request's fit drops every account
-without runway for it, and falls back to the whole set when none has it, and an account winding down toward its
-subscription end (see **Subscription end**, below) is skipped for a fresh placement too. A fresh session's fit reads the
-relay's estimate of the body's tokens as its rewrite and the median burn of the pool's warm sessions as its burn, each
-warm session's rate at the pace it would run unheld, and reads the account's own burn as the burn the sessions already
-on it would make unheld, so an account calm only because the slow-down holds its sessions reads as full (see **The
-demand**, below). A window the account has not read counts as untouched, and an account inside `wind_down_minutes` of
-its subscription end never fits.
+preferences that fall back to the wider set rather than stranding the request. The request's fit walks one ladder for a
+fresh session, a failover's landing and a request that takes no pin alike, and the strategy picks among the first rung
+that holds an account: the accounts it fits, else those where its rewrite alone fits with the longest runway to the
+ceiling, else those past the ceiling that hold allowance with the longest runway to 1, else those inside their wind-down
+that hold allowance, else every account. An account holds no allowance where a shared window, or the model's own week on
+a request for such a model, reads at or above 1, so an account kept on extra usage under `allow` holds none. The longest
+runway reads across priorities, so an account of a lower priority with the longer runway takes the landing, and an
+API-key account whose bucket is full ranks at zero on the third rung. The decision record names the rung in the
+partitions line's `ladder` fact (`fits`, `rewrite_only`, `least_bad`, `ending` or `every`), and an account that reads
+`least_bad` states its runway to 1 on its row. An account winding down toward its subscription end (see
+**Subscription end**, below) is skipped for a fresh placement too while another account stands. A fresh session's fit
+reads the relay's estimate of the body's tokens as its rewrite and the median burn of the pool's warm sessions as its
+burn, each warm session's rate at the pace it would run unheld, and reads the account's own burn as the burn the
+sessions already on it would make unheld, so an account calm only because the slow-down holds its sessions reads as full
+(see **The demand**, below). A window the account has not read counts as untouched, and an account inside
+`wind_down_minutes` of its subscription end never fits.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then API key. Within a group, or across the whole set with the flag off, tiers order by priority
@@ -1134,18 +1142,18 @@ account, or one with no account left, is answered the router's own `503 accounts
 account the failover marks, or finds disconnected, keeps its pin until the reselect moves it to another account, under
 the account's state or `attempted` ([Moves](#moves)). Any other failover moves the pin, and the move is recorded as
 `pin_migrated` with its cause ([Moves](#moves)): the landing reads the session's own burn, the cooled and the refused
-accounts are out, and the strategy ranks the accounts the session fits as a move's gate does, then the one where the
-rewrite alone fits with the longest runway, then the least bad, then any account at all, so a session whose every
-candidate is inside the wind-down is still served. The failover, its waits included, starts no new leg past the
-request's own deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather
-than tried on another account. The attempt rows read `auth_failed` with the upstream status, and the account reads
-`reauth_required` after a conclusive failure of the refresh (an `invalid_grant`, a token endpoint's `401`) or after a
-rejected replay, which the Accounts view and the `reauth_required` attention condition show. Whoever lands the mark
-reports it at once: the relay for a failover or a rejected replay, and the usage poll, its profile read and the catalog
-refresh when their own token refresh lands it. The routing writer's fenced write and the reload after it then take the
-account out of selection. Until that reload the credential cache refuses the marked credential, so no request dials the
-account on the token it still held. A rejected replay's mark refuses the replayed token's lineage in the credential
-cache the same way, so the token the upstream just refused is not handed to another request.
+accounts are out, and it walks the ladder of a fresh placement ([Selection](#selection)), where the runway breaks the
+strategy's tie among the accounts the session fits as a move's gate does, so a session whose every candidate is spent or
+inside the wind-down is still served. The failover, its waits included, starts no new leg past the request's own
+deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
+another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
+after a conclusive failure of the refresh (an `invalid_grant`, a token endpoint's `401`) or after a rejected replay,
+which the Accounts view and the `reauth_required` attention condition show. Whoever lands the mark reports it at once:
+the relay for a failover or a rejected replay, and the usage poll, its profile read and the catalog refresh when their
+own token refresh lands it. The routing writer's fenced write and the reload after it then take the account out of
+selection. Until that reload the credential cache refuses the marked credential, so no request dials the account on the
+token it still held. A rejected replay's mark refuses the replayed token's lineage in the credential cache the same way,
+so the token the upstream just refused is not handed to another request.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first. Earlier events are
 buffered, up to 64 KiB, and relayed after commit in order, and a stream that exceeds the buffer or sends no committing

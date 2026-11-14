@@ -13319,6 +13319,12 @@ export const FIXTURES: Record<string, Fixture> = {
               "unit": null
             },
             {
+              "key": "ladder",
+              "value": "fits",
+              "account_id": null,
+              "unit": null
+            },
+            {
               "key": "winding_down",
               "value": 0,
               "account_id": null,

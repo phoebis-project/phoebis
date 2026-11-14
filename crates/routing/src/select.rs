@@ -2272,17 +2272,22 @@ fn run(
     // The candidates placement may choose among, before any of step 6's own partitions: judged on the account
     // itself, never on whether a preference below narrowed the wider set around it.
     let allowed: Vec<&Candidate> = selection_set.clone();
-    // The allowance and fit reads below, each by account, which the placement's rungs start from rather than reading
-    // the same state again.
-    let mut allowances: Vec<(&str, bool)> = Vec::new();
+    // The allowance and fit reads, each by account, which the placement's rungs start from rather than reading the
+    // same state again. The allowance is read for every request, since the fit's ladder orders its last rungs by it.
+    let allowances: Vec<(&str, bool)> = selection_set
+        .iter()
+        .copied()
+        .map(|c| {
+            let holds = holds_allowance(state, snapshot, &c.account_id, window, request.now);
+            (c.account_id.as_str(), holds)
+        })
+        .collect();
     let mut verdicts: Vec<(&str, &'static str)> = Vec::new();
-    let mut partitions = Vec::with_capacity(4);
+    let mut partitions = Vec::with_capacity(5);
     if window != SEVEN_DAY {
         let mut left: Vec<&Candidate> = Vec::new();
         let mut dropped = 0;
-        for c in selection_set.iter().copied() {
-            let holds = holds_allowance(state, snapshot, &c.account_id, window, request.now);
-            allowances.push((&c.account_id, holds));
+        for (c, &(_, holds)) in selection_set.iter().copied().zip(&allowances) {
             if holds {
                 left.push(c);
                 continue;
@@ -2359,13 +2364,15 @@ fn run(
     partitions.push(at_cap);
     // The fit is a preference, not a refusal: with no account fitting the request goes where the strategy picks
     // rather than answering exhausted while capacity remains. A move's destinations are the set its rule's gate
-    // ordered, read with the moving pin already, so they stay as the gate left them with the gate's reads. A fresh
-    // placement reads every candidate with the fresh prior, and one inside the wind-down never fits. It
-    // keeps the read of each candidate that fits, so a fall-through to the whole set carries no runway to break a tie.
-    // A failed-over request falls through the gate's orders before the whole set, so a session that has to land
-    // somewhere still lands: the runway breaks the strategy's tie among the fitting candidates, the longest runway
-    // takes the `rewrite_only` rung, and the strategy alone picks on the `least_bad` and `every` rungs. The rung that
-    // kept the set is the `ladder` fact.
+    // ordered, read with the moving pin already, so they stay as the gate left them with the gate's reads. Every other
+    // landing reads each candidate with the fresh figures, where one inside the wind-down never fits, and walks one
+    // ladder whose rung is the `ladder` fact: the fitting candidates, else the `rewrite_only` ones with the longest
+    // runway to the ceiling, else the `least_bad` ones holding allowance with the longest runway to 1.0, else the ones
+    // inside their wind-down holding allowance, else the whole set. `longest` reads across priorities, so a lower
+    // priority with the longer runway takes the landing. A `least_bad` or winding-down member with no allowance left
+    // stands on the last rung alone, where the whole set stands rather than an exhaustion on the router's own estimate.
+    // The partition keeps the read of each candidate that fits, which breaks the strategy's tie for a failed-over
+    // request.
     let mut ladder = None;
     // Built once for the fit below, the placement's rung 4 and the booking, since nothing between them changes a pin.
     let prior = match moving {
@@ -2377,7 +2384,8 @@ fn run(
     } else {
         let mut fitting = Vec::with_capacity(selection_set.len());
         let mut rewrite_only: Vec<(&Candidate, FitRead)> = Vec::new();
-        let mut least_bad: Vec<&Candidate> = Vec::new();
+        let mut least_bad: Vec<(&Candidate, FitRead)> = Vec::new();
+        let mut ending: Vec<&Candidate> = Vec::new();
         for c in selection_set.iter().copied() {
             let read = fit_of(
                 state,
@@ -2391,42 +2399,47 @@ fn run(
                 Judge::Placement,
                 own_key.as_ref(),
             );
+            // A `least_bad` row states the runway to 1.0, the one its rung ranks by.
+            let (runway_ms, binding) = if read.verdict == "least_bad" {
+                (read.wall_shown_ms, read.wall_binding.clone())
+            } else {
+                (read.runway_ms, read.binding.clone())
+            };
             if let Some(member) = rec.candidate_mut(&c.account_id) {
-                member.runway_ms = read.runway_ms;
+                member.runway_ms = runway_ms;
                 member.fit = Some(read.verdict);
-                member.binding = read.binding.clone();
-            }
-            if read.verdict != "ending" {
-                least_bad.push(c);
+                member.binding = binding;
             }
             verdicts.push((&c.account_id, read.verdict));
+            let holds = read_of(&allowances, &c.account_id) == Some(true);
             match read.verdict {
                 "fits" => {
                     fitting.push(c);
                     reads.push((c.account_id.clone(), read));
                 }
                 "rewrite_only" => rewrite_only.push((c, read)),
+                "least_bad" if holds => least_bad.push((c, read)),
+                "ending" if holds => ending.push(c),
                 _ => {}
             }
         }
-        if request.failed_over.is_none() {
-            fitting
-        } else if !fitting.is_empty() {
-            ladder = Some("fits");
-            fitting
+        let (rung, kept) = if !fitting.is_empty() {
+            ("fits", fitting)
         } else if !rewrite_only.is_empty() {
-            ladder = Some("rewrite_only");
-            longest(rewrite_only.iter().map(|(c, read)| (*c, read)).collect())
-                .into_iter()
-                .map(|(c, _)| c)
-                .collect()
+            let rung = rewrite_only.iter().map(|(c, read)| (*c, read)).collect();
+            let kept = longest(rung, |read| read.rank_runway_ms);
+            ("rewrite_only", kept.into_iter().map(|(c, _)| c).collect())
         } else if !least_bad.is_empty() {
-            ladder = Some("least_bad");
-            least_bad
+            let rung = least_bad.iter().map(|(c, read)| (*c, read)).collect();
+            let kept = longest(rung, |read| read.wall_runway_ms);
+            ("least_bad", kept.into_iter().map(|(c, _)| c).collect())
+        } else if !ending.is_empty() {
+            ("ending", ending)
         } else {
-            ladder = Some("every");
-            Vec::new()
-        }
+            ("every", Vec::new())
+        };
+        ladder = Some(rung);
+        kept
     };
     partitions.push(narrow(
         &mut selection_set,
@@ -3483,6 +3496,15 @@ pub(crate) struct FitRead {
     /// `runway_ties` rank by, so a window past its reset still orders the placement, while `runway_ms` and `binding`
     /// show only the windows whose runway ends at or before their reset.
     pub rank_runway_ms: Option<i64>,
+    /// The runway the third rung ranks a `least_bad` member by: per window zero where the prediction with the
+    /// rewrite stands at or past 1.0, else the banded time to 1.0, and for the member the pick of `binding_of` over
+    /// its bounded windows, one past its reset included. Zero for a paid source whose full bucket refuses the request
+    /// at this instant, which names no window. None for a member no window bounds.
+    pub wall_runway_ms: Option<i64>,
+    /// The runway to 1.0 and its window as a landing's `least_bad` row states them: read over the windows whose runway
+    /// to 1.0 ends at or before their reset, as `runway_ms` and `binding` read the ceiling's.
+    pub wall_shown_ms: Option<i64>,
+    pub wall_binding: Option<String>,
     pub projection: BTreeMap<String, f64>,
     pub horizon: BTreeMap<String, i64>,
     pub rewrite: BTreeMap<String, f64>,
@@ -3525,6 +3547,9 @@ pub(crate) fn fit_of(
         runway_ms: None,
         binding: None,
         rank_runway_ms: None,
+        wall_runway_ms: None,
+        wall_shown_ms: None,
+        wall_binding: None,
         projection: BTreeMap::new(),
         horizon: BTreeMap::new(),
         rewrite: BTreeMap::new(),
@@ -3546,6 +3571,11 @@ pub(crate) fn fit_of(
             .and_then(|s| s.worst_bucket(now))
             .is_none_or(|r| r.utilization < 1.0);
         read.verdict = if room { "fits" } else { "least_bad" };
+        // The full bucket refuses the request at this instant, so the third rung ranks the source behind any room.
+        if !room {
+            read.wall_runway_ms = Some(0);
+            read.wall_shown_ms = Some(0);
+        }
         return read;
     }
     // An unnamed tier, or a plan the cost model does not price, prices neither the rewrite nor the burn, so for a move
@@ -3582,6 +3612,9 @@ pub(crate) fn fit_of(
     // reads a runway no burn bounds, while the verdict and the rank read every bounded window.
     let mut bounded: Vec<(&str, i64, bool)> = Vec::new();
     let mut shown: Vec<(&str, i64, bool)> = Vec::new();
+    // The same two lists for the runway to 1.0, which the third rung ranks a `least_bad` member by.
+    let mut walls: Vec<(&str, i64, bool)> = Vec::new();
+    let mut walls_shown: Vec<(&str, i64, bool)> = Vec::new();
     for window in state.plan_windows_held(candidate, &request.canonical_model) {
         let Some(projection) = projections.get(window) else {
             if judge == Judge::Move {
@@ -3634,6 +3667,14 @@ pub(crate) fn fit_of(
         if !lands {
             rewrite_lands = false;
         }
+        // `time_to` answers zero where the prediction with the rewrite already stands at or past 1.0.
+        if let Some(wall_ms) = burn.time_to(1.0 - predicted - rewrite) {
+            let short = wall_ms < span;
+            walls.push((window, wall_ms, short));
+            if !passes_reset(wall_ms, projection.reset, now) {
+                walls_shown.push((window, wall_ms, short));
+            }
+        }
         let runway_ms = if !lands {
             Some(0)
         } else {
@@ -3655,6 +3696,11 @@ pub(crate) fn fit_of(
     if let Some((window, runway_ms)) = binding_of(&shown) {
         read.binding = Some(window.to_string());
         read.runway_ms = Some(runway_ms);
+    }
+    read.wall_runway_ms = binding_of(&walls).map(|(_, wall_ms)| wall_ms);
+    if let Some((window, wall_ms)) = binding_of(&walls_shown) {
+        read.wall_binding = Some(window.to_string());
+        read.wall_shown_ms = Some(wall_ms);
     }
     read.verdict = if tier.is_none() || unread {
         "least_bad"
@@ -3877,11 +3923,13 @@ fn order<'a, 'r>(
         .collect()
 }
 
-/// The candidates with the longest runway, an unbounded one longest of all, ties kept for the pick.
+/// The candidates with the longest runway as `runway` reads it off each fit, an unbounded one longest of all, ties
+/// kept for the pick.
 fn longest<'a, 'r>(
     candidates: Vec<(&'a Candidate, &'r FitRead)>,
+    runway: impl Fn(&FitRead) -> Option<i64>,
 ) -> Vec<(&'a Candidate, &'r FitRead)> {
-    let key = |read: &FitRead| read.rank_runway_ms.unwrap_or(i64::MAX);
+    let key = |read: &FitRead| runway(read).unwrap_or(i64::MAX);
     let Some(best) = candidates.iter().map(|(_, read)| key(read)).max() else {
         return candidates;
     };
@@ -3975,7 +4023,10 @@ fn gate<'a>(
     } else if fits_only {
         (Vec::new(), "none")
     } else if !rewrite_only.is_empty() {
-        (chosen(longest(rewrite_only)), "rewrite_only")
+        (
+            chosen(longest(rewrite_only, |read| read.rank_runway_ms)),
+            "rewrite_only",
+        )
     } else if !least_bad.is_empty() {
         (least_bad, "least_bad")
     } else {
@@ -9050,6 +9101,9 @@ mod runway_tests {
             runway_ms: Some(runway_ms),
             binding: None,
             rank_runway_ms: Some(runway_ms),
+            wall_runway_ms: None,
+            wall_shown_ms: None,
+            wall_binding: None,
             projection: BTreeMap::new(),
             horizon: BTreeMap::new(),
             rewrite: BTreeMap::new(),

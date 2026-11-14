@@ -1615,10 +1615,11 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
                 &FactValue::Int(1),
                 "{strategy:?}"
             );
+            // a's row states its runway to 1.0, which nothing burning leaves unbounded.
             let a = candidate(&d.record, "a");
             assert_eq!(
                 (a.partition, a.fit, a.binding.as_deref()),
-                (Some("no_fit"), Some("least_bad"), Some("five_hour")),
+                (Some("no_fit"), Some("least_bad"), None),
                 "{strategy:?}"
             );
             let b = candidate(&d.record, "b");
@@ -1628,19 +1629,20 @@ fn the_no_fit_partition_drops_an_account_without_runway_and_falls_back_when_none
                 "with nothing burning, no window bounds b's runway under {strategy:?}"
             );
         }
-        // b and c within the rewrite of the ceiling: no account has room for it.
+        // b and c within the rewrite of the ceiling: no account has room for it. Each holds allowance, and nothing
+        // burning bounds a runway to 1.0, so the least-bad rung keeps the whole set.
         st.record_sample("b", refreshing(0.94, HOUR, 2 * HOUR, 2), 0);
         st.record_sample("c", refreshing(0.96, HOUR, 8 * HOUR, 2), 0);
         for seed in 0..8u64 {
             let d = decide(&mut st, &s, &req(), &mut StdRng::seed_from_u64(seed));
             assert_eq!(
                 fact(line(&d.record, "partitions"), "no_fit"),
-                &FactValue::Text("fell_through".into()),
+                &FactValue::Int(0),
                 "{strategy:?}"
             );
             assert!(
                 matches!(d.result, SelectResult::Selected(_)),
-                "the fall-through strands no request under {strategy:?}"
+                "the least-bad rung strands no request under {strategy:?}"
             );
             assert_eq!(
                 candidate(&d.record, "a").partition,
@@ -7261,8 +7263,8 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         "no_fit",
         "ending",
     );
-    // b past its ceiling with no runway and a inside its wind-down: nothing fits, so `no_fit` falls through, and the
-    // wind-down partition drops a while the tail match still lands there.
+    // b past its ceiling with no runway and a inside its wind-down: nothing fits, and b, still under 1.0, holds the
+    // least-bad rung ahead of the wind-down's, so `no_fit` passes over a while the tail match still lands there.
     let mut terms = tier_terms(&["b"]);
     terms.push(ends(1_000 + 10 * MINUTE));
     scenario(
@@ -7278,7 +7280,7 @@ fn a_tail_match_bypasses_no_fit_and_the_wind_down() {
         &|st| {
             st.record_sample("b", sample(0.96, 0.0, 1_000), 0);
         },
-        "winding_down",
+        "no_fit",
         "ending",
     );
 }
@@ -9072,9 +9074,10 @@ fn an_account_without_runway_is_passed_over_under_pace_while_a_fitting_one_serve
     };
     let d = decide(&mut st2, &solo, &req2, &mut rng());
     assert_eq!(picked(&d.result), "a", "and a serves once no sibling fits");
+    // a holds allowance under 1.0, so the least-bad rung keeps it and drops nothing.
     assert_eq!(
         fact(line(&d.record, "partitions"), "no_fit"),
-        &FactValue::Text("fell_through".into())
+        &FactValue::Int(0)
     );
 }
 
@@ -9109,14 +9112,14 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
     let partitions = line(&d.record, "partitions");
     assert_eq!(
         partitions.facts.iter().map(|f| f.key).collect::<Vec<_>>(),
-        ["spent", "at_cap", "no_fit", "winding_down"],
+        ["spent", "at_cap", "no_fit", "ladder", "winding_down"],
         "the wind-down stays the last partition"
     );
     assert_eq!(fact(partitions, "no_fit"), &FactValue::Int(1));
     assert_eq!(fact(partitions, "winding_down"), &FactValue::Int(0));
 
-    // a inside its wind-down and b, with no end, past its ceiling: nothing fits, so `no_fit` falls through, and the
-    // wind-down passes over a, so the pool places on b.
+    // a inside its wind-down and b, with no end, past its ceiling: nothing fits, and b, still under 1.0, holds the
+    // least-bad rung, which ranks ahead of the wind-down's, so `no_fit` passes over a and the pool places on b.
     let mut terms = tier_terms(&["b"]);
     terms.push(ending("a", 1_000 + 10 * MINUTE));
     let s = snapshot_with_terms(pool(), terms);
@@ -9126,13 +9129,10 @@ fn an_account_inside_its_wind_down_takes_no_placement_while_another_serves() {
     let d = decide(&mut st, &s, &req, &mut rng());
     assert_eq!(picked(&d.result), "b");
     let partitions = line(&d.record, "partitions");
-    assert_eq!(
-        fact(partitions, "no_fit"),
-        &FactValue::Text("fell_through".into())
-    );
-    assert_eq!(fact(partitions, "winding_down"), &FactValue::Int(1));
+    assert_eq!(fact(partitions, "no_fit"), &FactValue::Int(1));
+    assert_eq!(fact(partitions, "winding_down"), &FactValue::Int(0));
     let a = candidate(&d.record, "a");
-    assert_eq!((a.partition, a.fit), (Some("winding_down"), Some("ending")));
+    assert_eq!((a.partition, a.fit), (Some("no_fit"), Some("ending")));
     assert_eq!(candidate(&d.record, "b").fit, Some("least_bad"));
 }
 
@@ -10044,8 +10044,8 @@ fn the_cap_binds_before_the_fit_so_a_free_account_without_runway_takes_the_place
     assert_eq!(fact(partitions, "at_cap"), &FactValue::Int(1));
     assert_eq!(
         fact(partitions, "no_fit"),
-        &FactValue::Text("fell_through".into()),
-        "the cap left b alone, and b without runway is still the set"
+        &FactValue::Int(0),
+        "the cap left b alone, and b without runway holds the least-bad rung under 1.0"
     );
     let on_b = st.in_flight().dispatched("b", 1_000);
     assert_eq!(
@@ -14873,10 +14873,10 @@ fn a_pin_that_fails_over_off_its_account_leaves_its_mark_with_the_row() {
         burning("s0", "a", 1.0, false, T),
     ]);
     // s0's request runs a's round, which marks s1 with b as its planned destination and leaves s1 where it is until
-    // its own next request. c reads full, over the ceiling as a does, so no mark finds it a destination yet and a fresh
-    // placement reads both least bad.
+    // its own next request. c reads full, over the ceiling as a does and with no allowance left, so no mark finds it a
+    // destination yet, and a fresh placement reads both least bad and takes a, the one of them holding allowance.
     over_a_fitting_b(&mut st, T - 500);
-    st.record_sample("c", sample(0.96, 0.3, T - 500), 0);
+    st.record_sample("c", sample(1.0, 0.3, T - 500), 0);
     past_the_wait(&mut st, &s, "p", "a", T);
     assert_eq!(
         landed(select(&mut st, &s, &auxiliary(&s, "s0", T), &mut rng()).0),
@@ -16889,7 +16889,7 @@ fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
     assert_eq!(partitions.verdict, "match");
     assert_eq!(
         partitions.facts.iter().map(|f| f.key).collect::<Vec<_>>(),
-        vec!["spent", "at_cap", "no_fit", "winding_down"]
+        vec!["spent", "at_cap", "no_fit", "ladder", "winding_down"]
     );
     assert_eq!(
         fact(partitions, "at_cap"),
@@ -19170,10 +19170,11 @@ fn a_classifier_request_with_a_nonzero_body_lands_on_the_account_its_body_would_
             fact(line(&d.record, "partitions"), "no_fit"),
             &FactValue::Int(1)
         );
+        // a's row states its runway to 1.0, which nothing burning leaves unbounded.
         let a = candidate(&d.record, "a");
         assert_eq!(
             (a.partition, a.fit, a.binding.as_deref()),
-            (Some("no_fit"), Some("least_bad"), Some("five_hour"))
+            (Some("no_fit"), Some("least_bad"), None)
         );
     }
 }
@@ -20428,7 +20429,8 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
         Some(&FactValue::Text("least_bad".into()))
     );
 
-    // Both siblings end two hours out, inside their three hours of wind-down: every candidate serves.
+    // Both siblings end two hours out, inside their three hours of wind-down, and both hold allowance: the landing
+    // takes the wind-down's rung, which keeps the whole set.
     let mut terms = tier_terms(&["a", "b", "c"]);
     for term in &mut terms {
         if term.account_id != "a" {
@@ -20453,18 +20455,26 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
     );
     assert_eq!(
         fact(line(&d.record, "partitions"), "no_fit"),
-        &FactValue::Text("fell_through".into())
+        &FactValue::Int(0)
     );
-    assert_eq!(ladder_of(&d.record), Some(&FactValue::Text("every".into())));
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("ending".into()))
+    );
 
-    // A fresh session's partition keeps its one fall-through and names no rung.
-    let mut st = state(0.94, 0.94);
+    // A fresh session walks the same ladder. a, spent at 1.0 on its 5-hour window, and b read least_bad, and c reads
+    // rewrite_only as in the first block, so the session lands on c and the partition drops a and b.
+    let mut st = state(0.94, 0.5);
     let d = decide(&mut st, &s, &placing(&s, "r-2", "s2", T), &mut rng());
+    assert_eq!(landed(d.result.clone()), ("c".into(), None));
     assert_eq!(
         fact(line(&d.record, "partitions"), "no_fit"),
-        &FactValue::Text("fell_through".into())
+        &FactValue::Int(2)
     );
-    assert_eq!(ladder_of(&d.record), None);
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("rewrite_only".into()))
+    );
 }
 
 #[test]
@@ -20498,9 +20508,204 @@ fn a_failed_over_landing_whose_candidates_all_end_lands_on_the_fourth_rung() {
     );
     assert_eq!(
         fact(line(&d.record, "partitions"), "no_fit"),
-        &FactValue::Text("fell_through".into())
+        &FactValue::Int(0)
+    );
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("ending".into()))
+    );
+}
+
+#[test]
+fn the_least_bad_rung_lands_on_the_longest_runway_to_the_wall_over_a_higher_priority() {
+    // a, spent on its 5-hour window, holds no allowance and carries the pool's one warm pin, whose ten-thousandth of
+    // the 5-hour window a second is a fresh session's burn. b outranks c, and Priority would land on b.
+    let s = tiered(Pool {
+        members: vec![("a", 2), ("b", 0), ("c", 1)],
+        ..Pool::default()
+    });
+    let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
+    // The body's rewrite of 0.02 takes b's 0.97 and c's 0.96 past the 0.95 ceiling, so both read zero to it. To 1.0, b
+    // has 0.01 left, which the burn reaches in 100 s, and c 0.02, 200 s, both short of the three hours to the reset and
+    // of the week's 53 800 s.
+    gated_siblings(&mut st, 0.97, 0.96);
+    let d = decide(&mut st, &s, &placing(&s, "r-1", "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), None),
+        "the longer runway to 1.0 takes the landing over the higher priority"
+    );
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("least_bad".into()))
+    );
+    let c = candidate(&d.record, "c");
+    assert_eq!(
+        (c.fit, c.runway_ms, c.binding.as_deref()),
+        (Some("least_bad"), Some(200_000), Some("five_hour")),
+        "the row states the runway its rung ranked by"
+    );
+}
+
+#[test]
+fn a_paid_member_with_a_full_bucket_ranks_at_zero_on_the_least_bad_rung() {
+    // b, an api_key account, outranks c. a, spent on its 5-hour window, holds no allowance and carries the pool's one
+    // warm pin, the fresh session's burn of a ten-thousandth of the 5-hour window a second.
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 2), ("b", 0), ("c", 1)],
+            kinds: vec![("b", AccountKind::ApiKey)],
+            ..Pool::default()
+        },
+        tier_terms(&["a", "c"]),
+    );
+    let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T - 500), 0);
+    st.record_sample(
+        "b",
+        UtilizationSample {
+            observed_at: T - 500,
+            ..Default::default()
+        }
+        .with(
+            "itpm:claude-sonnet-5",
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(T + MINUTE),
+                observed_at: T - 500,
+                source: WindowSource::Head,
+                plan: None,
+                tier: None,
+            },
+        ),
+        0,
+    );
+    // c: 0.96 and the body's rewrite of 0.02 pass the 0.95 ceiling and leave 0.02 to 1.0, which the burn reaches in
+    // 200 s.
+    st.record_sample(
+        "c",
+        refreshing(0.96, T + 3 * HOUR, T + 72 * HOUR, T - 500),
+        0,
+    );
+    let d = decide(&mut st, &s, &placing(&s, "r-1", "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), None),
+        "the full bucket refuses the request now, so b ranks behind c's 200 s"
+    );
+    let b = candidate(&d.record, "b");
+    assert_eq!(
+        (b.fit, b.runway_ms, b.binding.as_deref()),
+        (Some("least_bad"), Some(0), None)
+    );
+}
+
+#[test]
+fn a_member_inside_its_wind_down_with_allowance_takes_the_landing_over_a_spent_week() {
+    let mut terms = tier_terms(&["a", "b"]);
+    // b ends two hours out, inside its three hours of wind-down.
+    terms[1].cancellation = Cancellation::On {
+        ends_at: Some(1_000 + 2 * HOUR),
+    };
+    let s = snapshot_with_terms(
+        Pool {
+            members: vec![("a", 0), ("b", 1)],
+            failover: Failover {
+                wind_down_minutes: 180,
+                ..Failover::default()
+            },
+            ..Pool::default()
+        },
+        terms,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // a's week reads 1.0, so a reads least_bad and holds no allowance. b has room on both windows.
+    st.record_sample("a", sample(0.1, 1.0, 1_000), 0);
+    st.record_sample("b", sample(0.3, 0.1, 1_000), 0);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("ending".into()))
+    );
+}
+
+#[test]
+fn with_no_member_holding_allowance_the_landing_stands_on_the_whole_set() {
+    let s = tiered(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample("a", sample(0.1, 1.0, 1_000), 0);
+    st.record_sample("b", sample(0.1, 1.0, 1_000), 0);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        picked(&d.result),
+        "a",
+        "the fit is a preference, so a spent week answers no exhaustion"
     );
     assert_eq!(ladder_of(&d.record), Some(&FactValue::Text("every".into())));
+}
+
+#[test]
+fn a_member_kept_on_extra_usage_holds_no_allowance_so_a_member_inside_its_wind_down_takes_the_landing(
+) {
+    let mut terms = tier_terms(&["a", "b"]);
+    // b ends two hours out, inside its three hours of wind-down.
+    terms[1].cancellation = Cancellation::On {
+        ends_at: Some(1_000 + 2 * HOUR),
+    };
+    let s = snapshot_with_terms(
+        Pool {
+            policy: OveragePolicy::Allow,
+            members: vec![("a", 0), ("b", 1)],
+            failover: Failover {
+                wind_down_minutes: 180,
+                ..Failover::default()
+            },
+            ..Pool::default()
+        },
+        terms,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    // a's Fable week reads 1.0, which extra usage funds while no credits reading blocks it. b's reads 0.5.
+    st.record_sample(
+        "a",
+        with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        0,
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+        0,
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, None, "claude-fable-5-1", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        fact(line(&d.record, "partitions"), "spent"),
+        &FactValue::Int(0),
+        "the spent partition keeps a on extra usage"
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(
+        ladder_of(&d.record),
+        Some(&FactValue::Text("ending".into()))
+    );
 }
 
 #[test]

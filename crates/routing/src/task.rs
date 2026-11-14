@@ -254,7 +254,9 @@ pub enum RouterEvent {
         /// `cooldown`, `overage` or `spent` from the rule or the failover of the same word.
         reasons: Vec<&'static str>,
         /// The destination's fit as the move read it: the verdict (`fits`, `rewrite_only`, `least_bad`), the runway
-        /// on the binding window (`None` for an unbounded one) and that window.
+        /// on the binding window (`None` for an unbounded one) and that window. Where the placement's ladder read the
+        /// fit, a `least_bad` destination states its runway to 1.0, which its rung ranks by, and every other fit its
+        /// runway to the ceiling.
         fit: Option<&'static str>,
         runway_ms: Option<i64>,
         binding: Option<String>,
