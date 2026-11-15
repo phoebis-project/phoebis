@@ -4081,7 +4081,7 @@ fn a_classifier_rows_burn_bucket_reads_zero_shares_and_figure_beside_a_plain_row
         [
             point.five_hour_share,
             point.seven_day_share,
-            point.equivalent,
+            point.equivalent_by_tier["test_tier"],
         ]
     };
     assert_eq!(
@@ -4150,7 +4150,7 @@ fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five
         (
             point.five_hour_share,
             point.seven_day_share,
-            point.five_hour_equivalent
+            point.five_hour_equivalent_by_tier["test_tier"]
         ),
         (Some(20.0), Some(2.0), Some(20.0)),
         "the priced row's shares and 5-hour figure alone: {point:?}"
@@ -4209,7 +4209,7 @@ fn a_classifier_row_reads_zero_in_the_session_series_beside_a_plain_rows_figures
         [
             point.five_hour_share,
             point.seven_day_share,
-            point.equivalent,
+            point.equivalent_by_tier["test_tier"],
         ]
     };
     assert_eq!(
@@ -4321,9 +4321,9 @@ fn the_burn_series_prices_a_subscription_row_in_window_share_and_an_api_key_row_
     };
     let want = figure(tokens) + figure(cached);
     assert!(
-        want > 0.0 && every.equivalent.is_some_and(|got| (got - want).abs() < 1e-12),
+        want > 0.0 && every.equivalent_by_tier[PRO].is_some_and(|got| (got - want).abs() < 1e-12),
         "both plan rows add their figure, the tierless one included, and the api_key row a zero: {:?} vs {want}",
-        every.equivalent
+        every.equivalent_by_tier
     );
     let key_usd = shipped_usd(
         3_600_000,
@@ -4414,7 +4414,7 @@ fn a_billed_burn_row_reads_in_dollars_and_a_zero_equivalent_whatever_tier_its_ke
             point.usd,
             point.five_hour_share,
             point.seven_day_share,
-            point.equivalent,
+            point.equivalent_by_tier[PRO],
             point.tokens,
         )
     };
@@ -4487,7 +4487,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
                 point.usd,
                 point.five_hour_share,
                 point.seven_day_share,
-                point.equivalent
+                point.equivalent_by_tier[PRO]
             ),
             (fast_usd, None, None, None),
             "the fast row's zero never stands for a bucket holding a row the table cannot price, whichever came first"
@@ -4541,7 +4541,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     let standard = point("standard", MAX_20X);
     assert!(
         standard.five_hour_share.is_some()
-            && standard.equivalent.is_some_and(|e| e > 0.0)
+            && standard.equivalent_by_tier[PRO].is_some_and(|e| e > 0.0)
             && standard.usd == 0.0,
         "a standard row on a subscription reads a share, a figure and no dollars: {standard:?}"
     );
@@ -4552,7 +4552,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
             fast.usd,
             fast.five_hour_share,
             fast.seven_day_share,
-            fast.equivalent,
+            fast.equivalent_by_tier[PRO],
             fast.uncached_tokens
         ),
         (fast_usd, Some(0.0), Some(0.0), Some(0.0), 1_000),
@@ -4698,7 +4698,7 @@ fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_and_a_zero_
          window: {point:?}"
     );
     assert_eq!(
-        (point.equivalent, point.unpriced),
+        (point.equivalent_by_tier[PRO], point.unpriced),
         (Some(0.0), false),
         "the billed row alone reads the zero figure of a bucket with no plan row"
     );
@@ -5052,10 +5052,10 @@ fn a_row_of_an_account_without_a_tier_prices_no_share_and_an_api_key_row_keeps_i
     let figure = tables.equivalent_at(SEVEN_DAY, None, "claude-opus-5-5", million, hour, hour, NOW);
     assert!(figure.is_some(), "the shipped model weighs Opus 5.5");
     for point in [&max, &pro, &tierless] {
-        assert_eq!(point.equivalent, figure, "{point:?}");
+        assert_eq!(point.equivalent_by_tier[PRO], figure, "{point:?}");
     }
     assert_eq!(
-        key.equivalent,
+        key.equivalent_by_tier[PRO],
         Some(0.0),
         "the api_key row adds a zero figure beside its dollars"
     );
@@ -5154,7 +5154,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
             (
                 point.five_hour_share,
                 point.seven_day_share,
-                point.equivalent,
+                point.equivalent_by_tier[PRO],
                 point.unpriced,
                 point.tokens,
                 point.usd
@@ -5172,7 +5172,7 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
         (
             point.five_hour_share,
             point.seven_day_share,
-            point.equivalent,
+            point.equivalent_by_tier[PRO],
             point.tokens
         ),
         (None, None, None, 2_000_000),
@@ -5468,14 +5468,18 @@ fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle
         let point = point_at(&points, hour);
         assert!(point.usd > 0.0, "{point:?}");
         assert_eq!(
-            (point.equivalent, point.five_hour_equivalent, point.unpriced),
+            (
+                point.equivalent_by_tier[PRO],
+                point.five_hour_equivalent_by_tier[PRO],
+                point.unpriced
+            ),
             (Some(0.0), Some(0.0), false),
             "a billed row adds a zero Pro-week and a zero Pro 5-hour figure: {point:?}"
         );
     }
     let idle = point_at(&points, 0);
     assert_eq!(
-        (idle.equivalent, idle.unpriced),
+        (idle.equivalent_by_tier[PRO], idle.unpriced),
         (None, false),
         "an idle bucket"
     );
@@ -5541,7 +5545,7 @@ fn the_burn_answers_the_model_week_share_beside_the_shared_windows() {
     let both = figure("claude-fable-5-1") + figure("claude-opus-5-5");
     assert!(
         every.model_week_share.is_none()
-            && every.equivalent.is_some_and(|got| (got - both).abs() <= 1e-12 * both),
+            && every.equivalent_by_tier[PRO].is_some_and(|got| (got - both).abs() <= 1e-12 * both),
         "a read naming no account answers no week share and the two rows' figure: {every:?} vs {both}"
     );
 }
@@ -5595,8 +5599,8 @@ fn the_five_hour_figure_prices_each_row_under_its_own_regime_and_the_band_of_its
     // 0.5, the desk row by the desk regime's Pro 10 and its factor 1, both rows at 07:00 and 08:00 in Los Angeles.
     assert_eq!(
         (
-            point_at(&points, hour).five_hour_equivalent,
-            point_at(&points, hour + 3_600).five_hour_equivalent
+            point_at(&points, hour).five_hour_equivalent_by_tier[PRO],
+            point_at(&points, hour + 3_600).five_hour_equivalent_by_tier[PRO]
         ),
         (Some(800.0), Some(200.0)),
         "each row's 5-hour figure under its own regime: {points:?}"
@@ -5706,14 +5710,256 @@ fn the_fable_week_figure_counts_the_fable_rows_alone_and_a_busy_bucket_without_o
     .unwrap();
     let figures = |hour: i64| {
         let point = point_at(&points, hour);
-        (point.fable_equivalent, point.equivalent)
+        (
+            point.fable_equivalent_by_tier["test_tier"],
+            point.equivalent_by_tier["test_tier"],
+        )
     };
     // 1,000 input tokens at Fable 5.1's weight 10 are 10,000 units and at Sonnet 5.5's weight 1 are 1,000, each over
-    // test_tier's 1,000 on the week.
+    // test_tier's 1,000 on the week. The Fable week holds half the week, so the Fable row reads 20 of it.
     assert_eq!(
         (figures(3_600), figures(7_200)),
-        ((Some(10.0), Some(11.0)), (Some(0.0), Some(1.0))),
+        ((Some(20.0), Some(11.0)), (Some(0.0), Some(1.0))),
         "the Fable row's figure alone beside both rows' figure, and a zero beside a Sonnet row's: {points:?}"
+    );
+}
+
+/// The points of the one group the burn route's reader answers for every row of `[from, to)` in `bucket_seconds`
+/// buckets.
+async fn burn_points(
+    db: &std::sync::Arc<LedgerDb>,
+    tables: &PlanTables,
+    prices: &PriceRevisions,
+    from: i64,
+    to: i64,
+    bucket_seconds: i64,
+) -> Vec<phoebis_ledger::BurnPoint> {
+    let filter = SeriesFilter {
+        from,
+        to,
+        bucket_seconds,
+        ..SeriesFilter::default()
+    };
+    let mut groups = burn_groups_paged(
+        db,
+        tables,
+        prices,
+        &filter,
+        GroupBy::All,
+        &LiveKeys::default(),
+        &[],
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(groups.len(), 1, "one group of every row: {groups:?}");
+    groups.remove(0).2
+}
+
+/// A cost model whose second entry doubles `test_tier`'s capacity on both windows from 18:30 UTC on 2026-01-15, an
+/// instant inside the 18:00 hour, with Sonnet 5.5 at weight 1 in both entries.
+const DOUBLED_CAPACITY_IN_ONE_HOUR: &str = "\
+unit: {tier: test_tier, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      test_tier: {five_hour: 50, seven_day: 500}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5-5: sonnet
+  - effective: 2026-01-15T18:30:00Z
+    capacity:
+      test_tier: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5-5: sonnet
+";
+
+/// Each plan request scales to a tier under the cost revision in force when it arrived: two requests of 50 input and
+/// 5 output tokens, 100 units, at 18:10 and at 18:45 read 0.2 of the anchor's 500 on the week before the entry of 18:30
+/// doubles it and 0.1 of its 1,000 after, so the day's bucket reads 0.3.
+#[tokio::test]
+async fn a_tiers_burn_figure_scales_each_plan_request_at_the_cost_revision_in_force_when_it_arrived(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    for (id, minute) in [("early", 10), ("late", 45)] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                model: "claude-sonnet-5-5",
+                at: ms(2026, 1, 15, 18, minute),
+                usage: usage(50, 5),
+                ..ShareRow::default()
+            },
+        );
+    }
+    let tables = phoebis_ledger::test_tables::tables(
+        CostRevisions::from_yaml(DOUBLED_CAPACITY_IN_ONE_HOUR).unwrap(),
+    );
+    let day = ms(2026, 1, 15, 0, 0);
+    let points = burn_points(
+        &db,
+        &tables,
+        &priced_table("claude-sonnet-5-5", 1.0),
+        day,
+        day + DAY_MS,
+        86_400,
+    )
+    .await;
+    let point = point_at(&points, day / 1_000);
+    assert!(
+        close(point.equivalent_by_tier["test_tier"].as_ref(), 0.3),
+        "{point:?}"
+    );
+}
+
+/// One cost revision of three tiers: the anchor `test_tier` at 100 units on the 5-hour window and 1,000 on the week,
+/// `wide_tier` at 200 and 2,000, and `narrow_tier` sized on the 5-hour window alone at 50. Sonnet 5.5 weighs 1 and
+/// Fable 5.1 weighs 10 on every window, its Fable week half the week.
+const THREE_TIERS: &str = "\
+unit: {tier: test_tier, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      test_tier:   {five_hour: 100, seven_day: 1000}
+      wide_tier:   {five_hour: 200, seven_day: 2000}
+      narrow_tier: {five_hour: 50, seven_day: null}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-fable-5-1: 10
+      claude-sonnet-5-5: 1
+    model_windows:
+      seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-fable-5-1: fable
+      claude-sonnet-5-5: sonnet
+";
+
+fn three_tiers() -> PlanTables {
+    phoebis_ledger::test_tables::tables(CostRevisions::from_yaml(THREE_TIERS).unwrap())
+}
+
+/// One of a burn point's maps over the tiers of `THREE_TIERS`.
+fn three_tier_map(
+    narrow: Option<f64>,
+    test: Option<f64>,
+    wide: Option<f64>,
+) -> BTreeMap<String, Option<f64>> {
+    BTreeMap::from([
+        ("narrow_tier".to_string(), narrow),
+        ("test_tier".to_string(), test),
+        ("wide_tier".to_string(), wide),
+    ])
+}
+
+/// A tier whose revision does not size a window reads null on that window alone, and the other tiers keep their
+/// figures: one plan row of 100 Sonnet units off the band reads `narrow_tier` null on the week and 2 of its 50 on the
+/// 5-hour window, beside its share of each window of the two tiers that size both.
+#[tokio::test]
+async fn a_tier_its_revision_does_not_size_on_a_window_reads_null_there_beside_the_other_tiers_figures(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    plant_share(
+        &db,
+        ShareRow {
+            model: "claude-sonnet-5-5",
+            usage: usage(50, 5),
+            ..ShareRow::default()
+        },
+    );
+    let (from, to) = hour_range(WEEKDAY_OFF_PEAK);
+    let points = burn_points(&db, &three_tiers(), &PRICES, from, to, 3_600).await;
+    let point = point_at(&points, from / 1_000);
+    assert_eq!(
+        (point.equivalent_by_tier, point.five_hour_equivalent_by_tier),
+        (
+            three_tier_map(None, Some(0.1), Some(0.05)),
+            three_tier_map(Some(2.0), Some(1.0), Some(0.5))
+        )
+    );
+}
+
+/// A billed row and a free classifier call spend no plan window, so each adds a zero to every tier's entry of the three
+/// maps ahead of the tier's size: on the three tiers' tables an hour of a billed Fable row and an hour of a free Fable
+/// classifier call read zero on every entry, `narrow_tier`'s week and Fable week among them.
+#[tokio::test]
+async fn a_billed_row_and_a_free_classifier_call_add_a_zero_to_every_tiers_burn_figure_an_unsized_tiers_too(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let (from, _) = hour_range(WEEKDAY_OFF_PEAK);
+    plant_share(
+        &db,
+        ShareRow {
+            id: "billed",
+            account: "direct",
+            account_kind: AccountKind::ApiKey,
+            at: from,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        &db,
+        ShareRow {
+            id: "free",
+            classifier: Some("client"),
+            at: from + 3_600_000,
+            ..ShareRow::default()
+        },
+    );
+    let points = burn_points(
+        &db,
+        &three_tiers(),
+        &PRICES,
+        from,
+        from + 2 * 3_600_000,
+        3_600,
+    )
+    .await;
+    let maps = |hour: i64| {
+        let point = point_at(&points, hour);
+        (
+            point.equivalent_by_tier,
+            point.five_hour_equivalent_by_tier,
+            point.fable_equivalent_by_tier,
+        )
+    };
+    let zeros = three_tier_map(Some(0.0), Some(0.0), Some(0.0));
+    let all_zero = (zeros.clone(), zeros.clone(), zeros);
+    assert_eq!(
+        [maps(from / 1_000), maps(from / 1_000 + 3_600)],
+        [all_zero.clone(), all_zero],
+        "the billed row's hour, then the free call's"
     );
 }
 
@@ -5823,8 +6069,7 @@ async fn the_burn_groups_by_every_breakdown_dimension_and_answers_the_shares_whe
         )
         .unwrap();
     assert!(
-        opus.equivalent
-            .is_some_and(|e| (e - 2.0 * equivalent).abs() < 1e-12)
+        opus.equivalent_by_tier[PRO].is_some_and(|e| (e - 2.0 * equivalent).abs() < 1e-12)
             && opus.five_hour_share.is_none(),
         "the two accounts' rows add in the figure and not in the shares: {opus:?} vs {equivalent}"
     );
@@ -5996,9 +6241,7 @@ fn a_session_series_answers_its_shares_where_the_read_names_one_account() {
     let every = read(Vec::new());
     assert!(
         every.five_hour_share.is_none()
-            && every
-                .equivalent
-                .is_some_and(|e| (e - 2.0 * equivalent).abs() < 1e-12)
+            && every.equivalent_by_tier[PRO].is_some_and(|e| (e - 2.0 * equivalent).abs() < 1e-12)
             && every.uncached_tokens == 2_000_000,
         "both attempts add in the figure and not in the shares: {every:?} vs {equivalent}"
     );
@@ -6693,7 +6936,7 @@ fn the_burn_series_over_one_read_matches_a_read_per_scope() {
             // rows' dollars alone.
             assert!(
                 read.iter()
-                    .any(|p| p.equivalent.is_some_and(|e| e > 0.0) || p.usd > 0.0),
+                    .any(|p| p.equivalent_by_tier[PRO].is_some_and(|e| e > 0.0) || p.usd > 0.0),
                 "the scope reads something: {filter:?}"
             );
             assert_eq!(

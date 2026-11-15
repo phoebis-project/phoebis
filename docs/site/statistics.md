@@ -346,11 +346,14 @@ Spend per minute charts under every grouping. An answer in overage reads the sam
 Plan per hour and its dollars in `usd`. A usage-based seat's answer counts its dollars in `usd` with no share, and the
 burn route names its group's unit `usd`, as an API-key account's. A member's budget counts a fast answer at the fast
 cells, a subscription member's as an API-key member's. The burn route's `usd` keeps the billed answers' dollars alone,
-and `plan_usd` holds the list dollars of the plan-funded answers at the price list in force at each one. Beside the
-Pro-week figure, each point answers `five_hour_equivalent`, the plan-funded answers as a share of the Pro 5-hour window
-under each request's own regime and band, and `fable_equivalent`, the Pro-week figure of the plan-funded answers on
-models that draw the Fable week, both under every grouping. A client classifier call the plan paid spends no window, so
-on a tier the cost model does not size on a window it leaves that window's share as the bucket's other rows set it.
+and `plan_usd` holds the list dollars of the plan-funded answers at the price list in force at each one. Each point
+prices the plan-funded answers once per plan tier the cost model's `capacity` map names, under every grouping:
+`equivalent_by_tier` as the share of each tier's 7-day window, `five_hour_equivalent_by_tier` as the share of its 5-hour
+window under each request's own band, and `fable_equivalent_by_tier` as the share of its Fable week for the answers on
+models that draw that week. Each request scales to each tier under its own regime and the cost revision in force when it
+arrived, and a tier that revision does not size on a window reads null there. A client classifier call the plan paid
+spends no window, so on a tier the cost model does not size on a window it leaves that window's share as the bucket's
+other rows set it.
 
 A client classifier call reads a zero share, a zero Pro-week figure and zero dollars on a subscription account, with the
 reason `client_classifier` on the request, and its dollars in the overage, on an API key and on a usage-based seat. A
@@ -364,20 +367,20 @@ capacity factor when the request completes inside the band. A unit is 1/90,000,0
 percent of that window, the step the usage header moves in, is 900,000 units. A request prices under the regime that
 lists its client's entrypoint (the interactive regime, below), and the unit stays the base Pro 7-day window, of which an
 interactive window holds 112,500,000, so one percent of the Pro week is 1,125,000 units for an interactive request and
-900,000 for any other. The admin routes answer one figure per row beside the dollars, the Pro-week figure: the share of
-a Pro 7-day window the same tokens would spend, the row's units over the Pro week of its regime, so figures of different
-account tiers compare and add. A row's units read the revision in force at its instant, and the figure divides them by
-the current revision's Pro week, so every figure on the console reads one yardstick. Where a route names one account,
-the request's shares of that account's own windows ride beside the figure as its hint, the 5-hour window with the peak
-band's weight, the 7-day window and the model week where the model has one on that plan, each only where the account's
-window set holds the window. A Fable 5.1 request of 100,000 input tokens outside the band under the base regime is
-1,000,000 units, 1.11% of a Pro week, 0.222% of a Max week and 0.111% of an Ultra week. One million plain input tokens
-of Opus 5.5 are 2,200,000 units, 2.44% of a Pro week, 0.489% of a Max week and 0.244% of an Ultra week, and the same
-request on a Pro account spends 29.3% of its own 5-hour window. Under the interactive regime the same million tokens are
-1.96% of a Pro week, 0.391% of a Max week and 0.196% of an Ultra week, and 14.7% of a Pro 5-hour window against 29.3%.
-The console reads the Pro-week figure in the week the top bar's Week control names, Ultra week until you pick one, under
-the Unit switch, whose default Native position shows a subscription request in it and a billed request in dollars ([The
-shell](console.md#the-shell)).
+900,000 for any other. The admin routes other than the burn answer one figure per row beside the dollars, the Pro-week
+figure: the share of a Pro 7-day window the same tokens would spend, the row's units over the Pro week of its regime, so
+figures of different account tiers compare and add. A row's units read the revision in force at its instant, and the
+figure divides them by the current revision's Pro week, so every figure on the console reads one yardstick. Where a
+route names one account, the request's shares of that account's own windows ride beside the figure as its hint, the
+5-hour window with the peak band's weight, the 7-day window and the model week where the model has one on that plan,
+each only where the account's window set holds the window. A Fable 5.1 request of 100,000 input tokens outside the band
+under the base regime is 1,000,000 units, 1.11% of a Pro week, 0.222% of a Max week and 0.111% of an Ultra week. One
+million plain input tokens of Opus 5.5 are 2,200,000 units, 2.44% of a Pro week, 0.489% of a Max week and 0.244% of an
+Ultra week, and the same request on a Pro account spends 29.3% of its own 5-hour window. Under the interactive regime
+the same million tokens are 1.96% of a Pro week, 0.391% of a Max week and 0.196% of an Ultra week, and 14.7% of a Pro
+5-hour window against 29.3%. The console reads the Pro-week figure in the week the top bar's Week control names, Ultra
+week until you pick one, under the Unit switch, whose default Native position shows a subscription request in it and a
+billed request in dollars ([The shell](console.md#the-shell)).
 
 The base capacities the shipped file carries, in units per window, keyed by the tier the profile reports for the plans
 the cost model prices (a Pro subscription reports `default_claude_ai`, and a free organization reports the same tier
@@ -459,8 +462,8 @@ hour it arrived in, so their shares weigh it by that hour's band rather than by 
 Pro-week figure does the same where the week's factor is not 1. The burn route groups by the analytics' ten dimensions,
 read from the rollups the same way, and by session, which reads the attempts, each weighed by the band at its
 completion. The shares answer under the account grouping, or under every grouping when the filter names exactly one
-account, since shares of different accounts' windows do not add, and the Pro-week figure answers under every grouping.
-The Tiers and peak band tab of the cost reference names this week's hours in your zone ([The cost
+account, since shares of different accounts' windows do not add, and the figures per plan tier answer under every
+grouping. The Tiers and peak band tab of the cost reference names this week's hours in your zone ([The cost
 reference](console.md#the-cost-reference)).
 
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window of the request's

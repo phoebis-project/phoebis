@@ -873,12 +873,12 @@ pub(crate) async fn accounts(
 }
 
 /// The burn series per group: an API key account's tokens in dollars, and a subscription account's as the share of
-/// its own 5-hour and 7-day window and of its model's own week, and as the Pro-week figure. `unit` and the shares
+/// its own 5-hour and 7-day window and of its model's own week, and as each plan tier's figures. `unit` and the shares
 /// answer under `group_by=account` and under any grouping whose `accounts` filter names exactly one account, and read
-/// null otherwise, since shares of different accounts' windows do not add. The figure answers under every grouping. So
-/// do a plan-funded row's list dollars in `plan_usd` beside the billed dollars in `usd`, and the Pro 5-hour figure in
-/// `five_hour_equivalent` and the Fable week's in `fable_equivalent` beside the Pro-week figure. A group none of whose
-/// rows in the range holds a token answers no point.
+/// null otherwise, since shares of different accounts' windows do not add. The figures answer under every grouping,
+/// once per plan tier in `equivalent_by_tier`, `five_hour_equivalent_by_tier` and `fable_equivalent_by_tier`, and so
+/// do a plan-funded row's list dollars in `plan_usd` beside the billed dollars in `usd`. A group none of whose rows in
+/// the range holds a token answers no point.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Burn {
@@ -924,22 +924,27 @@ pub(crate) struct BurnPoint {
     /// The same tokens over the model's own week, where the model has one. Null where no row of the bucket is on
     /// such a model, and in the same cases.
     pub model_week_share: Option<f64>,
-    /// The bucket's plan-funded tokens as the Pro-week figure, whatever tier served them, under every grouping. A
-    /// billed row adds a zero, so a bucket with tokens and no plan-funded row reads 0. Null for an idle bucket and for
-    /// a bucket holding a plan-funded row the cost model cannot price, a model without a weight.
-    pub equivalent: Option<f64>,
-    /// The bucket's plan rows as the Pro 5-hour figure: the share of the anchor tier's 5-hour window they spend, each
-    /// row priced under its own regime and the band of its own hour, or of its completion in the session series,
-    /// whatever tier served it, under every grouping and bucket size. A billed row adds a zero. Null where
-    /// `equivalent` reads null and where the cost model sizes no 5-hour window for a row of the bucket.
-    pub five_hour_equivalent: Option<f64>,
-    /// The Pro-week figure of the bucket's plan rows whose model draws the Fable week, under every grouping. A row on
-    /// such a model adds its figure and every other row with tokens a zero, so a bucket with traffic and no such row
-    /// reads 0. Null for an idle bucket and for a bucket holding a Fable-week row the cost model cannot price: null
-    /// beside `tokens` above 0 is the unpriced case.
-    pub fable_equivalent: Option<f64>,
-    /// True for a bucket holding a plan-funded row with tokens the cost model could not price, so a null `equivalent`
-    /// with the flag false is an idle bucket.
+    /// The bucket's plan-funded tokens as the share of each plan tier's 7-day window they spend, whatever tier served
+    /// them, under every grouping. The keys are the tiers the cost model's `capacity` map names across its revisions,
+    /// the same on every point. Each row scales to each tier under the revision in force when its request arrived and
+    /// its client's regime before the bucket sums it. A billed row and a client classifier call add a zero to every
+    /// entry, so a bucket with tokens and no plan-funded row reads 0 on each tier. Null on every entry for an idle
+    /// bucket and for a bucket holding a plan-funded row whose model has no weight, and on one tier's entry where a
+    /// row's revision gives that tier no capacity on the window. A reader with no chosen tier reads the entry of the
+    /// cost model's anchor tier, its `unit.tier`.
+    pub equivalent_by_tier: BTreeMap<String, Option<f64>>,
+    /// The same tokens as the share of each tier's 5-hour window, each row under the band of its own hour, or of its
+    /// completion in the session series, under every grouping and bucket size. Null in the same cases, each window
+    /// read by itself, so a tier sized on the 5-hour window alone reads a number here and null in
+    /// `equivalent_by_tier`.
+    pub five_hour_equivalent_by_tier: BTreeMap<String, Option<f64>>,
+    /// The bucket's plan-funded rows whose model draws the Fable week as the share of each tier's Fable week, and a
+    /// zero for every other row with tokens, so a bucket with traffic and no such row reads 0 on each tier. Null on
+    /// every entry for an idle bucket and for a bucket holding a Fable-week row whose model has no weight, and on one
+    /// tier's entry where such a row's revision gives that tier no capacity on the week.
+    pub fable_equivalent_by_tier: BTreeMap<String, Option<f64>>,
+    /// True for a bucket holding a plan-funded row with tokens whose model has no weight on the 7-day window, so a
+    /// null entry with the flag false is an idle bucket or a tier a row's revision does not size.
     pub unpriced: bool,
     pub cached_tokens: u64,
     /// Every token of the bucket, uncached input, cache reads, both cache writes and output. Zero for a bucket
@@ -963,11 +968,11 @@ pub(crate) struct BurnPoint {
 )]
 // The shares and `unit` are answered where each group holds one account's rows, the account grouping or a filter
 // naming exactly one account, and read null otherwise, since shares of different accounts' windows do not add. A
-// point whose shares answer knows its account's funding, so `unit` follows the same gate. The Pro-week figure adds
-// across accounts and tiers, so it answers under every grouping. A bucket holding a row the table cannot price reads
-// null on that window and in the figure, so a partial sum never reads as its share. Each point's `tokens` counts every
-// token type of the bucket's rows, whatever the tables priced, so a reader tells an idle bucket from one whose traffic
-// no table priced.
+// point whose shares answer knows its account's funding, so `unit` follows the same gate. Each plan tier's figures add
+// across accounts and the tiers that served them, so they answer under every grouping. A bucket holding a row the
+// table cannot price reads null on that window and in each entry the row nulls, so a partial sum never reads as its
+// share. Each point's `tokens` counts every token type of the bucket's rows, whatever the tables priced, so a reader
+// tells an idle bucket from one whose traffic no table priced.
 pub(crate) async fn burn(
     State(state): State<Arc<AdminState>>,
     AdminQuery(q): AdminQuery<BurnQuery>,
@@ -1078,9 +1083,9 @@ pub(crate) async fn burn(
                 five_hour_share: p.five_hour_share.filter(|_| !five_hour_lacked),
                 seven_day_share: p.seven_day_share.filter(|_| !seven_day_lacked),
                 model_week_share: p.model_week_share,
-                equivalent: p.equivalent,
-                five_hour_equivalent: p.five_hour_equivalent,
-                fable_equivalent: p.fable_equivalent,
+                equivalent_by_tier: p.equivalent_by_tier,
+                five_hour_equivalent_by_tier: p.five_hour_equivalent_by_tier,
+                fable_equivalent_by_tier: p.fable_equivalent_by_tier,
                 unpriced: p.unpriced,
                 cached_tokens: p.cached_tokens,
                 tokens: p.tokens,

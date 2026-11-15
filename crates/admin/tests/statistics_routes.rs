@@ -10,6 +10,8 @@ use phoebis_store::{
 };
 
 const HOUR: i64 = 3_600_000;
+/// The anchor tier of both cost models the rigs load, whose entry of a burn point's map a reader with no week reads.
+const PRO: &str = "default_claude_ai";
 
 fn record(id: &str, at: i64, model: &str, session: &str) -> Record {
     record_at(id, at, model, session, 0)
@@ -1316,17 +1318,17 @@ async fn the_burn_flags_a_bucket_holding_a_plan_row_the_cost_model_cannot_weigh_
     };
     let unpriced = point(1);
     assert!(
-        null_field(&unpriced, "equivalent") && unpriced["unpriced"] == true,
+        null_field(&unpriced["equivalent_by_tier"], PRO) && unpriced["unpriced"] == true,
         "the bucket holding the unweighted row reads a null figure and says so: {unpriced}"
     );
     let priced = point(2);
     assert!(
-        positive(&priced["equivalent"]) && priced["unpriced"] == false,
+        positive(&priced["equivalent_by_tier"][PRO]) && priced["unpriced"] == false,
         "a bucket whose rows priced reads no flag: {priced}"
     );
     let idle = point(5);
     assert!(
-        null_field(&idle, "equivalent") && idle["unpriced"] == false,
+        null_field(&idle["equivalent_by_tier"], PRO) && idle["unpriced"] == false,
         "an idle bucket's null figure carries no flag: {idle}"
     );
 }
@@ -2216,7 +2218,7 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     // The same 4,000,000 units over the Pro tier's 50 on the week.
     let opus_figure = 80_000.0;
     assert!(
-        close_to(&point["equivalent"], opus_figure) && point["unpriced"] == false,
+        close_to(&point["equivalent_by_tier"][PRO], opus_figure) && point["unpriced"] == false,
         "beside its shares the bucket reads the Pro-week figure, its model weighted: {point}"
     );
     assert!(
@@ -2229,15 +2231,17 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     // and over the Pro tier's 50 on the week for the figure.
     let (week_share, fable_figure) = (40_000.0, 400_000.0);
     assert!(
-        close_to(&fable["model_week_share"], week_share) && close_to(&fable["equivalent"], fable_figure),
+        close_to(&fable["model_week_share"], week_share)
+            && close_to(&fable["equivalent_by_tier"][PRO], fable_figure),
         "a Fable row reads its model week's share beside the shared windows and its figure: {fable}"
     );
     // The Opus row's 4,000,000 units over the Pro tier's 5 on the 5-hour window, off the band on the rig's Sunday. Opus
-    // 5.5 draws no Fable week, so its bucket's Fable week figure reads a zero, while the Fable bucket's is its figure.
+    // 5.5 draws no Fable week, so its bucket's Fable week figure reads a zero, while the Fable bucket's reads its units
+    // over half of the Pro tier's 50, the Pro tier's Fable week.
     assert!(
-        close_to(&point["five_hour_equivalent"], 800_000.0)
-            && close_to(&point["fable_equivalent"], 0.0)
-            && close_to(&fable["fable_equivalent"], fable_figure),
+        close_to(&point["five_hour_equivalent_by_tier"][PRO], 800_000.0)
+            && close_to(&point["fable_equivalent_by_tier"][PRO], 0.0)
+            && close_to(&fable["fable_equivalent_by_tier"][PRO], 800_000.0),
         "the Opus bucket's 5-hour figure and Fable week figure, then the Fable bucket's: {point} {fable}"
     );
     // The rig prices dollars on the shipped list, so the plan row's list dollars take no literal here: they read a
@@ -2245,8 +2249,8 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let plan_usd = point["plan_usd"].as_f64().unwrap_or(0.0);
     assert!(
         plan_usd > 0.0
-            && point["equivalent"] != plan_usd
-            && point["five_hour_equivalent"] != plan_usd,
+            && point["equivalent_by_tier"][PRO] != plan_usd
+            && point["five_hour_equivalent_by_tier"][PRO] != plan_usd,
         "plan_usd reads the plan row's own list dollars: {point}"
     );
     let mut keys: Vec<&str> = point
@@ -2261,9 +2265,9 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
         [
             "at",
             "cached_tokens",
-            "equivalent",
-            "fable_equivalent",
-            "five_hour_equivalent",
+            "equivalent_by_tier",
+            "fable_equivalent_by_tier",
+            "five_hour_equivalent_by_tier",
             "five_hour_share",
             "group",
             "model_week_share",
@@ -2275,7 +2279,8 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
             "unpriced",
             "usd"
         ],
-        "a point carries its shares, its dollars on both sides, its three Pro figures and the unpriced flag: {point}"
+        "a point carries its shares, its dollars on both sides, its three plan figures per tier and the unpriced flag: \
+         {point}"
     );
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -2363,11 +2368,14 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     };
     let keyed_opus = bucket_at(keyed, hour);
     assert!(
-        close_to(&keyed_opus["equivalent"], opus_figure),
+        close_to(&keyed_opus["equivalent_by_tier"][PRO], opus_figure),
         "the figure adds across accounts, the api_key row adding a zero to the subscription's: {keyed_opus}"
     );
     assert!(
-        close_to(&bucket_at(keyed, fable_hour)["equivalent"], fable_figure),
+        close_to(
+            &bucket_at(keyed, fable_hour)["equivalent_by_tier"][PRO],
+            fable_figure
+        ),
         "and so does the Fable row's: {by_key}"
     );
     let one_account = json(
@@ -3709,7 +3717,7 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
          {point}"
     );
     assert_eq!(
-        (&point["equivalent"], &point["unpriced"]),
+        (&point["equivalent_by_tier"][PRO], &point["unpriced"]),
         (&serde_json::json!(0.0), &serde_json::json!(false)),
         "a bucket with tokens and no plan row reads a zero Pro-week figure: {point}"
     );
@@ -4375,7 +4383,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         "s-mid's bucket reads its attempt's dollars at read time: {mid_point} vs {mid_usd}"
     );
     assert_eq!(
-        &mid_point["equivalent"],
+        &mid_point["equivalent_by_tier"][PRO],
         &serde_json::json!(0.0),
         "an api_key session draws no plan window: {mid_point}"
     );
@@ -4417,7 +4425,7 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
         };
         let any = bucket_of(points);
         assert!(
-            close_to(&any["equivalent"], figure),
+            close_to(&any["equivalent_by_tier"][PRO], figure),
             "a session's bucket reads its attempt's Pro-week figure with no account named: {any}"
         );
         let one = bucket_of(named);

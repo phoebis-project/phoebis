@@ -5040,10 +5040,10 @@ fn bucket_slot<T>(points: &mut [T], first: i64, bucket_seconds: i64, hour: i64) 
 
 /// One point of the burn series: a subscription row's tokens as the share of the account tier's own windows it
 /// recorded (the 5-hour share weighed by the band at the row's instant, the 7-day share unbanded), answered where the
-/// read's groups each hold one account's rows, and as the Pro figures under every grouping, a billed row's dollars in
-/// `usd` and a plan row's list dollars in `plan_usd`. A share is `None` on a window while no subscription row of the
-/// bucket could be priced on it, or while any row of the bucket with a tier could not be, save a free classifier
-/// call, which spends no window.
+/// read's groups each hold one account's rows, and as each plan tier's figures under every grouping, a billed row's
+/// dollars in `usd` and a plan row's list dollars in `plan_usd`. A share is `None` on a window while no subscription
+/// row of the bucket could be priced on it, or while any row of the bucket with a tier could not be, save a free
+/// classifier call, which spends no window.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct BurnPoint {
     /// Milliseconds, like every other series' `at`.
@@ -5062,22 +5062,25 @@ pub struct BurnPoint {
     /// The list dollars of the bucket's plan-funded rows at the API price revision in force at each row, 0 for a
     /// bucket with no plan row. `usd` keeps the billed rows alone.
     pub plan_usd: f64,
-    /// The bucket's plan rows as the Pro-week figure under every grouping. A billed row adds a zero, so a bucket with
-    /// tokens and no plan row reads 0, `None` for an idle bucket and for one holding a plan row the cost model cannot
-    /// price.
-    pub equivalent: Option<f64>,
-    /// The bucket's plan rows as the Pro 5-hour figure: the share of the anchor tier's 5-hour window they spend, each
-    /// row priced under its own regime and the band of its own hour, or of its completion in the session series,
-    /// whatever tier served it, under every grouping and bucket size. A billed row adds a zero. `None` where
-    /// `equivalent` reads `None` and where the cost model sizes no 5-hour window for a row of the bucket.
-    pub five_hour_equivalent: Option<f64>,
-    /// The Pro-week figure of the bucket's plan rows whose model draws the Fable week, under every grouping. A row on
-    /// such a model adds its figure and every other row with tokens a zero, so a bucket with traffic and no such row
-    /// reads 0. `None` for an idle bucket and for a bucket holding a Fable-week row the cost model cannot price: `None`
-    /// beside `tokens` above 0 is the unpriced case.
-    pub fable_equivalent: Option<f64>,
-    /// True for a bucket holding a plan row with tokens that priced nothing, so a `None` figure with the flag false is
-    /// an idle bucket.
+    /// The bucket's plan rows as the share of each plan tier's 7-day window they spend, keyed by every tier a loaded
+    /// cost revision's `capacity` map names, each row scaled under the revision in force at its instant and its own
+    /// regime before the sum, whatever tier served it, under every grouping. A billed row and a free classifier call
+    /// add a zero to every entry, so a bucket with tokens and no plan row reads 0 on each tier. `None` on every entry
+    /// for an idle bucket and for one holding a plan row whose model has no weight, and on one tier's entry where a
+    /// plan row's revision does not size that tier's window. The anchor tier's entry is the Pro-week figure under one
+    /// revision.
+    pub equivalent_by_tier: BTreeMap<String, Option<f64>>,
+    /// The same rows as the share of each tier's 5-hour window, each row under the band of its own hour, or of its
+    /// completion in the session series, under every grouping and bucket size. `None` in the same cases, each window
+    /// read by itself, so a tier sized on the 5-hour window alone reads a number here and `None` on the 7-day window.
+    pub five_hour_equivalent_by_tier: BTreeMap<String, Option<f64>>,
+    /// The bucket's plan rows whose model draws the Fable week as the share of each tier's Fable week, and a zero for
+    /// every other row with tokens, so a bucket with traffic and no such row reads 0 on each tier. `None` on every
+    /// entry for an idle bucket and for one holding a Fable-week row whose model has no weight, and on one tier's entry
+    /// where a Fable-week row's revision does not size that tier's week.
+    pub fable_equivalent_by_tier: BTreeMap<String, Option<f64>>,
+    /// True for a bucket holding a plan row with tokens whose model has no weight on the 7-day window, so a `None`
+    /// entry with the flag false is an idle bucket or a tier a row's revision does not size.
     pub unpriced: bool,
 }
 
@@ -5120,14 +5123,29 @@ pub(crate) struct BurnSums {
     uncached_tokens: u64,
     usd: f64,
     plan_usd: f64,
-    equivalent: Latch,
-    five_hour_equivalent: Latch,
-    fable_equivalent: Latch,
+    /// Every tier of the read's key set from the bucket's construction, so an idle bucket answers each with `None`.
+    tiers: BTreeMap<String, TierSums>,
+    unpriced: bool,
+}
+
+/// One plan tier's three figures in a burn bucket, each latched by itself, so a tier a row's revision sizes on one
+/// window keeps its sum there.
+#[derive(Clone, Copy, Debug, Default)]
+struct TierSums {
+    seven_day: Latch,
+    five_hour: Latch,
+    fable_week: Latch,
 }
 
 impl BurnSums {
-    /// The point, its `unpriced` the figure's latch.
+    /// The point, each tier's entry its latch's figure.
     pub(crate) fn point(self) -> BurnPoint {
+        let by_tier = |latch: fn(&TierSums) -> Latch| -> BTreeMap<String, Option<f64>> {
+            self.tiers
+                .iter()
+                .map(|(tier, sums)| (tier.clone(), latch(sums).figure()))
+                .collect()
+        };
         BurnPoint {
             at: self.at,
             cached_tokens: self.cached_tokens,
@@ -5138,31 +5156,59 @@ impl BurnSums {
             uncached_tokens: self.uncached_tokens,
             usd: self.usd,
             plan_usd: self.plan_usd,
-            equivalent: self.equivalent.figure(),
-            five_hour_equivalent: self.five_hour_equivalent.figure(),
-            fable_equivalent: self.fable_equivalent.figure(),
-            unpriced: self.equivalent == Latch::Unpriced,
+            equivalent_by_tier: by_tier(|sums| sums.seven_day),
+            five_hour_equivalent_by_tier: by_tier(|sums| sums.five_hour),
+            fable_equivalent_by_tier: by_tier(|sums| sums.fable_week),
+            unpriced: self.unpriced,
         }
+    }
+
+    /// A priced row's share of each tier's windows under the cost revision in force at the key's `at` and the regime
+    /// its entrypoint names, its band read at the key's `band_at`, else its `at`. `share_at` divides in the Pro-week
+    /// figure's order, so under one revision the anchor tier's entry reads that figure to the last digit.
+    fn add_tiers(&mut self, tables: &PlanTables, key: &RowKey<'_>, usage: PinUsage) {
+        let costs = tables.revisions.in_force(key.at);
+        // Neither a billed row nor a free classifier call spends a plan window, so each adds a zero ahead of any
+        // tier's size.
+        let plan = key.funding == Funding::Plan && !key.free();
+        let fable_week = model_week(key.model) == Some(SEVEN_DAY_FABLE);
+        let band_at = key.band_at.unwrap_or(key.at);
+        for (tier, sums) in &mut self.tiers {
+            let share = |window: &str| {
+                if plan {
+                    costs.share_at(window, key.entrypoint, tier, key.model, usage, band_at)
+                } else {
+                    Some(0.0)
+                }
+            };
+            sums.seven_day.add(share(SEVEN_DAY));
+            sums.five_hour.add(share(FIVE_HOUR));
+            // A row off the Fable week adds a zero, so a busy bucket never reads idle there.
+            sums.fable_week.add(if fable_week {
+                share(SEVEN_DAY_FABLE)
+            } else {
+                Some(0.0)
+            });
+        }
+        // The model's weight alone sets the flag, so a tier the revision does not size never reads as unpriced.
+        self.unpriced |= plan && costs.weight(key.model, SEVEN_DAY).is_none();
     }
 }
 
 /// The row's funding decides its unit, so the kind the registry holds for the account now has no say and a deleted
 /// or recreated account moves no dollar into a share. `price_request` answers the row's read-time dollars, a billed
-/// row's in `usd` and a plan row's in `plan_usd`, and for a plan row the Pro-week figure against the anchor row in
-/// force at the key's `now`, and, where `shares` holds and the row recorded a tier, the shares of that tier's windows
-/// (each banded at the key's `band_at`, else its `at`). The burn is the one reader of a plan row's Pro 5-hour figure,
-/// so this function prices it against the same anchor row through `price_equivalent_at`. A plan row with no tier
-/// recorded prices no share and still its figures. A free classifier call spends no window, so it leaves out a window
-/// its tier does not size, and on a tier the revision does not size it leaves every window as the bucket's other rows
-/// set it. A fast row and one in overage add their dollars and a zero share where the tables size the tier: fast mode
-/// spends usage credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a
-/// reader the account is priced in its window unit. Every billed row adds a zero figure, so a bucket with tokens and no
-/// plan row reads 0 there and only an idle bucket reads `None`. The Fable week's figure takes the Pro-week figure of a
-/// row whose model draws that week and a zero for every other row. A bucket holding a row the table cannot price
-/// answers `None` on that window and in the figure, whichever row came first, and a row with no token has nothing to
-/// price and leaves every figure as the other rows set it. The dollars, the Pro-week figure and the shares are
-/// `price_request`'s, which the session fold prices a request through too, so a session's spend and its burn series
-/// price one way.
+/// row's in `usd` and a plan row's in `plan_usd`, and, where `shares` holds and the row recorded a tier, the shares of
+/// that tier's windows (each banded at the key's `band_at`, else its `at`). A plan row with no tier recorded prices no
+/// share and still its figures. A free classifier call spends no window, so it leaves out a window its tier does not
+/// size, and on a tier the revision does not size it leaves every window as the bucket's other rows set it. A fast row
+/// and one in overage add their dollars and a zero share where the tables size the tier: fast mode spends usage
+/// credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader the
+/// account is priced in its window unit. The figures scale the row to each plan tier before the bucket sums them, as
+/// `BurnSums::add_tiers` reads them, so a bucket with tokens and no plan row reads 0 on every tier and only an idle
+/// bucket reads `None` on every one. A bucket holding a row the table cannot price answers `None` on that window and
+/// in each entry that row latched, whichever row came first, and a row with no token has nothing to price and leaves
+/// every figure as the other rows set it. The dollars and the shares are `price_request`'s, which the session fold
+/// prices a request through too, so a session's spend and its burn series price one way.
 pub(crate) fn price_usage(
     point: &mut BurnSums,
     prices: &PriceRevisions,
@@ -5187,25 +5233,13 @@ pub(crate) fn price_usage(
     ]
     .into_iter()
     .filter_map(|(window, latch)| Some((*shares.get(window?)?, latch)));
-    let five_hour_equivalent = if price.funding == Funding::Plan {
+    if price.funding == Funding::Plan {
         point.plan_usd += price.usd;
-        price_equivalent_at(tables, &key, FIVE_HOUR, usage)
     } else {
         point.usd += price.usd;
-        Some(0.0)
-    };
+    }
     windows.for_each(|(share, latch)| latch.add(share));
-    point.equivalent.add(price.equivalent);
-    point.five_hour_equivalent.add(five_hour_equivalent);
-    // Every row with tokens off the Fable week adds a zero, so a busy bucket never reads idle, and an unpriced row
-    // latches the bucket only where it draws the week.
-    point
-        .fable_equivalent
-        .add(if model_week(key.model) == Some(SEVEN_DAY_FABLE) {
-            price.equivalent
-        } else {
-            Some(0.0)
-        });
+    point.add_tiers(tables, &key, usage);
     point.cached_tokens += usage.cache_read;
     point.tokens += tokens_of(usage);
     point.uncached_tokens += usage.input;
@@ -5286,10 +5320,10 @@ pub fn burn_series(
 }
 
 /// The burn series of `filter`'s scopes over `rows`, which `burn_rows` read for the same range and bucket, its shares
-/// answered where the filter names one account. A subscription row's 5-hour share and figure carry the band of the
+/// answered where the filter names one account. A subscription row's 5-hour share and figures carry the band of the
 /// hour the rollup folded the request under, since the rollup keeps no completion. The band reads per row rather than
 /// per bucket, since a six-hour or daily bucket can straddle a band edge and only the row's own hour says which side of
-/// it the row fell on. The figure divides by the anchor row in force at `now`, the read's instant. One pass: each row
+/// it the row fell on. Each tier's figures divide by its capacity under the row's own revision. One pass: each row
 /// lands in its bucket by index. With no connection it reads no request row, so it hands `row_parts` no side and
 /// prices each row whole at the end of its hour.
 pub fn burn_series_over(
@@ -5301,7 +5335,7 @@ pub fn burn_series_over(
     now: i64,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let mut sums = empty_burn_sums(first, last, filter.bucket_seconds);
+    let mut sums = empty_burn_sums(first, last, filter.bucket_seconds, &burn_tiers(tables));
     let shares = names_one_account(&filter.accounts);
     let keys = key_selectors(&filter.keys, live);
     let sides = Sides::default();
@@ -5321,14 +5355,35 @@ pub fn burn_series_over(
     Ok(sums.into_iter().map(BurnSums::point).collect())
 }
 
-/// Every bucket of `[first, last)`, empty. Ceiling, not floor: `last` is only rounded up to the hour (`hour_ceil`),
-/// so a 6-hour or daily bucket can leave a trailing partial bucket, which is a point of its own.
-fn empty_burn_sums(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnSums> {
+/// Every bucket of `[first, last)`, empty, each holding every tier of `tiers`. Ceiling, not floor: `last` is only
+/// rounded up to the hour (`hour_ceil`), so a 6-hour or daily bucket can leave a trailing partial bucket, which is a
+/// point of its own.
+fn empty_burn_sums(
+    first: i64,
+    last: i64,
+    bucket_seconds: i64,
+    tiers: &BTreeSet<&str>,
+) -> Vec<BurnSums> {
     bucket_starts(first, last, bucket_seconds)
         .map(|at| BurnSums {
             at: at * 1_000,
+            tiers: tiers
+                .iter()
+                .map(|tier| (tier.to_string(), TierSums::default()))
+                .collect(),
             ..BurnSums::default()
         })
+        .collect()
+}
+
+/// The plan tiers a burn answer keys its figures by: each key of a loaded cost revision's base `capacity` map, a tier
+/// sized on no window among them, read once per read so every point holds the same keys whatever revision priced it.
+fn burn_tiers(tables: &PlanTables) -> BTreeSet<&str> {
+    tables
+        .revisions
+        .iter()
+        .flat_map(|revision| revision.capacity.keys())
+        .map(String::as_str)
         .collect()
 }
 
@@ -5415,6 +5470,7 @@ pub async fn burn_groups_paged(
     // Each group's points, whether a row of the range itself holds a token, and whether a row with a token is
     // plan-funded.
     let mut groups: BTreeMap<String, (Vec<BurnSums>, bool, bool)> = BTreeMap::new();
+    let tiers = burn_tiers(tables);
     read_rollups_paged(db, &select, first, last, |row| {
         if !burn_scope_holds(filter, &select.keys, row) {
             return;
@@ -5422,7 +5478,7 @@ pub async fn burn_groups_paged(
         let (points, held, plan_funded) =
             groups.entry(grouping.group_of(row)).or_insert_with(|| {
                 (
-                    empty_burn_sums(first, last, filter.bucket_seconds),
+                    empty_burn_sums(first, last, filter.bucket_seconds, &tiers),
                     false,
                     false,
                 )
@@ -6057,9 +6113,9 @@ pub fn newest_landed_at(conn: &Connection) -> Result<i64, LedgerError> {
 /// its completion and prices under the account tier it recorded. A session can move between accounts, so its shares
 /// are answered where the filter names one account, whose attempts alone the series then holds. Named keys and pools
 /// rank and price their own requests alone, and a session is answered where an attempt of the range itself holds a
-/// token, as `burn_groups_paged` answers a group, with the unit its attempts' recorded funding names. The Pro-week
-/// figure divides by the anchor row in force at `now`. One pass over the range's attempts: each lands in its bucket by
-/// index, rather than every session re-scanning every attempt for every bucket.
+/// token, as `burn_groups_paged` answers a group, with the unit its attempts' recorded funding names. Each tier's
+/// figures divide by its capacity under the revision in force at the attempt's receipt. One pass over the range's
+/// attempts: each lands in its bucket by index, rather than every session re-scanning every attempt for every bucket.
 pub fn session_burn_series(
     conn: &Connection,
     tables: &PlanTables,
@@ -6088,6 +6144,7 @@ pub fn session_burn_series(
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
+    let tiers = burn_tiers(tables);
     // Each session's points, whether an attempt of the range itself holds a token, and whether an attempt with a
     // token is plan-funded.
     let mut by_session: HashMap<String, (Vec<BurnSums>, bool, bool)> = sessions
@@ -6096,7 +6153,7 @@ pub fn session_burn_series(
             (
                 id.clone(),
                 (
-                    empty_burn_sums(first, last, filter.bucket_seconds),
+                    empty_burn_sums(first, last, filter.bucket_seconds, &tiers),
                     false,
                     false,
                 ),

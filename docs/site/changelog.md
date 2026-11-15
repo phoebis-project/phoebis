@@ -615,45 +615,47 @@ clean poll or the account's plan-ended pause ([Statistics](statistics.md#conditi
 again on every third usage poll, a quarter hour apart, so a tier or plan change reaches the router within a quarter hour
 ([Statistics](statistics.md#quota-samples)). A re-fold after a moved prompt-length threshold writes into no hour the
 rollup purge dropped ([Statistics](statistics.md#retention)). Every route that prices a subscription row answers one
-figure, the Pro-week figure, null where a row it sums priced nothing, and the ledger raises `model_unpriced`, an
-attention item at the info level, for a plan-funded model that prices nothing ([Plan meter](statistics.md#plan-meter),
-[Conditions and gauges](statistics.md#conditions-and-gauges)). The attention reader, the console's reads, the metrics
-scrape and `/v1/usage` run beside each other on four read-only connections, and the ledger's writer reads its own budget
-figures on its own connection ([The ledger writer](statistics.md#the-ledger-writer)). The ledger keeps planner
-statistics from the first start on and refreshes them after each hourly purge ([The ledger
-writer](statistics.md#the-ledger-writer)). The analytics series and burn routes and a pool's traffic route answer `400`
-with the ledger's own words for a range that needs more points than a chart carries, a trailing partial bucket counted
-as one ([API reference](api-reference.md)). A model filter that names a model's `[1m]` spelling selects that model's
-rows on the request log, the analytics reads and the cache placements ([Requests](console.md#requests),
-[Analytics](console.md#analytics)). A request row carries the serving attempt's account, speed, outcome and token
-counts, written when it lands, and the rows written before the columns existed fill a slice at a time, one at each
-start, which logs the rows left, and the rest in the hourly purge while the router runs
-([Statistics](statistics.md#the-ledger)). Refusals count by the request's model and the category and the count answers
-the fallbacks in range, a request that presented a refusal's fallback credit carries the credit's digest beside the
-refused attempt's, and the request log filters on it ([Refused requests](statistics.md#refused-requests)). The
-`slowed_long` condition holds on the time the slow-down held the account's requests over the trailing day, against twice
-the stretch and at least an hour, and names the held time and the requests held ([Conditions and
-gauges](statistics.md#conditions-and-gauges)). The hourly purge's slice of captured bodies ends after the body in
-progress once a write is waiting, so a write waits for one body at most ([Retention](statistics.md#retention)). A
-response head's `7d_oi` window is filed as the Fable week, so a head and a poll of one bucket write one Fable row and
-the gauge holds one Fable series ([Quota samples](statistics.md#quota-samples)). The request log orders by its arrival,
-attempts, duration, time to first byte, tokens in or tokens out, either way, and the routing log by its time either way,
-each page continuing at its last row ([API reference](api-reference.md)). The request log prices each attempt through
-the one price rule the fold uses, so a probe on a model the price list lacks reads no dollars, as the model's other
-requests do ([Pricing](statistics.md#pricing)). An account's pause and resume land in the routing log as a registry
-change carrying the `enabled` pair, and a registry change names the account or the key it changed, so the routing log
-filtered by the account or the key lists it ([Routing log](console.md#routing-log)).
+figure, the Pro-week figure, save the burn route, which answers its figures once per plan tier, and a figure reads null
+where a row it sums priced nothing. The ledger raises `model_unpriced`, an attention item at the info level, for a
+plan-funded model that prices nothing ([Plan meter](statistics.md#plan-meter), [Conditions and
+gauges](statistics.md#conditions-and-gauges)). The attention reader, the console's reads, the metrics scrape and
+`/v1/usage` run beside each other on four read-only connections, and the ledger's writer reads its own budget figures on
+its own connection ([The ledger writer](statistics.md#the-ledger-writer)). The ledger keeps planner statistics from the
+first start on and refreshes them after each hourly purge ([The ledger writer](statistics.md#the-ledger-writer)). The
+analytics series and burn routes and a pool's traffic route answer `400` with the ledger's own words for a range that
+needs more points than a chart carries, a trailing partial bucket counted as one ([API reference](api-reference.md)). A
+model filter that names a model's `[1m]` spelling selects that model's rows on the request log, the analytics reads and
+the cache placements ([Requests](console.md#requests), [Analytics](console.md#analytics)). A request row carries the
+serving attempt's account, speed, outcome and token counts, written when it lands, and the rows written before the
+columns existed fill a slice at a time, one at each start, which logs the rows left, and the rest in the hourly purge
+while the router runs ([Statistics](statistics.md#the-ledger)). Refusals count by the request's model and the category
+and the count answers the fallbacks in range, a request that presented a refusal's fallback credit carries the credit's
+digest beside the refused attempt's, and the request log filters on it ([Refused
+requests](statistics.md#refused-requests)). The `slowed_long` condition holds on the time the slow-down held the
+account's requests over the trailing day, against twice the stretch and at least an hour, and names the held time and
+the requests held ([Conditions and gauges](statistics.md#conditions-and-gauges)). The hourly purge's slice of captured
+bodies ends after the body in progress once a write is waiting, so a write waits for one body at most
+([Retention](statistics.md#retention)). A response head's `7d_oi` window is filed as the Fable week, so a head and a
+poll of one bucket write one Fable row and the gauge holds one Fable series ([Quota
+samples](statistics.md#quota-samples)). The request log orders by its arrival, attempts, duration, time to first byte,
+tokens in or tokens out, either way, and the routing log by its time either way, each page continuing at its last row
+([API reference](api-reference.md)). The request log prices each attempt through the one price rule the fold uses, so a
+probe on a model the price list lacks reads no dollars, as the model's other requests do
+([Pricing](statistics.md#pricing)). An account's pause and resume land in the routing log as a registry change carrying
+the `enabled` pair, and a registry change names the account or the key it changed, so the routing log filtered by the
+account or the key lists it ([Routing log](console.md#routing-log)).
 
 Every price is computed when it is read, from the token counts the ledger stores, at the price revision in force when
 the request arrived. The price table and the subscription cost model are revision lists keyed by the date or the UTC
 instant each revision takes effect, the cost model's unit is the Pro 7-day window, of which one percent is 900,000
-units, so every subscription figure is a Pro-week figure the console reads in the chosen week, the account's tier and
-the prompt-length band join the hourly rollups, a model the cost model does not weight prices nothing, its figure null,
-and raises an attention item, and the cost model names each model's tier ([statistics](statistics.md#pricing),
-[installation](installation.md#stats)). The shipped price table carries Claude Sonnet 4.6 and Claude Sonnet 4.5 and
-reads Claude Fable 5's cache read at $1 per million tokens in every revision ([statistics](statistics.md#pricing)). The
-subscription cost model weighs Claude Fable 5, Opus 5, Opus 4.8 and Sonnet 4.6 as the plan meter measured them on
-2026-10-29, the measurement confirming Sonnet 5's weight ([statistics](statistics.md#plan-meter)).
+units, so every subscription figure but the burn's is a Pro-week figure the console reads in the chosen week, the
+account's tier and the prompt-length band join the hourly rollups, a model the cost model does not weight prices
+nothing, its figure null, and raises an attention item, and the cost model names each model's tier
+([statistics](statistics.md#pricing), [installation](installation.md#stats)). The shipped price table carries Claude
+Sonnet 4.6 and Claude Sonnet 4.5 and reads Claude Fable 5's cache read at $1 per million tokens in every revision
+([statistics](statistics.md#pricing)). The subscription cost model weighs Claude Fable 5, Opus 5, Opus 4.8 and Sonnet
+4.6 as the plan meter measured them on 2026-10-29, the measurement confirming Sonnet 5's weight
+([statistics](statistics.md#plan-meter)).
 
 The console prices every figure in the unit the shell's Unit switch names, one of four positions, Native, All in
 dollars, Billed dollars and Dollar equivalent, Native by default (a subscription request as a share of the chosen week,

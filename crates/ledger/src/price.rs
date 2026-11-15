@@ -1,8 +1,7 @@
 //! A row's counts priced in one call: the dollars at the price revision in force at the row's instant, the shares of
 //! the account tier's windows and the Pro-week figure at the cost revision in force then. One function answers these
 //! figures so the native rule (a plan row in the equivalent, a billed row in dollars) is written once by the caller
-//! and never recomputed from the account tier the registry holds now. The burn series' Pro 5-hour figure, which no
-//! reader of that function asks for, is priced beside it under the same key.
+//! and never recomputed from the account tier the registry holds now.
 
 use phoebis_bus::Classifier;
 use phoebis_routing::{plan_windows, PinUsage, SEVEN_DAY};

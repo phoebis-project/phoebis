@@ -5017,9 +5017,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5034,9 +5046,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5051,9 +5075,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5068,9 +5104,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5085,9 +5133,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5102,9 +5162,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5119,9 +5191,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5136,9 +5220,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5153,9 +5249,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5170,9 +5278,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5187,9 +5307,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5204,9 +5336,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5221,9 +5365,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5238,9 +5394,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5255,9 +5423,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5272,9 +5452,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5289,9 +5481,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5306,9 +5510,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5323,9 +5539,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5340,9 +5568,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5357,9 +5597,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5374,9 +5626,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": 0.00005875,
           "seven_day_share": 0.000015666666666666667,
           "model_week_share": 0.000031333333333333334,
-          "equivalent": 0.00015666666666666666,
-          "five_hour_equivalent": 0.001175,
-          "fable_equivalent": 0.00015666666666666666,
+          "equivalent_by_tier": {
+            "default_claude_ai": 0.00015666666666666666,
+            "default_claude_max_20x": 0.000015666666666666667,
+            "default_claude_max_5x": 0.000031333333333333334
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": 0.001175,
+            "default_claude_max_20x": 0.00005875,
+            "default_claude_max_5x": 0.000235
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": 0.0003133333333333333,
+            "default_claude_max_20x": 0.000031333333333333334,
+            "default_claude_max_5x": 0.00006266666666666667
+          },
           "unpriced": false,
           "cached_tokens": 500,
           "tokens": 1800,
@@ -5391,9 +5655,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5408,9 +5684,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": 0.00008343750000000002,
           "seven_day_share": 0.00002225,
           "model_week_share": null,
-          "equivalent": 0.0002225,
-          "five_hour_equivalent": 0.00166875,
-          "fable_equivalent": 0,
+          "equivalent_by_tier": {
+            "default_claude_ai": 0.0002225,
+            "default_claude_max_20x": 0.00002225,
+            "default_claude_max_5x": 0.0000445
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": 0.00166875,
+            "default_claude_max_20x": 0.00008343750000000002,
+            "default_claude_max_5x": 0.00033375000000000006
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
           "unpriced": false,
           "cached_tokens": 15000,
           "tokens": 30800,
@@ -5425,9 +5713,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": 0,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
           "unpriced": true,
           "cached_tokens": 1500,
           "tokens": 6500,
@@ -5442,9 +5742,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5459,9 +5771,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5476,9 +5800,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5493,9 +5829,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5510,9 +5858,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5527,9 +5887,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5544,9 +5916,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5561,9 +5945,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5578,9 +5974,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5595,9 +6003,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5612,9 +6032,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5629,9 +6061,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5646,9 +6090,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5663,9 +6119,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5680,9 +6148,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5697,9 +6177,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5714,9 +6206,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5731,9 +6235,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5748,9 +6264,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5765,9 +6293,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5782,9 +6322,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5799,9 +6351,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5816,9 +6380,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5833,9 +6409,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": 0,
-          "five_hour_equivalent": 0,
-          "fable_equivalent": 0,
+          "equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
           "unpriced": false,
           "cached_tokens": 500,
           "tokens": 1800,
@@ -5850,9 +6438,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": 0,
-          "five_hour_equivalent": 0,
-          "fable_equivalent": 0,
+          "equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
           "unpriced": false,
           "cached_tokens": 500,
           "tokens": 1800,
@@ -5867,9 +6467,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5884,9 +6496,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5901,9 +6525,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5918,9 +6554,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5935,9 +6583,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5952,9 +6612,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5969,9 +6641,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -5986,9 +6670,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6003,9 +6699,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6020,9 +6728,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6037,9 +6757,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6054,9 +6786,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6071,9 +6815,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6088,9 +6844,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6105,9 +6873,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6122,9 +6902,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6139,9 +6931,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6156,9 +6960,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6173,9 +6989,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6190,9 +7018,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6207,9 +7047,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6224,9 +7076,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6241,9 +7105,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
@@ -6258,9 +7134,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": 0,
-          "five_hour_equivalent": 0,
-          "fable_equivalent": 0,
+          "equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": 0,
+            "default_claude_max_20x": 0,
+            "default_claude_max_5x": 0
+          },
           "unpriced": false,
           "cached_tokens": 500,
           "tokens": 1800,
@@ -6275,9 +7163,21 @@ export const FIXTURES: Record<string, Fixture> = {
           "five_hour_share": null,
           "seven_day_share": null,
           "model_week_share": null,
-          "equivalent": null,
-          "five_hour_equivalent": null,
-          "fable_equivalent": null,
+          "equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "five_hour_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
+          "fable_equivalent_by_tier": {
+            "default_claude_ai": null,
+            "default_claude_max_20x": null,
+            "default_claude_max_5x": null
+          },
           "unpriced": false,
           "cached_tokens": 0,
           "tokens": 0,
