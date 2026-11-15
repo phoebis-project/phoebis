@@ -669,9 +669,8 @@ test('a session decodes the word its pin was stamped by, and a row without one r
   const row = fixture('sessions').sessions[0];
   const read = (wire) => d.decodeSession(wire).shed;
   assert.equal(read(row), null, 'as the route answers it');
-  assert.deepEqual(read({ ...row, shed_from: 'business', shed_reason: 'cooldown' }), { at: null, from: 'business', reason: 'cooldown' }, 'a landing after a failover');
-  const { shed_reason: _r, ...bare } = { ...row, shed_from: 'business' };
-  assert.equal(read(bare).reason, 'round', 'a row without the member reads round');
+  assert.deepEqual(read({ ...row, shed: { at: 1_791_719_160_000, from: 'business', reason: 'cooldown' } }), { at: '2026-10-11T11:46:00.000Z', from: 'business', reason: 'cooldown' }, 'a landing after a failover');
+  assert.equal(read({ ...row, shed: { at: 1_791_719_160_000, from: 'business', reason: null } }).reason, 'round', 'a stamp with no reason reads round');
 });
 
 test('a session sent with no last use reads its last request as its last use', () => {
@@ -686,7 +685,8 @@ test("a session reads its pin's open mark, its stamp's instant and the instant i
   // No other check reads these wire keys: the captured rows carry no mark, `mock-sync` takes any mock value against a
   // decoded null, and the mock's rows reach the pages without the decoder.
   const row = fixture('sessions').sessions[0];
-  const s = d.decodeSession({ ...row, marked_at: 1_791_720_000_000, marked_on: 'studio', marked_window: 'five_hour', pinned_at: 1_791_719_100_000, shed_at: 1_791_719_160_000, shed_from: 'primary', shed_reason: 'cooldown' });
+  assert.equal(d.decodeSession(row).mark, null, 'as the route answers it');
+  const s = d.decodeSession({ ...row, mark: { at: 1_791_720_000_000, on: 'studio', window: 'five_hour' }, pinned_at: 1_791_719_100_000, shed: { at: 1_791_719_160_000, from: 'primary', reason: 'cooldown' } });
   assert.deepEqual(
     { mark: s.mark, pinnedAt: s.pinnedAt, shedAt: s.shed.at },
     { mark: { at: '2026-10-11T12:00:00.000Z', on: 'studio', window: 'five_hour' }, pinnedAt: '2026-10-11T11:45:00.000Z', shedAt: '2026-10-11T11:46:00.000Z' },

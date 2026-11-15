@@ -2038,7 +2038,7 @@ export interface Session extends BurnFigures {
   lifecycle: Lifecycle | null;
   /** The pin's open shedding mark: when the round set it, the account it stands on and the window whose trigger set
    *  it. Null where the pin holds none and on a row with no pin. */
-  mark: { at: string | null; on: string; window: string | null } | null;
+  mark: { at: string; on: string; window: string } | null;
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
@@ -2061,7 +2061,7 @@ export interface Session extends BurnFigures {
    * why the move took it off: `round` for a shedding round's move, the failover's word (`cooldown`, `fast_lane`,
    * `mark`) for its landing. Null off a pin never stamped, or with no pin.
    */
-  shed: { at: string | null; from: string; reason: string } | null;
+  shed: { at: string; from: string; reason: string } | null;
   /** The speed the account's holds realized, from the factor to 1, null where `factor` is. */
   speed: number | null;
   /** The session's spend over its life under its key, null where the ledger holds no request of it the router did not
