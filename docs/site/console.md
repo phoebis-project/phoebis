@@ -222,14 +222,14 @@ main among them where no line names it, and Busy, Idle and Parked count them by 
 unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's three caps as `{n} of
 {max}`: Sessions, Agent records, whose hover says that a released record keeps its slot for one cache TTL after the
 release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's probes by
-outcome (ok, migrated, held, skipped and failed), and a line reads `expired between turns {n} · bus gaps {n}`. The
-expired part takes the warning ink while the attention item `expired_between_turns` holds, which counts the expiries on
-pools that warm caches under keys the keepalive may probe for, so the part's own count, the keepalive overview's over
-every pool, can stand above zero in the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the
-last gap's instant on hover. Where the keepalive overview's first read fails, the caps, the probes and the line read a
-dash each under `Could not load the keepalive overview: {error}` and a "Try again" button. A failed recipes read draws
-in the card as a failed keepalive overview does, under a notice of its own. What each figure means is on
-[Statistics](statistics.md).
+outcome (ok, migrated, held, skipped and failed), where ok is the answered probes less the migrated ones, which draw as
+their own part, and a line reads `expired between turns {n} · bus gaps {n}`. The expired part takes the warning ink
+while the attention item `expired_between_turns` holds, which counts the expiries on pools that warm caches under keys
+the keepalive may probe for, so the part's own count, the keepalive overview's over every pool, can stand above zero in
+the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the last gap's instant on hover. Where
+the keepalive overview's first read fails, the caps, the probes and the line read a dash each under `Could not load the
+keepalive overview: {error}` and a "Try again" button. A failed recipes read draws in the card as a failed keepalive
+overview does, under a notice of its own. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 
@@ -525,13 +525,13 @@ account](pairing.md).
 ![The Pools view: the jobs pool exhausted at its budget](assets/pools-dark.png#only-dark)
 
 The view opens on its bar, the Sort control with Name (ascending by default), Status (ascending), Members, "Requests,
-24h", "Cost, 24h" (each descending, a pool whose day priced nothing last under Cost while the top bar's unit is Native)
-and Active pins (descending), then "Create pool" with the split Refresh button and the count `{n} pools` at the right
-edge, then "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it per session,
-and fail over when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in pools, Keys,
-"Requests, 24h" and "Cost, 24h". The sort and its direction live in the page's address, and a card's links into the
-pool dialog keep them, so the dialog closes onto the same order. A card's member rows keep the selection order whatever
-the sort. Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
+24h", "Cost, 24h" (each descending, Cost under Native ranking by the day's dollars at the API price list, the All in
+dollars figure) and Active pins (descending), then "Create pool" with the split Refresh button and the count `{n} pools`
+at the right edge, then "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it
+per session, and fail over when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in
+pools, Keys, "Requests, 24h" and "Cost, 24h". The sort and its direction live in the page's address, and a card's links
+into the pool dialog keep them, so the dialog closes onto the same order. A card's member rows keep the selection order
+whatever the sort. Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
 sessions and the keepalive overview the pool dialog draws are read when it opens on a saved pool and again after a key
 write from it, the overview also when the return rate's range is picked, never at the interval. "Cost, 24h" and each
 card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its figure in the chosen week
@@ -770,29 +770,32 @@ table lists, `{n} keys`. Status offers All statuses, Active, Disabled, Expired o
 pools, each as a chip of its own, such as "pool: jobs" and "pool: all", and a pool the address names that the router
 does not list keeps its chip until the pools load. The search, the filters and the sort with its direction live in the
 page's address, so a reload keeps them and the pool card's key count link lands on its pool's keys. Under either
-direction a key never used files last under Last used, one that never expires last under Expiry and one whose week
-priced nothing last under "Cost, 7d" while the top bar's unit is Native. No column shows a key's creation date or its
-requests of the week, so while Created or "Requests, 7d" is picked each row reads `created {date}` (the time on hover)
-or `{n} requests, 7d` under its name. The sort orders the table alone, and the card's bars keep their order by cost.
-Auto reload starts at 5 s and waits while a dialog or a row's menu is open. The tiles Keys, Active, Lifetime requests
-and Lifetime cost follow, and the card "Lifetime cost by key" ("Relative spend across all keys"), a bar per key. The
-lifetime tiles and the card's bars count their rows older than the week from a read made once an hour, so a request
-older than a week that lands late joins them within the hour. Lifetime cost, each bar's figure and the cost line under a
-key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks the subscription traffic's figure in the
-chosen week over the billed traffic's dollars, and a bar's figure and a cost line read a key's figure beside its billed
-dollars, a side with no traffic left out, the tile, the bar's figure and the cost line each reading the subscription
-side as a dash with the Dashboard's hover where a request priced nothing, and its bar draws no fill and sorts last. The
-billed dollars count a billed keepalive probe's, while the requests and the tokens leave the probes out. A key spans its
-pool's accounts, so its figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and
-Status, and each row ends in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or
-`bodies not captured`, with "inherited" where the key follows its pool, and `allowance off` or `cache warming off` for
-each companion permission the key lacks ([The key's permissions](companion-mod.md#the-keys-permissions)). Models reads
-`{n} rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or
-"Never". Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the previous
-secret`. The menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected
-immediately. Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its request
-history from the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with "Create
-key". What a key's settings mean is on [Keys](routing.md#keys).
+direction a key never used files last under Last used and one that never expires last under Expiry. Under Native "Cost,
+7d" ranks by the week's dollars at the API price list, the All in dollars figure, so a key of billed traffic alone sorts
+by its dollars. No column shows a key's creation date or its requests of the week, so while Created or "Requests, 7d" is
+picked each row reads `created {date}` (the time on hover) or `{n} requests, 7d` under its name. The sort orders the
+table alone, and the card's bars keep their order by cost. Auto reload starts at 5 s and waits while a dialog or a row's
+menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost follow, and the card "Lifetime cost by key"
+("Relative spend across all keys, in dollars at the API price list" under Native and "Relative spend across all keys"
+under a dollar position), a bar per key. The lifetime tiles and the card's bars count their rows older than the week
+from a read made once an hour, so a request older than a week that lands late joins them within the hour. Lifetime cost,
+each bar's figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks
+the subscription traffic's figure in the chosen week over the billed traffic's dollars, and a bar's figure and a cost
+line read a key's figure beside its billed dollars, a side with no traffic left out, the tile, the bar's figure and the
+cost line each reading the subscription side as a dash with the Dashboard's hover where a request priced nothing, while
+its bar keeps the length and the place its dollars give it: under Native the card's bars rank by each key's dollars at
+the API price list, the All in dollars figure, and the figure beside a bar keeps its two native sides. The billed
+dollars count a billed keepalive probe's, while the requests and the tokens leave the probes out. A key spans its pool's
+accounts, so its figures carry no hint. The columns are Name, Prefix, Pool, Models, "Usage, 7d", Expiry and Status, and
+each row ends in its menu. Under the name a row notes the capture setting, `bodies captured, {h}h` or `bodies not
+captured`, with "inherited" where the key follows its pool, and `allowance off` or `cache warming off` for each
+companion permission the key lacks ([The key's permissions](companion-mod.md#the-keys-permissions)). Models reads `{n}
+rules`, with "(replace)" where they replace the pool's, or "Pool rules" or "No rules". Expiry reads the date or "Never".
+Status carries the key's state with `used {ago}` and, after a rotation, `{n} sessions still on the previous secret`. The
+menu offers Edit, Rotate (`Rotate {name}`), Revoke (`Revoke {name}`: "Requests with this key are rejected immediately.
+Its history stays in the ledger.") and Delete (`Delete {name}`: "Removes the key and detaches its request history from
+the key name. This cannot be undone."). Before the first key the table reads "No keys yet" with "Create key". What a
+key's settings mean is on [Keys](routing.md#keys).
 
 "Create key" and Rotate end on the dialog "Key created" or "Key rotated", which shows the secret once with a copy
 button under "Copy the secret now. The router stores only a hash, so it cannot be shown again." and "Set it as
@@ -1107,51 +1110,58 @@ own end either way, and one whose end lay more than a minute in the past when th
 dropdown, disabled, while a link whose range ends at the moment it was made reads on. A custom range whose end has not
 passed reads the account list again at each interval, as it reads its charts.
 
-Filtered to one session the view sums the request log instead of the hourly rollups and says so, over the first 10,000
-requests of the range, and a session with more reads "Partial: the first 10,000 requests of the range" on a line under
-the bar. On a custom range the view walks the session's pages once, and each auto reload re-reads the first page alone,
-with the later pages standing as loaded. Under that filter the Cost split reads "Cost split is not available for a
-session view.", the Write cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming
-figures are not available for a session view." with "not in the request log" under its probe tiles, since a request row
-carries one cost total and no probe or kept-warm fact. Grouped by key, a deleted key's group reads
-`<id> (deleted, created <time>)`, its creation instant in the viewer's zone. The range, the grouping, every filter, the
-client groups, the probes switch and the sort with its direction live in the page's address. A link that carries `unit`
-sets the top bar's Unit switch to that position and leaves the address, so a shared link opens on its unit. The section
-bar under it shows one section at a time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range
-with nothing reads "No traffic in this range." What each figure means is on [Statistics](statistics.md).
+Filtered to one session the view sums the request log instead of the hourly rollups and says so in four heads: Traffic,
+Cache and Cost read "From the request log, since rollups carry no session" after their figures, and Latency reads it in
+place of "Percentiles read from merged per-hour histograms". The sums run over the first 10,000 requests of the range,
+and a session with more reads "Partial: the first 10,000 requests of the range" on a line under the bar. On a custom
+range the view walks the session's pages once, and each auto reload re-reads the first page alone, with the later pages
+standing as loaded. Under that filter the Cost split reads "Cost split is not available for a session view.", the Write
+cost vs read cost legend reads a dash for each cost, and Cache warming reads "Cache warming figures are not available
+for a session view." with "not in the request log" under its probe tiles, since a request row carries one cost total and
+no probe or kept-warm fact. Grouped by key, a deleted key's group reads `<id> (deleted, created <time>)`, its creation
+instant in the viewer's zone. The range, the grouping, every filter, the client groups, the probes switch and the sort
+with its direction live in the page's address. A link that carries `unit` sets the top bar's Unit switch to that
+position and leaves the address, so a shared link opens on its unit. The section bar under it shows one section at a
+time, Traffic, Burn, Latency, Cache, Cost, Cache warming or Accounts, and a range with nothing reads "No traffic in this
+range." What each figure means is on [Statistics](statistics.md).
 
-Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete and
-Exhausted), Errors by code ("Failed and incomplete responses in range, the refused requests left out"), Refusals by code
-("Requests the router refused before any account was asked, not in the counts", or "No request was refused in this
-range." where none was), Refusals by category ("Answers the upstream refused in range, by model and category, each a
-request that succeeded", one bar per model and category linking the Requests view on the stop reason `refusal`, the
-category and the model over the range to the millisecond, each bar labeled with the model's family and version and the
-category, such as `sonnet-5-5 · cyber`, with the whole model id on hover, `none` for a refusal with no category, or "No
-answer was refused in this range." where none was, with the requests that presented a fallback token counted in the
-subtitle ("1 request presented a fallback token"), and under a client or user agent filter the matching requests' alone,
-and under a session filter every session's, which its subtitle then names, its links carrying the client pattern and no
-session, plain under a user agent filter as the Misses by reason counts are), Failovers, Migration rewrites with its
-moves (one bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each
-segment titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar
-per bucket of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`,
-`no request held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart),
-Requests by speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key")
-with one row per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the
-range alone and no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched
-in this range." where none did ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests,
-OK, Rate limited, Failed, Incomplete, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the
-Requests and Error rate headers reading "The refused requests are left out, see the Refused column" on hover and the
-Refused header the Dashboard's Refused tile hover. Under the model grouping a request refused before it resolved a model
-groups under "no model", which the Cache by model table leaves out, and a group with no request, as that one, reads a
-muted dash in its Error rate cell, as the head's `{pct}` reads a dash where the range rated no request. A request the
-router refused before any account was asked is counted in its group's Refused column and in the "Refusals by code" card,
-a guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
-outcome columns, the error rate, the cache figures or the latency. A request whose client left before its answer ended
-counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out. The
-bars of Errors by code carry the upstream's own error types beside the router's words. Four of Traffic's cards follow
-fewer controls than the bar holds: Refusals by category follows every control but the Session filter, Migration rewrites
-with its moves follows the range and the Account filter, "Held by the slow-down" the range and the Account and Pool
-filters, and Guardrails the range alone. Each names the controls it ignores under its title while one of them is set.
+Traffic reads `{n} requests, {pct} errors` and draws Requests by outcome (OK, Rate limited, Failed, Incomplete, Client
+canceled, Exhausted and Rejected, where Rejected draws in the muted ink for the requests the router rejected itself),
+Errors by code ("Failed and incomplete responses in range, the refused requests left out"), Refusals by code ("Requests
+the router refused before any account was asked, not in the counts", or "No request was refused in this range." where
+none was), Refusals by category ("Answers the upstream refused in range, by model and category, each a request that
+succeeded", one bar per model and category linking the Requests view on the stop reason `refusal`, the category and the
+model over the range to the millisecond, each bar labeled with the model's family and version and the category, such as
+`sonnet-5-5 · cyber`, with the whole model id on hover, `none` for a refusal with no category, or "No answer was
+refused in this range." where none was, with the requests that presented a fallback token counted in the subtitle ("1
+request presented a fallback token"), and under a client or user agent filter the matching requests' alone, and under a
+session filter every session's, which its subtitle then names, its links carrying the client pattern and no session,
+plain under a user agent filter as the Misses by reason counts are), Failovers, Migration rewrites with its moves (one
+bar per move reason, stacked by the destination's fit, `fits`, `rewrite only`, `least bad` or `unknown`, each segment
+titled `{fit} {n}` and the bar labeled with the reason's total, and under them "Held by the slow-down", a bar per bucket
+of the time the slow-down held requests in the warning tone, its hover `12 requests held 14 min in all`, `no request
+held` on a bucket that held none, and its legend line the range's sum, or `none in range` with no chart), Requests by
+speed, Effort levels, then at full width the card "Guardrails" ("Matches by guardrail in range, every key") with one row
+per guardrail that matched in the range as Guardrail, Observed, Blocked and "Blocked bytes", reading the range alone and
+no other filter, a guardrail the registry no longer holds as `{id} (deleted)` and "No guardrail matched in this range."
+where none did ([Guardrails](guardrails.md)), and the table Traffic by the chosen group with Requests, OK, Rate limited,
+Failed, Incomplete, Client canceled, Exhausted, Rejected, Refused, Error rate, Failovers, Search and Fetch, the Requests
+header reading "The refused requests are left out, see the Refused column" on hover, the Client canceled header
+"Requests the client canceled. They are left out of the error rate", the Error rate header "The refused requests and the
+client's cancels are left out, see the Refused and Client canceled columns" and the Refused header the Dashboard's
+Refused tile hover. Under the model grouping a request refused before it resolved a model groups under "no model", which
+the Cache by model table leaves out, and a group with no request, as that one, reads a muted dash in its Error rate
+cell, as the head's `{pct}` reads a dash where the range rated no request. A group that counts no request leaves the
+Latency, Cost and Cache group tables. The Cost by chart keeps such a group only where it still holds a cost, as a group
+of billed keepalive probes alone does, and Traffic keeps it for its Refused column. A request the router refused before
+any account was asked is counted in its group's Refused column and in the "Refusals by code" card, a guardrail's block
+on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the outcome columns, the
+error rate, the cache figures or the latency. A request whose client left before its answer ended counts among its
+group's requests, and the head's errors, the Error rate column and Errors by code leave it out. The bars of Errors by
+code carry the upstream's own error types beside the router's words. Four of Traffic's cards follow fewer controls than
+the bar holds: Refusals by category follows every control but the Session filter, Migration rewrites with its moves
+follows the range and the Account filter, "Held by the slow-down" the range and the Account and Pool filters, and
+Guardrails the range alone. Each names the controls it ignores under its title while one of them is set.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
 grouping, since no rollup carries a session. Of the filters, the Account, Key and Pool filters and the user agent groups
@@ -1180,27 +1190,30 @@ line, with no band word, since a bucket holds no one request's completion. Under
 account charts as a plan line where the router sizes its tier or the range holds a priced bucket of it, so an account
 whose range ran on unpriced models alone keeps its line with its gaps, and an account the router prices no tier for (a
 free plan, no tier on file or one the cost model does not hold) whose range holds no priced bucket reads "tier unknown",
-while a usage-based seat draws no line on the card. The three plan cards' notes carry a "Cost reference" link that opens
-the dialog on Tiers and peak band. Under the Unit setting "Plan per hour" charts the plan side, the chosen week's share
-per hour under Native and each group's `plan_usd` per hour under All in dollars and Dollar equivalent, where its
-subtitle reads "The subscription traffic per hour in dollars at the API price list", and "Spend per minute" charts the
-billed side, `usd` per minute, under Native, All in dollars and Billed dollars, a usage-based seat's whole spend and a
-subscription account's fast-mode and overage answers among it. A card whose side has no figure in a position, "Plan per
-hour" under Billed dollars and "Spend per minute" under Dollar equivalent, keeps its place in the grid and draws one
-sentence in place of its chart, so the two cards together read `usd` plus `plan_usd` under All in dollars, `usd` under
-Billed dollars and `plan_usd` under Dollar equivalent. The four cards sit two to a row where the grid fits two columns
-or more. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member
-carries, a member at its budget marked and one the ledger has not reported on reading "not reported".
+while a usage-based seat draws no line on the card. An account the registry no longer holds charts by the funding of its
+rows: its plan traffic draws under its id on the three plan cards and its billed traffic on Spend per minute, and a
+group none of whose rows in the range holds a token draws on no card. The three plan cards' notes carry a "Cost
+reference" link that opens the dialog on Tiers and peak band. Under the Unit setting "Plan per hour" charts the plan
+side, the chosen week's share per hour under Native and each group's `plan_usd` per hour under All in dollars and Dollar
+equivalent, where its subtitle reads "The subscription traffic per hour in dollars at the API price list", and "Spend
+per minute" charts the billed side, `usd` per minute, under Native, All in dollars and Billed dollars, a usage-based
+seat's whole spend and a subscription account's fast-mode and overage answers among it. A card whose side has no figure
+in a position, "Plan per hour" under Billed dollars and "Spend per minute" under Dollar equivalent, keeps its place in
+the grid and draws one sentence in place of its chart, so the two cards together read `usd` plus `plan_usd` under All in
+dollars, `usd` under Billed dollars and `plan_usd` under Dollar equivalent. The four cards sit two to a row where the
+grid fits two columns or more. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one
+row per budget a member carries, a member at its budget marked and one the ledger has not reported on reading "not
+reported".
 
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-dark.png#only-dark)
 
-Latency reads "Percentiles read from merged per-hour histograms" and draws one row per metric, Time to first byte,
-Time to first content token, Total duration and Output tokens per second, each with a percentile chart (p50, p90, p95,
-p99) and a Distribution card, then Latency by the chosen group with TTFB p50, TTFB p99, TTFT p99, Duration p99 and
-tok/s p50. The histograms hold 84 buckets that reach about 61 minutes. A request counts toward Output tokens per second
-only where at least 500 ms pass from its first content token to its end, and the three times leave out the time the
-slow-down held the request. Latency follows every filter of the bar.
+Latency reads "Percentiles read from merged per-hour histograms. The slow-down's hold is left out" and draws one row per
+metric, Time to first byte, Time to first content token, Total duration and Output tokens per second, each with a
+percentile chart (p50, p90, p95, p99) and a Distribution card, then Latency by the chosen group with TTFB p50, TTFB p99,
+TTFT p99, Duration p99 and tok/s p50. The histograms hold 84 buckets that reach about 61 minutes. A request counts
+toward Output tokens per second only where at least 500 ms pass from its first content token to its end, and the three
+times leave out the time the slow-down held the request. Latency follows every filter of the bar.
 
 Cache reads `{pct} hit ratio, {n} expired between turns, {pct} of input read from cache` and draws Tokens (Uncached
 input, Cache read, Cache write 5m, Cache write 1h, Thinking, Output), Hit ratio and cached share, Write cost vs read
@@ -1253,23 +1266,26 @@ figures on [Plan meter](statistics.md#plan-meter). Cost follows every filter of 
 Cache warming draws the tiles Probe cost, Saved by probes, Net saving and Kept warm, whose note splits the tokens read
 warm between five minutes and an hour, then Probes by outcome (OK, Migrated, Held, Skipped, Failed), Wasted probes
 (Wasted probes, Wasted cost, Share of probe cost), Saved by probes, Kept-warm requests, Kept-warm tokens and Cache
-warming by pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost, Saved). Saved by
-probes is what the kept-warm requests saved, the cache write each avoided at its TTL's rate less the read it paid. Net
-saving is that saving less the probe cost, in the critical ink while the probes cost more than they saved, which under
-Native the plan side alone decides. A held or skipped probe never reached the upstream and costs nothing, so a range
-whose probes were all held or skipped reads a zero Probe cost and its whole saving as its Net saving. A Saved by probes
-chart draws the gross saving and the probe cost per bucket with the net on hover. The by-pool table's Saved column reads
-each pool's saving beside its Probe cost. Probe cost, Saved by probes, Net saving, Wasted cost, Share of probe cost and
-the by-pool Probe cost and Saved read in the top bar's unit: under Native the plan side's figure in the chosen week over
-the billed side's dollars, with no hint, and under the three dollar positions the position's figures in dollars. The
-chart draws dollars under the three dollar positions and the figure in the chosen week under Native, with the billed
-dollars on hover, and the billed dollars alone under Native where the range holds no plan side. The tab's keepalive
-figures follow the Client and User agent filters and groupings from the hours folded by this build on. In an hour folded
-before it each keepalive row stands under no user agent, and a probe's own rows under no client, so the User agent
-filter drops the tab's figures there and the Client filter drops all but the kept-warm figures. What a probe is and when
-it counts as wasted is on [Keepalive](keepalive.md). Cache warming counts the probes whatever Include probes says, which
-its head states, on Probes by outcome and the by-pool table's probe columns as on its tiles. That toggle is the one
-control its figures ignore.
+warming by pool (Probes OK, Held, Skipped, Failed, Kept-warm requests, Kept-warm tokens, Probe cost, Saved). Probes by
+outcome draws OK as the answered probes less the migrated ones, never under zero in a bucket, since a probe's mark and
+its request row can fall in different hours. The probe counts on the Probe cost tile and the Wasted probes card read the
+probes sent, with the held and the skipped ones named apart. Saved by probes is what the kept-warm requests saved, the
+cache write each avoided at its TTL's rate less the read it paid. Net saving is that saving less the probe cost, in the
+critical ink while the probes cost more than they saved, which under Native the plan side alone decides. A held or
+skipped probe never reached the upstream and costs nothing, so a range whose probes were all held or skipped reads a
+zero Probe cost and its whole saving as its Net saving. A Saved by probes chart draws the gross saving and the probe
+cost per bucket with the net on hover. The by-pool table's Saved column reads each pool's saving beside its Probe cost.
+Probe cost, Saved by probes, Net saving, Wasted cost, Share of probe cost and the by-pool Probe cost and Saved read in
+the top bar's unit: under Native the plan side's figure in the chosen week over the billed side's dollars, with no hint,
+and under the three dollar positions the position's figures in dollars. The chart draws dollars under the three dollar
+positions and the figure in the chosen week under Native, with the billed dollars on hover, and the billed dollars alone
+under Native where the range holds no plan side. The tab's keepalive figures follow the Client and User agent filters
+and groupings from the hours folded by this build on. In an hour folded before it each keepalive row stands under no
+user agent, and a probe's own rows under no client, so the User agent filter drops the tab's figures there and the
+Client filter drops all but the kept-warm figures. What a probe is and when it counts as wasted is on
+[Keepalive](keepalive.md). Cache warming counts the probes whatever Include probes says, which its head states, on
+Probes by outcome and the by-pool table's probe columns as on its tiles. That toggle is the one control its figures
+ignore.
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three
 windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,
