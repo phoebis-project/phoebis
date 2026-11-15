@@ -1127,24 +1127,28 @@ export const FIXTURES: Record<string, Fixture> = {
                 "five_hour": {
                   "utilization": 0.62,
                   "reset_at": 1791724600000,
+                  "deadline": 1791724600000,
                   "lead": -0.1744444444444444,
                   "sampled_at": 1791720900000
                 },
                 "seven_day": {
                   "utilization": 0.41,
                   "reset_at": 1791807400000,
+                  "deadline": 1791807400000,
                   "lead": -0.4469775132275133,
                   "sampled_at": 1791720900000
                 },
                 "seven_day_fable": {
                   "utilization": 0.12,
                   "reset_at": 1791807400000,
+                  "deadline": 1791807400000,
                   "lead": -0.7369775132275133,
                   "sampled_at": 1791720900000
                 },
                 "seven_day_opus": {
                   "utilization": 0.03,
                   "reset_at": 1791807400000,
+                  "deadline": 1791807400000,
                   "lead": -0.8269775132275132,
                   "sampled_at": 1791720900000
                 }

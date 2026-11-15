@@ -3969,15 +3969,22 @@ fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Optio
 /// the engine's pace reading and the ledger's lead over a raw sample, so the two readings cannot drift apart.
 pub fn elapsed_share_at(window: &str, reset_at: Option<i64>, end: Option<i64>, at: i64) -> f64 {
     let length = window_length_ms(window);
-    reset_at.map_or(0.0, |reset| {
-        let start = reset.saturating_sub(length);
-        let deadline = end.map_or(reset, |end| end.min(reset));
-        let span = deadline.saturating_sub(start);
-        if span <= 0 {
-            return 1.0;
-        }
-        (at.saturating_sub(start) as f64 / span as f64).clamp(0.0, 1.0)
-    })
+    reset_at
+        .zip(window_deadline(reset_at, end))
+        .map_or(0.0, |(reset, deadline)| {
+            let start = reset.saturating_sub(length);
+            let span = deadline.saturating_sub(start);
+            if span <= 0 {
+                return 1.0;
+            }
+            (at.saturating_sub(start) as f64 / span as f64).clamp(0.0, 1.0)
+        })
+}
+
+/// The instant a window's elapsed share runs toward: the earlier of the window's reset and the account's end,
+/// `None` without a reset.
+pub fn window_deadline(reset: Option<i64>, account_end: Option<i64>) -> Option<i64> {
+    reset.map(|reset| account_end.map_or(reset, |end| end.min(reset)))
 }
 
 /// Whether the account's allowance is known: a paid source (an api_key account or a usage-based seat) has no plan

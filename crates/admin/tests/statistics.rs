@@ -796,6 +796,76 @@ async fn the_accounts_route_runs_a_canceled_account_s_lead_to_its_end_inside_the
     );
 }
 
+#[tokio::test]
+async fn the_accounts_route_answers_each_sample_s_deadline_at_the_earlier_of_its_reset_and_the_account_s_end(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The account ends a day after the samples: past the 5-hour window's reset and before the week's.
+    let sampled_at = 2 * HOUR + 300_456;
+    let end = sampled_at + 24 * HOUR;
+    let sample = |window: &str, reset_at: Option<i64>| phoebis_ledger::QuotaSampleRecord {
+        account_id: "business".into(),
+        bucket: phoebis_ledger::bucket_of(sampled_at),
+        window: window.into(),
+        utilization: Some(0.41),
+        reset_at,
+        source: phoebis_ledger::SampleSource::Poll,
+        observed_at: sampled_at,
+    };
+    parts
+        .db
+        .insert_samples(
+            &[
+                sample("five_hour", Some(sampled_at + 4 * HOUR)),
+                sample("seven_day", Some(sampled_at + 6 * 24 * HOUR)),
+                sample("seven_day_fable", None),
+            ],
+            None,
+        )
+        .unwrap();
+    let canceled = patch(
+        &parts.app,
+        "/admin/accounts/business",
+        &format!(r#"{{"canceled":true,"subscription_ends_at":{end}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(canceled.status(), 200);
+    let answer = json(
+        get(
+            &parts.app,
+            &format!("/admin/analytics/accounts?range={},{}", HOUR, 4 * HOUR),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let business = answer["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_id"] == "business")
+        .unwrap();
+    let hour = business["hours"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["hour"] == 2 * HOUR)
+        .unwrap();
+    // Read by `get`, since indexing a missing member reads null as well.
+    assert_eq!(
+        ["five_hour", "seven_day", "seven_day_fable"]
+            .map(|window| hour["windows"][window].get("deadline").cloned()),
+        [
+            Some(serde_json::Value::from(sampled_at + 4 * HOUR)),
+            Some(serde_json::Value::from(end)),
+            Some(serde_json::Value::Null)
+        ],
+        "the 5-hour reset comes before the end, the end before the weekly reset, and no reset holds no deadline"
+    );
+}
+
 /// Midnight UTC of the day `common::NOW` falls in.
 const MIDNIGHT: i64 = 1_791_676_800_000;
 const MINUTE: i64 = 60_000;

@@ -17,8 +17,8 @@ use phoebis_ledger::{
     RequestFilter, RollupFilter, SeriesFilter, TermEnd, TermPair,
 };
 use phoebis_routing::{
-    account_window_id, is_weekly_window, term, BurnUnit, UtilizationSample, WindowReading,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    account_window_id, is_weekly_window, term, window_deadline, BurnUnit, UtilizationSample,
+    WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
@@ -623,6 +623,7 @@ fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> Windo
     WindowSample {
         utilization: s.utilization,
         reset_at: s.reset_at,
+        deadline: window_deadline(s.reset_at, end),
         lead: s
             .utilization
             .map(|u| lead_over_pace(&s.window, u, s.reset_at, end, sampled_at)),
@@ -736,6 +737,9 @@ fn windows_schema() -> utoipa::openapi::schema::Object {
 pub(crate) struct WindowSample {
     pub utilization: Option<f64>,
     pub reset_at: Option<i64>,
+    /// The instant the sample's `lead` runs toward, in Unix milliseconds: the earlier of the window's reset and the
+    /// account's end. Null for a sample that reported no reset.
+    pub deadline: Option<i64>,
     pub lead: Option<f64>,
     pub sampled_at: i64,
 }

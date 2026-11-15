@@ -1232,19 +1232,20 @@ it counts as wasted is on [Keepalive](keepalive.md).
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three
 windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,
 below behind, from the quota samples, before the router's burn projection", each account's hover adding its Pace score,
-the remaining share over the hours from the sample's instant to the window's reset. The table Accounts in range lists
-Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created, Migrated in and Migrated out. Time in
-cooldown counts a cleared cooldown up to its clear, and the clear leaves no time behind. It counts an open cooldown up
-to the moment of the read. The section keeps reading the rollups under a session filter, since they carry no session,
-and its subtitle says so. The card "Unused allowance by account" follows Accounts in range, one row per subscription
-account with a weekly reset in the last four weeks under the Accounts filter whatever the range, with Resets, which
-reads the used limit resets apart ("4, 1 used") with a hover that names each use, each weekly window's last and four
-weeks' figures in the chosen week (each week priced at the tier the account ran under at that reset, as the Accounts
-detail's "Allowance left at reset" prices it), a used reset that cleared its window counting among the resets as its
-`claim` row, sorted most left first on the four weeks' 7-day figure, an unpriced account last, a row whose latest reset
-is a term's end reading "term ended {date}" under its account, and two fleet figures over the rows, "7-day, fleet total"
-and "Fable, fleet total", the priced accounts' figures added with the unpriced accounts named. The card waits on the
-cost model, so a failed settings read draws its error state in place of the rows and the figures.
+the remaining share over the hours from the sample's instant to the earlier of the window's reset and the account's end.
+The table Accounts in range lists Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created,
+Migrated in and Migrated out. Time in cooldown counts a cleared cooldown up to its clear, and the clear leaves no time
+behind. It counts an open cooldown up to the moment of the read. The section keeps reading the rollups under a session
+filter, since they carry no session, and its subtitle says so. The card "Unused allowance by account" follows Accounts
+in range, one row per subscription account with a weekly reset in the last four weeks under the Accounts filter whatever
+the range, with Resets, which reads the used limit resets apart ("4, 1 used") with a hover that names each use, each
+weekly window's last and four weeks' figures in the chosen week (each week priced at the tier the account ran under at
+that reset, as the Accounts detail's "Allowance left at reset" prices it), a used reset that cleared its window counting
+among the resets as its `claim` row, sorted most left first on the four weeks' 7-day figure, an unpriced account last, a
+row whose latest reset is a term's end reading "term ended {date}" under its account, and two fleet figures over the
+rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts' figures added with the unpriced accounts
+named. The card waits on the cost model, so a failed settings read draws its error state in place of the rows and the
+figures.
 
 ## Sessions
 
