@@ -452,7 +452,7 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
   # How long a session no companion reports stays listed in the Sessions view past its newest pin use, its last request
-  # or its companion's end.
+  # or its companion's end. The lesser of the timeout and the session expiry applies.
   non_companion_idle_seconds: 3600
 stats:
   # Overrides the shipped price table. A missing file is fine.
@@ -640,7 +640,7 @@ session's previous request id and prompt id, the record behind `cc_prev_req`
 | `memory_cap` | `65536` | 1 to 1048576 entries held in process, and past it the least recently seen entry leaves memory |
 | `memory_idle_seconds` | `86400` | 60 to 31536000, how long an entry may go unseen before it leaves memory |
 | `memory_retention_days` | `30` | 1 to 3650, how long the on-disk copy of an entry is kept after its last request |
-| `non_companion_idle_seconds` | `3600` | 60 to 31536000, how long a session no companion reports stays listed past its newest pin use, its last request or its companion's end, and how long a line's pin stays listed on such a row past its last use |
+| `non_companion_idle_seconds` | `3600` | 60 to 31536000, how long a session no companion reports stays listed past its newest pin use, its last request or its companion's end, and how long a line's pin stays listed on such a row past its last use. The lesser of the timeout and `expire_after_seconds` applies. |
 
 Refused with:
 

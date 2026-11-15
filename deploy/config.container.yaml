@@ -35,7 +35,7 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
   # How long a session no companion reports stays listed in the Sessions view past its newest pin use, its last request
-  # or its companion's end.
+  # or its companion's end. The lesser of the timeout and the session expiry applies.
   non_companion_idle_seconds: 3600
 stats:
   # Overrides the shipped price table. A missing file is fine, and the volume is where one would be dropped.

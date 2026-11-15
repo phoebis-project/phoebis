@@ -150,7 +150,8 @@ pub(crate) struct Session {
     pub agents: u64,
     /// One line per conversation pin the row lists, main's included, ordered by agent id then model, main first:
     /// on a companion row the pins of the agents the engine holds and has not released, on a row whose `companion`
-    /// is `none` the pins used within `sessions.non_companion_idle_seconds`. Empty where none draws.
+    /// is `none` the pins used within the lesser of `sessions.non_companion_idle_seconds` and the session expiry. Empty
+    /// where none draws.
     pub agent_contexts: Vec<AgentContext>,
     /// One entry per agent the ledger holds requests of, its requests and their spend over every model it ran, with
     /// the model, the type, the account and the instant of its newest request.
