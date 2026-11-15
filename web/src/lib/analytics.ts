@@ -1,5 +1,5 @@
 import type { Api } from '@/api/client';
-import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
+import type { Account, AccountRollup, AnalyticsGroup, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, FundedSum, HeldPoint, KeepaliveOverview, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Reconciliation, RewritesAnswer, SubscriptionCosts, WindowSample } from '@/api/types';
 import type { AnalyticsAddress } from '@/lib/address';
 import { MODEL_WEEK_TIERS, tierCapacity, type CostWindow } from '@/lib/costs';
 import { has, lookup } from '@/lib/counts';
@@ -319,11 +319,18 @@ export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests 
  */
 export const errorRateOf = (g: Pick<AnalyticsGroup, 'requests' | 'succeeded'>): number | null => (g.requests > 0 ? (g.requests - g.succeeded) / g.requests : null);
 /**
- * The answered and the failed probes, the count a side's probe cost latches on. The wire's `failed` count also holds
- * the exhausted and rejected probes the relay refuses itself. A held or skipped probe never ran, so a group whose
- * probes were all held or skipped spent nothing on probes and its saving stands.
+ * The answered and the failed probes, the count a side's probe cost latches on and the Cache warming notes print as
+ * the probes sent. The wire's `failed` count also holds the exhausted and rejected probes the relay refuses itself. A
+ * held or skipped probe never ran, so a group whose probes were all held or skipped spent nothing on probes and its
+ * saving stands.
  */
 export const upstreamProbes = (g: Pick<AnalyticsGroup, 'probes'>): number => g.probes.ok + g.probes.failed;
+/**
+ * The five drawn probe counts by the keys of `PROBE_SERIES`. The route counts a migrated probe in `ok` and in
+ * `migrated`, so the OK part is `ok` less `migrated`, floored at zero for a bucket whose mark landed apart from its
+ * request row.
+ */
+export const probeParts = <T extends KeepaliveOverview['probes24h']>(c: T): T => ({ ...c, ok: Math.max(0, c.ok - c.migrated) });
 /**
  * The named account's whole: the position's totals with its shares summed over the groups the route answered them on.
  */

@@ -1248,14 +1248,14 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 {
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
-  // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (225
-  // ok of 295), the 54 expiries between turns the ledger rows of the day hold and the three bus gaps, the last two
-  // hours back. The expired part takes the warning ink while the attention item `expired_between_turns` holds, which
-  // the mock holds over its expiries on the pools that warm caches under keys that may be probed for (`ATTENTION` in
-  // mock/attention.ts), and with an attention answer that lacks the item it takes none, the overview's count of 54
-  // standing. The last gap is inside the day, so the bus gaps part takes the warning ink with that gap's instant on its
-  // hover. The card is read at the story's own instant, which the mock anchors as it loads, a moment past the clock's
-  // origin, so the gap lies two hours back.
+  // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (207
+  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 54 expiries between turns the ledger rows of the day
+  // hold and the three bus gaps, the last two hours back. The expired part takes the warning ink while the attention
+  // item `expired_between_turns` holds, which the mock holds over its expiries on the pools that warm caches under
+  // keys that may be probed for (`ATTENTION` in mock/attention.ts), and with an attention answer that lacks the item
+  // it takes none, the overview's count of 54 standing. The last gap is inside the day, so the bus gaps part takes the
+  // warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the mock
+  // anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
   const overview = await api.getKeepaliveOverview();
   const storyNow = Date.parse(overview.lastBusGapAt) + 2 * 3_600_000;
   // The attention poll is one for every reader, and the dashboard this block mounted first holds it open, so a mount
@@ -1289,7 +1289,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const { getAttention } = api;
   const cold = await readCard(async () => (await getAttention.call(api)).filter((i) => i.kind !== 'expired_between_turns'));
   const want = {
-    bar: 'Probes in the last 24h: 225 ok, 18 migrated, 4 held, 45 skipped, 3 failed',
+    bar: 'Probes in the last 24h: 207 ok, 18 migrated, 4 held, 45 skipped, 3 failed',
     caps: [
       ['Sessions', '19 of 128', null],
       ['Agent records', '33 of 1,024', 'A released record keeps its slot for one cache TTL after the release'],
@@ -1301,7 +1301,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       { text: 'expired between turns 54', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
-    probes: '225 ok (76%) of 295',
+    probes: '207 ok (75%) of 277',
   };
   results.push({
     name: "/ the Sessions card's Keepalive engine block reads the caps, the day's probes over their bar, and the line whose expired part takes the warning ink while the attention item on expiries between turns holds and whose bus gaps part takes it while the last gap is inside the day, its instant on hover",
@@ -20976,8 +20976,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: "/analytics under native the Probe cost tile stacks the plan probes' figure in the chosen week of the whole read over the billed probes' dollars of the billed read the Cache warming tab adds",
         ok:
           billedAnswer !== null && probe != null && probeCount(whole) > probeCount(billed) && probeCount(billed) > 0 &&
-          JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(probeCount(whole))} probes, ${NATIVE_SUBSET}` && probeTile.title === null,
+          JSON.stringify(probeTile.lines) === JSON.stringify(pairOf(probe.cost, billed.probeCostUsd)) && probeTile.note === `${fmtInt(upstreamCount(whole))} probes sent, ${NATIVE_SUBSET}` && probeTile.title === null,
         missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
+      });
+      // The route counts a migrated probe in `ok` and in `migrated`, so Probes by outcome's OK is the totals' `ok` less
+      // `migrated`, the totals the page sums off its own breakdown.
+      const outcomes = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes !== true)) ?? []);
+      const okValue = legendOf('Probes by outcome').find((i) => i.label === 'OK')?.value ?? null;
+      results.push({
+        name: "/analytics Probes by outcome's legend counts a migrated probe once, its OK the range's ok less the migrated probes the route counts in both",
+        ok: outcomes.probes.migrated > 0 && okValue === fmtInt(outcomes.probes.ok - outcomes.probes.migrated),
+        missing: [okValue ?? 'no OK value', JSON.stringify(outcomes.probes)],
       });
       // The saving's sides are told apart by their kept-warm credits, the plan side the whole read's less the billed
       // read's: the gross a side with a credit, the net a side with a credit or a probe, each side's saving less its
@@ -21031,7 +21040,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: "/analytics under native the Wasted probes card stacks the wasted plan probes' figure in the chosen week over the wasted billed probes' dollars, the share of probe cost the plan side's, and its blurb ends in the unit each probe's funding pays in",
         ok:
           probe != null && whole.wastedProbes > 0 &&
-          wasted.count.value === fmtInt(whole.wastedProbes) && wasted.count.note === `of ${fmtInt(probeCount(whole))} probes` &&
+          wasted.count.value === fmtInt(whole.wastedProbes) && wasted.count.note === `of ${fmtInt(upstreamCount(whole))} probes sent` &&
           JSON.stringify(wasted.cost.lines) === JSON.stringify(pairOf(probe.wasted, billed.wastedProbeUsd)) && wasted.cost.note === NATIVE_SUBSET && wasted.cost.title === null &&
           wasted.share.value === fmtPct(probe.wasted / probe.cost, 1) && wasted.share.note === `of ${weekFull(probe.cost)} and ${fmtUsd(billed.probeCostUsd)} on probes` &&
           wasted.subtitle.endsWith("says the parked ceilings do. In the unit each probe's funding pays in."),
@@ -21394,7 +21403,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const underPlan = await tileUnder('equivalent');
       const [whole, billed, plan] = [underWhole.read, underBilled.read, underPlan.read];
       const usd = (read) => Number(/^\$([\d,.]+)/.exec(read[0])?.[1].replace(/,/g, '') ?? NaN);
-      const count = (read) => Number(/^(\d[\d,]*) probes, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
+      const count = (read) => Number(/^(\d[\d,]*) probes sent, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
       results.push({
         name: '/analytics under Billed dollars the Probe cost tile reads the probes an overage paid for beside plan-funded requests and for a probe-only group, and the two positions add up to the whole',
         ok: template !== undefined && usd(whole) === 0.8 && count(whole) === 8 && usd(billed) === 0.8 && count(billed) === 8 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),

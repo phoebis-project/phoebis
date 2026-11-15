@@ -1236,7 +1236,8 @@ const ENGINE_SESSIONS = SESSIONS.filter((s, i) => s.companion !== 'none' || (i <
 
 // Router-wide, so every probe counted here belongs to a pool that keeps caches
 // warm, and `jobs` has warming off and contributes none. Hand-set at a busier
-// scale than the logged rows.
+// scale than the logged rows. `ok` holds the 18 migrated probes, since the
+// route counts a migrated probe in `ok` and again in `migrated`.
 const PROBES_24H = { ok: 225, migrated: 18, held: 4, skipped: 45, failed: 3 };
 
 // Each bucket reaches fewer windows than the one before it left unreturned.

@@ -24,7 +24,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -97,7 +97,6 @@ const rateCell = (rate: number | null): ReactNode => (rate === null ? <span clas
 const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRead + g.tokens.cacheWrite5m + g.tokens.cacheWrite1h;
 const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncached ? g.cacheHits / (g.cacheHits + g.cacheMisses + g.uncached) : null);
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
-const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
 /** A figure per counted unit, scaled, and null where the figure or the count is unknown or the count is not positive. */
 const per = (v: number | null, count: number | null, scale: number) => (v === null || count === null || !(count > 0) ? null : (v / count) * scale);
@@ -513,6 +512,7 @@ export function AnalyticsPage() {
   const latest = useMemo(() => latestGenerations(rows), [rows]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
+  const probeBuckets = useMemo(() => buckets.map((b) => ({ ...b, probes: probeParts(b.probes) })), [buckets]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
@@ -536,6 +536,7 @@ export function AnalyticsPage() {
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
   const probesUnmeasured = totals.fromRequests === true;
+  const probeTotals = probeParts(totals.probes);
   // The cost-bearing sections' rows under the position: the funded query's under a dollar side, the page's own under
   // the whole, and in a session view the rows folded by who paid for them.
   const costSeriesAnswer = costSeries.current;
@@ -619,7 +620,7 @@ export function AnalyticsPage() {
   const billedBreakdownAnswer = billedBreakdown.current;
   const billedTotals = useMemo(() => (nativeWarming && billedBreakdownAnswer !== null ? sumGroups(billedBreakdownAnswer) : null), [nativeWarming, billedBreakdownAnswer]);
   const warmingTile = (lead: string, sides: ReturnType<typeof probeSidesOf>, usd: number) => warmingTileOf(unit, costTotals, figureLoading, sessionId !== null, reading, lead, sides, usd);
-  const probeTile = warmingTile(`${fmtInt(probesOf(costTotals))} probes`, probeSidesOf(costTotals, billedTotals, 'cost'), costTotals.probeCostUsd);
+  const probeTile = warmingTile(`${fmtInt(upstreamProbes(costTotals))} probes sent`, probeSidesOf(costTotals, billedTotals, 'cost'), costTotals.probeCostUsd);
   const savingTile = warmingTile(keptWarmRequests(costTotals), savingSidesOf(costTotals, billedTotals, 'gross'), costTotals.savingUsd);
   const netTile = warmingTile('less the probe cost', savingSidesOf(costTotals, billedTotals, 'net'), netSaving(costTotals.savingUsd, costTotals.probeCostUsd));
   const warmingPoints = warmingSeries.current ?? NO_POINTS;
@@ -1049,8 +1050,8 @@ export function AnalyticsPage() {
               <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
             </div>
             <div className="grid-2 warming-grid">
-              <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
-                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
+              <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(probeTotals[s.key]) }))}>
+                <BarChart data={probeBuckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
                   <YAxis {...COUNT_AXIS} />
@@ -1070,7 +1071,7 @@ export function AnalyticsPage() {
                 ) : probesUnmeasured ? (
                   <p className="muted">{WARMING_UNAVAILABLE}</p>
                 ) : (
-                  <WastedProbes group={costTotals} probes={probesOf(costTotals)} unit={unit} billed={billedTotals} reading={reading} />
+                  <WastedProbes group={costTotals} probes={upstreamProbes(costTotals)} unit={unit} billed={billedTotals} reading={reading} />
                 )}
               </Card>
 
@@ -1545,7 +1546,7 @@ function WastedProbes({ billed, group, probes, reading, unit }: { billed: Analyt
   return (
     <>
       <div className="tiles-row tiles-row--panel">
-        <Tile label="Wasted probes" value={fmtInt(group.wastedProbes)} note={`of ${fmtInt(probes)} probes`} />
+        <Tile label="Wasted probes" value={fmtInt(group.wastedProbes)} note={`of ${fmtInt(probes)} probes sent`} />
         <Tile label="Wasted cost" value={tiles.cost.value} note={tiles.cost.note} />
         <Tile label="Share of probe cost" value={tiles.share.value} note={tiles.share.note} />
       </div>

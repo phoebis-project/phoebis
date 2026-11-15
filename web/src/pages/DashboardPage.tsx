@@ -17,7 +17,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
-import { dollarsUnder, equivalentOrDash, nativeSidesOf, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, equivalentOrDash, nativeSidesOf, probeParts, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
@@ -464,7 +464,8 @@ function KeepaliveEngine({ busGaps, expired, now, read }: { busGaps: boolean; ex
   if (k === null && !failed) return <Skeleton height={140} />;
   const cap = (limit: { count: number; max: number }, fmt = fmtInt) => `${fmt(limit.count)} of ${fmt(limit.max)}`;
   const probes = k?.probes24h ?? null;
-  const total = probes ? PROBE_SERIES.reduce((n, s) => n + probes[s.key], 0) : 0;
+  const parts = probes ? probeParts(probes) : null;
+  const total = parts ? PROBE_SERIES.reduce((n, s) => n + parts[s.key], 0) : 0;
   const gap = k?.lastBusGapAt ?? null;
   return (
     <section className="sess-summary__engine">
@@ -485,7 +486,7 @@ function KeepaliveEngine({ busGaps, expired, now, read }: { busGaps: boolean; ex
         </div>
       </dl>
       <h3 className="section-title">Cache probes, 24h</h3>
-      <p className="sess-summary__probes num">{probes ? `${fmtInt(probes.ok)} ok (${fmtPct(total ? probes.ok / total : 0)}) of ${fmtInt(total)}` : '-'}</p>
+      <p className="sess-summary__probes num">{parts ? `${fmtInt(parts.ok)} ok (${fmtPct(total ? parts.ok / total : 0)}) of ${fmtInt(total)}` : '-'}</p>
       {probes && <ProbeBar probes={probes} />}
       <p className="sess-summary__line">
         {k ? (
