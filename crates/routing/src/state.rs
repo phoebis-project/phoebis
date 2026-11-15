@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
+pub use phoebis_oauth::SEVEN_DAY_FABLE;
 pub use phoebis_store::EvidenceSource;
 
 use phoebis_store::{
@@ -228,7 +229,6 @@ struct SpendShare {
 
 pub const FIVE_HOUR: &str = "five_hour";
 pub const SEVEN_DAY: &str = "seven_day";
-pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
 
 /// `five_hour`, `seven_day`, or a `seven_day_` claim: the plan windows the classifier names on a cooldown row.
 pub fn is_plan_window(window: &str) -> bool {

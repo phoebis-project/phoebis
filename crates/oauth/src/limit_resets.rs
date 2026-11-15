@@ -5,14 +5,16 @@ use serde_json::{Map, Value};
 
 use crate::exchange::{instant_ms, json_object, OauthError};
 
-/// The router's name for the Fable week in a grant's windows. It has to equal `phoebis_routing::SEVEN_DAY_FABLE`,
-/// which this crate cannot name because the routing crate depends on it.
-pub(crate) const SEVEN_DAY_FABLE: &str = "seven_day_fable";
+/// The id of the Fable week, the weekly window that Fable models draw beside the shared week.
+pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
+
+/// The usage endpoint's key for the week a head reports as `7d_oi`, the overage-included week.
+pub const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 /// A window name as the router spells it: the upstream's name for the Fable week maps, every other reads as sent.
 pub(crate) fn window_name(sent: &str) -> String {
     match sent {
-        "seven_day_overage_included" => SEVEN_DAY_FABLE,
+        SEVEN_DAY_OVERAGE_INCLUDED => SEVEN_DAY_FABLE,
         other => other,
     }
     .to_string()
