@@ -267,7 +267,7 @@ async fn a_count_on_a_pinned_session_leaves_the_pins_refresh_its_ttl_and_its_war
         "a count writes no cache, so it neither refreshes the pin nor names its TTL"
     );
     assert!(
-        warm(&after, false, counted_at + 600_000),
+        warm(&after, counted_at + 600_000),
         "the turn's hour still stands ten minutes after the count"
     );
     up.shutdown().await;

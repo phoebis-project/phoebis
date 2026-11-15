@@ -289,8 +289,8 @@ fn session_pins(companion_key: &CompanionKey, pins: Vec<PinStanding>, now: i64) 
                 account: companion_key.pseudonym(&pin.account_id),
                 placed_at: stamp(pin.created_at),
                 last_used_at: stamp(pin.last_used_at),
-                warm: warm(pin, standing.auxiliary_only, now),
-                warm_until: stamp(warm_until(pin, standing.auxiliary_only)),
+                warm: warm(pin, now),
+                warm_until: stamp(warm_until(pin)),
                 runway_minutes: runway_minutes(standing.runway_ms),
                 binding_window: standing.binding,
                 slow_down: standing.slow_down.map(|entry| PinSlowDownView {

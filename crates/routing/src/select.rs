@@ -493,27 +493,20 @@ pub fn warmth_of(
     (Warmth::Untouched, WarmthCause::Foreign)
 }
 
-/// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads
-/// `warm(current, auxiliary_only, now)`.
-pub fn effective_warm(
-    current: &PinRow,
-    auxiliary_only: bool,
-    request: &SelectRequest,
-    affinity: &AffinityMap,
-) -> bool {
+/// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads `warm(current, now)`.
+pub fn effective_warm(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> bool {
     warm_on(
         current,
-        auxiliary_only,
         warmth_of(current, request, affinity).0,
         request.now,
     )
 }
 
-fn warm_on(current: &PinRow, auxiliary_only: bool, verdict: Warmth, now: i64) -> bool {
+fn warm_on(current: &PinRow, verdict: Warmth, now: i64) -> bool {
     match verdict {
         Warmth::Cold => false,
         Warmth::Refresh => true,
-        Warmth::Untouched => warm(current, auxiliary_only, now),
+        Warmth::Untouched => warm(current, now),
     }
 }
 
@@ -2147,12 +2140,7 @@ fn run(
             } else {
                 slow_down_read(state, snapshot, pool, &current.account_id, request.now)
             };
-            let cold = !warm_on(
-                &current,
-                state.auxiliary_only(&current_key),
-                verdict,
-                request.now,
-            );
+            let cold = !warm_on(&current, verdict, request.now);
             // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps
             // none.
             let fast = if verdict == Warmth::Untouched {
@@ -6590,7 +6578,6 @@ fn renew(
 ) -> Selection {
     let (now, fallback_ms) = (request.now, request.fallback_ms);
     let chained = request.static_hash().is_some() || !request.boundaries.is_empty();
-    let auxiliary_only = state.auxiliary_only(key);
     // The stored row is `current` itself: a move and a credit placed elsewhere take it off the state, and neither
     // reaches a renewal.
     let renewed = state
@@ -6624,7 +6611,7 @@ fn renew(
         verdict != Warmth::Untouched && chained,
     );
     rec.renewal = Some(Renewal {
-        cold: !warm_on(current, auxiliary_only, verdict, now),
+        cold: !warm_on(current, verdict, now),
         cause: cause.as_str(),
         epoch: current.epoch,
     });

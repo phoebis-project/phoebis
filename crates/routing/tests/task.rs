@@ -7825,7 +7825,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         pin.last_refresh_at, 3_500,
         "the probe's renewal counts as a refresh"
     );
-    assert!(warm(&pin, false, 3_600));
+    assert!(warm(&pin, 3_600));
 }
 
 /// A dollar table weighing every token a quarter beside a unit share table, so a fold that priced anything
@@ -16442,7 +16442,7 @@ async fn a_restarted_router_reads_each_pins_flag_and_effort_from_its_row_and_a_r
         standing
             .iter()
             .find(|p| p.pin.session_id == session)
-            .map(|p| (p.auxiliary_only, p.pin.effort.clone()))
+            .map(|p| (p.pin.auxiliary_only, p.pin.effort.clone()))
             .unwrap_or_else(|| panic!("no pin of {session}: {standing:?}"))
     };
     assert_eq!(
@@ -16477,7 +16477,7 @@ async fn a_restarted_router_reads_each_pins_flag_and_effort_from_its_row_and_a_r
             .await
             .unwrap()
             .iter()
-            .any(|p| p.auxiliary_only),
+            .any(|p| p.pin.auxiliary_only),
         "the main turn's refresh clears the flag in the state and in the store"
     );
 }

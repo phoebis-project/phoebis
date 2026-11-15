@@ -1502,8 +1502,6 @@ pub struct PinStanding {
     /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
-    /// Only auxiliary requests have used the pin since its placement, read from the row.
-    pub auxiliary_only: bool,
     /// The pin's lane is the fast lane, by the test a shedding round reads to leave a fast-lane pin out of a
     /// window-share round.
     pub fast: bool,
@@ -3089,7 +3087,6 @@ fn pins_standing(
                 Some((runway_ms, binding)) => (runway_ms, Some(runway_ms.is_some()), binding),
             };
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
-            let auxiliary_only = state.auxiliary_only(&pin.key());
             let fast = lane_is_fast(&pin.lane);
             // A pin whose pool left the registry has no siblings to plan a move among.
             let read = match pool {
@@ -3104,7 +3101,6 @@ fn pins_standing(
                 binding,
                 slow_down,
                 cycle_ms,
-                auxiliary_only,
                 fast,
                 move_read: read,
             }

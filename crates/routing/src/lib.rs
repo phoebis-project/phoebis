@@ -45,8 +45,8 @@ pub use select::{
 pub use snapshot::{paid_source, KeyRefusal, Presented, RefusedKey, RegistrySnapshot};
 pub use state::{
     all_plan_windows, budget_deadline, burn_average_ms, burn_decayed, ceiling, cooldown_holds,
-    is_plan_window, is_weekly_window, latest_full_reset, load_shedding, pin_warm, pin_warm_until,
-    plan_windows, return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms,
+    is_plan_window, is_weekly_window, latest_full_reset, load_shedding, plan_windows,
+    return_to_plan_dwell_ms, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms,
     slow_down_stretch_ms, spend_reading_reset, spend_reset_estimate, wait_until, warm, warm_until,
     AccountTicket, BandSegment, BurnUnit, CreditsState, DroppedBlocks, EvidenceSource, HeadMark,
     InFlight, KeyPermit, LongContextRates, MemberSpend, OverageEvidence, PinPace, PinRef, PinUsage,

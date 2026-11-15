@@ -10371,7 +10371,7 @@ fn without_the_class_a_continuation_refreshes_a_restart_is_cold_and_a_foreign_re
         (0, Some("x1")),
         "the same static prefix without the tail restarted the conversation, which is cold"
     );
-    assert!(!warm(&pin, false, T + 3_000));
+    assert!(!warm(&pin, T + 3_000));
     select(&mut st, &s, &at(T + 4_000, "other", &["y1"]), &mut rng());
     let foreign = pinned(&st, "s1");
     assert_eq!(
@@ -10386,7 +10386,7 @@ fn without_the_class_a_continuation_refreshes_a_restart_is_cold_and_a_foreign_re
     );
     select(&mut st, &s, &at(T + 5_000, "s0", &["x1", "x2"]), &mut rng());
     assert!(
-        warm(&pinned(&st, "s1"), false, T + 5_000),
+        warm(&pinned(&st, "s1"), T + 5_000),
         "the restarted conversation's continuation warms the pin again"
     );
 }
@@ -10417,7 +10417,7 @@ fn a_compacted_request_is_cold_and_the_next_continuation_re_warms_the_pin() {
         (0, Some("c1")),
         "the compacted flag is cold whatever the class says, and the pin keeps the compacted chain's tail"
     );
-    assert!(!warm(&pin, false, T + 2_000));
+    assert!(!warm(&pin, T + 2_000));
     select(
         &mut st,
         &s,
@@ -10427,7 +10427,7 @@ fn a_compacted_request_is_cold_and_the_next_continuation_re_warms_the_pin() {
     let pin = pinned(&st, "s1");
     assert_eq!(pin.last_refresh_at, T + 3_000);
     assert!(
-        warm(&pin, false, T + 3_000),
+        warm(&pin, T + 3_000),
         "the continuation of the compacted conversation re-warms the pin"
     );
 }
@@ -10507,7 +10507,7 @@ fn a_probe_never_colds_a_pin() {
         };
         let before = pinned(&st, "s1");
         assert!(
-            effective_warm(&before, false, &probe, &st.affinity().read().unwrap()),
+            effective_warm(&before, &probe, &st.affinity().read().unwrap()),
             "{shape}: the round's order reads the pin warm on the probe"
         );
         select(&mut st, &s, &probe, &mut rng());
@@ -10519,7 +10519,7 @@ fn a_probe_never_colds_a_pin() {
             before.last_refresh_at
         );
         assert!(
-            warm(&after, false, probe.now),
+            warm(&after, probe.now),
             "{shape}: still warm after the probe"
         );
     }
@@ -10685,12 +10685,12 @@ fn a_main_turn_on_a_pin_only_auxiliary_requests_used_clears_its_flag_and_it_read
     select(&mut st, &s, &classed(&s, "title", T), &mut rng());
     select(&mut st, &s, &classed(&s, "quota", T + 200_000), &mut rng());
     assert!(
-        st.auxiliary_only(&pin_key("s1")),
+        st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "only auxiliary requests used the pin so far"
     );
     select(&mut st, &s, &classed(&s, "main", T + 250_000), &mut rng());
     assert!(
-        !st.auxiliary_only(&pin_key("s1")),
+        !st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "the main turn refreshed the pin, which clears the flag"
     );
     select(&mut st, &s, &classed(&s, "quota", T + 500_000), &mut rng());
@@ -10783,7 +10783,7 @@ fn a_refreshing_renewal_of_a_row_stored_flagged_writes_it_clear_and_an_auxiliary
         "the main turn's refresh writes the row clear"
     );
     assert!(
-        !st.auxiliary_only(&pin_key("s1")),
+        !st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "the held row reads clear as well"
     );
 }
@@ -10868,7 +10868,7 @@ fn a_fresh_placement_under_main_or_with_no_class_leaves_the_new_pins_flag_clear(
     select(&mut st, &s, &classed(&s, "main", T), &mut rng());
     pinned(&st, "s1");
     assert!(
-        !st.auxiliary_only(&pin_key("s1")),
+        !st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "a main turn refreshes the pin it places"
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
@@ -10877,7 +10877,7 @@ fn a_fresh_placement_under_main_or_with_no_class_leaves_the_new_pins_flag_clear(
     select(&mut st, &s, &classless, &mut rng());
     pinned(&st, "s1");
     assert!(
-        !st.auxiliary_only(&pin_key("s1")),
+        !st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "a request that names no class is no auxiliary one"
     );
 }
@@ -10903,7 +10903,7 @@ fn a_main_turn_on_another_lane_keeps_the_flag_of_a_pin_only_auxiliary_requests_u
         "a main turn on another lane reads cold"
     );
     assert!(
-        st.auxiliary_only(&pin_key("s1")),
+        st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "a lane change keeps the flag"
     );
     assert!(
@@ -10932,11 +10932,11 @@ fn a_loaded_pin_whose_last_refresh_is_its_creation_reads_as_a_conversation_pin_u
         },
     ]);
     assert!(
-        !st.auxiliary_only(&pin_key("s1")),
+        !st.pin(&pin_key("s1")).is_some_and(|p| p.auxiliary_only),
         "the row carries no flag, whatever its two stamps read"
     );
     assert!(
-        st.auxiliary_only(&pin_key("s2")),
+        st.pin(&pin_key("s2")).is_some_and(|p| p.auxiliary_only),
         "the row carries the flag"
     );
     assert!(
@@ -10962,7 +10962,15 @@ fn a_flagged_and_a_clear_pin(flagged_burn: f64, clear_burn: f64) -> (PinRow, Pin
         ..burning("clear", "a", clear_burn, true, T)
     };
     assert!(
-        warm(&flagged, true, T) && !warm(&flagged, false, T) && !warm(&clear, false, T),
+        warm(&flagged, T)
+            && !warm(
+                &PinRow {
+                    auxiliary_only: false,
+                    ..flagged.clone()
+                },
+                T
+            )
+            && !warm(&clear, T),
         "the flag alone decides the flagged pin's warmth, and the clear pin reads cold by its last refresh"
     );
     (flagged, clear)
@@ -10976,7 +10984,10 @@ fn a_fresh_sessions_prior_counts_a_flagged_pin_warm_by_its_last_use_and_leaves_o
     });
     let (flagged, clear) = a_flagged_and_a_clear_pin(10_000.0, 30_000.0);
     let mut st = loaded(vec![flagged.clone(), clear.clone()]);
-    assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
+    assert!(
+        st.pin(&flagged.key()).is_some_and(|p| p.auxiliary_only)
+            && !st.pin(&clear.key()).is_some_and(|p| p.auxiliary_only)
+    );
     st.set_share(ratio_pricer());
     st.record_sample("a", sample(0.5, 0.1, T), 0);
     let fresh = SelectRequest {
@@ -11006,7 +11017,10 @@ fn the_shed_round_reads_a_flagged_pin_warm_by_its_last_use_and_a_clear_one_cold(
         clear.clone(),
         burning("current", "a", 1.0, true, T),
     ]);
-    assert!(st.auxiliary_only(&flagged.key()) && !st.auxiliary_only(&clear.key()));
+    assert!(
+        st.pin(&flagged.key()).is_some_and(|p| p.auxiliary_only)
+            && !st.pin(&clear.key()).is_some_and(|p| p.auxiliary_only)
+    );
     over_a_fitting_b(&mut st, T - 500);
     past_the_wait(&mut st, &s, "p", "a", T);
     let d = decide(&mut st, &s, &main_turn(&s, "current", T), &mut rng());
@@ -13031,7 +13045,7 @@ fn a_restart_on_a_warm_pin_is_cold_for_the_return_rule_on_that_request() {
         ..burning("s1", "a", 0.0, true, T)
     };
     let mut st = loaded(vec![pin.clone()]);
-    assert!(warm(&pinned(&st, "s1"), false, T), "the stored pin is warm");
+    assert!(warm(&pinned(&st, "s1"), T), "the stored pin is warm");
     let restart = |s: &RegistrySnapshot| {
         with_facts(
             request(s, Some("s1"), "claude-sonnet-5", true, &[], T),
@@ -15426,7 +15440,7 @@ fn a_compacted_request_on_a_warm_pin_is_first_in_the_order_on_that_request() {
         ..main_turn(&s, "warm-9", T)
     };
     assert!(
-        warm(&pinned(&st, "warm-9"), false, T),
+        warm(&pinned(&st, "warm-9"), T),
         "the stored refresh reads warm"
     );
     assert_eq!(

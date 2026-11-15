@@ -1024,29 +1024,19 @@ pub(crate) fn fold_usage(
 /// Whether the pin's cache entry is still alive at `now`. A pin only auxiliary requests have used since its placement
 /// (`auxiliary_only`) is kept warm by those requests, so its last use is the measure, and any other pin reads its last
 /// refresh, the last turn that rewrote its prefix.
-pub fn warm(pin: &PinRow, auxiliary_only: bool, now: i64) -> bool {
-    now < warm_until(pin, auxiliary_only)
+pub fn warm(pin: &PinRow, now: i64) -> bool {
+    now < warm_until(pin)
 }
 
 /// The first instant `warm` answers false for the pin. `warm` reads it, so a reader that shows when the cache goes
 /// cold cannot disagree with the selector's warmth.
-pub fn warm_until(pin: &PinRow, auxiliary_only: bool) -> i64 {
-    let since = if auxiliary_only {
+pub fn warm_until(pin: &PinRow) -> i64 {
+    let since = if pin.auxiliary_only {
         pin.last_used_at
     } else {
         pin.last_refresh_at
     };
     since + pin.cache_ttl_ms
-}
-
-/// `warm` under the row's own flag, for a reader that holds a stored row and no state.
-pub fn pin_warm(pin: &PinRow, now: i64) -> bool {
-    warm(pin, pin.auxiliary_only, now)
-}
-
-/// `warm_until` under the row's own flag, the instant `pin_warm` answers false from.
-pub fn pin_warm_until(pin: &PinRow) -> i64 {
-    warm_until(pin, pin.auxiliary_only)
 }
 
 /// Past this age a permit or a ticket is a guard whose drop never reached the table: the relay bounds a
@@ -1942,16 +1932,10 @@ impl RoutingState {
         }
     }
 
-    /// Whether only auxiliary requests have used the pin held under the key (resolved as `pin` resolves it) since
-    /// its placement, read from the row, false where no pin stands.
-    pub fn auxiliary_only(&self, key: &PinKey) -> bool {
-        self.pin(key).is_some_and(|pin| pin.auxiliary_only)
-    }
-
     /// The pin's warmth under its own flag, the read every selector path takes. `pin` is a row read from this state, so
     /// its flag is the stored one.
     pub fn pin_warm(&self, pin: &PinRow, now: i64) -> bool {
-        pin_warm(pin, now)
+        warm(pin, now)
     }
 
     pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
@@ -4868,24 +4852,29 @@ mod tests {
     #[test]
     fn a_flagged_pin_reads_warm_by_its_last_use_and_an_unflagged_one_by_its_last_refresh() {
         // Refreshed at its placement at 0, used last at 200 000, under a five-minute TTL.
-        let pin = PinRow {
+        let flagged = PinRow {
             last_used_at: 200_000,
+            auxiliary_only: true,
             ..burning("s", 1.0).0
         };
+        let unflagged = PinRow {
+            auxiliary_only: false,
+            ..flagged.clone()
+        };
         assert!(
-            warm(&pin, true, 499_999),
+            warm(&flagged, 499_999),
             "flagged, a millisecond short of one TTL after the last use"
         );
         assert!(
-            !warm(&pin, true, 500_000),
+            !warm(&flagged, 500_000),
             "flagged, one TTL after the last use"
         );
         assert!(
-            warm(&pin, false, 299_999),
+            warm(&unflagged, 299_999),
             "unflagged, a millisecond short of one TTL after the last refresh"
         );
         assert!(
-            !warm(&pin, false, 300_000),
+            !warm(&unflagged, 300_000),
             "unflagged, one TTL after the last refresh, whatever used it since"
         );
     }
@@ -4908,11 +4897,13 @@ mod tests {
             ..RoutingLoad::default()
         });
         assert!(
-            state.auxiliary_only(&flagged.key()),
+            state.pin(&flagged.key()).is_some_and(|p| p.auxiliary_only),
             "a row stored with the flag reads flagged"
         );
         assert!(
-            !state.auxiliary_only(&conversation.key()),
+            !state
+                .pin(&conversation.key())
+                .is_some_and(|p| p.auxiliary_only),
             "a row whose last refresh is its creation and that carries no flag reads as a conversation pin"
         );
     }
@@ -4933,7 +4924,7 @@ mod tests {
             ..pin.clone()
         });
         assert!(
-            state.auxiliary_only(&pin.key()),
+            state.pin(&pin.key()).is_some_and(|p| p.auxiliary_only),
             "a renewal under the same epoch writes the flag the caller read"
         );
         state.put_pin(PinRow {
@@ -4942,7 +4933,7 @@ mod tests {
             ..pin.clone()
         });
         assert!(
-            !state.auxiliary_only(&pin.key()),
+            !state.pin(&pin.key()).is_some_and(|p| p.auxiliary_only),
             "a fresh row under the key reads its own flag, not the replaced pin's"
         );
         state.put_pin(PinRow {
@@ -4951,7 +4942,7 @@ mod tests {
         });
         state.remove_pin(&pin.key());
         assert!(
-            !state.auxiliary_only(&pin.key()),
+            !state.pin(&pin.key()).is_some_and(|p| p.auxiliary_only),
             "the flag leaves with the row"
         );
     }
@@ -4981,7 +4972,7 @@ mod tests {
             vec![(dated.clone(), true)],
             "the rekey moves the row with its flag to the dated id and leaves none under the spelling"
         );
-        assert!(state.auxiliary_only(&dated));
+        assert!(state.pin(&dated).is_some_and(|p| p.auxiliary_only));
     }
 
     /// A pin of session `s`'s main agent under `model` on `account`, placed at `created_at` and used last at
