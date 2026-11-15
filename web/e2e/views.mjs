@@ -4414,8 +4414,11 @@ async function accountLines(theme, path) {
  * Each Quota card's poll lines against the foot's leftmost control beside them, Use reset where the card carries it
  * and else the Refresh pill: the lines end before the control starts and inside the card, the backoff line reads in
  * the serious ink rather than the muted ink of the line above it, and no line wraps. A second read in a 375 by 800
- * window records each card's lines, their heights and the control's left edge and fails nothing, since the foot's own
- * rules keep the lines inside its status box there. The router's seed has no subscription account, so only the
+ * window records each card's lines, their heights and the control's left edge, which the foot's own rules keep inside
+ * its status box there. On a card whose foot holds Use reset beside a lone failed poll line it also records the widths
+ * of the status box, the line's words and its reason, and fails where the reason draws no box of its own that ends
+ * inside the status box, which a rule that leaves the words the whole line does, or where the line stands higher than
+ * two of its line heights, past the room every foot holds. The router's seed has no subscription account, so only the
  * story's pass has lines to read.
  */
 async function quotaPollLines(theme) {
@@ -4428,11 +4431,28 @@ async function quotaPollLines(theme) {
           const box = line.getBoundingClientRect();
           return { color: getComputedStyle(line).color, height: Math.round(box.height), lineHeight: parseFloat(getComputedStyle(line).lineHeight), right: Math.round(box.right), serious: line.classList.contains('qcard__backoff'), text: line.textContent?.trim() ?? '' };
         });
+        const status = card.querySelector('.qcard__foot .qcard__status');
+        const only = status !== null && status.children.length === 1 && card.querySelector('.qcard__foot .qcard__use') !== null ? status.firstElementChild : null;
+        const reason = only?.querySelector('.qcard__reason') ?? null;
+        const box = (el) => {
+          const rect = el.getBoundingClientRect();
+          return { right: Math.round(rect.right * 10) / 10, width: Math.round(rect.width * 10) / 10 };
+        };
         return {
           cardRight: Math.round(card.getBoundingClientRect().right),
           control: control === null ? null : control.classList.contains('qcard__use') ? 'Use reset button' : 'Refresh pill',
           controlLeft: control ? Math.round(control.getBoundingClientRect().left) : null,
           lines,
+          lone:
+            reason === null
+              ? null
+              : {
+                  height: Math.round(only.getBoundingClientRect().height * 10) / 10,
+                  lineHeight: parseFloat(getComputedStyle(only).lineHeight),
+                  reason: box(reason),
+                  status: box(status),
+                  words: box(only.querySelector('.qcard__words')),
+                },
           name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '',
         };
       }),
@@ -4471,7 +4491,15 @@ async function quotaPollLines(theme) {
     if (!r.inside) say(`the reason ${JSON.stringify(r.text)} runs past its line`);
     if (!r.title.split('\n').includes(r.text)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
   }
-  measurements.push(`${theme} /quota poll lines at 375 ${recorded(await inPhoneWindow(read))}`);
+  const phone = await inPhoneWindow(read);
+  measurements.push(`${theme} /quota poll lines at 375 ${recorded(phone)}`);
+  const lone = phone.filter((c) => c.lone !== null).map((c) => ({ name: c.name, ...c.lone }));
+  measurements.push(`${theme} /quota a lone failed poll line beside Use reset at 375 ${JSON.stringify(lone)}`);
+  if (mock && lone.length === 0) say('the story gives a card with a reset left a failed last poll, yet no foot draws its lone line beside Use reset at 375');
+  for (const l of lone) {
+    if (!(l.reason.width > 0 && l.reason.right <= l.status.right + 0.5)) say(`at 375 ${l.name}'s reason beside Use reset draws no box of its own inside the status box (status ${l.status.width}px ending at ${l.status.right}px, words ${l.words.width}px, reason ${l.reason.width}px ending at ${l.reason.right}px)`);
+    if (l.height > 2 * Math.ceil(l.lineHeight) + 1) say(`at 375 ${l.name}'s lone line beside Use reset stands ${l.height}px, past two lines of ${l.lineHeight}px`);
+  }
 }
 
 /**
@@ -5144,7 +5172,7 @@ async function quotaCardHeights(theme) {
  * with the focus on that row's button, since the page change unmounts the Back that held it. After the close through
  * Cancel the focus stands on the card's Use reset again, where a keyboard operator left off, not at the top of the
  * page. It stands there too after a second opening from a click that left the focus on the card, as a browser that
- * focuses no button on a click does, where the dialog hands the focus back to the card. The first opening writes the
+ * focuses no button on a click does, where the dialog hands the focus back to Use reset. The first opening writes the
  * dialog's own shots at rest, its first page as `<theme>/quota-reset-pick.png` and its confirmation, before Back, as
  * `<theme>/quota-reset-confirm.png`. The walk sends no claim and ends at rest, so the view's shot draws the cards with
  * no focus ring and no hover.

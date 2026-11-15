@@ -484,8 +484,9 @@
 }
 
 /* A poll line: a failed poll's reason gives way to the line's width first and the line's words next, so the line
-   stays on one line and ends before the control beside it. A lone reading beside Use reset on a narrow card breaks
-   into a second line instead (below). The gap stands in for the space the flex row drops after "failed:". */
+   stays on one line and ends before the control beside it. A lone reading beside Use reset on a narrow card runs as
+   text over two lines instead, its reason after its words (below). The gap stands in for the space the flex row drops
+   after "failed:". */
 .qcard__poll {
   display: flex;
   gap: 0.25em;
@@ -514,9 +515,21 @@
   margin-left: auto;
 }
 
-/* On a narrow card a reading of one line breaks into the second line every foot holds room for. */
+/* On a narrow card beside Use reset the status box is too narrow for a reading of one line, which then runs as text
+   into the second line every foot holds room for: the words whole, breaking at a word where they pass the first line,
+   since they carry the poll's instant, then a failed poll's reason, cut with an ellipsis where the second line ends.
+   The words alone fill the box's width at 375 px, so a line that kept its flex row would leave the reason no width. */
 @media (max-width: 900px) {
   .qcard__foot--use .qcard__poll:only-child {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+
+  /* The reason's own nowrap would keep it in one run wider than the line, which drops whole past the second line,
+     where the clamp hides it. */
+  .qcard__foot--use .qcard__poll:only-child .qcard__reason {
     white-space: normal;
   }
 }

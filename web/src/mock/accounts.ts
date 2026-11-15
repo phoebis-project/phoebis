@@ -63,6 +63,11 @@ const RESERVE_CLEAN_AGO = 35 * MINUTE;
 /** Reserve's last poll, the sixth 503 at the poll's five-minute cadence since the clean one. */
 const RESERVE_POLLED_AGO = 5 * MINUTE;
 
+/** How long before now workshop's last clean poll read its windows. */
+const WORKSHOP_CLEAN_AGO = 5 * MINUTE + 40_000;
+/** Workshop's last poll, the one 503 at the poll's five-minute cadence since the clean one. */
+const WORKSHOP_POLLED_AGO = 40_000;
+
 /** How long before now sunset's saved end passed. */
 export const SUNSET_END_AGO = 3 * DAY;
 /**
@@ -107,6 +112,8 @@ const SNAPSHOT_OF: Readonly<Record<string, (a: Pick<Account, 'id'>) => QuotaSnap
   // read that set it stands as the last attempt, under the words the usage service records for the pause, while the
   // snapshot keeps the reading of the last clean poll before the end.
   sunset: (a) => failedSinceClean(a.id, SUNSET_LAST_POLL_AGO, ago(SUNSET_FLAGGED_AGO), 'plan ended'),
+  // Reserve's passing 503 at the one slot since the last clean read, while the windows of that read still answer.
+  workshop: (a) => failedSinceClean(a.id, WORKSHOP_CLEAN_AGO, ago(WORKSHOP_POLLED_AGO), 'usage request rejected with status 503'),
 };
 
 /** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
@@ -480,10 +487,11 @@ const SEEDS = [
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-  // The Ultra the upstream approved: its poll stopped carrying the 5-hour window, so the clean poll of 40 s ago reads
-  // the 7-day window, the Opus week and the Fable week alone. After the older seeds, so every seed above keeps its
-  // history's draws, and its id sorts after each of theirs, since a color slot is the id's sorted place: it takes the
-  // API-key overflow's slot, which no ring and no Quota lane draws, and every older account keeps its color.
+  // The Ultra the upstream approved: its poll stopped carrying the 5-hour window, so its last clean poll, 5 min 40 s
+  // ago, read the 7-day window, the Opus week and the Fable week alone, and the poll at the next slot failed on the
+  // endpoint's 503. After the older seeds, so every seed above keeps its history's draws, and its id sorts after each
+  // of theirs, since a color slot is the id's sorted place: it takes the API-key overflow's slot, which no ring and no
+  // Quota lane draws, and every older account keeps its color.
   {
     ...ACCOUNT_SAMPLE,
     id: 'workshop',
@@ -493,8 +501,8 @@ const SEEDS = [
     email: 'operator+workshop@example.com',
     status: 'ready',
     routingEnabled: true,
-    windows: [win('7d', 0.22, 4 * DAY + 2 * HOUR + 10 * MINUTE, 40_000, 0.002), win('seven_day_opus', 0.05, 4 * DAY + 2 * HOUR + 10 * MINUTE)],
-    fableWindow: win('7d_fable', 0.09, 4 * DAY + 2 * HOUR + 10 * MINUTE),
+    windows: [win('7d', 0.22, 4 * DAY + 2 * HOUR + 10 * MINUTE, WORKSHOP_CLEAN_AGO, 0.002), win('seven_day_opus', 0.05, 4 * DAY + 2 * HOUR + 10 * MINUTE, WORKSHOP_CLEAN_AGO)],
+    fableWindow: win('7d_fable', 0.09, 4 * DAY + 2 * HOUR + 10 * MINUTE, WORKSHOP_CLEAN_AGO),
     extraUsage: null,
     fastLane: null,
     credential: {
@@ -735,8 +743,8 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
 const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_fable': 3 };
 
 /**
- * Where an account's samples end: at its last reading, the last clean poll where every poll after it failed (legacy's
- * and reserve's), an unpaired row's last reading before its disconnect, and the rest now.
+ * Where an account's samples end: at its last reading, the last clean poll where every poll after it failed (legacy's,
+ * reserve's and workshop's), an unpaired row's last reading before its disconnect, and the rest now.
  */
 const samplesEndOf = (account: (typeof ACCOUNTS)[number]): number => {
   const last = account.usage?.poll?.lastOutcome === 'failed' ? account.usage.poll.lastCleanAt : account.status === 'unpaired' ? account.usage?.fetchedAt : null;

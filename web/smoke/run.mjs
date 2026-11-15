@@ -1768,9 +1768,9 @@ const quotaListed = (a) => a.kind === 'oauth' && a.status !== 'reauth_required' 
 let quotaStoryCount;
 await forView('/quota', async () => {
 m = await mount('/quota');
-// secondary's backoff and reserve's failed poll are the listed rows needing attention, legacy's failing poll leaving
-// with its card. The sunset seed's plan ended, so its card and its place in the count leave too.
-expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '2 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'no 5-hour window', 'no Fable window', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
+// secondary's backoff and the failed polls of reserve and workshop are the listed rows needing attention, legacy's
+// failing poll leaving with its card. The sunset seed's plan ended, so its card and its place in the count leave too.
+expect('/quota', m.text(), [`${(await api.listAccounts()).filter(quotaListed).length} accounts`, '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'no 5-hour window', 'no Fable window', 'not reported', 'resets in', 'polled', 'rate limited', 'backing off']);
 /**
  * The story's count on the bar, `{n} accounts, {n} need attention`, as its two figures. A funding_required account
  * under an override keeps its place in both, read against these after the shared mount has gone.
@@ -16387,7 +16387,8 @@ await forView('/routing-log', async () => {
   const tinted = (page) => page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length;
   const pagerButton = (page, label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
   {
-    // The poll lands the hour's newest row in the tint, then the reader pages away before the next poll clears it.
+    // The poll lands the hour's newest rows in the tint, then the reader pages away before the next poll clears them.
+    // Two rows share the newest instant, the polls of 40 s back: studio's cleared window and workshop's failed poll.
     const t = Date.parse(hour.rows[0].at);
     const page = await mount('/routing-log', { now: t - 2_000 });
     await chooseInterval(page, '5 s');
@@ -16401,7 +16402,7 @@ await forView('/routing-log', async () => {
     const back = { first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
     results.push({
       name: '/routing-log paging back from an older page draws no row in the accent tint',
-      ok: landed === 1 && back.first === datedText(hour.rows[0].at) && back.tinted === 0,
+      ok: landed === 2 && back.first === datedText(hour.rows[0].at) && back.tinted === 0,
       missing: [`${landed} tinted after the poll`, JSON.stringify(back)],
     });
     page.unmount();

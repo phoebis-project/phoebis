@@ -2790,7 +2790,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`the story writes nightly's failed usage poll, legacy's at the poll's cadence until its refresh failed, reserve's at the cadence to its last attempt, and one stream cut after its head with their detail members, at ${at}`, async () => {
+  test(`the story writes nightly's failed usage poll, legacy's at the poll's cadence until its refresh failed, reserve's at the cadence to its last attempt, workshop's one, and one stream cut after its head with their detail members, at ${at}`, async () => {
     const s = await story;
     const log = await logOf(s);
     const polls = log.filter((row) => row.type === 'event' && row.kind === 'poll_failed');
@@ -2822,8 +2822,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(reserved.map((p) => p.at), reserveSlots, "reserve's failed polls");
     assert.equal(reserved.at(-1)?.at, reserve.usage.poll.lastAttemptAt, 'the last row is the last attempt');
     for (const p of reserved) assert.deepEqual(p.detail, poll.detail, `${p.at} reads the 503 nightly's poll read`);
-    // Reserve's six: its seed's last clean read 35 minutes back and its last attempt 5 minutes back.
-    assert.equal(polls.length, 1 + slots.length + 6, 'no other account failed a poll');
+    // Reserve's six: its seed's last clean read 35 minutes back and its last attempt 5 minutes back. Workshop's one:
+    // its seed's last clean read 5 min 40 s back and its last attempt 40 s back, the one slot since.
+    assert.equal(polls.length, 1 + slots.length + 6 + 1, 'no account but nightly, legacy, reserve and workshop failed a poll');
     // The poll's last attempt is the slot whose acquisition ran the refresh that failed, after the last 503.
     const last = Date.parse(legacy.usage.poll.lastAttemptAt);
     assert.ok(last <= Date.parse(lapsed.at) && last > Date.parse(own.at(-1).at), `the last attempt at ${legacy.usage.poll.lastAttemptAt}`);

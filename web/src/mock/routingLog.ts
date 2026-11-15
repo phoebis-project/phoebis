@@ -2648,6 +2648,13 @@ function reservePolls(): EventSeed[] {
   return failedPolls('reserve', poll.lastCleanAt, Date.parse(poll.lastAttemptAt) + 1);
 }
 
+/** Workshop's one poll after its last clean read, its last attempt, which the endpoint answered 503. */
+function workshopPolls(): EventSeed[] {
+  const poll = accountById.get('workshop')?.usage?.poll;
+  if (!poll?.lastCleanAt || !poll.lastAttemptAt) return [];
+  return failedPolls('workshop', poll.lastCleanAt, Date.parse(poll.lastAttemptAt) + 1);
+}
+
 /**
  * Primary's plan read as ended by the profile read a usage 403 made due, and found again by the next profile read a
  * minute later. While the flag stands the routing reads the account as past its end, so the two sit in a minute of
@@ -2967,6 +2974,7 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'nightly', at: iso(t(12, 26, 40)), detail: USAGE_503, kind: 'poll_failed' },
     ...legacyPolls(),
     ...reservePolls(),
+    ...workshopPolls(),
     { accountId: 'research', at: iso(RESEARCH_BUDGET_AT), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(RESEARCH_BUDGET_AT) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'jobs', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', ...currentPair('primary'), reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     ...WEEKLY_RESETS,

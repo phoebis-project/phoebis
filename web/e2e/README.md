@@ -175,7 +175,9 @@ the Identity card's note, the two sizes recorded, each text recorded), the accou
 (short of the foot's leftmost control, Use reset where the card carries it and else the Refresh pill, and inside the
 card, the backoff line in the serious ink, none wrapping, a failed poll's reason cut inside its line and whole in its
 title where a listed card draws one, and in a 375 by 800 window each card's lines, their heights and the control's left
-edge recorded and nothing failed), the Quota cards' chips and reset cells (each chip and each reset cell without a
+edge recorded, and beside Use reset a lone failed poll line's status box, words and reason widths recorded, the reason
+drawing a box of its own that ends inside the status box and the line no higher than two of its line heights (mock pass:
+the story's `workshop` card)), the Quota cards' chips and reset cells (each chip and each reset cell without a
 projection on one line inside its column, a live label with its projection split between its reset and its projection
 with each part on one line inside the cell, the window grid inside its card, an expired cell's reset on its title where
 a listed card draws one) and each live window's pace mark (inside its meter and taller than the track) and the chip row
