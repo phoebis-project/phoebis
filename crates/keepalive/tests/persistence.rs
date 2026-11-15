@@ -1308,6 +1308,99 @@ async fn a_restart_under_the_session_cap_restores_the_session_that_sent_a_reques
     );
 }
 
+/// A session row an earlier build saved carries no `slotted`, and that build wrote the request time only at a request
+/// that took the slots, so a session that sent a request before the upgrade loads holding its slot: under a session cap
+/// of one, a second session's first request is refused.
+#[tokio::test]
+async fn a_saved_session_without_its_slot_member_holds_its_slot_where_it_carries_a_request_time() {
+    let mut r = rig(on_disk()).await;
+    r.event(session_start("second"))
+        .expect("the default caps leave room for a second session");
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let mut row = saved_sessions(&r)
+        .into_iter()
+        .find(|row| row.session_id == "session")
+        .expect("the rig's session row");
+    let mut payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+    payload
+        .as_object_mut()
+        .expect("the payload is an object")
+        .remove("slotted")
+        .expect("this build saves the member");
+    row.payload = payload.to_string();
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            sessions: vec![row],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    let second = r
+        .restart_with_limits(KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        })
+        .await;
+    second.load_persisted().await;
+    let BusEvent::RequestObserved(mut observed) = r.observed("first", "main", BODY) else {
+        unreachable!("observed builds an observation")
+    };
+    observed.session_id = Some("second".into());
+    second.observe(BusEvent::RequestObserved(observed));
+    let cause = second
+        .recipes()
+        .into_iter()
+        .find(|line| line.session_id == "second" && line.agent_id == "main")
+        .map(|line| line.cause);
+    assert_eq!(
+        cause,
+        Some(Reason::SessionLimit),
+        "the restored session holds the one slot"
+    );
+}
+
+/// A request refused the slot saves the session's request time, so a refused session that comes back from a restart is
+/// held until one expiry after its newest refused request, as the engine that refused it holds it, and leaves then.
+#[tokio::test]
+async fn a_refused_session_restored_by_a_restart_leaves_one_expiry_after_its_newest_refused_request(
+) {
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        },
+        ..on_disk()
+    })
+    .await;
+    r.event(session_start("other"))
+        .expect("the rig's session has sent nothing, so it holds no slot");
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    // Inside the lease, so no lapse saves the session's row beside the refused requests.
+    r.advance(30_000);
+    observe_on(&mut r, "other", "main").await;
+    r.advance(30_000);
+    observe_on(&mut r, "other", "main").await;
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let cause = || {
+        second
+            .recipes()
+            .into_iter()
+            .find(|line| line.session_id == "other" && line.agent_id == "main")
+            .map(|line| line.cause)
+    };
+    r.advance(DAY - 1);
+    assert_eq!(
+        cause(),
+        Some(Reason::SessionLimit),
+        "one millisecond short of one expiry after the newest refused request"
+    );
+    r.advance(1);
+    assert_eq!(cause(), None, "one expiry after the newest refused request");
+}
+
 /// A session the load admits can still carry more agents than the limit leaves room for: the subagent past it is
 /// disposed on its own, and the probe it paid for and nobody answered settles under the eviction.
 #[tokio::test]

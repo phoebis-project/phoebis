@@ -569,7 +569,14 @@ pub(crate) struct Session {
     pub ended: bool,
     pub owner_id: Option<String>,
     pub last_report_at: i64,
+    /// The session's last real request, one refused its slot included, which the expiry and a silent session's idle
+    /// ceiling count from. A refused session keeps no recipe, so the ceiling never reads a refused request's stamp.
     pub last_real_at: Option<i64>,
+    /// Whether the session took its slots of `max_sessions` and `max_agents`, which the first request the caps admit
+    /// sets. From then on its agents' records hold slots of `max_agents` until each leaves, a record its end released
+    /// included. A request refused the slot leaves it false and still writes `last_real_at`, so the session's next
+    /// request reads both caps again while the expiry counts from the refused request.
+    pub slotted: bool,
     /// A session the load restored from a save that held it attended keeps the attended reading of the ceilings until
     /// this instant or until the mod registers it again, whichever is first: the mod re-adopts a restored session
     /// within its lease, and a parked recipe must not be discarded as idle before it can.
@@ -587,20 +594,14 @@ impl Session {
         self.attended || self.restored_until.is_some_and(|until| now < until)
     }
 
-    /// Whether the session has carried a real request: from then on its agents' records hold slots of `max_agents`
-    /// until each leaves, a record its end released included.
-    pub(crate) fn requested(&self) -> bool {
-        self.last_real_at.is_some()
-    }
-
-    /// Holds a slot of `max_sessions`: past its first real request, with `last_real_at` set, and not ended.
+    /// Holds a slot of `max_sessions`: it took its slots and has not ended.
     pub(crate) fn holds_slot(&self) -> bool {
-        !self.ended && self.requested()
+        !self.ended && self.slotted
     }
 
-    /// The slots of `max_agents` the session's agents hold, none before its first real request.
+    /// The slots of `max_agents` the session's agents hold, none before the session takes its slots.
     pub(crate) fn agent_slots(&self) -> usize {
-        if self.requested() {
+        if self.slotted {
             self.agents.len()
         } else {
             0
@@ -1695,8 +1696,8 @@ impl Inner {
         self.touch_agent(key, agent_id);
     }
 
-    /// The agents `max_agents` bounds: every record of a session that has carried a real request. A registered
-    /// session's agents hold no slot until its first request.
+    /// The agents `max_agents` bounds: every record of a session that took its slots. A registered session's agents
+    /// hold none until a request the caps admit.
     pub(crate) fn agent_count(&self) -> usize {
         self.sessions.values().map(Session::agent_slots).sum()
     }
@@ -2584,11 +2585,7 @@ impl Inner {
             .sessions
             .iter()
             .filter(|(_, s)| {
-                // A request refused its slot writes its agent's stamp and leaves the session's own unwritten, so the
-                // newest agent's request counts beside the session's two stamps.
-                let stale = |at: i64| now - at >= self.session_expiry_ms;
-                stale(s.last_real_at.unwrap_or(0).max(s.last_report_at))
-                    && s.agents.values().filter_map(|a| a.last_real_at).all(stale)
+                now - s.last_real_at.unwrap_or(0).max(s.last_report_at) >= self.session_expiry_ms
             })
             .map(|(k, _)| k.clone())
             .collect();
@@ -3057,9 +3054,9 @@ impl Engine {
         inner.set_aside(&key, &agent_id, now);
         // A session takes its slots at its first real request, so both caps are read here, the session cap first as a
         // registration reads them, and the session's agents join the agent count only where they all fit. A first
-        // request over either cap is refused the slot as a registration over it is: it keeps nothing and leaves the
-        // session's request time unwritten, so the session's next request reads the caps again.
-        if !inner.sessions[&key].requested() {
+        // request over either cap is refused the slot as a registration over it is: it keeps nothing and leaves
+        // `slotted` false, so the session's next request reads the caps again.
+        if !inner.sessions[&key].slotted {
             let joining = inner.sessions[&key].agents.len();
             let refused = if inner.live_sessions() >= inner.limits.max_sessions {
                 Some(Reason::SessionLimit)
@@ -3069,17 +3066,22 @@ impl Engine {
                 None
             };
             if let Some(reason) = refused {
-                // The agent saw a real request, so the view lists its line with the cause, while the session's own
-                // request time stays unwritten and the session still holds no slot.
+                // The agent saw a real request, so the view lists its line with the cause. The session's request time
+                // moves too and is saved, since the expiry counts from it across a restart, and `slotted` stays false,
+                // so the session holds no slot.
+                inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
                 let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                 agent.last_real_at = Some(now);
                 agent.canonical_model = observed.canonical_model.clone();
+                inner.touch_session(&key);
                 inner.drop_aside(&key, &agent_id);
                 inner.set_reason(&key, &agent_id, reason);
                 return;
             }
         }
-        inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
+        let session = inner.sessions.get_mut(&key).unwrap();
+        session.last_real_at = Some(now);
+        session.slotted = true;
         inner.touch_session(&key);
         let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if agent.state == AgentState::Unknown {

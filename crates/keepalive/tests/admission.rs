@@ -847,9 +847,9 @@ async fn a_first_request_whose_agents_pass_the_agent_cap_keeps_nothing_and_takes
     );
 }
 
-/// A request refused the slot writes its agent's request time and leaves the session's own unwritten, so a session
-/// whose refused requests keep arriving with no report between them is held until one expiry after the newest of them
-/// and leaves then.
+/// A request refused the slot writes its agent's request time and the session's and leaves the session without a slot,
+/// so a session whose refused requests keep arriving with no report between them is held until one expiry after the
+/// newest of them and leaves then.
 #[tokio::test]
 async fn a_session_refused_the_slot_expires_one_expiry_after_its_newest_refused_request() {
     let mut r = rig(RigSpec {
@@ -889,6 +889,38 @@ async fn a_session_refused_the_slot_expires_one_expiry_after_its_newest_refused_
     assert!(
         r.engine.agent_status("desktop", "other", "main").is_none(),
         "one expiry after the newest refused request"
+    );
+}
+
+/// A start that replaces a session under another instance of the same key generation inherits the slot the replaced
+/// session took beside its request time, so under a session cap of one a second session that registered first is still
+/// refused at its first request.
+#[tokio::test]
+async fn a_same_generation_replacement_keeps_the_slot_its_session_took() {
+    let mut r = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.event(session_start("other"))
+        .expect("the rig's session has sent nothing, so it holds no slot");
+    arm(&r, "first", "session", "main", 1_000);
+    r.event(session_start_as("session", "second", Some("instance")))
+        .expect("a replacement of a live session takes no slot of its own");
+    arm(&r, "second", "other", "main", 1_000);
+    let cause = r
+        .engine
+        .recipes()
+        .into_iter()
+        .find(|line| line.session_id == "other" && line.agent_id == "main")
+        .map(|line| line.cause);
+    assert_eq!(
+        cause,
+        Some(Reason::SessionLimit),
+        "the replacement holds the one slot"
     );
 }
 

@@ -812,11 +812,13 @@ impl Inner {
             self.forget_session(&key);
         }
         // A previous holder's traffic says nothing about this key's session, so only a start of the same
-        // generation inherits when the session last carried a real request.
-        let last_real_at = if mine {
-            self.sessions.get(&key).and_then(|s| s.last_real_at)
+        // generation inherits whether the session took its slots and when it last carried a real request.
+        let (last_real_at, slotted) = if mine {
+            self.sessions
+                .get(&key)
+                .map_or((None, false), |s| (s.last_real_at, s.slotted))
         } else {
-            None
+            (None, false)
         };
         let mut agents = BTreeMap::new();
         let incarnation = self.incarnation();
@@ -836,6 +838,7 @@ impl Inner {
                 owner_id: owner_id.map(str::to_owned),
                 last_report_at: now,
                 last_real_at,
+                slotted,
                 restored_until: None,
                 owner_mismatches: 0,
                 agents,

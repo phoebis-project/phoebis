@@ -978,6 +978,7 @@ mod tests {
                 owner_id: None,
                 last_report_at: 0,
                 last_real_at: Some(0),
+                slotted: true,
                 restored_until: None,
                 owner_mismatches: 0,
                 agents,

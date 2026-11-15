@@ -63,6 +63,10 @@ pub(crate) struct PersistedSession {
     pub owner_id: Option<String>,
     pub last_report_at: i64,
     pub last_real_at: Option<i64>,
+    /// Absent from a row an earlier build saved, which loads as `None` and takes its slot from `last_real_at`: that
+    /// build wrote the stamp only at a request that took the slots.
+    #[serde(default)]
+    pub slotted: Option<bool>,
 }
 
 /// Every field of `Agent` but `in_flight`, with the observation's fields and the recipe's own beside it. The prompt,
@@ -427,6 +431,7 @@ impl PersistedSession {
             owner_id: session.owner_id.clone(),
             last_report_at: session.last_report_at,
             last_real_at: session.last_real_at,
+            slotted: Some(session.slotted),
         }
     }
 
@@ -445,6 +450,7 @@ impl PersistedSession {
             owner_id: self.owner_id,
             last_report_at: self.last_report_at,
             last_real_at: self.last_real_at,
+            slotted: self.slotted.unwrap_or(self.last_real_at.is_some()),
             restored_until: self.attended.then_some(now + LEASE_MS),
             owner_mismatches: 0,
             agents: BTreeMap::new(),
