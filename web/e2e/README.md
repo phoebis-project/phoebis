@@ -266,7 +266,7 @@ nightly, a Cache warming card alone on its row spanning the grid and a last card
 top edge, each figure and card recorded), the Traffic table grouped by model (its Error rate column, and the no model
 row's Error rate a dash in the muted ink and in the type of the rate cell beside it, which reads a percent, the row
 required in the mock pass alone since the router's seed holds no request without a model), the request pages' widths,
-walked on a load of their own once every view's shot is taken, the pagers of both logs (three buttons 32 px square on
+walked on a load of their own in the part behind the walks, the pagers of both logs (three buttons 32 px square on
 each, the request log's page-size select 32 px, each footer one control tall with its padding and its border), the
 request log's range control (the group 32 px with its six pills 28 px at one top, the group against the split Refresh
 button on height and the search field on height and top, the Custom pill's width recorded), the speed chip, and the
@@ -335,7 +335,7 @@ Estimated cost row's figure chip and muted equivalent on one line each inside th
 their own under it, each on one line inside that row's one cell across the table, at 1280 by 800 and 1440 by 900, the
 story's Fable request reading its figure in the Ultra week alone on the cost row, then its plan, and a 5-hour, a 7-day
 and a Fable week share in that order), a reasons panel link landing on a list whose first row's drawer reads the reason
-(mock pass, on a load of its own once every view's shot is taken), the attempt count's hover card at the request log's
+(mock pass, on a load of its own in the part behind the walks), the attempt count's hover card at the request log's
 bottom (mock pass, on the log read at 50 rows a page, where the story's last row of two or more attempts sits below the
 window's fold, the bare log loaded again after: that row scrolled to the viewport's bottom edge and its count hovered,
 the card inside the viewport and uncovered at its center with its last badge ending inside it, the card drawn again on
@@ -345,7 +345,7 @@ block's field, the find row at the 400 px drawer inside its width with the field
 its buttons on one line, and Enter opening the wide dialog with that row the one drawn active inside the rows in view,
 the box scrolled off its top, the mark's fill apart from the row's tint and the focus in the dialog's field, in both
 passes and recorded as skipped where the body holds no such line), the wide body view's width floor (mock pass, on a
-load of its own once every view's shot is taken: the page an edge answered an upstream 502 with, indented with tabs,
+load of its own in the part behind the walks: the page an edge answered an upstream 502 with, indented with tabs,
 opened wide, its block of rows no narrower than its widest row's text, which runs wider than the scroll box), the
 routing log's first decision row, opened before the log's shot (Time the card less the other columns with the row's
 panel open), the routing log's decision card, which opens once the log's shot is taken (the strip and the candidate
@@ -452,8 +452,10 @@ worktree list` reports, and against the tree holding the nearest `Cargo.toml` wh
 
 The page runs on Playwright's clock: it starts at `PHOEBIS_E2E_CLOCK` (an ISO instant), or at the instant the pass
 launches when that is unset, and stands still except where the script moves it, in fixed steps, while a view loads
-and again before its shot. Animations are off and the time zone is UTC, so two passes over one tree at one clock
-origin draw the same pixels.
+and again before its shot. A step starts once the page has had two frames with no request in flight, so a view that
+loads a module waits for the module's file however late it arrives. A request that has not landed after 30 s fails the
+pass with its address, and the later steps wait for the frames alone. Animations are off and the time zone is UTC, so
+two passes over one tree at one clock origin draw the same pixels.
 
 ## Run it against a running router
 
@@ -515,11 +517,6 @@ Unset or empty, the variable names every part, and a word that names no part sto
 `views.mjs` reads the same variable and runs the parts it names in one process, every part when it is unset. The pass
 against a running router keeps that one process, since its walks share the router's registry, where one walk's writes
 would reach another's reads.
-
-Under the load of the parts side by side, a page can set its own clock state one step late, so a line that prints an
-instant to the millisecond can differ between two passes by one step of 100 ms. A part that runs alone takes the same
-steps in each run. Where two passes differ in a shot or a line, run that part alone through `PHOEBIS_E2E_WALKS` and
-compare again.
 
 ## Compare the computed styles
 

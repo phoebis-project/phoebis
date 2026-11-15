@@ -148,6 +148,12 @@ const failures = [];
 const measurements = [];
 /** Per page, the login screens the pass loads on purpose, each of which asks /admin/session without a cookie first. */
 const loginLoads = new WeakMap();
+/** Per page, the requests it sent that have neither finished nor failed, and the count of those it has sent. */
+const traffic = new WeakMap();
+/** Room in real time for a page's requests to land, the span Playwright gives each of its own waits. */
+const SETTLE_DEADLINE_MS = 30_000;
+/** Set once a page's requests outlast the deadline: one failure is recorded, and no later step waits for a request. */
+let stalled = false;
 /** The pages whose clock a login paused at the origin, where a later login sets the time back instead. */
 const clocked = new WeakSet();
 // A tile repainted in part can anti-alias a rounded corner a shade apart from one painted whole, and which
@@ -192,6 +198,14 @@ async function openPage(on) {
     if (m.type() === 'error' && !expectedAnonymous(m)) failures.push(`console error on ${opened.url()}: ${m.text()}`);
   });
   opened.on('pageerror', (e) => failures.push(`page error on ${opened.url()}: ${e.message}`));
+  const sent = { open: new Set(), started: 0 };
+  traffic.set(opened, sent);
+  opened.on('request', (request) => {
+    sent.open.add(request);
+    sent.started += 1;
+  });
+  opened.on('requestfinished', (request) => sent.open.delete(request));
+  opened.on('requestfailed', (request) => sent.open.delete(request));
   return opened;
 }
 let page = await openPage(browser);
@@ -203,19 +217,42 @@ let page = await openPage(browser);
 const booted = () => page.evaluate(() => import(document.querySelector('script[type="module"][src]').src).then(() => true));
 
 /**
- * Two of the page's own frames: every task the last step queued (a render, the effects after it, the timers
- * those start) has run by then however slow the page is, so each step starts from the same page. Playwright
- * polls on the real frame clock, which the paused one leaves alone, and runs its first check at once rather
- * than on a frame, so the third check is the second frame.
+ * Two of the page's own frames. Playwright polls on the real frame clock, which the paused one leaves alone, and runs
+ * its first check at once rather than on a frame, so the third check is the second frame.
  */
-const settle = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globalThis.__e2eFrames ?? 0) + 1) % 3 === 0, null, { polling: 'raf' });
+const frames = () => page.waitForFunction(() => (globalThis.__e2eFrames = (globalThis.__e2eFrames ?? 0) + 1) % 3 === 0, null, { polling: 'raf' });
 
 /**
- * The page's clock stands still between these calls, so everything a view does on a timer (the mock's latency,
- * the relative labels) happens here, in fixed steps. A step jumps to its end and fires
- * what fell due on the way there, so a timer the page starts in reply counts from the step's end however late
- * the reply lands. Every run takes the same steps, and each view sets the clock back to the origin before it loads,
- * so a view draws at the same instants whatever the measures before it advanced.
+ * Two frames with no request of the page in flight at their start and none started inside them: every task the last
+ * step queued (a render, the effects after it, the timers those start) has run by then however slow the page is, and
+ * every file and answer the page asked for has landed with two frames behind it. So a step waits for a module's file
+ * however late it arrives, and the two frames behind its last byte are the room for the module's evaluation and the
+ * view's first render. The clock stands still meanwhile, so no timer of the page starts a request. A request that never
+ * lands ends the wait at the deadline with one failure, and the steps behind it wait for the frames alone.
+ */
+async function settle() {
+  const sent = traffic.get(page);
+  const deadline = performance.now() + SETTLE_DEADLINE_MS;
+  for (;;) {
+    const quiet = sent.open.size === 0;
+    const started = sent.started;
+    await frames();
+    if (stalled || (quiet && sent.started === started)) return;
+    if (performance.now() > deadline) {
+      stalled = true;
+      failures.push(`requests still in flight after ${SETTLE_DEADLINE_MS / 1_000} s on ${page.url()}, so the later steps wait for frames alone: ${[...sent.open].map((request) => request.url()).join(', ')}`);
+      return;
+    }
+  }
+}
+
+/**
+ * The page's clock stands still between these calls, so everything a view does on a timer (the mock's latency, the
+ * relative labels) happens here, in fixed steps. A step starts once the page's requests have landed and two frames
+ * passed behind them, then jumps to its end and fires what fell due on the way there, so a timer the page starts in
+ * reply counts from the step's end however late the reply lands. Every run takes the same steps, and each view sets the
+ * clock back to the origin before it loads, so a view draws at the same instants whatever the measures before it
+ * advanced.
  */
 async function advance(ms) {
   for (let spent = 0; spent < ms; spent += CLOCK_STEP_MS) {
