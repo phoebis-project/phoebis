@@ -528,9 +528,12 @@
   }
 
   /* The reason's own nowrap would keep it in one run wider than the line, which drops whole past the second line,
-     where the clamp hides it. */
+     where the clamp hides it. It breaks inside a word, as each one-line ellipsis of the console cuts, so its text runs
+     to the second line's end before the clamp's ellipsis. A break at word boundaries alone would end that line after
+     its first word, about 35 px short of the status box's edge at 375 px. */
   .qcard__foot--use .qcard__poll:only-child .qcard__reason {
     white-space: normal;
+    word-break: break-all;
   }
 }
 

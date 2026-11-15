@@ -4415,11 +4415,13 @@ async function accountLines(theme, path) {
  * and else the Refresh pill: the lines end before the control starts and inside the card, the backoff line reads in
  * the serious ink rather than the muted ink of the line above it, and no line wraps. A second read in a 375 by 800
  * window records each card's lines, their heights and the control's left edge, which the foot's own rules keep inside
- * its status box there. On a card whose foot holds Use reset beside a lone failed poll line it also records the widths
- * of the status box, the line's words and its reason, and fails where the reason draws no box of its own that ends
- * inside the status box, which a rule that leaves the words the whole line does, or where the line stands higher than
- * two of its line heights, past the room every foot holds. The router's seed has no subscription account, so only the
- * story's pass has lines to read.
+ * its status box there. On a card whose foot holds Use reset beside a lone failed poll line it also records the status
+ * box, the line's words and its reason, and fails where the reason's first line fragment has no width, ends past the
+ * status box or sits below the line's bottom, as a rule that leaves the words the whole line or pushes the reason past
+ * the two lines the clamp draws does. The reason's own box would not tell: it spans the lines the clamp hides. It fails
+ * too where the line stands higher than two of its line heights, past the room every foot holds, or reads no line
+ * height in pixels, and the mock pass fails where no foot draws such a line. The router's seed has no subscription
+ * account, so only the story's pass has lines to read.
  */
 async function quotaPollLines(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -4434,10 +4436,9 @@ async function quotaPollLines(theme) {
         const status = card.querySelector('.qcard__foot .qcard__status');
         const only = status !== null && status.children.length === 1 && card.querySelector('.qcard__foot .qcard__use') !== null ? status.firstElementChild : null;
         const reason = only?.querySelector('.qcard__reason') ?? null;
-        const box = (el) => {
-          const rect = el.getBoundingClientRect();
-          return { right: Math.round(rect.right * 10) / 10, width: Math.round(rect.width * 10) / 10 };
-        };
+        const round = (n) => Math.round(n * 10) / 10;
+        const box = (rect) => ({ bottom: round(rect.bottom), right: round(rect.right), width: round(rect.width) });
+        const first = reason?.getClientRects()[0];
         return {
           cardRight: Math.round(card.getBoundingClientRect().right),
           control: control === null ? null : control.classList.contains('qcard__use') ? 'Use reset button' : 'Refresh pill',
@@ -4447,11 +4448,13 @@ async function quotaPollLines(theme) {
             reason === null
               ? null
               : {
-                  height: Math.round(only.getBoundingClientRect().height * 10) / 10,
+                  height: round(only.getBoundingClientRect().height),
+                  line: box(only.getBoundingClientRect()),
                   lineHeight: parseFloat(getComputedStyle(only).lineHeight),
-                  reason: box(reason),
-                  status: box(status),
-                  words: box(only.querySelector('.qcard__words')),
+                  reason: first === undefined ? null : box(first),
+                  reasonBox: box(reason.getBoundingClientRect()),
+                  status: box(status.getBoundingClientRect()),
+                  words: box(only.querySelector('.qcard__words').getBoundingClientRect()),
                 },
           name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '',
         };
@@ -4497,8 +4500,13 @@ async function quotaPollLines(theme) {
   measurements.push(`${theme} /quota a lone failed poll line beside Use reset at 375 ${JSON.stringify(lone)}`);
   if (mock && lone.length === 0) say('the story gives a card with a reset left a failed last poll, yet no foot draws its lone line beside Use reset at 375');
   for (const l of lone) {
-    if (!(l.reason.width > 0 && l.reason.right <= l.status.right + 0.5)) say(`at 375 ${l.name}'s reason beside Use reset draws no box of its own inside the status box (status ${l.status.width}px ending at ${l.status.right}px, words ${l.words.width}px, reason ${l.reason.width}px ending at ${l.reason.right}px)`);
-    if (l.height > 2 * Math.ceil(l.lineHeight) + 1) say(`at 375 ${l.name}'s lone line beside Use reset stands ${l.height}px, past two lines of ${l.lineHeight}px`);
+    const drawn = l.reason !== null && l.reason.width > 0 && l.reason.right <= l.status.right + 0.5 && l.reason.bottom <= l.line.bottom + 0.5;
+    if (!drawn) {
+      const where = l.reason === null ? 'no fragment' : `a first fragment ${l.reason.width}px wide, ending at ${l.reason.right}px with its bottom at ${l.reason.bottom}px`;
+      say(`at 375 ${l.name}'s reason beside Use reset starts on no drawn line inside the status box: ${where}, against the status box ending at ${l.status.right}px and the line's bottom at ${l.line.bottom}px (words ${l.words.width}px, the reason's whole box ${l.reasonBox.width}px ending at ${l.reasonBox.right}px)`);
+    }
+    if (!Number.isFinite(l.lineHeight)) say(`at 375 ${l.name}'s lone line beside Use reset reads no line height in pixels (${l.lineHeight}), so its ${l.height}px cannot be read against two lines`);
+    else if (l.height > 2 * Math.ceil(l.lineHeight) + 1) say(`at 375 ${l.name}'s lone line beside Use reset stands ${l.height}px, past two lines of ${l.lineHeight}px`);
   }
 }
 

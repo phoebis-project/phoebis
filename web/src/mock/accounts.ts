@@ -112,7 +112,8 @@ const SNAPSHOT_OF: Readonly<Record<string, (a: Pick<Account, 'id'>) => QuotaSnap
   // read that set it stands as the last attempt, under the words the usage service records for the pause, while the
   // snapshot keeps the reading of the last clean poll before the end.
   sunset: (a) => failedSinceClean(a.id, SUNSET_LAST_POLL_AGO, ago(SUNSET_FLAGGED_AGO), 'plan ended'),
-  // Reserve's passing 503 at the one slot since the last clean read, while the windows of that read still answer.
+  // Workshop's failed poll, a passing 503 as on reserve, at the one slot since its last clean read, while the windows
+  // of that read still answer.
   workshop: (a) => failedSinceClean(a.id, WORKSHOP_CLEAN_AGO, ago(WORKSHOP_POLLED_AGO), 'usage request rejected with status 503'),
 };
 
