@@ -7,7 +7,9 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
-use phoebis_ledger::{run_retention, LedgerConfig, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
+use phoebis_ledger::{
+    run_retention, LedgerConfig, PriceRevisions, Purged, MAX_CAPTURED_BODY, PURGE_SLICE,
+};
 use phoebis_store::AccountKind;
 use tower::ServiceExt;
 
@@ -211,6 +213,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
         LedgerConfig::default(),
         row.finished_at.unwrap() + 6 * 3_600_000 - 1,
         Vec::new(),
+        six.pricing.revisions(),
     )
     .await
     .unwrap();
@@ -220,6 +223,7 @@ async fn a_key_override_of_zero_stores_nothing_and_an_override_of_six_captures_o
         LedgerConfig::default(),
         row.finished_at.unwrap() + 6 * 3_600_000,
         Vec::new(),
+        six.pricing.revisions(),
     )
     .await
     .unwrap();
@@ -361,9 +365,15 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
     // One second past the 90-day cutoff, so the row received at 0 and the sample at bucket 0 are older than the
     // window, and the day-89 row and the day-30 sample are not.
     let now = 90 * day + 1_000;
-    let purged = run_retention(h.db.clone(), config.clone(), now, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        h.db.clone(),
+        config.clone(),
+        now,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         purged,
         Purged {
@@ -386,9 +396,15 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
         })
         .unwrap();
     assert_eq!(rollups.len(), 2, "rollups outlive their raw rows");
-    let purged = run_retention(h.db.clone(), config, 401 * day, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        h.db.clone(),
+        config,
+        401 * day,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         purged.rollups, 1,
         "the hour-zero rollup is past 400 days; the other is not"
@@ -517,9 +533,15 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
         rollup_retention_days: 400,
         ..LedgerConfig::default()
     };
-    let purged = run_retention(h.db.clone(), forever_raw, 402 * day, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        h.db.clone(),
+        forever_raw,
+        402 * day,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (
             purged.requests,
@@ -539,9 +561,15 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
         rollup_retention_days: 0,
         ..LedgerConfig::default()
     };
-    let purged = run_retention(h.db.clone(), forever_rollups, 402 * day, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        h.db.clone(),
+        forever_rollups,
+        402 * day,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (purged.requests, purged.attempts),
         (2, 2),
@@ -665,9 +693,15 @@ async fn a_sliced_pass_sums_its_slices_and_keeps_a_budgeted_members_period_acros
         period: phoebis_store::BudgetPeriod::Month,
         metered_only: false,
     }];
-    let purged = run_retention(h.db.clone(), config, now, budgeted)
-        .await
-        .unwrap();
+    let purged = run_retention(
+        h.db.clone(),
+        config,
+        now,
+        budgeted,
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         purged,
         Purged {
@@ -727,7 +761,13 @@ async fn a_batch_waits_for_a_slice_of_a_long_purge_pass_rather_than_the_whole_pa
         retention_days: 1,
         ..LedgerConfig::default()
     };
-    let pass = tokio::spawn(run_retention(db.clone(), config, 2 * DAY, Vec::new()));
+    let pass = tokio::spawn(run_retention(
+        db.clone(),
+        config,
+        2 * DAY,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    ));
     wait_for_async(Duration::from_secs(30), || async {
         (old(&db) < OLD).then_some(())
     })
@@ -802,9 +842,15 @@ async fn the_retention_purges_decisions_under_the_request_cutoff_and_keeps_them_
         retention_days: 0,
         ..LedgerConfig::default()
     };
-    let purged = run_retention(db.clone(), forever, 400 * day, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        db.clone(),
+        forever,
+        400 * day,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (purged.decisions, seqs()),
         (0, vec![1, 2, 3]),
@@ -814,9 +860,15 @@ async fn the_retention_purges_decisions_under_the_request_cutoff_and_keeps_them_
         retention_days: 1,
         ..LedgerConfig::default()
     };
-    let purged = run_retention(db.clone(), one_day, 3 * day, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        db.clone(),
+        one_day,
+        3 * day,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         purged,
         Purged {
@@ -863,9 +915,15 @@ async fn a_pass_over_byte_bounded_slices_removes_every_expired_body_and_keeps_th
         db.read_blocking(|c| Ok(c.query_row(sql, [now], |r| r.get::<_, i64>(0))?))
             .unwrap() as usize
     };
-    let purged = run_retention(db.clone(), LedgerConfig::default(), now, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        db.clone(),
+        LedgerConfig::default(),
+        now,
+        Vec::new(),
+        std::sync::Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         purged,
         Purged {

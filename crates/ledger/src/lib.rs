@@ -24,6 +24,7 @@ mod refold;
 mod refusals;
 mod rollup;
 mod schema;
+mod session_totals;
 mod task;
 mod usage;
 
@@ -114,6 +115,7 @@ pub use rollup::{
 };
 /// The type `LedgerDb::read` and `read_blocking` lend a closure, so a caller can name it in a signature.
 pub use rusqlite::Connection;
+pub use session_totals::unmark_rebanded_sessions;
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, UnpricedModel,
     BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,

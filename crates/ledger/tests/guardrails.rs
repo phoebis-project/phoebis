@@ -14,8 +14,8 @@ use phoebis_bus::{
 use phoebis_ledger::{
     guardrail_counts, guardrail_sample_page, list_requests, request_body, request_by_id,
     run_retention, BodyRecord, Direction, GuardrailCountRow, GuardrailMatchRecord, LedgerConfig,
-    LedgerDb, LiveKeys, RequestCursor, RequestFilter, RequestOrder, RequestRecord, SampleRow,
-    GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
+    LedgerDb, LiveKeys, PriceRevisions, RequestCursor, RequestFilter, RequestOrder, RequestRecord,
+    SampleRow, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
 };
 use phoebis_store::AttachmentSubject;
 
@@ -254,9 +254,15 @@ async fn the_purge_removes_the_child_rows_with_the_request() {
         retention_days: 30,
         ..LedgerConfig::default()
     };
-    run_retention(db.clone(), config, 30 * DAY_MS + 1_000, Vec::new())
-        .await
-        .unwrap();
+    run_retention(
+        db.clone(),
+        config,
+        30 * DAY_MS + 1_000,
+        Vec::new(),
+        Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert!(db.request("old").await.unwrap().is_none());
     assert_eq!(
         counts(&db, 0, 30 * DAY_MS),

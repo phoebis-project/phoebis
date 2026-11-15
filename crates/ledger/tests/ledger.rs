@@ -1720,6 +1720,341 @@ async fn a_slice_the_ledger_refuses_ends_the_pass_and_the_next_pass_goes_on() {
     up.shutdown().await;
 }
 
+/// A client request of agent `g` in session `session` under the key `desktop`, received at `at` and finished a second
+/// later.
+fn session_request(id: &str, session: &str, at: i64) -> RequestRecord {
+    RequestRecord {
+        id: id.into(),
+        received_at: at,
+        finished_at: Some(at + 1_000),
+        key_id: Some("desktop".into()),
+        session_id: Some(session.into()),
+        agent_id: Some("g".into()),
+        model: "claude-sonnet-5".into(),
+        canonical_model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    }
+}
+
+/// Attempt `n` of `id` on account `account`, started at `at` and answered with `input` input tokens.
+fn answered(id: &str, n: u32, account: &str, at: i64, input: u64) -> AttemptRecord {
+    AttemptRecord {
+        request_id: id.into(),
+        attempt: n,
+        account_id: account.into(),
+        account_kind: AccountKind::Oauth,
+        started_at: at,
+        finished_at: Some(at + 500),
+        outcome: "succeeded".into(),
+        input_tokens: Some(input),
+        ..Default::default()
+    }
+}
+
+/// Session `session`'s sums rows as (agent, account, band, requests, input tokens), read on a connection of its own.
+fn session_sums(path: &std::path::Path, session: &str) -> Vec<(String, String, String, i64, i64)> {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .prepare(
+            "SELECT agent_id, account_id, band, requests, input_tokens FROM session_sums WHERE session_id = ?1 \
+             ORDER BY agent_id, account_id, received_hour",
+        )
+        .unwrap()
+        .query_map([session], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+/// The requests session `session`'s sums rows count.
+fn session_requests(path: &std::path::Path, session: &str) -> i64 {
+    session_sums(path, session).iter().map(|row| row.3).sum()
+}
+
+/// Whether session `session` holds its own facts row, the fill's mark.
+fn session_marked(path: &std::path::Path, session: &str) -> bool {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM session_facts WHERE session_id = ?1 AND agent_id = ''",
+            [session],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+        == 1
+}
+
+/// Agent `agent`'s facts in session `session`: its first request's receipt, its newest request's id and that
+/// request's serving account.
+fn agent_facts(
+    path: &std::path::Path,
+    session: &str,
+    agent: &str,
+) -> (Option<i64>, Option<String>, Option<String>) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .prepare(
+            "SELECT first_request_at, newest_id, newest_account_id FROM session_facts \
+             WHERE session_id = ?1 AND agent_id = ?2",
+        )
+        .unwrap()
+        .query_map([session, agent], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .next()
+        .transpose()
+        .unwrap()
+        .unwrap_or_default()
+}
+
+async fn wait_for_session_marked(path: &std::path::Path, session: &str) {
+    wait_for(Duration::from_secs(5), || {
+        session_marked(path, session).then_some(())
+    })
+    .await;
+}
+
+/// Writes rows into the file at `path` as a build before the session totals left them: no sums row and no mark.
+fn write_raw(path: &std::path::Path, sql: &str) {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .execute_batch(sql)
+        .unwrap();
+}
+
+/// A request landed again leaves the sums row its first landing added and counts its serving attempt's tokens alone,
+/// though the trail's earlier attempt on `a` answered with tokens too. The first landing found the session holding no
+/// other request, so it marked it, and the agent's newest request names the replacement's account.
+#[test]
+fn a_request_landed_again_counts_once_by_its_serving_attempt_in_the_session_its_first_landing_marked(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = LedgerDb::open(&path).unwrap();
+    let prices = PriceRevisions::shipped();
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    let request = session_request("r1", "s", at);
+    db.insert_request_at(&request, &[answered("r1", 1, "a", at, 100)], None, &prices)
+        .unwrap();
+    db.insert_request_at(
+        &request,
+        &[
+            answered("r1", 1, "a", at, 100),
+            answered("r1", 2, "b", at, 300),
+        ],
+        None,
+        &prices,
+    )
+    .unwrap();
+    assert_eq!(
+        (
+            session_sums(&path, "s"),
+            session_marked(&path, "s"),
+            agent_facts(&path, "s", "g").2
+        ),
+        (
+            vec![("g".into(), "b".into(), "standard".into(), 1, 300)],
+            true,
+            Some("b".into())
+        )
+    );
+}
+
+/// The purge task's fill sums a session the ledger held before the step, at the task's start ahead of any purge pass:
+/// two served requests of one agent at one instant, the greater id written first, and a refused request of the same
+/// session. The sums count the two served requests, and the agent's newest request is the greater id.
+#[tokio::test]
+async fn the_start_fills_a_session_written_before_the_step_from_its_served_requests_by_receipt_and_id(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    drop(LedgerDb::open(&path).unwrap());
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id, refused) VALUES \
+             ('r-b', {at}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 's', 'g', 0), \
+             ('r-a', {at}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 's', 'g', 0), \
+             ('r-refused', {later}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'rejected', 0, \
+              'desktop', 's', 'g', 1); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r-b', 1, 'a', 'oauth', {at}, 'succeeded', 100), \
+             ('r-a', 1, 'a', 'oauth', {at}, 'succeeded', 100);",
+            at = phoebis_ledger::test_tables::JANUARY_2026,
+            later = phoebis_ledger::test_tables::JANUARY_2026 + 1_000,
+        ),
+    );
+    let _h = on_disk(&up, fresh_store(), &path, quick()).await;
+    wait_for_session_marked(&path, "s").await;
+    assert_eq!(
+        (session_requests(&path, "s"), agent_facts(&path, "s", "g").1),
+        (2, Some("r-b".into()))
+    );
+    up.shutdown().await;
+}
+
+/// A request that lands on a session the fill has not reached adds nothing, and the start's fill then counts it once
+/// beside the session's request from before the step.
+#[tokio::test]
+async fn a_landing_on_a_session_the_fill_has_not_reached_is_counted_once_by_the_fill() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    let db = LedgerDb::open(&path).unwrap();
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id) VALUES \
+             ('r1', {at}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 's', 'g'); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r1', 1, 'a', 'oauth', {at}, 'succeeded', 100);"
+        ),
+    );
+    db.insert_request_at(
+        &session_request("r2", "s", at + 1_000),
+        &[answered("r2", 1, "a", at + 1_000, 100)],
+        None,
+        &PriceRevisions::shipped(),
+    )
+    .unwrap();
+    drop(db);
+    let _h = on_disk(&up, fresh_store(), &path, quick()).await;
+    wait_for_session_marked(&path, "s").await;
+    assert_eq!(session_requests(&path, "s"), 2);
+    up.shutdown().await;
+}
+
+/// A price list whose Haiku 5.5 row opens its long-context cells past `over` prompt tokens.
+fn haiku_over(over: u64) -> PriceRevisions {
+    PriceRevisions::from_yaml(
+        &format!(
+            "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-haiku-5-5:\n        input: 1\n        \
+             cache_write_5m: 1.25\n        cache_write_1h: 2\n        cache_read: 0.1\n        output: 5\n        \
+             long_context: {{over: {over}, input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, \
+             output: 25}}\n"
+        ),
+        "test",
+    )
+    .expect("the list parses")
+}
+
+/// A start's steps as the router runs them ahead of the ledger task, then the task over the file at `path` with
+/// `prices` as its list.
+async fn started_under(
+    up: &FakeUpstream,
+    path: &std::path::Path,
+    prices: PriceRevisions,
+    now: i64,
+) -> Harness {
+    let db = Arc::new(LedgerDb::open(path).unwrap());
+    phoebis_ledger::refold_bands(&db, &prices, 0, 0, now).unwrap();
+    phoebis_ledger::unmark_rebanded_sessions(&db, &prices).unwrap();
+    harness_on_tables(
+        fresh_store(),
+        db,
+        up,
+        &[api_key("a", C, 0)],
+        (0, None),
+        quick(),
+        false,
+        prices,
+        PlanTables::shipped(),
+    )
+    .await
+}
+
+/// A request lands before the band re-fold's first mark at a threshold of 1,000, which bands its 1,500-token prompt
+/// long. The next start loads a threshold of 2,000, under which the prompt is standard: the re-fold's pass leaves the
+/// request out of its walk, and the session's sums row takes the new band once the start's step and the fill ran.
+#[tokio::test]
+async fn a_moved_threshold_bands_a_session_again_past_the_refolds_since_floor() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let at = phoebis_ledger::test_tables::JANUARY_2026;
+    let h = started_under(&up, &path, haiku_over(1_000), at + 86_400_000).await;
+    let request = RequestRecord {
+        model: "claude-haiku-5-5".into(),
+        canonical_model: "claude-haiku-5-5".into(),
+        ..session_request("r1", "s", at)
+    };
+    h.ledger
+        .record_request(Record::Request {
+            request,
+            attempts: vec![answered("r1", 1, "a", at, 1_500)],
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (!session_sums(&path, "s").is_empty()).then_some(())
+    })
+    .await;
+    assert_eq!(session_sums(&path, "s")[0].2, "long");
+    h.ledger.clone().shutdown().await.unwrap();
+    drop(h);
+    let _h = started_under(&up, &path, haiku_over(2_000), at + 2 * 86_400_000).await;
+    wait_for_session_marked(&path, "s").await;
+    assert_eq!(
+        session_sums(&path, "s"),
+        [("g".into(), "a".into(), "standard".into(), 1, 1_500)]
+    );
+    up.shutdown().await;
+}
+
+/// The retention purge cuts a session's sums at the requests' cutoff: one request in an hour before the cutoff's and
+/// two in the hour the cutoff splits, ten minutes either side of it. The pass leaves the request after the cutoff
+/// counted alone, and the agent's first request reads its receipt.
+#[test]
+fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hour_it_splits() {
+    const MINUTE: i64 = 60_000;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = LedgerDb::open(&path).unwrap();
+    let prices = PriceRevisions::shipped();
+    // Half past an hour, so the hour it falls in holds a request on each side of it.
+    let cutoff = phoebis_ledger::test_tables::JANUARY_2026 + 30 * MINUTE;
+    for (id, at) in [
+        ("old", cutoff - 150 * MINUTE),
+        ("cut", cutoff - 10 * MINUTE),
+        ("kept", cutoff + 10 * MINUTE),
+    ] {
+        db.insert_request_at(
+            &session_request(id, "s", at),
+            &[answered(id, 1, "a", at, 100)],
+            None,
+            &prices,
+        )
+        .unwrap();
+    }
+    phoebis_ledger::run_retention_blocking(
+        &db,
+        &LedgerConfig {
+            retention_days: 1,
+            ..LedgerConfig::default()
+        },
+        cutoff + 86_400_000,
+        &[],
+        &prices,
+    )
+    .unwrap();
+    assert_eq!(
+        (session_requests(&path, "s"), agent_facts(&path, "s", "g").0),
+        (1, Some(cutoff + 10 * MINUTE))
+    );
+}
+
 /// A request's `held` names each of its waits with the reason: the hourly row sums the `slow_down` waits under
 /// `slow_down_held_ms` and counts the request once under `slow_down_held`, a request that waited for a slot alone
 /// counts under neither, and a replaced request takes its waits back out of its row.
@@ -7421,9 +7756,15 @@ async fn a_parked_record_whose_acknowledgement_is_refused_is_charged_once() {
         ..LedgerConfig::default()
     };
     let later = NOW + 91 * 86_400_000;
-    let purged = run_retention(h.db.clone(), window, later, Vec::new())
-        .await
-        .unwrap();
+    let purged = run_retention(
+        h.db.clone(),
+        window,
+        later,
+        Vec::new(),
+        Arc::new(PriceRevisions::shipped()),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         purged,
         Purged {

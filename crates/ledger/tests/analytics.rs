@@ -7815,6 +7815,7 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
         },
         now,
         &[],
+        &PriceRevisions::shipped(),
     )
     .unwrap();
     assert_eq!((purged.requests, purged.attempts), (1, 1));
@@ -7889,6 +7890,7 @@ fn the_rollup_retention_keeps_the_rows_of_a_budgeted_members_active_period() {
         },
         now,
         &budgets,
+        &PriceRevisions::shipped(),
     )
     .unwrap();
     let spent = |account: &str, period: BudgetPeriod| {

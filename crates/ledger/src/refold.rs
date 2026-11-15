@@ -351,7 +351,7 @@ pub const PRICE_BANDS_REFOLD_KEY: &str = "price_bands_refold";
 /// without one. A row without the block is kept, since a dated row without it beside an undated row with it bands by
 /// its own row, and leaving it out would resolve it to the undated row's.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct Thresholds {
+pub(crate) struct Thresholds {
     effective: String,
     bands: BTreeMap<String, Option<u64>>,
 }
@@ -562,7 +562,7 @@ fn rows_stand(conn: &Connection, deltas: &[RollupRow]) -> Result<bool, LedgerErr
 }
 
 /// Every revision's thresholds, in the list's order.
-fn thresholds_of(prices: &PriceRevisions) -> Vec<Thresholds> {
+pub(crate) fn thresholds_of(prices: &PriceRevisions) -> Vec<Thresholds> {
     prices
         .iter()
         .map(|table| Thresholds {
@@ -582,7 +582,7 @@ fn thresholds_of(prices: &PriceRevisions) -> Vec<Thresholds> {
 }
 
 /// A list whose rows carry the thresholds alone, every cell zero: `deltas_of` reads a band from it and prices nothing.
-fn revisions_of(list: &[Thresholds]) -> Result<PriceRevisions, LedgerError> {
+pub(crate) fn revisions_of(list: &[Thresholds]) -> Result<PriceRevisions, LedgerError> {
     let tables = list
         .iter()
         .map(|revision| PriceTable {
@@ -611,7 +611,11 @@ fn revisions_of(list: &[Thresholds]) -> Result<PriceRevisions, LedgerError> {
 
 /// The first instant at or after `floor` at which the two lists answer another threshold for any model, `None` where
 /// they agree from `floor` on.
-fn first_difference(old: &PriceRevisions, new: &PriceRevisions, floor: i64) -> Option<i64> {
+pub(crate) fn first_difference(
+    old: &PriceRevisions,
+    new: &PriceRevisions,
+    floor: i64,
+) -> Option<i64> {
     let mut instants: Vec<i64> = old
         .instants()
         .iter()
@@ -1057,20 +1061,22 @@ mod tests {
         assert_eq!(rows(&db), before, "nothing moved: nothing is backfilled");
     }
 
-    /// The retention purge at `now` under the two retentions, the `budgeted` members' periods kept.
+    /// The retention purge at `now` under the two retentions, the `budgeted` members' periods kept, over requests
+    /// landed at the thresholds of `prices`.
     fn purge(
         db: &LedgerDb,
         retention_days: u32,
         rollup_retention_days: u32,
         now: i64,
         budgeted: &[BudgetedMember],
+        prices: &PriceRevisions,
     ) {
         let config = crate::LedgerConfig {
             retention_days,
             rollup_retention_days,
             ..Default::default()
         };
-        crate::bodies::run_retention_blocking(db, &config, now, budgeted).unwrap();
+        crate::bodies::run_retention_blocking(db, &config, now, budgeted, prices).unwrap();
     }
 
     /// A request retention of 0 keeps the requests for good while a rollup retention of seven days drops whole hours:
@@ -1101,7 +1107,7 @@ mod tests {
             );
             land(&db, &haiku("dropped", dropped, 1_500), &list(Some(1_000)));
             land(&db, &haiku("kept", kept, 1_500), &list(Some(1_000)));
-            purge(&db, 0, rollup_retention_days, now, &[]);
+            purge(&db, 0, rollup_retention_days, now, &[], &list(Some(1_000)));
             let moved =
                 refold_bands(&db, &list(Some(2_000)), 0, rollup_retention_days, now).unwrap();
             (moved, bands(&db))
@@ -1155,7 +1161,7 @@ mod tests {
             period: phoebis_store::BudgetPeriod::Month,
             metered_only: false,
         }];
-        purge(&db, 0, 7, now, &budgeted);
+        purge(&db, 0, 7, now, &budgeted, &list(Some(1_000)));
         let hour = crate::rollup::hour_of(day_four);
         assert_eq!(
             bands(&db),
@@ -1238,7 +1244,14 @@ mod tests {
             &haiku("next", IN_THE_NEXT_HOUR, 1_500),
             &list(Some(1_000)),
         );
-        purge(&db, 7, rollup_retention_days, SPLIT_NOW, budgeted);
+        purge(
+            &db,
+            7,
+            rollup_retention_days,
+            SPLIT_NOW,
+            budgeted,
+            &list(Some(1_000)),
+        );
         let moved =
             refold_bands(&db, &list(Some(2_000)), 7, rollup_retention_days, SPLIT_NOW).unwrap();
         (moved, bands(&db))
@@ -1799,7 +1812,7 @@ mod tests {
         let kept = timed("kept", IN_THE_NEXT_HOUR, 100, (200, 1_000, 1_040));
         store(&db, &dropped, &list(Some(1_000)), NO_RULES, 0);
         store(&db, &kept, &list(Some(1_000)), NO_RULES, 0);
-        purge(&db, 0, 7, SPLIT_NOW, &[]);
+        purge(&db, 0, 7, SPLIT_NOW, &[], &list(Some(1_000)));
         mark_fold_rules(&db).unwrap();
         refold_rules(&db, 0, 7, SPLIT_NOW).unwrap();
         assert_eq!(

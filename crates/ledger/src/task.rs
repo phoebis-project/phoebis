@@ -25,7 +25,7 @@ use crate::events::{catalog_changed, spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
 use crate::plan::{funding_of, Funding, PlanTables, SubscriptionCosts};
 use crate::price::is_free_classifier;
-use crate::pricing::{Pricing, Speed};
+use crate::pricing::{PriceRevisions, Pricing, Speed};
 use crate::query::{
     member_spends, period_bounds, BudgetedMember, BUDGET_PERIOD_ENDED, BUDGET_REACHED, LEDGER_GAP,
     ROUTER_STARTED,
@@ -500,6 +500,7 @@ pub fn spawn(
         // the purge that frees room waiting.
         let _ = tokio::time::timeout(purge_config.purge_interval, start_committed).await;
         let mut backfill = Some(0usize);
+        let mut filling = true;
         loop {
             let now = (purging.clock)();
             fold_conditions(
@@ -514,12 +515,24 @@ pub fn spawn(
                 .stats
                 .condition_folds
                 .fetch_add(1, Ordering::Relaxed);
-            tick.tick().await;
+            // The session totals fill ahead of the first wait and behind each pass, until a run finds none left.
+            let mut due = false;
+            if filling {
+                match fill_sessions(&purging.db, &purging.pricing, &mut tick).await {
+                    Filled::Done => filling = false,
+                    Filled::Due => due = true,
+                    Filled::Refused => {}
+                }
+            }
+            if !due {
+                tick.tick().await;
+            }
             run_purge(
                 &purging.db,
                 &purge_store,
                 &purge_config,
                 &purging.router,
+                purging.pricing.revisions(),
                 (purging.clock)(),
             )
             .await;
@@ -1621,12 +1634,12 @@ impl Handles {
                                 bodies.as_ref(),
                                 clock(),
                             )?;
+                            let previous = previous.as_ref().map(|(r, a)| (r, a.as_slice()));
                             crate::rollup::fold_request(
-                                &tx,
-                                request,
-                                attempts,
-                                previous.as_ref().map(|(r, a)| (r, a.as_slice())),
-                                &revisions,
+                                &tx, request, attempts, previous, &revisions,
+                            )?;
+                            crate::session_totals::land(
+                                &tx, request, attempts, previous, &revisions,
                             )?;
                         }
                         Record::Samples { quota, extra, .. } => {
@@ -1842,15 +1855,17 @@ async fn fold_conditions(
     }
 }
 
+/// `prices` is the list the writer bands its landings under, which the session totals' split hour sums again by.
 async fn run_purge(
     db: &Arc<LedgerDb>,
     store: &Arc<Store>,
     config: &LedgerConfig,
     router: &RouterHandle,
+    prices: Arc<PriceRevisions>,
     now: i64,
 ) {
     let budgeted = budgeted_members(&router.snapshot());
-    let purged = run_retention(db.clone(), config.clone(), now, budgeted).await;
+    let purged = run_retention(db.clone(), config.clone(), now, budgeted, prices).await;
     // The registry's settled refresh attempts and its change log follow the requests' cutoff, so a zero
     // `retention_days` keeps them as it keeps the requests.
     let history = match request_cutoff(config.retention_days, now) {
@@ -1915,6 +1930,52 @@ async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usi
                 return Some(written);
             }
         }
+    }
+}
+
+/// How a run of the session totals' fill ended.
+enum Filled {
+    /// A call found no session left, so the task asks no more until the next start.
+    Done,
+    /// The purge's tick came due between two sessions and was taken, so its pass runs at once.
+    Due,
+    /// The ledger refused a call, and the run behind the next pass goes on from the cursor.
+    Refused,
+}
+
+/// The fill of the sessions no landing marked, one session per blocking call, so a shutdown's abort lands between two
+/// sessions and a due purge pass waits for one session at most.
+async fn fill_sessions(
+    db: &Arc<LedgerDb>,
+    pricing: &Arc<Pricing>,
+    tick: &mut tokio::time::Interval,
+) -> Filled {
+    loop {
+        if tick_due(tick).await {
+            return Filled::Due;
+        }
+        let prices = pricing.revisions();
+        match blocking(db, move |db| crate::session_totals::fill_step(db, &prices)).await {
+            Ok(true) => {}
+            Ok(false) => return Filled::Done,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "a session's totals could not be filled, so the fill goes on behind the next pass"
+                );
+                return Filled::Refused;
+            }
+        }
+    }
+}
+
+/// Whether the purge's tick is due, taking it where it is. A tick is cancel safe, so one not yet due stays for the
+/// wait.
+async fn tick_due(tick: &mut tokio::time::Interval) -> bool {
+    tokio::select! {
+        biased;
+        _ = tick.tick() => true,
+        () = std::future::ready(()) => false,
     }
 }
 

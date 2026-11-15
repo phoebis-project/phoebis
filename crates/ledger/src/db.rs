@@ -500,13 +500,9 @@ impl LedgerDb {
         self.write(|conn| {
             let tx = begin_write(conn)?;
             let previous = insert_request_in(&tx, request, attempts, bodies, 0)?;
-            crate::rollup::fold_request(
-                &tx,
-                request,
-                attempts,
-                previous.as_ref().map(|(r, a)| (r, a.as_slice())),
-                prices,
-            )?;
+            let previous = previous.as_ref().map(|(r, a)| (r, a.as_slice()));
+            crate::rollup::fold_request(&tx, request, attempts, previous, prices)?;
+            crate::session_totals::land(&tx, request, attempts, previous, prices)?;
             tx.commit()?;
             Ok(())
         })

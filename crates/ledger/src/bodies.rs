@@ -8,6 +8,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Transaction};
 
 use crate::db::begin_write;
+use crate::pricing::PriceRevisions;
 use crate::query::{bind_all, hour_ceil, period_bounds, BudgetedMember};
 use crate::task::LedgerConfig;
 use crate::{LedgerDb, LedgerError};
@@ -41,6 +42,8 @@ pub struct Purged {
     pub quota_samples: usize,
     pub requests: usize,
     pub rollups: usize,
+    /// The rows of `session_sums` and `session_facts` the pass deleted.
+    pub session_totals: usize,
 }
 
 /// The families the purge walks, in the order a pass cuts them.
@@ -48,6 +51,10 @@ pub struct Purged {
 enum Family {
     Bodies,
     Requests,
+    /// The per-session totals, at the requests' cutoff, so a session's sums count the requests that stand. The
+    /// requests' family ends its slices before this one starts, so between the two, and after a stop that lands
+    /// between them until the next pass, a sums row counts requests the purge took, which the next pass closes.
+    SessionTotals,
     KeptWarmMarks,
     Events,
     Decisions,
@@ -58,9 +65,10 @@ enum Family {
 }
 
 impl Family {
-    const ALL: [Family; 9] = [
+    const ALL: [Family; 10] = [
         Family::Bodies,
         Family::Requests,
+        Family::SessionTotals,
         Family::KeptWarmMarks,
         Family::Events,
         Family::Decisions,
@@ -74,9 +82,11 @@ impl Family {
     fn cutoff(self, cutoffs: &Cutoffs, now: i64) -> Option<i64> {
         match self {
             Family::Bodies => Some(now),
-            Family::Requests | Family::KeptWarmMarks | Family::Events | Family::Decisions => {
-                cutoffs.request
-            }
+            Family::Requests
+            | Family::SessionTotals
+            | Family::KeptWarmMarks
+            | Family::Events
+            | Family::Decisions => cutoffs.request,
             Family::QuotaSamples | Family::ExtraUsageSamples => cutoffs.sample,
             Family::Rollups | Family::AccountRollups => cutoffs.rollup,
         }
@@ -133,20 +143,22 @@ pub async fn run_retention(
     config: LedgerConfig,
     now: i64,
     budgeted: Vec<BudgetedMember>,
+    prices: Arc<PriceRevisions>,
 ) -> Result<Purged, LedgerError> {
     crate::task::blocking(&db, move |db| {
-        run_retention_blocking(db, &config, now, &budgeted)
+        run_retention_blocking(db, &config, now, &budgeted, &prices)
     })
     .await
 }
 
 /// The pass on the calling thread: every family in slices, a family repeated while its slice says more rows wait, and
-/// the sum.
+/// the sum. `prices` is the list the landings banded their requests under.
 pub fn run_retention_blocking(
     db: &LedgerDb,
     config: &LedgerConfig,
     now: i64,
     budgeted: &[BudgetedMember],
+    prices: &PriceRevisions,
 ) -> Result<Purged, LedgerError> {
     let cutoffs = Cutoffs::of(config, now);
     let mut purged = Purged::default();
@@ -154,7 +166,15 @@ pub fn run_retention_blocking(
         let Some(cutoff) = family.cutoff(&cutoffs, now) else {
             continue;
         };
+        // Read ahead of the cut, which deletes the rows that name the sessions it touches.
+        let touched = match family {
+            Family::SessionTotals => Some(crate::session_totals::touched(db, cutoff)?),
+            _ => None,
+        };
         while purge_slice(db, family, cutoff, budgeted, now, &mut purged)? {}
+        if let Some(touched) = touched {
+            purged.session_totals += crate::session_totals::settle(db, cutoff, prices, &touched)?;
+        }
     }
     Ok(purged)
 }
@@ -233,6 +253,11 @@ pub(crate) const PURGE_REQUEST_GUARDRAILS: &str = "DELETE FROM request_guardrail
 
 pub(crate) const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
+/// The sums rows of each receipt hour before `?1`, the hour the requests' cutoff falls in, so every hour the slices
+/// take ends at or before the cutoff. The table holds no rowid, so the slice selects its rows by their primary key
+/// through the receipt-hour index, which holds the key.
+pub(crate) const PURGE_SESSION_SUMS: &str = "DELETE FROM session_sums WHERE (key_id, key_generation, session_id, agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, classifier, request_class, received_hour, completed_hour) IN (SELECT key_id, key_generation, session_id, agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, classifier, request_class, received_hour, completed_hour FROM session_sums WHERE received_hour < ?1 LIMIT ?2)";
+
 /// Under the requests' cutoff and after their family, so a decision leaves in the pass that takes its request, which
 /// was received before it was decided. One whose request never landed leaves at the same age by its own stamp.
 pub(crate) const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
@@ -277,6 +302,12 @@ fn purge_slice(
                 purged.attempts += attempts;
                 purged.requests += requests;
                 requests
+            }
+            Family::SessionTotals => {
+                let sums =
+                    tx.execute(PURGE_SESSION_SUMS, params![crate::rollup::hour_of(cutoff), slice])?;
+                purged.session_totals += sums;
+                sums
             }
             // No index leads with the marks' or the samples' cutoff column, so their slices take the first
             // matches the table yields: an `ORDER BY` would read and sort every match under the write lock, once
@@ -381,6 +412,7 @@ mod tests {
             (EXPIRED_BODY_BYTES, "INDEX bodies_expires"),
             (PURGE_ATTEMPTS, "INDEX requests_received"),
             (PURGE_REQUESTS, "INDEX requests_received"),
+            (PURGE_SESSION_SUMS, "INDEX session_sums_received_hour"),
             (PURGE_DECISIONS, "INDEX decisions_at"),
         ] {
             let lines = plan(&db, sql);

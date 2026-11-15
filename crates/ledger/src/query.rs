@@ -38,6 +38,7 @@ use crate::rollup::{
     NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
     TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
+use crate::session_totals::{Serving, SessionRequest};
 use crate::LedgerError;
 
 pub fn parse_range(range: Option<&str>, now: i64) -> Result<(i64, i64), String> {
@@ -5988,11 +5989,18 @@ const SESSION_SPEND_COLUMNS: &str =
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
 const SESSION_SPEND_PRICED_FROM: usize = 12;
 
+/// The columns past `PRICED_ATTEMPT_COLUMNS` that `session_request_of` takes for a session's totals, from
+/// `SESSION_REQUEST_FROM` on.
+const SESSION_REQUEST_COLUMNS: &str = "r.requested_speed";
+
+/// The column `SESSION_REQUEST_COLUMNS` starts at, past the fifteen of `PRICED_ATTEMPT_COLUMNS`.
+const SESSION_REQUEST_FROM: usize = SESSION_SPEND_PRICED_FROM + 15;
+
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
 /// carry: the completion, the two cache writes apart, the account kind, the overage flag, the tier and the
 /// usage-based class.
-const SERVING_ATTEMPT_NUMBER: &str =
+pub(crate) const SERVING_ATTEMPT_NUMBER: &str =
     "(SELECT a.attempt FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1)";
 
 impl SessionSpendRow {
@@ -6053,20 +6061,104 @@ pub(crate) fn session_spend_since_statement(
 /// identities read does, each session's rows oldest first. The key and its generation scope the rows, as
 /// `session_identities_statement` scopes its own. The named sessions hold the outer loop through `CROSS JOIN`: the
 /// session index yields the order the statement sorts by, and on statistics that make a session look large the
-/// planner would walk the whole index in that order to spare the sort.
+/// planner would walk the whole index in that order to spare the sort. The fill of a session's totals reads the same
+/// rows through `session_request_of`.
 pub(crate) fn session_spend_of_statement(
     sessions: &[SessionSpendKey],
 ) -> (String, Vec<rusqlite::types::Value>) {
     let (named, binds) = named_sessions(sessions);
     let sql = format!(
         "WITH {named} \
-         SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
+         SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS}, {SESSION_REQUEST_COLUMNS} \
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
          LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
          ORDER BY r.session_id, r.received_at, r.id"
     );
     (sql, binds)
+}
+
+/// The columns of `session_spend_of_statement` for one session's requests received in the hour that starts at `hour`
+/// (seconds), through the session index, oldest first.
+pub(crate) fn session_hour_statement(
+    key: &SessionSpendKey,
+    hour: i64,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let sql = format!(
+        "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS}, {SESSION_REQUEST_COLUMNS} \
+         FROM requests r INDEXED BY requests_session \
+         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
+         WHERE r.session_id = ?1 AND r.key_id = ?2 AND r.key_generation = ?3 \
+         AND r.received_at >= ?4 AND r.received_at < ?5 \
+         ORDER BY r.received_at, r.id"
+    );
+    let binds = vec![
+        rusqlite::types::Value::Text(key.session_id.clone()),
+        rusqlite::types::Value::Text(key.key_id.clone()),
+        rusqlite::types::Value::Integer(key.key_generation),
+        rusqlite::types::Value::Integer(hour * 1_000),
+        rusqlite::types::Value::Integer(hour * 1_000 + HOUR_MS),
+    ];
+    (sql, binds)
+}
+
+/// The requests a statement of `session_spend_of_statement`'s columns answers, as a session's totals read them. A
+/// missing token count stays `None`, since a serving attempt that answered with none files under the standard band
+/// and the asked speed.
+pub(crate) fn session_requests_of(
+    conn: &Connection,
+    sql: &str,
+    binds: Vec<rusqlite::types::Value>,
+) -> Result<Vec<SessionRequest>, LedgerError> {
+    let mut stmt = conn.prepare_cached(sql)?;
+    let rows = stmt.query_map(params_from_iter(binds), session_request_of)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
+    let first = SESSION_SPEND_PRICED_FROM;
+    let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
+        Ok(row
+            .get::<_, Option<i64>>(first + i)?
+            .map(|n| n.max(0) as u64))
+    };
+    let serving = match row.get::<_, Option<String>>(9)? {
+        Some(account_id) => Some(Serving {
+            account_id,
+            account_kind: AccountKind::parse(&row.get::<_, String>(first + 9)?),
+            usage_based: row.get(first + 14)?,
+            overage_in_use: row.get(first + 10)?,
+            speed: row.get(first + 8)?,
+            tier: row.get(first + 11)?,
+            completed_at: row.get(first)?,
+            input_tokens: tokens(2)?,
+            cache_read_tokens: tokens(3)?,
+            cache_write_5m_tokens: tokens(4)?,
+            cache_write_1h_tokens: tokens(5)?,
+            output_tokens: tokens(6)?,
+        }),
+        None => None,
+    };
+    Ok(SessionRequest {
+        key: Some(SessionSpendKey {
+            key_id: row.get(1)?,
+            key_generation: row.get(2)?,
+            session_id: row.get(0)?,
+        }),
+        id: row.get(3)?,
+        agent_id: row.get(4)?,
+        agent_type: row.get(5)?,
+        user_agent: row.get(6)?,
+        request_class: row.get(7)?,
+        kind: row.get(10)?,
+        refused: row.get(11)?,
+        canonical_model: row.get(first + PricedAttempt::MODEL)?,
+        received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
+        client: row.get(first + 12)?,
+        classifier: row.get(first + 13)?,
+        requested_speed: row.get(SESSION_REQUEST_FROM)?,
+        serving,
+    })
 }
 
 /// Every request landed after `landed_after` with a key and a session, a refused one with its flag, with its serving

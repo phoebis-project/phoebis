@@ -106,21 +106,26 @@ fn answered_speed(a: &AttemptRecord) -> &str {
     a.speed.as_deref().unwrap_or(STANDARD_SPEED)
 }
 
-/// The speed of a request no attempt answered: the serving attempt's reported speed, else `fast` for a request that
-/// asked for it, else `STANDARD_SPEED`. The request row keeps the body's `speed` text as sent, and any other value
-/// would key a row of its own.
-fn unanswered_speed<'a>(a: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
-    a.and_then(|a| a.speed.as_deref())
-        .unwrap_or_else(|| Speed::of(requested).as_str())
+/// The speed a request files under, read off its serving attempt `last` through `serving_speed`. The request row's
+/// `speed` column, the serving delta and a session's sums read this one rule.
+pub(crate) fn fold_speed<'a>(last: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
+    serving_speed(last.map(|a| (a.speed.as_deref(), a.has_usage())), requested)
 }
 
-/// The speed a request files under, read off its serving attempt `last`: the answer's own where it answered with
-/// usage, `unanswered_speed` where it did not. The request row's `speed` column and the serving delta read this one
-/// rule.
-pub(crate) fn fold_speed<'a>(last: Option<&'a AttemptRecord>, requested: Option<&str>) -> &'a str {
-    match last.filter(|a| a.has_usage()) {
-        Some(a) => answered_speed(a),
-        None => unanswered_speed(last, requested),
+/// The speed off the serving attempt's reported speed and whether it answered with usage, for a reader that holds
+/// those parts and not the attempt's record: the answer's own where it answered, `STANDARD_SPEED` for an answer that
+/// reported none. A request no attempt answered files under the reported speed, else `fast` for a request that asked
+/// for it, else `STANDARD_SPEED`: the request row keeps the body's `speed` text as sent, and any other value would key
+/// a row of its own.
+pub(crate) fn serving_speed<'a>(
+    serving: Option<(Option<&'a str>, bool)>,
+    requested: Option<&str>,
+) -> &'a str {
+    match serving {
+        Some((speed, true)) => speed.unwrap_or(STANDARD_SPEED),
+        serving => serving
+            .and_then(|(speed, _)| speed)
+            .unwrap_or_else(|| Speed::of(requested).as_str()),
     }
 }
 

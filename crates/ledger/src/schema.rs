@@ -5,7 +5,8 @@
 //! dropping the unused `requests.request_truncated`, adding `attempts.input_transformations`,
 //! `attempts.previous_input_tokens`, `requests.cache_marker`, `requests.input_transformations`,
 //! `requests.thinking_diagnostics_source`, `events.from_account_id`, `rollups_hourly.client_canceled`,
-//! `rollups_hourly.input_transformations_json` and `rollups_hourly.uncacheable`, filling the stored events' move
+//! `rollups_hourly.input_transformations_json` and `rollups_hourly.uncacheable`, creating the per-session totals
+//! `session_sums` and `session_facts` with the index `session_sums_received_hour`, filling the stored events' move
 //! sources and pools, filling the client's cancels from the stored rollups' errors maps, and deleting the stored
 //! account hours that hold nothing.
 
@@ -451,7 +452,9 @@ const STEP_3: &str = "ALTER TABLE attempts ADD COLUMN issued_digest TEXT; \
 /// `attempts.previous_input_tokens` holds the size the selection handed on, `requests.cache_marker` the selection's
 /// marker fact and `rollups_hourly.uncacheable` the uncached requests whose body marked no cache, each with no fill,
 /// since no stored row holds the fact. `requests.thinking_diagnostics_source` holds who sent the thinking-binding beta,
-/// null on a row stored before the step.
+/// null on a row stored before the step. `session_sums` holds each session's request and token counts under every part
+/// a price reads and `session_facts` the picks no sum carries, both left empty for the purge task's fill, with
+/// `session_sums_received_hour` for the purge's cut and a moved threshold.
 const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN input_transformations TEXT; \
     ALTER TABLE requests ADD COLUMN input_transformations TEXT; \
@@ -478,7 +481,26 @@ const STEP_4: &str = "ALTER TABLE requests DROP COLUMN request_truncated; \
     ALTER TABLE attempts ADD COLUMN previous_input_tokens INTEGER; \
     ALTER TABLE requests ADD COLUMN cache_marker INTEGER; \
     ALTER TABLE rollups_hourly ADD COLUMN uncacheable INTEGER NOT NULL DEFAULT 0; \
-    ALTER TABLE requests ADD COLUMN thinking_diagnostics_source TEXT";
+    ALTER TABLE requests ADD COLUMN thinking_diagnostics_source TEXT; \
+    CREATE TABLE session_sums ( \
+        key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, \
+        probe INTEGER NOT NULL, account_id TEXT NOT NULL, canonical_model TEXT NOT NULL, speed TEXT NOT NULL, \
+        funding TEXT NOT NULL, band TEXT NOT NULL, tier TEXT NOT NULL, client TEXT NOT NULL, classifier TEXT NOT NULL, \
+        request_class TEXT NOT NULL, received_hour INTEGER NOT NULL, completed_hour INTEGER NOT NULL, \
+        requests INTEGER NOT NULL, input_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL, \
+        cache_write_5m_tokens INTEGER NOT NULL, cache_write_1h_tokens INTEGER NOT NULL, \
+        output_tokens INTEGER NOT NULL, \
+        PRIMARY KEY (key_id, key_generation, session_id, agent_id, probe, account_id, canonical_model, speed, funding, \
+                     band, tier, client, classifier, request_class, received_hour, completed_hour) \
+    ) WITHOUT ROWID; \
+    CREATE TABLE session_facts ( \
+        key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, \
+        last_request_at INTEGER, last_inference_at INTEGER, served_at INTEGER, served_id TEXT, user_agent TEXT, \
+        first_request_at INTEGER, newest_at INTEGER, newest_id TEXT, newest_model TEXT, newest_agent_type TEXT, \
+        newest_account_id TEXT, probe_at INTEGER, probe_id TEXT, probe_model TEXT, \
+        PRIMARY KEY (key_id, key_generation, session_id, agent_id) \
+    ) WITHOUT ROWID; \
+    CREATE INDEX session_sums_received_hour ON session_sums (received_hour)";
 
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or rebuild a
 /// table, so an older build refuses a newer ledger rather than misreading it.
