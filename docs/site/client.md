@@ -145,13 +145,13 @@ other lines, and the client sends it on every model request of the process. The 
 requests from those of another process on the same session id, so binding a session to its process needs no wrapper
 script. Installing and configuring the mod is that page's.
 
-`CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is an optional line the block does not carry, worth setting for Fable 5.1 sessions in
-a pool of API-key accounts with cache warming on: at a 0.025x read price, a five-minute entry kept warm by probes stays
-cheaper on a metered account than a one-hour entry for idle warming of up to about 2.2 hours, past which the one-hour
-entry costs less ([Cache TTL](routing.md#cache-ttl)). Leave it unset in a pool of plan-funded accounts, where a write
-costs the same window share at either TTL and a five-minute entry takes 15 probes an hour against 1.11 for a one-hour
-entry ([The four fields](keepalive.md#the-four-fields)), and unset without warming. Through a pool with a cache TTL
-policy the variable has no effect, since the pool decides ([Cache TTL](routing.md#cache-ttl),
+`CLAUDE_CODE_PROMPT_CACHE_TTL=5m` is an optional line the block does not carry, worth setting for Fable 5.2 and Fable
+5.1 sessions in a pool of API-key accounts with cache warming on: at a 0.025x read price, a five-minute entry kept warm
+by probes stays cheaper on a metered account than a one-hour entry for idle warming of up to about 2.2 hours, past which
+the one-hour entry costs less ([Cache TTL](routing.md#cache-ttl)). Leave it unset in a pool of plan-funded accounts,
+where a write costs the same window share at either TTL and a five-minute entry takes 15 probes an hour against 1.11 for
+a one-hour entry ([The four fields](keepalive.md#the-four-fields)), and unset without warming. Through a pool with a
+cache TTL policy the variable has no effect, since the pool decides ([Cache TTL](routing.md#cache-ttl),
 [Keepalive](keepalive.md)).
 
 ## The required set
