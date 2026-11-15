@@ -5200,9 +5200,74 @@ revisions:
       claude-sonnet-5: sonnet
 ";
 
+/// `LISTING_COSTS` with a second entry from 01:00 UTC that weighs `claude-opus-9` and a third from 02:00 UTC that
+/// weighs it no longer.
+const REVISED_LISTING_COSTS: &str = "\
+unit: {tier: default_claude_ai, window: seven_day}
+revisions:
+  - effective: 1970-01-01
+    capacity:
+      default_claude_ai: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5: sonnet
+  - effective: 1970-01-01T01:00:00Z
+    capacity:
+      default_claude_ai: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-opus-9: 1
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-opus-9: opus
+      claude-sonnet-5: sonnet
+  - effective: 1970-01-01T02:00:00Z
+    capacity:
+      default_claude_ai: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 1, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5: sonnet
+";
+
 /// A ledger on `LISTING_COSTS` under `dir`, its pool's one member the OAuth account `a`, so a request it serves is
 /// plan-funded.
 async fn on_listing_costs(up: &FakeUpstream, dir: &std::path::Path) -> Harness {
+    on_cost_model(up, dir, LISTING_COSTS).await
+}
+
+/// A ledger on the cost model `costs` under `dir`, its pool's one member the OAuth account `a`.
+async fn on_cost_model(up: &FakeUpstream, dir: &std::path::Path, costs: &str) -> Harness {
     harness_on_tables(
         fresh_store(),
         Arc::new(LedgerDb::open(&dir.join("ledger.sqlite")).unwrap()),
@@ -5213,11 +5278,21 @@ async fn on_listing_costs(up: &FakeUpstream, dir: &std::path::Path) -> Harness {
         false,
         phoebis_ledger::test_tables::api_prices(),
         phoebis_ledger::test_tables::tables(
-            phoebis_ledger::CostRevisions::from_yaml(LISTING_COSTS)
-                .expect("the listing cost model parses"),
+            phoebis_ledger::CostRevisions::from_yaml(costs).expect("the listing cost model parses"),
         ),
     )
     .await
+}
+
+/// A catalog change of `account` at `at` that adds `model` alone.
+fn adding(account: &str, model: &str, at: i64) -> phoebis_relay::CatalogChange {
+    phoebis_relay::CatalogChange {
+        account_id: account.into(),
+        added: vec![model.into()],
+        removed: Vec::new(),
+        count: 1,
+        at,
+    }
 }
 
 /// A catalog change enters each added model the cost model does not weigh under its undated id, dated at the
@@ -5237,7 +5312,7 @@ async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_ch
         NOW + 60_000,
     );
     assert_eq!(
-        h.ledger.unpriced_served(),
+        h.ledger.unpriced_served(NOW + 60_000),
         [phoebis_ledger::UnpricedModel {
             model: "claude-opus-9".into(),
             since: Some(NOW + 60_000),
@@ -5248,7 +5323,7 @@ async fn a_listing_enters_an_added_model_the_cost_model_does_not_weigh_at_the_ch
     h.ledger
         .note_listed(&["claude-opus-9-20260101".to_string()], NOW + 120_000);
     assert_eq!(
-        h.ledger.unpriced_served(),
+        h.ledger.unpriced_served(NOW + 120_000),
         [phoebis_ledger::UnpricedModel {
             model: "claude-opus-9".into(),
             since: Some(NOW + 60_000),
@@ -5288,15 +5363,109 @@ async fn a_listing_leaves_an_unpriced_run_that_counts_requests_with_its_since_an
     // The landing enters its run after its commit, so the listing comes once the entry shows, never before it, where
     // the listing would date the run and the landing count it.
     wait_for(Duration::from_secs(5), || {
-        (h.ledger.unpriced_served() == [landed.clone()]).then_some(())
+        (h.ledger.unpriced_served(NOW) == [landed.clone()]).then_some(())
     })
     .await;
     h.ledger
         .note_listed(&["claude-opus-9-20260101".to_string()], NOW + 60_000);
     assert_eq!(
-        h.ledger.unpriced_served(),
+        h.ledger.unpriced_served(NOW + 60_000),
         [landed],
         "the listing keeps the landed run's since and count"
+    );
+    up.shutdown().await;
+}
+
+/// A plan account's listing ahead of the revision that weighs the model reads standing until that revision is in
+/// force and cleared from then on. The read writes the clear, so a listing under a later revision that weighs the model
+/// no longer dates a new run at its own instant.
+#[tokio::test]
+async fn a_listed_model_reads_cleared_once_a_revision_weighs_it_and_a_later_listing_dates_a_new_run(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_cost_model(&up, dir.path(), REVISED_LISTING_COSTS).await;
+    // The second entry's and the third entry's instants.
+    let (weighted_from, unweighted_from) = (3_600_000, 7_200_000);
+    let entry = |since| {
+        [phoebis_ledger::UnpricedModel {
+            model: "claude-opus-9".into(),
+            since,
+            requests: 0,
+        }]
+    };
+    // The read writes, so the reads come in rising order.
+    h.ledger.on_catalog_change(
+        &adding("a", "claude-opus-9-20260101", NOW),
+        Some(AccountKind::Oauth),
+        false,
+    );
+    assert_eq!(
+        h.ledger.unpriced_served(NOW),
+        entry(Some(NOW)),
+        "the first entry weighs nothing for the model, so the listing's entry stands"
+    );
+    assert_eq!(
+        h.ledger.unpriced_served(weighted_from),
+        entry(None),
+        "the revision in force at the read weighs the model, so the entry reads cleared"
+    );
+    h.ledger.on_catalog_change(
+        &adding("b", "claude-opus-9-20260101", unweighted_from),
+        Some(AccountKind::Oauth),
+        false,
+    );
+    assert_eq!(
+        h.ledger.unpriced_served(unweighted_from),
+        entry(Some(unweighted_from)),
+        "the read cleared the entry it answered, so the next listing opens a run of its own"
+    );
+    up.shutdown().await;
+}
+
+/// A listing enters its models only where its account's requests are plan-funded: an API-key account's and a
+/// usage-based seat's enter nothing, and a plan account's and the listing of an account the routing snapshot does not
+/// hold yet enter theirs.
+#[tokio::test]
+async fn a_listing_enters_its_models_only_where_the_accounts_requests_are_plan_funded() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_listing_costs(&up, dir.path()).await;
+    h.ledger.on_catalog_change(
+        &adding("direct", "claude-haiku-9-20260101", NOW),
+        Some(AccountKind::ApiKey),
+        false,
+    );
+    h.ledger.on_catalog_change(
+        &adding("seat", "claude-sonnet-9-20260101", NOW),
+        Some(AccountKind::Oauth),
+        true,
+    );
+    h.ledger.on_catalog_change(
+        &adding("plan", "claude-opus-9-20260101", NOW),
+        Some(AccountKind::Oauth),
+        false,
+    );
+    h.ledger.on_catalog_change(
+        &adding("unheld", "claude-fable-9-20260101", NOW),
+        None,
+        false,
+    );
+    assert_eq!(
+        h.ledger.unpriced_served(NOW),
+        [
+            phoebis_ledger::UnpricedModel {
+                model: "claude-fable-9".into(),
+                since: Some(NOW),
+                requests: 0,
+            },
+            phoebis_ledger::UnpricedModel {
+                model: "claude-opus-9".into(),
+                since: Some(NOW),
+                requests: 0,
+            },
+        ],
+        "the plan account's and the unheld account's models enter, the API key's and the seat's do not"
     );
     up.shutdown().await;
 }

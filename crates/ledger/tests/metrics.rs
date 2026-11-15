@@ -1266,7 +1266,10 @@ async fn a_batch_the_file_refused_once_counts_its_request_once_when_its_retry_la
     })
     .await;
     assert_eq!(
-        (pricing.unknown_models(), ledger.unpriced_served()),
+        (
+            pricing.unknown_models(),
+            ledger.unpriced_served(clock_cell.load(Ordering::SeqCst))
+        ),
         (
             1,
             vec![phoebis_ledger::UnpricedModel {

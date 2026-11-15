@@ -296,7 +296,16 @@ pub async fn run_until(
     ));
     catalog.set_on_change(Arc::new({
         let ledger = ledger.clone();
-        move |change| ledger.on_catalog_change(&change)
+        let router = router_task.clone();
+        move |change| {
+            // The listing account's kind and seat flag tell the ledger whether its requests are plan-funded, the one
+            // funding an unpriced entry counts.
+            let snapshot = router.snapshot();
+            let kind = snapshot
+                .account(&change.account_id)
+                .map(|account| account.kind);
+            ledger.on_catalog_change(&change, kind, snapshot.usage_based(&change.account_id))
+        }
     }));
     let mark = ShutdownMark::default();
     let relay = Arc::new(

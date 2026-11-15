@@ -23,9 +23,9 @@ use crate::db::{
 };
 use crate::events::{catalog_changed, spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
-use crate::plan::{Funding, PlanTables, SubscriptionCosts};
+use crate::plan::{funding_of, Funding, PlanTables, SubscriptionCosts};
 use crate::price::is_free_classifier;
-use crate::pricing::Pricing;
+use crate::pricing::{Pricing, Speed};
 use crate::query::{
     member_spends, period_bounds, BudgetedMember, BUDGET_PERIOD_ENDED, BUDGET_REACHED, LEDGER_GAP,
     ROUTER_STARTED,
@@ -135,23 +135,26 @@ pub struct Admission {
 #[error("the ledger task has stopped")]
 pub struct LedgerGone;
 
-/// A model the cost model in force gave no weight on the 7-day window when a catalog listing added it or a plan-funded
-/// request on it landed, so its figure is null. Kept once seen, so its gauge series reads 0 rather than vanishing after
-/// a revision weights the model.
+/// A model the cost model in force gave no weight on the 7-day window when a plan-funded account's catalog listing
+/// added it or a plan-funded request on it landed, so its figure is null. The run ends at a read whose instant a
+/// revision that weighs the model governs, or at a landing that finds the model weighted. Kept once seen, so its gauge
+/// series reads 0 rather than vanishing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct UnpricedModel {
     /// The undated model id.
     pub model: String,
     /// When the listing that added the model or the first unpriced landing arrived, whichever came first, `None` once
-    /// a landing found the model weighted, until the next such listing or unpriced landing dates it again.
+    /// a read or a landing found the model weighted, until the next such listing or unpriced landing dates it again.
     pub since: Option<i64>,
     /// Landed requests with at least one plan-funded attempt with usage that priced nothing since `since`, one per
-    /// request: 0 on a run a listing dated until such a request lands, and 0 once a landing found the model weighted.
+    /// request: 0 on a run a listing dated until such a request lands, and 0 once a read or a landing found the model
+    /// weighted.
     pub requests: u64,
 }
 
-/// The unpriced models by undated id, written by the landing after its commit and by a catalog listing that adds a
-/// model, and read by the attention reader. A `std` mutex, since the reader asks synchronously from inside the
+/// The unpriced models by undated id, written by the landing after its commit, by a plan-funded account's catalog
+/// listing that adds a model and by `unpriced_served`, which clears an entry the revision in force at its instant
+/// weighs, and read by the attention reader. A `std` mutex, since the reader asks synchronously from inside the
 /// runtime, where a tokio lock would have to block.
 type Unpriced = Arc<std::sync::Mutex<BTreeMap<String, UnpricedModel>>>;
 
@@ -219,16 +222,21 @@ impl Ledger {
         self.retention_days
     }
 
-    /// Every model the cost model does not weigh that a catalog listing added or a plan-funded landing served since the
-    /// start, by undated model id, a model a later landing found weighted among them with no `since` and no requests.
-    /// Empty at each start.
-    pub fn unpriced_served(&self) -> Vec<UnpricedModel> {
-        self.unpriced
-            .lock()
-            .expect(UNPRICED_POISONED)
-            .values()
-            .cloned()
-            .collect()
+    /// Every model the cost model does not weigh that a plan-funded listing added or a plan-funded landing served since
+    /// the start, by undated model id. An entry whose model the revision in force at `at` weighs, or that a later
+    /// landing found weighted, reads with no `since` and no requests. Empty at each start.
+    pub fn unpriced_served(&self, at: i64) -> Vec<UnpricedModel> {
+        let costs = self.tables.revisions.in_force(at);
+        let mut served = self.unpriced.lock().expect(UNPRICED_POISONED);
+        // Written into the set rather than answered on a copy, so the model's next run starts at its own listing or
+        // landing instead of taking up the date and the count of the run this read ended.
+        for entry in served.values_mut() {
+            if !unweighted(costs, &entry.model) {
+                entry.since = None;
+                entry.requests = 0;
+            }
+        }
+        served.values().cloned().collect()
     }
 
     /// Enters each of `added`, the model ids a catalog change listed, that the cost model in force at `at` weighs
@@ -248,11 +256,22 @@ impl Ledger {
         }
     }
 
-    /// A catalog change in the ledger: its added models the cost model does not weigh enter through `note_listed`, then
-    /// its `catalog_changed` row is recorded.
-    pub fn on_catalog_change(&self, change: &CatalogChange) {
-        // A listed model the cost model does not weigh is unpriced from its listing on, before any request.
-        self.note_listed(&change.added, change.at);
+    /// A catalog change in the ledger: where `funding_of` reads the listing account's kind and seat flag as plan
+    /// funding, the change's added models the cost model does not weigh enter through `note_listed`, and its
+    /// `catalog_changed` row is recorded either way. An account the routing snapshot does not hold passes no kind and
+    /// `false`, which reads as plan funding.
+    pub fn on_catalog_change(
+        &self,
+        change: &CatalogChange,
+        account_kind: Option<AccountKind>,
+        usage_based: bool,
+    ) {
+        // The landing side enters and clears an entry for a plan-funded attempt alone, so a model only an API key or a
+        // usage-based seat lists would hold an item that no landing clears.
+        if funding_of(account_kind, usage_based, None, Speed::Standard) == Funding::Plan {
+            // A listed model the cost model does not weigh is unpriced from its listing on, before any request.
+            self.note_listed(&change.added, change.at);
+        }
         self.record(catalog_changed(change));
     }
 

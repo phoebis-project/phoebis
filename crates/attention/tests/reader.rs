@@ -2822,7 +2822,9 @@ async fn a_revision_that_weights_the_model_clears_its_item_at_the_next_landing_a
         .record_request(on_model("r2", "claude-opus-5", "business", later, 1))
         .await;
     let cleared = fake_upstream::wait_for(Duration::from_secs(5), || {
-        let conditions = read(&attention, later);
+        // At an instant the first entry governs, where the read clears nothing itself, so the landing's clear alone
+        // answers it.
+        let conditions = read(&attention, NOW);
         find(&conditions, Kind::ModelUnpriced, "claude-opus-5")
             .is_some_and(|c| !c.holds)
             .then_some(conditions)

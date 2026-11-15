@@ -177,7 +177,7 @@ impl Attention {
         let unpriced = self
             .ledger
             .as_ref()
-            .map(Ledger::unpriced_served)
+            .map(|ledger| ledger.unpriced_served(now))
             .unwrap_or_default();
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(

@@ -3565,6 +3565,193 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
     up.shutdown().await;
 }
 
+/// The catalog hook reads the listing account's kind and seat flag off the routing snapshot: a plan account's listing
+/// raises the unpriced item of an added model the cost model does not weigh, an API-key account's and a usage-based
+/// seat's raise none, and each of the three lands its `catalog_changed` row.
+#[tokio::test]
+async fn a_listing_raises_the_unpriced_item_for_a_plan_account_alone_through_the_running_router() {
+    const KEY_SECRET: &str = "sk-ant-api03-catalog-funding-kkkk";
+    const PLAN_TOKEN: &str = "sk-ant-oat01-catalog-funding-pppp";
+    const SEAT_TOKEN: &str = "sk-ant-oat01-catalog-funding-ssss";
+    let listing = |ids: &[&str]| Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: serde_json::to_vec(&serde_json::json!({
+            "data": ids
+                .iter()
+                .map(|id| serde_json::json!({ "id": id, "type": "model" }))
+                .collect::<Vec<_>>(),
+        }))
+        .unwrap(),
+    };
+    let up = FakeUpstream::start(vec![]).await;
+    for credential in [KEY_SECRET, PLAN_TOKEN, SEAT_TOKEN] {
+        up.add_credential_rule(credential, "/v1/models", listing(&["claude-sonnet-4-5"]));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let key_path = dir.path().join("storage.key");
+    std::fs::write(
+        &key_path,
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
+    std::fs::write(
+        dir.path().join("subscription_costs.yaml"),
+        phoebis_ledger::test_tables::first_entry_costs_text(),
+    )
+    .unwrap();
+    let db_path = dir.path().join("phoebis.sqlite");
+    {
+        let store = phoebis_store::Store::open(
+            &db_path,
+            &phoebis_store::StorageKey::from_file(&key_path).unwrap(),
+        )
+        .unwrap();
+        pair_oauth(
+            &store,
+            "plan",
+            PLAN_TOKEN,
+            "00000000-0000-4000-8000-000000000001",
+        );
+        pair_oauth(
+            &store,
+            "seat",
+            SEAT_TOKEN,
+            "00000000-0000-4000-8000-000000000002",
+        );
+        // The tier of a usage-based Enterprise seat, so the snapshot's seat flag reads true for `seat`.
+        store
+            .set_profile(
+                "seat",
+                "{}",
+                &phoebis_store::SubscriptionRow {
+                    tier: Some("default_claude_zero".into()),
+                    since: None,
+                    trial_ends_at: None,
+                },
+            )
+            .unwrap();
+    }
+    let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
+    let yaml = format!(
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_CATALOG_FUNDING_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\n",
+        ledger = dir.path().join("ledger.sqlite").display(),
+        costs = dir.path().join("subscription_costs.yaml").display(),
+        key = key_path.display(),
+        db = db_path.display(),
+        addr = up.addr(),
+        ca = dir.path().join("ca.pem").display(),
+    );
+    let cfg_path = dir.path().join("config.yaml");
+    std::fs::write(&cfg_path, yaml).unwrap();
+    let config = {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("TEST_CATALOG_FUNDING_ADMIN_SECRET", "admin-secret-001");
+        phoebis_router::config::load_unresolved(&cfg_path).unwrap()
+    };
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    let client = reqwest::Client::builder()
+        .cookie_store(true)
+        .build()
+        .unwrap();
+    let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
+    logged_in(&client, &admin("/session")).await;
+    assert_eq!(
+        client
+            .post(admin("/accounts"))
+            .json(&serde_json::json!({ "id": "direct", "kind": "api_key", "label": "Direct", "secret": KEY_SECRET }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        201
+    );
+    // An account's first listing names none before it, so it moves nothing and lands no row.
+    for id in ["direct", "plan", "seat"] {
+        wait_json(
+            &client,
+            &admin(&format!("/accounts/{id}/catalog")),
+            |catalog| {
+                catalog["models"]
+                    .as_array()
+                    .is_some_and(|models| !models.is_empty())
+            },
+        )
+        .await;
+    }
+    // Each listing adds an id of its own that the cost model does not weigh.
+    for (id, credential, added) in [
+        ("direct", KEY_SECRET, "claude-mystery-7"),
+        ("plan", PLAN_TOKEN, "claude-mystery-8"),
+        ("seat", SEAT_TOKEN, "claude-mystery-9"),
+    ] {
+        up.set_credential_rule_after(
+            credential,
+            0,
+            "/v1/models",
+            listing(&[added, "claude-sonnet-4-5"]),
+        );
+        let refreshed: serde_json::Value = client
+            .get(admin(&format!("/accounts/{id}/catalog?refresh=1")))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(
+            refreshed["models"].as_array().map(Vec::len),
+            Some(2),
+            "{refreshed}"
+        );
+    }
+    let log = wait_json(
+        &client,
+        &admin("/routing-log?accounts=direct,plan,seat&kinds=catalog_changed"),
+        |log| log["rows"].as_array().is_some_and(|rows| rows.len() == 3),
+    )
+    .await;
+    let plan_row = log["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["account_id"] == "plan")
+        .unwrap_or_else(|| panic!("no row of plan: {log}"))
+        .clone();
+    let attention: serde_json::Value = client
+        .get(admin("/attention"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let unpriced: Vec<_> = attention["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["kind"] == "model_unpriced")
+        .map(|item| (&item["subject"]["id"], &item["since"], &item["detail"]))
+        .collect();
+    assert_eq!(
+        unpriced,
+        [(
+            &serde_json::json!("claude-mystery-8"),
+            &plan_row["at"],
+            &serde_json::json!({ "model": "claude-mystery-8", "requests": 0 })
+        )],
+        "the plan account's listing raises its added model's item, and the API key's and the seat's raise none: \
+         {attention}"
+    );
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever_comes_first() {
     let dir = tempfile::tempdir().unwrap();
