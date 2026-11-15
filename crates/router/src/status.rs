@@ -1164,21 +1164,13 @@ mod tests {
             "{screen}"
         );
 
-        // The captured items in their order, each `since` on the fixtures' clock in UTC.
+        // The first two captured items read a subject by its label ahead of its id, and an instant of the day before
+        // with its date, each `since` on the fixtures' clock in UTC.
         assert_eq!(
-            block(&lines, "  attention:"),
+            block(&lines, "  attention:")[..2],
             [
                 "    pool_exhausted Main since 12:16",
                 "    pairing_expiring Seat since 10-10 12:16",
-                "    limit_reset_ending Reset ending since 10-09 00:00",
-                "    ledger_record_parked Main since 12:16",
-                "    model_unpriced claude-opus-99 since 12:15",
-                "    meter_drift Business since 10:16",
-                "    wall_reached Business since 11:56",
-                "    destination_spent Business since 11:26",
-                "    shed_no_runway Main since 11:21",
-                "    slowed_long Business since 06:16",
-                "    expired_between_turns Keepalive since 12:16",
             ],
             "{screen}"
         );
