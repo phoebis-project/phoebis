@@ -3119,6 +3119,7 @@ fn the_hourly_window_samples_are_each_window_s_last_sample_of_its_hour() {
             observed_at: 4_517_000,
             utilization: Some(0.3),
             reset_at: Some(8_100_000),
+            utilization_max: Some(0.3),
         },
         "the row carries the sample's own instant beside its bucket"
     );

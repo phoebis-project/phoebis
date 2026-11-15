@@ -103,7 +103,9 @@ requests before their heads and how many requests it held, which the Analytics v
 ([Slow-down](routing.md#slow-down)). An account's rollups also book a cooldown's time when its announcement lands, each
 part to the hour it falls in, up to seven days past the announcement, a later announcement booking on from the end
 already booked. A cooldown cleared early gives back the time after the clear and leaves no time behind: an hour that
-held nothing but the returned time leaves the account's rollups.
+held nothing but the returned time leaves the account's rollups. An open cooldown counts up to the moment of the read:
+the Analytics view reads the account rollups up to the current hour and leaves out the part of that hour the cooldown
+booked past the read.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
 spelling the request carried, `model_permitted` the account that served the same request afterwards. The

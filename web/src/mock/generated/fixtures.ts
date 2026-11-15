@@ -1069,12 +1069,12 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "account_id": "business",
           "peak": {
-            "five_hour": 0.4,
-            "seven_day": null,
-            "seven_day_overage_included": null
+            "five_hour": 0.62,
+            "seven_day": 0.41,
+            "seven_day_overage_included": 0.12
           },
           "overage_seconds": 0,
-          "cooldown_seconds": 1800,
+          "cooldown_seconds": 0,
           "pins": {
             "created": 4,
             "migrated_in": 1,
@@ -1115,11 +1115,11 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             {
               "hour": 1791720000000,
-              "utilization_5h_max": 0.4,
-              "utilization_7d_max": null,
-              "utilization_7d_oi_max": null,
+              "utilization_5h_max": 0.62,
+              "utilization_7d_max": 0.41,
+              "utilization_7d_oi_max": 0.12,
               "overage_seconds": 0,
-              "cooldown_seconds": 1800,
+              "cooldown_seconds": 0,
               "pins_created": 1,
               "pins_migrated_in": 0,
               "pins_migrated_out": 0,

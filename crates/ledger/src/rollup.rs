@@ -2153,8 +2153,8 @@ pub(crate) fn unelapsed_segment_seconds(
     (unelapsed as u64).min(segment_seconds)
 }
 
-/// Per account, the seconds of the current hour that its open cooldowns booked and that have not passed at `now`.
-/// Reads `cooldown_spans` and `cooldown_segments` and writes nothing.
+/// Per account, the seconds of the current hour that its open cooldowns booked and that have not passed at `now`, an
+/// instant in Unix milliseconds. Reads `cooldown_spans` and `cooldown_segments` and writes nothing.
 pub fn open_cooldown_remainders(
     conn: &Connection,
     now: i64,

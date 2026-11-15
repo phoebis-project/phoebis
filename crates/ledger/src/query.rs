@@ -3334,9 +3334,10 @@ pub fn latest_quota(conn: &Connection, now: i64) -> Result<Vec<QuotaSampleRecord
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// The last quota sample of one account's window inside one hour, as `GET /admin/analytics/accounts` reads it.
-/// `observed_at` is the sample's own instant (`quota_samples.observed_at`, Unix milliseconds), which the lead and the
-/// wire's `sampled_at` read, since `bucket` is the 300-second floor the sampler files the row under.
+/// The last quota sample of one account's window inside one hour, with the highest utilization of the hour's samples of
+/// the window, as `GET /admin/analytics/accounts` reads them. `observed_at` is the sample's own instant
+/// (`quota_samples.observed_at`, Unix milliseconds), which the lead and the wire's `sampled_at` read, since `bucket` is
+/// the 300-second floor the sampler files the row under.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HourlyWindowSample {
     pub account_id: String,
@@ -3347,6 +3348,9 @@ pub struct HourlyWindowSample {
     pub observed_at: i64,
     pub utilization: Option<f64>,
     pub reset_at: Option<i64>,
+    /// The highest utilization among the hour's samples of the window, which the hour's peak reads. Null where none of
+    /// them carried one, as in an hour whose one sample reported the reset alone.
+    pub utilization_max: Option<f64>,
 }
 
 /// The hour of `q.bucket` in seconds. SQLite's `/` truncates toward zero, so the hour is floored through a modulus kept
@@ -3358,8 +3362,8 @@ macro_rules! hour_floor {
 }
 
 /// Binds `?1` and `?2`, the range, and `?3` and `?4`, the hour floor of `?1` and the hour ceiling of `?2`. The
-/// ranking reads the whole hours, so a sample of the range is the last of its hour against the hour's samples outside
-/// the range too.
+/// ranking and the highest read the whole hours, so a sample of the range is the last of its hour against the hour's
+/// samples outside the range too, and the highest is the hour's own.
 pub(crate) const HOURLY_WINDOW_SAMPLES_SQL: &str = concat!(
     quota_account_windows_cte!(),
     ", ranked AS ( \
@@ -3367,17 +3371,19 @@ pub(crate) const HOURLY_WINDOW_SAMPLES_SQL: &str = concat!(
     hour_floor!(),
     " AS hour, ROW_NUMBER() OVER (PARTITION BY q.account_id, q.window, ",
     hour_floor!(),
-    " ORDER BY q.bucket DESC) AS nth \
+    " ORDER BY q.bucket DESC) AS nth, MAX(q.utilization) OVER (PARTITION BY q.account_id, q.window, ",
+    hour_floor!(),
+    ") AS utilization_max \
            FROM windows w JOIN quota_samples q INDEXED BY quota_samples_account \
              ON q.account_id = w.account_id AND q.window = w.window \
           WHERE w.window IS NOT NULL AND q.bucket >= ?3 AND q.bucket < ?4) \
-     SELECT account_id, hour, window, bucket, observed_at, utilization, reset_at \
+     SELECT account_id, hour, window, bucket, observed_at, utilization, reset_at, utilization_max \
        FROM ranked WHERE nth = 1 AND bucket >= ?1 AND bucket < ?2 \
       ORDER BY account_id, hour, window"
 );
 
-/// Every account's last sample per window and hour over `[from, to)` in Unix seconds, ordered by account, hour,
-/// window.
+/// Every account's last sample per window and hour over `[from, to)` in Unix seconds, with the highest utilization of
+/// the hour's samples of the window beside it, ordered by account, hour, window.
 pub fn hourly_window_samples(
     conn: &Connection,
     from: i64,
@@ -3394,6 +3400,7 @@ pub fn hourly_window_samples(
             observed_at: r.get(4)?,
             utilization: r.get(5)?,
             reset_at: r.get(6)?,
+            utilization_max: r.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

@@ -1,7 +1,7 @@
 //! The analytics, request-log, and dashboard routes over rows written straight into the ledger.
 mod common;
 use common::{get, json, login, patch, post, wait_json};
-use phoebis_ledger::{AttemptRecord, BodyRecord, Record, RequestRecord};
+use phoebis_ledger::{AttemptRecord, BodyRecord, EventRecord, Record, RequestRecord};
 use phoebis_store::AccountKind;
 
 const HOUR: i64 = 3_600_000;
@@ -662,8 +662,8 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
     );
     let first = &hours[0];
     assert!(
-        first["utilization_5h_max"].is_null() && first["pins_created"] == 0,
-        "an hour with samples and no attempt carries no peak and no count: {first}"
+        first["utilization_5h_max"].as_f64() == Some(0.62) && first["pins_created"] == 0,
+        "an hour with samples and no attempt carries its sample's peak and no count: {first}"
     );
     // Indexing a missing `windows` would read null and pass the null checks below, so the object is pinned first.
     assert_eq!(
@@ -732,8 +732,8 @@ async fn the_accounts_route_answers_each_hour_s_last_window_sample_with_its_lead
     );
     assert_eq!(
         business["peak"]["five_hour"].as_f64(),
-        Some(0.3),
-        "the peaks still come from the attempts' heads"
+        Some(0.62),
+        "the account's peak is its sampled hour's 0.62 above the attempted hour's 0.3"
     );
 }
 
@@ -793,6 +793,269 @@ async fn the_accounts_route_runs_a_canceled_account_s_lead_to_its_end_inside_the
     assert!(
         (lead - (0.41 - 0.5)).abs() < 1e-9,
         "the pace runs to the end, a day gone of the two to it, steeper than a seventh of the week: {lead}"
+    );
+}
+
+/// Midnight UTC of the day `common::NOW` falls in.
+const MIDNIGHT: i64 = 1_791_676_800_000;
+const MINUTE: i64 = 60_000;
+
+/// Steps the clock to 20:10 of the rig's day and lands a cooldown on `business` set at 19:45 until 23:50, which books
+/// 900 seconds in the 19:00 hour, 3,600 in each of the three after it and 3,000 in the 23:00 hour. Answers a session
+/// cookie taken at the stepped clock, since one taken at the rig's own has expired by then.
+async fn open_cooldown_at_ten_past_eight(parts: &common::Full) -> String {
+    parts.clock_cell.store(
+        MIDNIGHT + 20 * HOUR + 10 * MINUTE,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.record(Record::Event(EventRecord {
+        at: MIDNIGHT + 19 * HOUR + 45 * MINUTE,
+        kind: "cooldown_set".into(),
+        account_id: Some("business".into()),
+        detail: Some(format!(
+            r#"{{"scope":"account","until":{}}}"#,
+            MIDNIGHT + 23 * HOUR + 50 * MINUTE
+        )),
+        ..Default::default()
+    }));
+    // The writer lands the event a batch later, and its fold books every hour in one transaction.
+    wait_json(
+        &parts.app,
+        "/admin/analytics/accounts?range=24h",
+        &cookie,
+        |v| {
+            v["accounts"]
+                .as_array()
+                .is_some_and(|accounts| accounts.iter().any(|a| a["account_id"] == "business"))
+        },
+    )
+    .await;
+    cookie
+}
+
+/// `business`'s cooldown seconds and each of its listed hours' as an accounts answer gives them.
+fn business_cooldown(answer: &serde_json::Value) -> (u64, Vec<(i64, u64)>) {
+    let business = answer["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_id"] == "business")
+        .unwrap();
+    (
+        business["cooldown_seconds"].as_u64().unwrap(),
+        business["hours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| {
+                (
+                    h["hour"].as_i64().unwrap(),
+                    h["cooldown_seconds"].as_u64().unwrap(),
+                )
+            })
+            .collect(),
+    )
+}
+
+#[tokio::test]
+async fn the_accounts_route_counts_an_open_cooldown_to_the_read_and_cuts_only_a_listed_current_hour(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = open_cooldown_at_ten_past_eight(&parts).await;
+    let to_the_clock = json(
+        get(
+            &parts.app,
+            "/admin/analytics/accounts?range=24h",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        business_cooldown(&to_the_clock),
+        (
+            1_500,
+            vec![(MIDNIGHT + 19 * HOUR, 900), (MIDNIGHT + 20 * HOUR, 600)]
+        ),
+        "ten minutes of the 20:00 hour have passed, and the fifty booked past them leave the hour and the account"
+    );
+    let before_the_current_hour = json(
+        get(
+            &parts.app,
+            &format!(
+                "/admin/analytics/accounts?range={},{}",
+                MIDNIGHT + 19 * HOUR,
+                MIDNIGHT + 20 * HOUR
+            ),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        business_cooldown(&before_the_current_hour),
+        (900, vec![(MIDNIGHT + 19 * HOUR, 900)]),
+        "a range that ends before the current hour lists it nowhere, so nothing comes off the account"
+    );
+}
+
+#[tokio::test]
+async fn the_accounts_route_lists_and_sums_no_hour_after_the_current_one() {
+    let parts = common::admin_parts_full().await;
+    let cookie = open_cooldown_at_ten_past_eight(&parts).await;
+    let twenty_hours_ahead = json(
+        get(
+            &parts.app,
+            &format!(
+                "/admin/analytics/accounts?range={},{}",
+                MIDNIGHT + 19 * HOUR,
+                MIDNIGHT + 40 * HOUR + 10 * MINUTE
+            ),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        business_cooldown(&twenty_hours_ahead),
+        (
+            1_500,
+            vec![(MIDNIGHT + 19 * HOUR, 900), (MIDNIGHT + 20 * HOUR, 600)]
+        ),
+        "the hours the cooldown booked past 21:00 are neither listed nor summed"
+    );
+}
+
+#[tokio::test]
+async fn the_accounts_route_reads_an_idle_hour_s_fable_peak_off_its_highest_sample_of_either_name()
+{
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let sample = |window: &str, at: i64, utilization: f64| phoebis_ledger::QuotaSampleRecord {
+        account_id: "business".into(),
+        bucket: phoebis_ledger::bucket_of(at),
+        window: window.into(),
+        utilization: Some(utilization),
+        reset_at: Some(at + 6 * 24 * HOUR),
+        source: phoebis_ledger::SampleSource::Poll,
+        observed_at: at,
+    };
+    // Each hour's samples fall from 1.0 to 0.2, so an hour's last sample is not its highest.
+    parts
+        .db
+        .insert_samples(
+            &[
+                sample("seven_day_fable", HOUR + 10 * MINUTE, 1.0),
+                sample("seven_day_fable", HOUR + 30 * MINUTE, 0.2),
+                sample("seven_day_overage_included", 2 * HOUR + 10 * MINUTE, 1.0),
+                sample("seven_day_overage_included", 2 * HOUR + 30 * MINUTE, 0.2),
+            ],
+            None,
+        )
+        .unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            &format!("/admin/analytics/accounts?range={},{}", HOUR, 3 * HOUR),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let business = answer["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_id"] == "business")
+        .unwrap();
+    assert_eq!(
+        business["hours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| (
+                h["hour"].as_i64().unwrap(),
+                h["utilization_7d_oi_max"].as_f64()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(HOUR, Some(1.0)), (2 * HOUR, Some(1.0))],
+        "an hour with no attempt reads the highest sample of either name of the Fable week as its Fable peak"
+    );
+    assert_eq!(
+        business["peak"]["seven_day_overage_included"].as_f64(),
+        Some(1.0),
+        "the account's peak is the highest of its hours' peaks"
+    );
+}
+
+#[tokio::test]
+async fn the_accounts_route_keeps_an_hour_s_head_peak_above_its_highest_sample() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let attempted_at = HOUR + 10 * MINUTE;
+    let mut served = attempt("h1", "business", 200);
+    served.started_at = attempted_at;
+    served.ratelimit_5h_utilization = Some(0.9);
+    parts
+        .db
+        .insert_request(
+            &request(
+                "h1",
+                attempted_at,
+                Some("desktop"),
+                "claude-sonnet-5",
+                "succeeded",
+                200,
+                "inference",
+            ),
+            &[served],
+            None,
+        )
+        .unwrap();
+    let sampled_at = HOUR + 30 * MINUTE;
+    parts
+        .db
+        .insert_samples(
+            &[phoebis_ledger::QuotaSampleRecord {
+                account_id: "business".into(),
+                bucket: phoebis_ledger::bucket_of(sampled_at),
+                window: "five_hour".into(),
+                utilization: Some(0.8),
+                reset_at: Some(sampled_at + 4 * HOUR),
+                source: phoebis_ledger::SampleSource::Poll,
+                observed_at: sampled_at,
+            }],
+            None,
+        )
+        .unwrap();
+    let answer = json(
+        get(
+            &parts.app,
+            &format!("/admin/analytics/accounts?range={},{}", HOUR, 2 * HOUR),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let business = answer["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["account_id"] == "business")
+        .unwrap();
+    assert_eq!(
+        business["hours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| (
+                h["hour"].as_i64().unwrap(),
+                h["utilization_5h_max"].as_f64()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(HOUR, Some(0.9))],
+        "the head's 0.9 stands above the hour's sample of 0.8"
     );
 }
 

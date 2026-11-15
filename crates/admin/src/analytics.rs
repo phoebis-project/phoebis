@@ -10,14 +10,15 @@ use axum::Json;
 use indexmap::IndexMap;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
-    hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit, names_one_account,
-    parse_range, read_account_rollups, read_reconciliations, rewrite_series, series_paged,
-    session_burn_series, AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample,
-    LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter, SeriesFilter, TermEnd, TermPair,
+    hour_end, hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit,
+    names_one_account, open_cooldown_remainders, parse_range, read_account_rollups,
+    read_reconciliations, rewrite_series, series_paged, session_burn_series, AccountRollupRow,
+    FundingFilter, GroupBy, GroupRow, HourlyWindowSample, LedgerError, LiveKeys, Patterns,
+    RequestFilter, RollupFilter, SeriesFilter, TermEnd, TermPair,
 };
 use phoebis_routing::{
     account_window_id, is_weekly_window, term, BurnUnit, UtilizationSample, WindowReading,
-    FIVE_HOUR, SEVEN_DAY,
+    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
@@ -629,6 +630,18 @@ fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> Windo
     }
 }
 
+/// Raises the peak of `window` on an account's hour or sum to `utilization` where that reads higher. Both names of the
+/// Fable week raise its one peak, and a window with no peak of its own raises nothing.
+fn raise_peak(row: &mut AccountRollupRow, window: &str, utilization: f64) {
+    let peak = match account_window_id(window) {
+        FIVE_HOUR => &mut row.utilization_5h_max,
+        SEVEN_DAY => &mut row.utilization_7d_max,
+        SEVEN_DAY_FABLE => &mut row.utilization_7d_oi_max,
+        _ => return,
+    };
+    *peak = Some(peak.map_or(utilization, |p| p.max(utilization)));
+}
+
 /// The account rollups over the range.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
@@ -649,6 +662,8 @@ pub(crate) struct AccountRollup {
     pub hours: Vec<RollupHour>,
 }
 
+/// The account's peaks over the range, each the highest of the same peak among its listed hours, so an hour's
+/// highest quota sample counts as its attempts' heads do (`RollupHour`).
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RollupPeak {
@@ -665,13 +680,18 @@ pub(crate) struct RollupPins {
     pub migrated_out: u64,
 }
 
-/// One hour. An hour with samples and no attempt is listed with null peaks and zero counts.
+/// One hour. The answer lists no hour after the current one, and an hour with samples and no attempt is listed with
+/// zero counts. A peak is the larger of the highest utilization the attempts' heads carried in the hour and the hour's
+/// highest quota sample of the peak's window, null where the hour holds neither.
 #[derive(serde::Serialize, serde::Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RollupHour {
     pub hour: i64,
+    /// The 5-hour window's peak, read with the `five_hour` samples.
     pub utilization_5h_max: Option<f64>,
+    /// The 7-day window's peak, read with the `seven_day` samples.
     pub utilization_7d_max: Option<f64>,
+    /// The Fable week's peak, read with the samples of `seven_day_fable` and of `seven_day_overage_included`.
     pub utilization_7d_oi_max: Option<f64>,
     pub overage_seconds: u64,
     pub cooldown_seconds: u64,
@@ -739,19 +759,23 @@ pub(crate) async fn accounts(
     State(state): State<Arc<AdminState>>,
     AdminQuery(q): AdminQuery<RangeQuery>,
 ) -> Response {
-    let (from, to) = match parse_range(q.range.as_deref(), (state.clock)()) {
+    let now = (state.clock)();
+    let (from, to) = match parse_range(q.range.as_deref(), now) {
         Ok(r) => r,
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
-    // The same hour bounds in seconds as the rollups read, so a sample never falls outside the hours answered.
-    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
-    let (rows, samples) = match state
+    // The same hour bounds in seconds as the rollups read, so a sample never falls outside the hours answered. They
+    // end with the current hour, since a cooldown books the hours ahead of the clock when it is set.
+    let current_hour = hour_of(now);
+    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to).min(hour_end(current_hour)));
+    let (rows, samples, unelapsed) = match state
         .ledger
         .db()
         .read(move |c| {
             Ok((
                 read_account_rollups(c, from_hour, to_hour)?,
                 hourly_window_samples(c, from_hour, to_hour)?,
+                open_cooldown_remainders(c, now)?,
             ))
         })
         .await
@@ -771,7 +795,13 @@ pub(crate) async fn accounts(
             BTreeMap::new(),
         )
     };
-    for row in rows {
+    for mut row in rows {
+        // An open cooldown booked the current hour past the read's instant, a part that has not passed yet. The cut
+        // lands on the row before the account sums it, so only an answer that lists the current hour loses the part.
+        if row.hour == current_hour {
+            let ahead = unelapsed.get(&row.account_id).copied().unwrap_or(0);
+            row.cooldown_seconds = row.cooldown_seconds.saturating_sub(ahead.max(0) as u64);
+        }
         let entry = by_account
             .entry(row.account_id.clone())
             .or_insert_with(|| empty(&row.account_id));
@@ -780,12 +810,12 @@ pub(crate) async fn accounts(
         entry.1.insert(hour, (row, base_windows()));
     }
     for s in samples {
-        let entry = by_account
+        let (sum, hours) = by_account
             .entry(s.account_id.clone())
             .or_insert_with(|| empty(&s.account_id));
-        // An hour with samples and no attempt is listed with null peaks and zero counts, so the cards draw an idle
-        // hour's reading while the peaks and the sums stay the attempts' own.
-        let (_, windows) = entry.1.entry(s.hour).or_insert_with(|| {
+        // An hour with samples and no attempt is listed with zero counts and its samples' peaks, so the cards draw the
+        // polled level of an hour in which the router sent the account nothing.
+        let (hour, windows) = hours.entry(s.hour).or_insert_with(|| {
             (
                 AccountRollupRow {
                     hour: s.hour,
@@ -795,6 +825,10 @@ pub(crate) async fn accounts(
                 base_windows(),
             )
         });
+        if let Some(highest) = s.utilization_max {
+            raise_peak(hour, &s.window, highest);
+            raise_peak(sum, &s.window, highest);
+        }
         let sample = window_json(&s, snapshot.term(&s.account_id));
         windows.insert(s.window, Some(sample));
     }
