@@ -1102,7 +1102,7 @@ async function dashboardTileWords(theme) {
 }
 
 /** The Agent records cap's hover. The pass reads no module of the console, so it spells the page's sentence here. */
-const AGENT_RECORDS_TITLE = 'A released record keeps its slot for one cache TTL after the release';
+const AGENT_RECORDS_TITLE = 'A released record that held a slot keeps it for one cache TTL after the release';
 
 /**
  * The Dashboard's Sessions card at the pass's viewport: its subtitle, the Keepalive engine and Cache probes, 24h

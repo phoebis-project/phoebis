@@ -144,6 +144,17 @@ test("a reset prices at the plan and the tier it ran under, and at the account's
   assert.equal(d.allowanceFigure(0.5, 'seven_day', MAX_20X, QUARTER, 'ultra', MAX_5X).text, '12.5% Ultra week');
 });
 
+test("drawsFreeNote reads the drawn resets' pairs", () => {
+  const free = (pairs) => accountOf('free', FREE, [windowOf('seven_day', [0.5, 0.25], { pairs })]);
+  assert.equal(d.drawsFreeNote(free([PRO, PRO])), false, 'both weeks ran under Pro, so no figure prices at Free');
+  assert.equal(d.drawsFreeNote(free([PRO, NO_PAIR])), true, "a week the router recorded no pair for prices at the account's own Free");
+  assert.equal(d.drawsFreeNote(free([PRO, FREE])), true, 'a week the router recorded under Free');
+});
+
+test('a paid account draws no Free note', () => {
+  assert.equal(d.drawsFreeNote(accountOf('pro', PRO, [windowOf('seven_day', [])])), false);
+});
+
 test("an account's windows and the card's column pairs read the 7-day window first, then each model week in the console's order", () => {
   const a = accountOf('a', MAX_20X, [windowOf('seven_day_opus', [0.5]), windowOf('seven_day_fable', [0.5]), windowOf('seven_day', [0.5])]);
   assert.deepEqual(d.allowanceWindows(a).map((w) => w.window), ['seven_day', 'seven_day_fable', 'seven_day_opus']);

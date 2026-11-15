@@ -476,7 +476,7 @@ function KeepaliveEngine({ busGaps, expired, now, read }: { busGaps: boolean; ex
           <dt>Sessions</dt>
           <dd className="num">{k ? cap(k.limits.sessions) : '-'}</dd>
         </div>
-        <div title="A released record keeps its slot for one cache TTL after the release">
+        <div title="A released record that held a slot keeps it for one cache TTL after the release">
           <dt>Agent records</dt>
           <dd className="num">{k ? cap(k.limits.agents) : '-'}</dd>
         </div>

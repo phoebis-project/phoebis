@@ -21,7 +21,7 @@ import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, E
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { accountHref, accountMeterHref, ACCOUNTS_CODEC, ACCOUNT_SORT_KEYS, sortDirOf } from '@/lib/address';
-import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
+import { ALLOWANCE_SUBTITLE, FREE_NOTE, allowanceFigure, allowanceSpan, allowanceWindows, drawsFreeNote, newestResets, ownShareHover, pairOf, resetHover, resetInstant, weeklyResetsKey, weeksFigure, type AllowanceFigure } from '@/lib/allowance';
 import { hintPlan } from '@/lib/analytics';
 import { clock } from '@/lib/clock';
 import { ACCOUNTS_DIMENSIONS } from '@/lib/filterBar';
@@ -810,7 +810,7 @@ function AllowanceCard({ answer, costs, error, holder, onRetry, week }: { answer
               <AllowanceColumn key={w.window} account={answer} costs={costs} holder={holder} week={week} window={w} />
             ))}
           </div>
-          {answer.plan === 'free' && <p className="muted detail__note">{FREE_NOTE}</p>}
+          {drawsFreeNote(answer) && <p className="muted detail__note">{FREE_NOTE}</p>}
         </>
       )}
     </Card>

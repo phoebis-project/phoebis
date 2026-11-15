@@ -1292,7 +1292,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     bar: 'Probes in the last 24h: 207 ok, 18 migrated, 4 held, 45 skipped, 3 failed',
     caps: [
       ['Sessions', '19 of 128', null],
-      ['Agent records', '33 of 1,024', 'A released record keeps its slot for one cache TTL after the release'],
+      ['Agent records', '33 of 1,024', 'A released record that held a slot keeps it for one cache TTL after the release'],
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
@@ -5637,18 +5637,17 @@ await forView('/accounts', async () => {
   // sample of its 7-day series before the end, its seed's reading 0.46: 0.54 of its week. Its three weeks before left
   // 0.52, 0.48 and 0.57, each under the Pro pair the account held before its plan ended (`WEEKLY_RESETS`). The term's
   // end carries the pair of the window's stored reading, its last clean poll before the end, which landed before the
-  // plan-ended flag under Pro too. So every week and the total price at Pro's tier, and each hover names Pro. The Free
-  // note stands on the account's own plan, free, which the router prices no capacity for.
+  // plan-ended flag under Pro too. So every week and the total price at Pro's tier, and each hover names Pro. With
+  // Pro's pair on all four weeks, no figure prices at the account's own plan, free, and the block draws no Free note.
   const sunset = story.get('sunset');
   const end = Date.parse(sunset.subscription.endsAt);
   const sunsetResets = [end, ...resetsBack(new Date(end + 4 * 24 * 3_600_000).toISOString(), 3)];
   const ended = await mount('/accounts/sunset', { now: CLOCK_ORIGIN });
   const term = blockOf(ended);
   const termWant = [columnOf('7-day', 'seven_day', [1 - 0.46, 0.52, 0.48, 0.57], sunsetResets, weekOf('default_claude_ai'), 'Pro', { line: `left at ${instantOf(end)} term ended`, badge: 'term ended', title: hoverOf(end, "the term's end") })];
-  const freeNote = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
   results.push({
-    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and every week and the total at Pro's tier, the pair its readings held before the plan ended, with the Free note while its plan reads free",
-    ok: sunset.subscription.plan === 'free' && JSON.stringify(term?.columns) === JSON.stringify(termWant) && term?.note === freeNote,
+    name: "/accounts/sunset the week its term ended inside reads as its latest reset, \"left at\" its end with the neutral \"term ended\" badge, and every week and the total at Pro's tier, the pair its readings held before the plan ended, with no Free note, since each week carries Pro's pair though its own plan reads free",
+    ok: sunset.subscription.plan === 'free' && JSON.stringify(term?.columns) === JSON.stringify(termWant) && term?.note === null,
     missing: [sunset.subscription.plan, JSON.stringify(term?.columns ?? null), JSON.stringify(termWant), term?.note ?? 'no note'],
   });
   ended.unmount();

@@ -6,7 +6,7 @@ import { MeterRatio } from '@/components/MeterRatio';
 import type { Option } from '@/components/ui/OptionList';
 import { IconChevron } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
-import { Button, Card, ErrorState, SkeletonRows, toggleRow } from '@/components/ui/primitives';
+import { Button, Card, ErrorRow, SkeletonRows, toggleRow } from '@/components/ui/primitives';
 import { accountHref, METER_CODEC } from '@/lib/address';
 import { clock } from '@/lib/clock';
 import { METER_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
@@ -178,11 +178,7 @@ function GroupsCard({ accounts, error, first, groups, newest, now, onExpand, onM
                   );
                 })}
             {error !== null ? (
-              <tr>
-                <td colSpan={COLUMNS}>
-                  <ErrorState title="Could not load the meter reconciliation" body={error} retry={onRetry} />
-                </td>
-              </tr>
+              <ErrorRow colSpan={COLUMNS} error={error} errorTitle="Could not load the meter reconciliation" retry={onRetry} />
             ) : (
               groups?.length === 0 && (
                 <tr>

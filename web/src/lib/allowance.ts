@@ -68,6 +68,15 @@ function capacityWeight(account: Pick<AllowanceAccount, 'plan' | 'tier'>, window
 export const pairOf = (account: Pick<AllowanceAccount, 'plan' | 'tier'>, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): Pick<AllowanceAccount, 'plan' | 'tier'> =>
   reset !== undefined && (reset.plan ?? null) !== null && (reset.tier ?? null) !== null ? reset : account;
 
+/** Whether a block draws FREE_NOTE: a free account with a figure that prices at Free, which is a drawn reset whose pair
+ *  reads free (the account's own where the router recorded none) or a window's total with no reset under it. */
+export const drawsFreeNote = (account: AllowanceAccount): boolean =>
+  account.plan === 'free' &&
+  allowanceWindows(account).some((w) => {
+    const { resets } = newestResets(w);
+    return resets.length === 0 || resets.some((r) => pairOf(account, r).plan === 'free');
+  });
+
 /** With no cost model a figure reads the unpriced dash, an arm the pages never draw, since they hold the skeleton
  *  while the model loads. */
 export function allowanceFigure(share: number | null, window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition, reset?: Pick<AllowanceReset, 'plan' | 'tier'>): AllowanceFigure {
