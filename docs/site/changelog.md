@@ -320,16 +320,17 @@ the router resolved from the organization type and the tier otherwise, Ultra, Ma
 prices, "Free" for a free organization and "Usage-based" for a seat, as do the Quota card's chip and the capacity rings,
 while the routing log's candidates read the label of the plan word a record carries ([Accounts](console.md#accounts),
 [Dashboard](console.md#dashboard), [Quota](console.md#quota), [Routing log](console.md#routing-log)). An account's
-detail draws "Allowance left at reset", each weekly window's share left unused at its last four resets in the chosen
-week under every position, a term's end counting as a reset marked "term ended" ([Accounts](console.md#accounts)). An
-account's detail draws "Meter drift", the newest completed window of each kind against the table with the windows off
-the band in 30 days, opening the Meter view on the account ([Accounts](console.md#accounts)). An account's end editor
-names the browser's zone beside its field ([Accounts](console.md#accounts)). An account's end editor opens empty for a
-running plan, and its hint names the date the plan's billing settings show as the end ([Accounts](console.md#accounts)).
-An extra usage reading with no amounts draws its state alone, with no amounts and no meter, on the Accounts view's Usage
-card and the Quota cards ([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag
-is spelled `canceled` on the account view, the account edit, the routing log's term facts and the `wind_down_started`
-event, with the error code `account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
+detail draws "Allowance left at reset", each weekly window's share left unused at its last four natural resets and at
+the used limit resets between them, in the chosen week under every position, a term's end counting as a reset marked
+"term ended" ([Accounts](console.md#accounts)). An account's detail draws "Meter drift", the newest completed window of
+each kind against the table with the windows off the band in 30 days, opening the Meter view on the account
+([Accounts](console.md#accounts)). An account's end editor names the browser's zone beside its field
+([Accounts](console.md#accounts)). An account's end editor opens empty for a running plan, and its hint names the date
+the plan's billing settings show as the end ([Accounts](console.md#accounts)). An extra usage reading with no amounts
+draws its state alone, with no amounts and no meter, on the Accounts view's Usage card and the Quota cards
+([Accounts](console.md#accounts), [Quota](console.md#quota)). The account's cancellation flag is spelled `canceled` on
+the account view, the account edit, the routing log's term facts and the `wind_down_started` event, with the error code
+`account_canceled`, the probe outcome `canceled` and the pairing session's status `canceled`
 ([Accounts](console.md#accounts), [API reference](api-reference.md)). The Accounts view orders its list through the
 filter bar's sort control, a key and a direction carried in the address, with Name ascending by default, one key per
 window's reset and Most used filing an account with no plan window last ([Accounts](console.md#accounts)). The Accounts
@@ -400,7 +401,7 @@ in a filter's list clears every check, the inverse of checking it, and an empty 
 created <time>)`, its creation instant in the viewer's zone ([Analytics](console.md#analytics)). The Accounts cards
 offer the three windows the router reads, and the Accounts in range table reads the Fable week's peak as Peak Fable
 ([Analytics](console.md#analytics)). The Accounts section's card "Unused allowance by account" ranks the subscription
-accounts by the figure of their weekly windows left unused over the last four weeks, in the chosen week, with the
+accounts by the figure of their weekly windows left unused at the resets in the range, in the chosen week, with the
 fleet's figures ([Analytics](console.md#analytics)). The Analytics session view narrows to one agent under the Agent
 filter of the Subject group, carried in the address as `agent_id` and written by the Sessions view's agent menu, its
 links to the request log carrying the agent, the filter disabled until a session is picked and leaving with the session

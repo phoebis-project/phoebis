@@ -94,14 +94,14 @@ at the next start ([The cost reference](#the-cost-reference)).
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
 included.", is stored in the browser under `phoebis.expertView` and starts off. With it on, the pool dialog's rail gains
 the groups Auto mode, Placement, Slow-down, Failover and Cache diagnostics, and its other groups show the fields Pin
-sessions, Windows' Burn average (s), Load shedding's Preset, Shed cap (%), Shed dwell (s), Warm sessions and Preview,
-Overage grace (min), Return to plan, Return dwell (s), Wind down (min), Add a cache marker to a request without one and
-the cache TTL's per-model overrides. The key dialog gains Server-side auto mode, Pool rules and List [1m] twins in the
-models listing, and the sidebar the Diagnostics group. With the mode off, a group with hidden fields closes on
-`{n} more settings in the expert view` (`1 more setting` for one), whose link turns the mode on, and a hidden field that
-holds a refusal shows anyway. Closing a dialog with unsaved changes asks "Discard changes?" with "This dialog has
-changes that are not saved.", "Keep editing" and "Discard". A dialog draws its fields afresh at each opening, so a
-picker's search text starts empty.
+sessions, Windows' Burn average (s), Load shedding's Preset, Shed cap (%), Shed dwell (s), Warm sessions, Fable
+reservation shedding and Preview, Overage grace (min), Return to plan, Return dwell (s), Wind down (min), Add a cache
+marker to a request without one and the cache TTL's per-model overrides. The key dialog gains Server-side auto mode,
+Pool rules and List [1m] twins in the models listing, and the sidebar the Diagnostics group. With the mode off, a group
+with hidden fields closes on `{n} more settings in the expert view` (`1 more setting` for one), whose link turns the
+mode on, and a hidden field that holds a refusal shows anyway. Closing a dialog with unsaved changes asks "Discard
+changes?" with "This dialog has changes that are not saved.", "Keep editing" and "Discard". A dialog draws its fields
+afresh at each opening, so a picker's search text starts empty.
 
 ## Dashboard
 
@@ -198,7 +198,8 @@ past eight accounts, and an account the registry does not list draws muted.
 
 "Accounts" draws one small card per account, linking to its detail, with the status badge, the speed chip beside it on a
 slowed account (`0.5x`, as [Quota](#quota) describes it), the email, the window bars (`No window since the plan ended
-{ago}` in their place on an account whose plan ended, "Not read yet" on one whose poll has read no window yet, and
+{ago}` in their place on an account whose plan ended, "Not paired, no window" or "Needs re-auth, no window" on a
+subscription account that is not paired or needs re-auth, "Not read yet" on one whose poll has read no window yet, and
 "none" muted in the slot of a window the account does not carry, such as an approved Ultra account's 5-hour slot, with
 the window's words on hover) or the spend bar of a usage-based seat, "Overage active" while requests bill as extra
 usage, the cooldown line, and "API key" for an API-key account. "Recent requests" ("Last 10 across every pool", with
@@ -282,7 +283,8 @@ cards, the Accounts view, the Pools cards and the Sessions view draw the same ch
 projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
 the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the
 window has no projection. An account whose plan ended reads `No window since the plan ended {ago}` in the bars' place on
-both views, where any other subscription account without a window reads "Not read yet" and an API-key account "No quota
+both views, where a subscription account that is not paired or needs re-auth reads "Not paired, no window" or "Needs
+re-auth, no window", any other subscription account without a window "Not read yet" and an API-key account "No quota
 windows". A window the account's poll does not carry keeps its slot, so the bars line up across the cards, with "none"
 muted in the share's place, since the slot is too narrow for the words beside its label, and the words on hover: "no
 5-hour window" on an approved Ultra account, "no 7-day window", and "no Fable window" on a Pro account. The Accounts
@@ -437,22 +439,27 @@ window") draws the three windows as the Quota view does, or a usage-based seat's
 `{used} of {limit}` over its meter and its reset line, the speed chip beside the 5-hour bar's label on a slowed account,
 "Extra usage this month" on every account but a usage-based seat, with an "in use" badge and its amounts and spend meter
 where the reading carries them, the reason the provider gave for disabling extra usage, and a "Fast mode" line with the
-share of the fast lane's input and output buckets used and a chip while the fast lane cools, or reads "This account does
-not report quota windows." ("No spend reading yet" on a usage-based seat, or "No quota window is read since the plan
-ended {ago}." on an account whose plan ended), or "The first quota reading is in flight." from a pairing's confirm that
-started the account's first poll until its first reading lands, where a usage-based seat reads "No spend reading yet".
-"7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour, 7-day and Fable 7-day windows of
-a subscription account, or "No samples yet" with "Quota samples appear after the first successful quota fetch."
+share of the fast lane's input and output buckets used and a chip while the fast lane cools, or reads "Not paired, so no
+quota window is read." or "Needs re-auth, so no quota window is read." on a subscription account in that state, where
+the router withholds the windows until the account pairs again, "This account does not report quota windows." ("No spend
+reading yet" on a usage-based seat, or "No quota window is read since the plan ended {ago}." on an account whose plan
+ended), or "The first quota reading is in flight." from a pairing's confirm that started the account's first poll until
+its first reading lands, where a usage-based seat reads "No spend reading yet". On an account whose plan ended the
+plan-ended sentence stands first, and it stands too on a subscription account that is not paired or needs re-auth and
+whose canceled end has passed. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour,
+7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after the first
+successful quota fetch."
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"
 ("left at {date}" and the badge where that reset is the term's end), the three weeks before it with their figures, and
 "Total, {n} weeks", each week's hover naming its reset's instant and where its reading came from. The block shows the
-rows of the card "Unused allowance by account", a used limit reset that cleared its window among them, so its four weeks
-count the natural resets and add the uses between them. The figures read in the week the week control names under every
-position: the share of the account's own window times its tier's 7-day capacity, a model week at its capacity factor,
-over the chosen week's tier's, so a Fable-week reset reads half its 7-day figure. Each week prices at the tier the
-account ran under at that reset, so a week before an upgrade reads its figure at the earlier tier's capacity, and a
+rows of the card "Unused allowance by account", a used limit reset that cleared its window among them with a "reset
+used" badge on its row, so its four weeks count the natural resets and add the uses between them, and the total's label
+names the uses, such as "Total, 4 weeks and 1 used reset". The figures read in the week the week control names under
+every position: the share of the account's own window times its tier's 7-day capacity, a model week at its capacity
+factor, over the chosen week's tier's, so a Fable-week reset reads half its 7-day figure. Each week prices at the tier
+the account ran under at that reset, so a week before an upgrade reads its figure at the earlier tier's capacity, and a
 reset the router recorded no tier for at the account's current one, a dash where the cost model holds no capacity for
 the tier a week prices at (a Free plan among them, the card then noting it), and the total a dash where one of its weeks
 reads one. Each week's hover adds the reset's own share of the account's window under the plan that week prices at, such
@@ -593,7 +600,7 @@ warm" switch starts off. The groups by rail parent, with what the expert view ad
 | --- | --- | --- |
 | Pool | Identity, Members, Keys, Models, Guardrails, Auto mode | Auto mode |
 | Routing | Selection, Placement, Pinning | Placement, and Pin sessions under Pinning |
-| Load | Windows, Load shedding, Slow-down, Failover, Overage and plan end | Slow-down, Failover, Burn average (s) under Windows, Preset, Shed cap (%), Shed dwell (s), Warm sessions and Preview under Load shedding, and Overage grace (min), Return to plan, Return dwell (s) and Wind down (min) under Overage and plan end |
+| Load | Windows, Load shedding, Slow-down, Failover, Overage and plan end | Slow-down, Failover, Burn average (s) under Windows, Preset, Shed cap (%), Shed dwell (s), Warm sessions, Fable reservation shedding and Preview under Load shedding, and Overage grace (min), Return to plan, Return dwell (s) and Wind down (min) under Overage and plan end |
 | Caching | Cache TTL, Keepalive | Add a cache marker to a request without one and the per-model overrides, both under Cache TTL |
 | Visibility | Body capture, Cache diagnostics | Cache diagnostics |
 
@@ -630,12 +637,15 @@ own toggle. The expert view adds the preset (Balanced, the default, Fast, Conser
 filling the cap, the average under Windows and the dwell and leaving the switch as it is, Custom opening the three to an
 edit with the hint "Set the cap, the burn average under Windows, and the dwell by hand."), `Shed cap (%)`, from 10 to
 100, with the hint "The most of the member's burn one round removes. The round removes what brings the window under the
-ceiling, up to this.", `Shed dwell (s)` and Warm sessions, and closes on a "Preview" line, the round's dry run as the
-fields stand. `Burn average (s)` sits under Windows and `Migrate when spent` under Failover, which opens on "How long a
-request waits out a throttle on its member, how many requests one member serves at once, and whether a spent window
-moves the session at once." The Preview replays the trigger from the projections the accounts route serves for each
-member and window and from the sessions' served burn, an estimate of what the router reads. It leaves the line of an
-agent that ended out of its round, as the router's walk does, and the Sessions view keeps drawing that line.
+ceiling, up to this.", `Shed dwell (s)` and Warm sessions, then the switch `Fable reservation shedding`, which is off by
+default and can be set under every strategy and with load shedding off, with the hint "On, under the Pace strategy, a
+round also runs on a member whose 7-day room is smaller than its Fable reservation. It marks non-Fable sessions alone,
+up to the shed cap.", and closes on a "Preview" line, the round's dry run as the fields stand. `Burn average (s)` sits
+under Windows and `Migrate when spent` under Failover, which opens on "How long a request waits out a throttle on its
+member, how many requests one member serves at once, and whether a spent window moves the session at once." The Preview
+replays the trigger from the projections the accounts route serves for each member and window and from the sessions'
+served burn, an estimate of what the router reads. It leaves the line of an agent that ended out of its round, as the
+router's walk does, and the Sessions view keeps drawing that line.
 
 With the switch off the Preview opens on `Load shedding is off: no round runs.` and names the projection alone. It reads
 `No member projects over the ceiling on any window: the closest is {label}, {window} {p} {horizon}.` while no member's
@@ -647,9 +657,14 @@ and otherwise `1 member projects over the ceiling: {label}.` or
 runway for the sessions a round would mark, or by `A round there would mark no session:` with the reason it marks none,
 `none is priced.` where the members over the ceiling hold no priced session, `each is its member's last.` where every
 priced session is the last on its member, which a round never marks, `each is warm.` where Warm sessions is never and
-every priced session is warm, or `none burns.` where the round's target is zero. A member whose 5-hour window is under
-the hold is read on its next window in the order, and where its 5-hour projection reads over the ceiling, the line names
-the round the hold took away:
+every priced session is warm, or `none burns.` where the round's target is zero. With `Fable reservation shedding` on,
+under the Pace strategy and with load shedding on, the line adds
+`1 member holds less 7-day room than its Fable reservation: {label}.` or
+`{n} members hold less 7-day room than their Fable reservation: {list}.`, followed by
+`A round there would mark {k} non-Fable sessions ({warm} warm), to move to a sibling with runway.`
+(`1 non-Fable session (1 warm)` for one) or by `A round there would mark no non-Fable session.` Otherwise the line says
+nothing of the reservation. A member whose 5-hour window is under the hold is read on its next window in the order, and
+where its 5-hour projection reads over the ceiling, the line names the round the hold took away:
 `{label}'s 5-hour window is {age} old, under the hold of {hold}, so its round reads the next window.` `{p}` is a whole
 percent with a space before the sign (`99 %`), `{horizon}` `at` a clock time on the 5-hour window and `in` a span on a
 weekly one (`in 5h`), `{window}` the window's label (`5h`, `7d` or `7-day Fable`), `{excess}` a percent an hour with one
@@ -1047,10 +1062,11 @@ the key lifetime a link from the Sessions view carries ("under the key laptop@3"
 leaves when the session changes. The session view narrows to one agent where the address carries `agent_id`, which the
 Sessions view's agent menu writes, and the agent applies under a session alone and leaves with the session as the key
 lifetime does. "Group by" offers Account, Classifier, Client, Key, Effort, Kind, Model, Pool, Request class, Speed, User
-agent or "Session (Burn only)", the last the Burn section's own grouping. While it reads User agent, "Groups (N)" opens
-the "User agent groups" box with one pattern per line, N the patterns it holds, where each pattern names a group and
-every other agent groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user agent
-grouping reads the agent's first product token, `claude-cli/2.1.310` for `claude-cli/2.1.310 (external, cli)`. The
+agent or "Session (Burn only)", the last the Burn section's own grouping. The grouping splits each tab's group table,
+the Cost by chart and the Burn cards, and every other chart draws the groups' total. While it reads User agent, "Groups
+(N)" opens the "User agent groups" box with one pattern per line, N the patterns it holds, where each pattern names a
+group and every other agent groups under `other` (`claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups). The user
+agent grouping reads the agent's first product token, `claude-cli/2.1.310` for `claude-cli/2.1.310 (external, cli)`. The
 classifier grouping lists the requests with no classifier call under `none`, as the Requests view's Classifier filter
 names them.
 
@@ -1062,7 +1078,8 @@ under either direction a group whose subscription requests priced nothing files 
 billed requests alone last under the two ratios. Under a dollar position they order by the dollars. A tab switch keeps a
 key the new tab's table has and reads Name otherwise, and the address keeps the key for the next tab whose table has it.
 On Burn, Cache warming and Accounts, and on the Cost tab of a session view, which draws no Cost table, the control
-stands disabled in its slot, titled "This tab's tables keep their own order". The tables over a fixed dimension (Cache
+stands disabled in its slot, titled "This tab's tables keep their own order". On Accounts "Group by" stands disabled in
+its slot too, titled "The Accounts tab draws one line and one row per account". The tables over a fixed dimension (Cache
 by model, Cache warming by pool, Accounts in range) and every chart and card keep their own order.
 
 Auto reload is at 5 s when the view opens, set on the split Refresh button's dropdown as on the Requests view and kept
@@ -1116,45 +1133,49 @@ router refused before any account was asked is counted in its group's Refused co
 a guardrail's block on the Guardrails card's Blocked and "Blocked bytes" as well, and never in the request count, the
 outcome columns, the error rate, the cache figures or the latency. A request whose client left before its answer ended
 counts among its group's requests, and the head's errors, the Error rate column and Errors by code leave it out. The
-bars of Errors by code carry the upstream's own error types beside the router's words.
+bars of Errors by code carry the upstream's own error types beside the router's words. Four of Traffic's cards follow
+fewer controls than the bar holds: Refusals by category follows every control but the Session filter, Migration rewrites
+with its moves follows the range and the Account filter, "Held by the slow-down" the range and the Account and Pool
+filters, and Guardrails the range alone. Each names the controls it ignores under its title while one of them is set.
 
 Burn follows the page's grouping, and "Session (Burn only)" groups it by session while every other section keeps the key
-grouping, since no rollup carries a session. Of the filters, the Accounts filter and the user agent groups alone apply
-to it, which its head says while another filter is set. The card "Plan per hour" ("The subscription traffic per hour as
-a share of the chosen week") draws one line per group, named as the breakdown names it, the requests with no classifier
-call listed as `none` under the classifier grouping, each the group's subscription traffic per hour in the chosen week,
-the legend's figure in full on hover and its highest hour on the entry's hover, led by the whole session id under the
-session grouping. Beside it the card "5-hour per hour" ("The subscription traffic per hour as a share of the chosen
-tier's 5-hour window, the peak band's factor applied by the hour") draws the same lines from the burn route's 5-hour
-figure under every grouping and bucket size, scaled to the chosen tier's 5-hour window by the capacities with no band
-of its own, and reads unpriced where the cost model holds no 5-hour capacity for the chosen tier. The card "Fable week
-per hour" ("The subscription traffic per hour as a share of the chosen tier's Fable week") draws the subscription
-traffic of the models that draw the Fable week, and of those alone, from the burn route's `fable_equivalent` scaled to
-the chosen tier's Fable week. A busy bucket with no such traffic reads zero, a group whose traffic over the whole range
-ran on no such model draws no line and no legend entry, and the card reads unpriced where the cost model holds no Fable
-week for the chosen tier. The two cards' tooltips carry no account's hint. Under the Ultra week the 5-hour card's note
-reads "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window." A bucket the
-cost model could not price stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a
-model without a weight in the cost model prices no share and draws no point", and an idle bucket reads zero. The three
-plan cards read the cost revision in force at each bucket, so a bucket before a revision's instant keeps the figures of
-the revision before it, and a bucket whose revision sizes no window for the chosen tier draws a gap. Where one account
-is named, under the account grouping or with one account in the Accounts filter, a bucket's tooltip adds the hint the
-Requests view's Cost column describes under the account's line, with no band word, since a bucket holds no one request's
-completion. Under that grouping or filter a subscription account charts as a plan line where the router sizes its tier
-or the range holds a priced bucket of it, so an account whose range ran on unpriced models alone keeps its line with its
-gaps, and an account the router prices no tier for (a free plan, no tier on file or one the cost model does not hold)
-whose range holds no priced bucket reads "tier unknown", while a usage-based seat draws no line on the card. The three
-plan cards' notes carry a "Cost reference" link that opens the dialog on Tiers and peak band. Under the Unit setting
-"Plan per hour" charts the plan side, the chosen week's share per hour under Native and each group's `plan_usd` per hour
-under All in dollars and Dollar equivalent, where its subtitle reads "The subscription traffic per hour in dollars at
-the API price list", and "Spend per minute" charts the billed side, `usd` per minute, under Native, All in dollars and
-Billed dollars, a usage-based seat's whole spend and a subscription account's fast-mode and overage answers among it. A
-card whose side has no figure in a position, "Plan per hour" under Billed dollars and "Spend per minute" under Dollar
-equivalent, keeps its place in the grid and draws one sentence in place of its chart, so the two cards together read
-`usd` plus `plan_usd` under All in dollars, `usd` under Billed dollars and `plan_usd` under Dollar equivalent. The four
-cards sit two to a row where the grid fits two columns or more. The section closes on Member budgets, Pool, Account,
-Spent, Budget and Period ends, one row per budget a member carries, a member at its budget marked and one the ledger has
-not reported on reading "not reported".
+grouping, since no rollup carries a session. Of the filters, the Account, Key and Pool filters and the user agent groups
+apply to it, and its head names the Model, Client, User agent and Session filters as ignored while one of them is set.
+Burn counts the probes whatever Include probes says, and Member budgets follows neither the range nor a filter. The card
+"Plan per hour" ("The subscription traffic per hour as a share of the chosen week") draws one line per group, named as
+the breakdown names it, the requests with no classifier call listed as `none` under the classifier grouping, each the
+group's subscription traffic per hour in the chosen week, the legend's figure in full on hover and its highest hour on
+the entry's hover, led by the whole session id under the session grouping. Beside it the card "5-hour per hour" ("The
+subscription traffic per hour as a share of the chosen tier's 5-hour window, the peak band's factor applied by the
+hour") draws the same lines from the burn route's 5-hour figure under every grouping and bucket size, scaled to the
+chosen tier's 5-hour window by the capacities with no band of its own, and reads unpriced where the cost model holds no
+5-hour capacity for the chosen tier. The card "Fable week per hour" ("The subscription traffic per hour as a share of
+the chosen tier's Fable week") draws the subscription traffic of the models that draw the Fable week, and of those
+alone, from the burn route's `fable_equivalent` scaled to the chosen tier's Fable week. A busy bucket with no such
+traffic reads zero, a group whose traffic over the whole range ran on no such model draws no line and no legend entry,
+and the card reads unpriced where the cost model holds no Fable week for the chosen tier. The two cards' tooltips carry
+no account's hint. Under the Ultra week the 5-hour card's note reads "The Ultra tier's 5-hour capacity row is assumed,
+and an approved account carries no 5-hour window." A bucket the cost model could not price stays a gap, under a "model
+unlisted" entry with the hover "A bucket whose traffic ran on a model without a weight in the cost model prices no share
+and draws no point", and an idle bucket reads zero. The three plan cards read the cost revision in force at each bucket,
+so a bucket before a revision's instant keeps the figures of the revision before it, and a bucket whose revision sizes
+no window for the chosen tier draws a gap. Where one account is named, under the account grouping or with one account in
+the Accounts filter, a bucket's tooltip adds the hint the Requests view's Cost column describes under the account's
+line, with no band word, since a bucket holds no one request's completion. Under that grouping or filter a subscription
+account charts as a plan line where the router sizes its tier or the range holds a priced bucket of it, so an account
+whose range ran on unpriced models alone keeps its line with its gaps, and an account the router prices no tier for (a
+free plan, no tier on file or one the cost model does not hold) whose range holds no priced bucket reads "tier unknown",
+while a usage-based seat draws no line on the card. The three plan cards' notes carry a "Cost reference" link that opens
+the dialog on Tiers and peak band. Under the Unit setting "Plan per hour" charts the plan side, the chosen week's share
+per hour under Native and each group's `plan_usd` per hour under All in dollars and Dollar equivalent, where its
+subtitle reads "The subscription traffic per hour in dollars at the API price list", and "Spend per minute" charts the
+billed side, `usd` per minute, under Native, All in dollars and Billed dollars, a usage-based seat's whole spend and a
+subscription account's fast-mode and overage answers among it. A card whose side has no figure in a position, "Plan per
+hour" under Billed dollars and "Spend per minute" under Dollar equivalent, keeps its place in the grid and draws one
+sentence in place of its chart, so the two cards together read `usd` plus `plan_usd` under All in dollars, `usd` under
+Billed dollars and `plan_usd` under Dollar equivalent. The four cards sit two to a row where the grid fits two columns
+or more. The section closes on Member budgets, Pool, Account, Spent, Budget and Period ends, one row per budget a member
+carries, a member at its budget marked and one the ledger has not reported on reading "not reported".
 
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-light.png#only-light)
 ![The Analytics view: the Burn tab's plan chart](assets/analytics-burn-dark.png#only-dark)
@@ -1164,7 +1185,7 @@ Time to first content token, Total duration and Output tokens per second, each w
 p99) and a Distribution card, then Latency by the chosen group with TTFB p50, TTFB p99, TTFT p99, Duration p99 and
 tok/s p50. The histograms hold 84 buckets that reach about 61 minutes. A request counts toward Output tokens per second
 only where at least 500 ms pass from its first content token to its end, and the three times leave out the time the
-slow-down held the request.
+slow-down held the request. Latency follows every filter of the bar.
 
 Cache reads `{pct} hit ratio, {n} expired between turns, {pct} of input read from cache` and draws Tokens (Uncached
 input, Cache read, Cache write 5m, Cache write 1h, Thinking, Output), Hit ratio and cached share, Write cost vs read
@@ -1183,7 +1204,8 @@ one. In the hours the router stored before it filed these two words such a reque
 hours' bars add up to less than their requests. A bar draws apart the requests under its reason that read 90 % or more
 of their prompt from the cache, and the per-group table shows the same split. Every count in Misses by reason but the
 expired column links to the Requests view on those requests with the page's filters carried over, and a count the
-Requests view cannot list exactly stays plain with the reason on hover.
+Requests view cannot list exactly stays plain with the reason on hover. Cache follows every filter of the bar, and
+Placements by rung the Account, Key, Model, Pool, Client and User agent filters.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen week
 over the billed requests' dollars, a side with no requests left out, and Cost per request and Cost per 1k output tokens
@@ -1208,7 +1230,7 @@ read, Cache write, Output). Every position draws Fast mode spend. A billed keepa
 and the billed dollars, while its request and its tokens follow the Include probes toggle, and under a dollar position
 with the toggle off the tab's head says so: "A billed probe's dollars count whatever the Include probes toggle says".
 The prices behind the dollars are on [Pricing](statistics.md#pricing), and the cost model behind the subscription
-figures on [Plan meter](statistics.md#plan-meter).
+figures on [Plan meter](statistics.md#plan-meter). Cost follows every filter of the bar.
 
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-light.png#only-light)
 ![The Analytics view: the Cache warming tab](assets/analytics-cache-warming-dark.png#only-dark)
@@ -1230,7 +1252,9 @@ dollars on hover, and the billed dollars alone under Native where the range hold
 figures follow the Client and User agent filters and groupings from the hours folded by this build on. In an hour folded
 before it each keepalive row stands under no user agent, and a probe's own rows under no client, so the User agent
 filter drops the tab's figures there and the Client filter drops all but the kept-warm figures. What a probe is and when
-it counts as wasted is on [Keepalive](keepalive.md).
+it counts as wasted is on [Keepalive](keepalive.md). Cache warming counts the probes whatever Include probes says, which
+its head states, on Probes by outcome and the by-pool table's probe columns as on its tiles. That toggle is the one
+control its figures ignore.
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three
 windows the router reads, 5-hour, 7-day and 7-day Fable. Pace reads "The lead over pace per bucket: above zero ahead,
@@ -1238,17 +1262,21 @@ below behind, from the quota samples, before the router's burn projection", each
 the remaining share over the hours from the sample's instant to the earlier of the window's reset and the account's end.
 The table Accounts in range lists Peak 5h, Peak 7d, Peak Fable, Time in overage, Time in cooldown, Pins created,
 Migrated in and Migrated out. Time in cooldown counts a cleared cooldown up to its clear, and the clear leaves no time
-behind. It counts an open cooldown up to the moment of the read. The section keeps reading the rollups under a session
-filter, since they carry no session, and its subtitle says so. The card "Unused allowance by account" follows Accounts
-in range, one row per subscription account with a weekly reset in the last four weeks under the Accounts filter whatever
-the range, with Resets, which reads the used limit resets apart ("4, 1 used") with a hover that names each use, each
-weekly window's last and four weeks' figures in the chosen week (each week priced at the tier the account ran under at
-that reset, as the Accounts detail's "Allowance left at reset" prices it), a used reset that cleared its window counting
-among the resets as its `claim` row, sorted most left first on the four weeks' 7-day figure, an unpriced account last, a
-row whose latest reset is a term's end reading "term ended {date}" under its account, and two fleet figures over the
-rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts' figures added with the unpriced accounts
-named. The card waits on the cost model, so a failed settings read draws its error state in place of the rows and the
-figures.
+behind. It counts an open cooldown up to the moment of the read. The section reads the account rollups, which carry the
+account alone: it follows the range and the Account filter, and its cards name the Key, Pool, Model, Client, User agent
+and Session filters and Include probes as ignored while one of them is set. The card "Unused allowance by account"
+follows Accounts in range, one row per subscription account with a weekly reset in the range under the Accounts filter,
+with Resets, the count of the range's resets, which reads the used limit resets apart ("4, 1 used") with a hover that
+names each use (`{window} cleared by a used reset, seen {instant}, {share} left`), and each weekly window's last figure
+and its sum over the range in the chosen week, "last" being the newest reset at or before the range's end (each week
+priced at the tier the account ran under at that reset, as the Accounts detail's "Allowance left at reset" prices it), a
+used reset that cleared its window counting among the resets as its `claim` row, sorted most left first on the range's
+7-day figure, an unpriced account last, a row whose latest reset is a term's end reading "term ended {date}" under its
+account, and two fleet figures over the rows, "7-day, fleet total" and "Fable, fleet total", the priced accounts'
+figures added with the unpriced accounts named. The card reads the resets from a week before the range's start, 400 days
+before the range's end at the most, so a range shorter than a week still shows an account's newest reset, with a note
+that the range holds none, and the Accounts detail's "Allowance left at reset" keeps its four weeks. The card waits on
+the cost model, so a failed settings read draws its error state in place of the rows and the figures.
 
 ## Sessions
 
@@ -1616,9 +1644,12 @@ where it differs from the burn the window sees, `demand 12.86 %/h over burn 6.43
 slow-down factor. The Pace score stands under a header naming the window it read, `Spare rate, 7-day per hour` or `Spare
 rate, 7-day Fable per hour` (`Pace` where no subscription candidate names one, and `Pace, 7-day left per hour` on a
 version 1 record), each cell's hover reading `{pct} of the 7-day window left over {n} h to its reset at {time}, less
-{burn} of burn: {rate}.` (or `to its subscription's end at {time}`) followed by `Inside its tier, the highest spare rate
-wins.` The pick line names the accounts whose scores tied, the runway that narrowed them where it did, and whether the
-draw chose among more than one. Verdict carries the one chip that decided it (`429 on 5h until 14:55`,
+{burn} of burn: {rate}.` (or `to its subscription's end at {time}`), or `{pct} of the 7-day window left, less {share}
+reserved for Fable, over {n} h to its reset at {time}, less {burn} of burn: {rate}.` where the candidate carries a
+reservation, followed by `Inside its tier, the highest spare rate wins.` The pick line names the accounts whose scores
+tied, the runway that narrowed them where it did, and whether the draw chose among more than one. On a request of a
+model without a week of its own, the line carries a "Fable reservation" chip per first-tier member with a whole percent,
+such as `{account}: Fable reservation 12%`. Verdict carries the one chip that decided it (`429 on 5h until 14:55`,
 `model 404 until 15:24 for claude-opus-5`, `budget $1.10 of $5.00`, `5h spent until 15:42`,
 `spend cap reached until 00:00`), whose hover says why the member was passed over, on a spent member with the reset it
 waits for (`its 5h window spent until 15:42`, `at its spend cap until 00:00`), and beside it a badge for a destination
@@ -1664,28 +1695,29 @@ panel reads Started by, Trigger (`5h projection 104% at 18:20 over the wall` on 
 against the wall at its reset, `7d projection 102% in 5 h over the wall` on a weekly window whose reset is more than
 five hours away, which it tests against the pool's weekly ceiling, the wall at the default, `7d projection 96% in 5 h
 over the ceiling 95%` on the same window of a pool that holds a weekly reserve, or `5h stretch 42 min over the threshold
-30 min` for a round the stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the projection`
-or `the slow-down`), Excess (`9.5 %/h`), Cap with the target and the burn removed, Mark share (`10%`, the share of the
-burn left to shed that a pin's own burn must cover before the round marks it), Unit, Burn average, Warm sessions, the
-Pins table (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the share of the chosen week the pin's rewrite takes,
-`0.111% Ultra week`, with `compared on the 7-day window` on hover naming the window the pick compared on, or on an
-earlier build's round, which names no unit, the figure as stored under its old label, Destination, Mark), Skipped (one
-chip per pin, its session and its reason, `off window` for a pin whose model does not draw the window that fired,
-`ended` for a pin whose agent ended before the round read it, `no burn` for a pin with no priced burn on the fired
-window, and `sliver` for a pin the round left warm under its Mark share), Planned destinations, Outcome (`marked 2`,
-`nothing to mark: no runway`, `nothing to mark: sliver`, or, for a round that walked no pin, the word of the pin it left
-out, such as `nothing to mark: off window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads
-the pin, Reason (`healed: the 5h projection read 91% under the wall` where the heal's horizon was the window's reset or
-the account's end and at the five-hour bound on a window whose ceiling is the wall, and `under the ceiling` at the
-five-hour bound on a window whose ceiling stands under it, `healed: the stretch read 24 min under the threshold 30 min`
-for a mark the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation
-expired panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share
-left the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the
-threshold after `of`), Demand (`12.0 %/h`), Reset and the Effect `requests of the account's sessions wait their cycle
-times the slow-down up to the hold`, and a slow-down ended panel Lasted, Slowest (`0.35x`), Held (the waits of the
-span's holds summed, with the count of the holds beside it, labeled "holds") and the Effect `requests of the account's
-sessions pass unheld again`. Held can pass Lasted, since the span's holds can overlap. The kinds and what each row
-records:
+30 min` for a round the stretch fired, followed by Demand, `12.0 %/h to the reset at 18:20`), Fired by (`the Fable
+reservation`, `the projection` or `the slow-down`), "Fable reservation" (the reserved share as a whole percent, on a
+round the reservation fired), Excess (`9.5 %/h`), Cap with the target and the burn removed, Mark share (`10%`, the share
+of the burn left to shed that a pin's own burn must cover before the round marks it), Unit, Burn average, Warm sessions,
+the Pins table (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the share of the chosen week the pin's rewrite
+takes, `0.111% Ultra week`, with `compared on the 7-day window` on hover naming the window the pick compared on, or on
+an earlier build's round, which names no unit, the figure as stored under its old label, Destination, Mark), Skipped
+(one chip per pin, its session and its reason, `off window` for a pin whose model does not draw the window that fired,
+`Fable model` for a Fable pin of a round the reservation fired, which the round leaves where it is, `ended` for a pin
+whose agent ended before the round read it, `no burn` for a pin with no priced burn on the fired window, and `sliver`
+for a pin the round left warm under its Mark share), Planned destinations, Outcome (`marked 2`, `nothing to mark: no
+runway`, `nothing to mark: sliver`, or, for a round that walked no pin, the word of the pin it left out, such as
+`nothing to mark: off window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin,
+Reason (`healed: the 5h projection read 91% under the wall` where the heal's horizon was the window's reset or the
+account's end and at the five-hour bound on a window whose ceiling is the wall, and `under the ceiling` at the five-hour
+bound on a window whose ceiling stands under it, `healed: the stretch read 24 min under the threshold 30 min` for a mark
+the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation expired
+panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left
+the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold
+after `of`), Demand (`12.0 %/h`), Reset and the Effect `requests of the account's sessions wait their cycle times the
+slow-down up to the hold`, and a slow-down ended panel Lasted, Slowest (`0.35x`), Held (the waits of the span's holds
+summed, with the count of the holds beside it, labeled "holds") and the Effect `requests of the account's sessions pass
+unheld again`. Held can pass Lasted, since the span's holds can overlap. The kinds and what each row records:
 
 | Event | What it records |
 | --- | --- |
