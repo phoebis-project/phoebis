@@ -1072,13 +1072,12 @@ pub(crate) async fn list(
     };
     let shares = ShareContext::read(&state);
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    let reported = reported_samples(&state).await;
-    match state
+    let read = state
         .ledger
         .db()
-        .read(move |c| list_request_page(c, &filter, &live, order, dir, cursor.as_ref(), limit))
-        .await
-    {
+        .read(move |c| list_request_page(c, &filter, &live, order, dir, cursor.as_ref(), limit));
+    let (reported, read) = tokio::join!(reported_samples(&state), read);
+    match read {
         Ok(page) => Json(RequestList {
             requests: page
                 .rows
@@ -1108,19 +1107,15 @@ pub(crate) async fn list(
 )]
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let shares = ShareContext::read(&state);
-    let reported = reported_samples(&state).await;
     let now = (state.clock)();
-    let found = state
-        .ledger
-        .db()
-        .read(move |c| {
-            let Some((r, a)) = request_by_id(c, &id)? else {
-                return Ok(None);
-            };
-            let events = request_events(c, &r, now)?;
-            Ok(Some((r, a, events)))
-        })
-        .await;
+    let found = state.ledger.db().read(move |c| {
+        let Some((r, a)) = request_by_id(c, &id)? else {
+            return Ok(None);
+        };
+        let events = request_events(c, &r, now)?;
+        Ok(Some((r, a, events)))
+    });
+    let (reported, found) = tokio::join!(reported_samples(&state), found);
     match found {
         Ok(Some((r, a, events))) => Json(RequestDetail {
             request: bounded(request_summary(&r, &a, &shares), &reported),

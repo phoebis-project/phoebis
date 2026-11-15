@@ -327,7 +327,8 @@ pub(crate) async fn series(
         Err(r) => return r,
     };
     let bucket = bucket_seconds(from, to);
-    let mut points = match series_paged(
+    let prices = state.pricing.revisions();
+    let read = series_paged(
         state.ledger.db(),
         &filter,
         &live,
@@ -335,16 +336,15 @@ pub(crate) async fn series(
         to,
         bucket,
         group_by,
-        &state.pricing.revisions(),
+        &prices,
         &state.tables,
         now,
-    )
-    .await
-    {
+    );
+    let (reported, read) = tokio::join!(reported_samples(&state), read);
+    let mut points = match read {
         Ok(p) => p,
         Err(e) => return ledger_failure(e),
     };
-    let reported = reported_samples(&state).await;
     for point in &mut points {
         bound_shares(&mut point.groups, group_by, &filter.accounts, &reported);
     }
@@ -393,28 +393,24 @@ pub(crate) async fn breakdown(
         Ok(x) => x,
         Err(r) => return r,
     };
-    let mut rows = match breakdown_paged(
+    let prices = state.pricing.revisions();
+    let read = breakdown_paged(
         state.ledger.db(),
         &filter,
         &live,
         from,
         to,
         group_by,
-        &state.pricing.revisions(),
+        &prices,
         &state.tables,
         now,
-    )
-    .await
-    {
+    );
+    let (reported, read) = tokio::join!(reported_samples(&state), read);
+    let mut rows = match read {
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),
     };
-    bound_shares(
-        &mut rows,
-        group_by,
-        &filter.accounts,
-        &reported_samples(&state).await,
-    );
+    bound_shares(&mut rows, group_by, &filter.accounts, &reported);
     Json(Breakdown {
         from,
         to,
@@ -1019,35 +1015,37 @@ pub(crate) async fn burn(
         ..Default::default()
     };
     let prices = state.pricing.revisions();
-    let read = match by {
-        None => {
-            state
-                .ledger
-                .db()
-                .read(move |c| session_burn_series(c, &tables, &prices, &filter, &live, now))
+    let read = async {
+        match by {
+            None => {
+                state
+                    .ledger
+                    .db()
+                    .read(move |c| session_burn_series(c, &tables, &prices, &filter, &live, now))
+                    .await
+            }
+            // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
+            // rather than the range read again per group under the reader lock.
+            Some(by) => {
+                burn_groups_paged(
+                    state.ledger.db(),
+                    &tables,
+                    &prices,
+                    &filter,
+                    by,
+                    &live,
+                    &agent_groups,
+                    now,
+                )
                 .await
-        }
-        // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
-        // rather than the range read again per group under the reader lock.
-        Some(by) => {
-            burn_groups_paged(
-                state.ledger.db(),
-                &tables,
-                &prices,
-                &filter,
-                by,
-                &live,
-                &agent_groups,
-                now,
-            )
-            .await
+            }
         }
     };
+    let (reported, read) = tokio::join!(reported_samples(&state), read);
     let series = match read {
         Ok(s) => s,
         Err(e) => return ledger_failure(e),
     };
-    let reported = reported_samples(&state).await;
     let points = series
         .into_iter()
         .flat_map(|(group, recorded, points)| {
