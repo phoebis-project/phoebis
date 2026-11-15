@@ -2004,6 +2004,7 @@ async fn a_restored_recipes_settlement_and_skip_key_the_client_and_the_user_agen
             *value = "claude-cli/2.1.301 (external, desk)".into();
         }
     }
+    r.pin("main", "claude-sonnet-4-5", "a").await;
     r.engine.observe(BusEvent::RequestObserved(observed));
     r.engine.observe(r.selected("first", "a"));
     let written = Usage {

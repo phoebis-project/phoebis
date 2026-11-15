@@ -667,36 +667,89 @@ pub enum Exhaustion {
     FastCredits {
         reason: String,
     },
-    /// A probe whose pinned member cannot serve it for an obstacle no wait clears, answered as the untimed
-    /// exhaustion and placed nowhere, so a probe never moves the session's pin. The obstacle reaches the keepalive,
-    /// which holds the agent under it.
+    /// A probe that finds no live pin, or whose pinned member cannot serve it, answered on that standing and placed
+    /// nowhere, so a probe never moves the session's pin and creates none. A wait answers 429 and every other standing
+    /// 503. The obstacle reaches the keepalive, which holds the agent under it.
     Pinned {
         obstacle: PinnedObstacle,
     },
 }
 
-/// The pinned member's standing a probe's untimed answer names: `attempted` for a member this probe already tried
-/// while a sibling could take it, `budget_unknown` for a budgeted member whose spend the degraded ledger leaves
-/// unknown, `operator` for an account the operator paused, and `subscription_ended` for one past its saved end. A
-/// probe warms the pin it was sent for, and no wait clears any of these, so the selector answers them untimed and
-/// places the probe nowhere rather than on a sibling, which would move the session's pin.
+/// The standing a probe's pinned answer names. A probe warms the pin it was sent for, and a placement on a sibling
+/// would move the session's pin onto a member no request asked for, so the selector answers the standing instead.
+/// No wait clears `attempted` (a member this probe already tried while a sibling could take it), `budget_unknown` (a
+/// budgeted member whose spend the degraded ledger leaves unknown), `operator` (an account the operator paused, or one
+/// deleted or in a state other than ready that the probe did not try while a sibling could take it),
+/// `subscription_ended` (one past its saved end) or `no_pin`, so each answers untimed. `cooldown`, `credits`, `overage`
+/// and `spent` name a wait while a sibling could take the probe, dated where the obstacle names its end.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PinnedObstacle {
     Attempted,
     BudgetUnknown,
+    /// The pinned member cools until `until` while a sibling could take the probe.
+    Cooldown {
+        until: i64,
+    },
+    /// The pinned member's usage credits are out for a fast probe.
+    Credits,
+    /// The probe's session holds no live pin, so it has no entry to renew.
+    NoPin,
     Operator,
+    /// The pinned member is in overage until `until` under a pool that refuses it.
+    Overage {
+        until: i64,
+    },
+    /// The pinned member is a usage-based seat at its spend cap until `until`.
+    Spent {
+        until: i64,
+    },
     SubscriptionEnded,
 }
 
 impl PinnedObstacle {
-    /// The word the exhausted decision's `obstacle` fact records, the one `Obstacle::name` gives the selector's own
-    /// obstacle.
+    /// The word the exhausted decision's `obstacle` fact records: the one `Obstacle::name` gives the selector's own
+    /// obstacle, or `no_pin`.
     pub fn as_str(self) -> &'static str {
         match self {
             PinnedObstacle::Attempted => "attempted",
             PinnedObstacle::BudgetUnknown => "budget_unknown",
+            PinnedObstacle::Cooldown { .. } => "cooldown",
+            PinnedObstacle::Credits => "credits",
+            PinnedObstacle::NoPin => "no_pin",
             PinnedObstacle::Operator => "operator",
+            PinnedObstacle::Overage { .. } => "overage",
+            PinnedObstacle::Spent { .. } => "spent",
             PinnedObstacle::SubscriptionEnded => "subscription_ended",
+        }
+    }
+
+    /// The instant a wait clears the obstacle at, for the three that name one.
+    pub const fn until(self) -> Option<i64> {
+        match self {
+            PinnedObstacle::Cooldown { until }
+            | PinnedObstacle::Overage { until }
+            | PinnedObstacle::Spent { until } => Some(until),
+            PinnedObstacle::Attempted
+            | PinnedObstacle::BudgetUnknown
+            | PinnedObstacle::Credits
+            | PinnedObstacle::NoPin
+            | PinnedObstacle::Operator
+            | PinnedObstacle::SubscriptionEnded => None,
+        }
+    }
+
+    /// Whether a wait clears the obstacle: the three dated ones and `Credits`.
+    pub const fn waits(self) -> bool {
+        match self {
+            PinnedObstacle::Cooldown { .. }
+            | PinnedObstacle::Credits
+            | PinnedObstacle::Overage { .. }
+            | PinnedObstacle::Spent { .. } => true,
+            PinnedObstacle::Attempted
+            | PinnedObstacle::BudgetUnknown
+            | PinnedObstacle::NoPin
+            | PinnedObstacle::Operator
+            | PinnedObstacle::SubscriptionEnded => false,
         }
     }
 }
@@ -709,6 +762,7 @@ pub const fn exhaustion_status(exhaustion: &Exhaustion, at_cap: bool) -> u16 {
     match exhaustion {
         Exhaustion::Untimed if at_cap => 429,
         Exhaustion::ModelRejected => 404,
+        Exhaustion::Pinned { obstacle } if obstacle.waits() => 429,
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => 503,
         Exhaustion::Timed { .. } | Exhaustion::FastLane { .. } | Exhaustion::FastCredits { .. } => {
             429
@@ -1979,66 +2033,65 @@ fn run(
         };
     }
 
-    // A probe warms the pin it was sent for. With that member at its spend budget, disabled by the operator, past
-    // its subscription's end, or already tried by this probe there is nothing to warm, and a placement on a
-    // sibling would move the session's pin onto a member no request asked for, so the probe answers the obstacle
-    // and moves nothing; the keepalive reads the obstacle's name off the answer.
+    // A probe warms the pin it was sent for, so it never creates a pin or moves one onto a member no request asked
+    // for: a probe that finds no live pin, or a pinned member that cannot serve while a sibling could take it, answers
+    // that standing and places nothing. The keepalive reads the obstacle's name off the answer.
     if request.probe {
+        let Some((current, _)) = pin.as_ref() else {
+            let obstacle = PinnedObstacle::NoPin;
+            rec.step(
+                "probe",
+                "answered",
+                vec![Fact::text("obstacle", obstacle.as_str())],
+            );
+            let exhaustion = Exhaustion::Pinned { obstacle };
+            return (SelectResult::Exhausted(exhaustion), writes);
+        };
         let mut facts = Vec::new();
-        if let Some((current, _)) = pin.as_ref() {
-            let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
-            let tried = request.attempted.contains(&current.account_id);
-            if let Some((_, o)) = pinned {
-                facts.push(Fact::text("obstacle", o.name()));
-            }
-            facts.push(Fact::bool("tried", tried));
-            let answered = |rec: &mut Recorder, facts: Vec<Fact>, exhaustion: Exhaustion| {
-                rec.step("probe", "answered", facts);
-                SelectResult::Exhausted(exhaustion)
-            };
-            // Every obstacle is named, so one added later fails to build here until it is given its answer to a
-            // probe.
-            let standing = match pinned.map(|(_, o)| o) {
-                // The window names the obstacle for the relay, which renders it on the wire as the overage claim.
-                Some(Obstacle::Budget { until, .. }) => {
-                    let exhaustion = Exhaustion::Timed {
-                        deadline: *until,
-                        window: BUDGET_WINDOW.into(),
-                    };
-                    return (answered(rec, facts, exhaustion), writes);
-                }
-                // A probe warms the pin it was sent for. With the member's spend unknown nothing is placed and
-                // nothing moves, and no deadline dates the answer.
-                Some(Obstacle::BudgetUnknown) => Some(PinnedObstacle::BudgetUnknown),
-                // An attempt of the probe's own hides nothing when no sibling could take it: no pin can move,
-                // and the pool's exhaustion (a cooldown's deadline among it) is the truer answer.
-                Some(Obstacle::Attempted) if eligible.is_empty() => None,
-                // A member this probe tried whose state moved since, as when the attempt's own mark reached the
-                // snapshot before this selection, is still the member the probe tried: with a sibling free, a
-                // placement there would move the pin all the same.
-                Some(Obstacle::Unready) if tried && !eligible.is_empty() => {
-                    Some(PinnedObstacle::Attempted)
-                }
-                // A deleted account and a state other than ready keep the answer they get under their own reason.
-                // Of the operator's obstacles only the pause holds the pin.
-                Some(Obstacle::Deleted | Obstacle::Unready) => None,
-                // No wait clears these, so they answer untimed. The next real request moves the pin if it must.
-                Some(Obstacle::Attempted) => Some(PinnedObstacle::Attempted),
-                Some(Obstacle::Ended) => Some(PinnedObstacle::SubscriptionEnded),
-                Some(Obstacle::Paused) => Some(PinnedObstacle::Operator),
-                // The pool's own answer below covers these, dated where a wait clears them.
-                Some(
-                    Obstacle::Cooldown { .. }
-                    | Obstacle::Credits { .. }
-                    | Obstacle::Overage { .. }
-                    | Obstacle::Spent { .. },
-                )
-                | None => None,
-            };
-            if let Some(obstacle) = standing {
-                let exhaustion = Exhaustion::Pinned { obstacle };
+        let pinned = obstacles.iter().find(|(id, _)| id == &current.account_id);
+        let tried = request.attempted.contains(&current.account_id);
+        if let Some((_, o)) = pinned {
+            facts.push(Fact::text("obstacle", o.name()));
+        }
+        facts.push(Fact::bool("tried", tried));
+        let answered = |rec: &mut Recorder, facts: Vec<Fact>, exhaustion: Exhaustion| {
+            rec.step("probe", "answered", facts);
+            SelectResult::Exhausted(exhaustion)
+        };
+        // Every obstacle is named, so one added later fails to build here until it is given its answer to a probe.
+        let standing = match pinned.map(|(_, o)| o) {
+            // The window names the obstacle for the relay, which renders it on the wire as the overage claim.
+            Some(Obstacle::Budget { until, .. }) => {
+                let exhaustion = Exhaustion::Timed {
+                    deadline: *until,
+                    window: BUDGET_WINDOW.into(),
+                };
                 return (answered(rec, facts, exhaustion), writes);
             }
+            // No wait clears these, so they answer untimed whatever the siblings hold, and the next real request
+            // moves the pin if it must. With the member's spend unknown no deadline dates the answer.
+            Some(Obstacle::BudgetUnknown) => Some(PinnedObstacle::BudgetUnknown),
+            Some(Obstacle::Ended) => Some(PinnedObstacle::SubscriptionEnded),
+            Some(Obstacle::Paused) => Some(PinnedObstacle::Operator),
+            // With no sibling to take the probe no pin could move, so the pool's own exhaustion is the truer answer,
+            // a cooldown's deadline among it.
+            Some(_) if eligible.is_empty() => None,
+            // A member this probe tried whose state moved since, as when the attempt's own mark reached the snapshot
+            // before this selection, is still the member the probe tried.
+            Some(Obstacle::Unready) if tried => Some(PinnedObstacle::Attempted),
+            Some(Obstacle::Attempted) => Some(PinnedObstacle::Attempted),
+            Some(Obstacle::Cooldown { until, .. }) => {
+                Some(PinnedObstacle::Cooldown { until: *until })
+            }
+            Some(Obstacle::Credits { .. }) => Some(PinnedObstacle::Credits),
+            Some(Obstacle::Deleted | Obstacle::Unready) => Some(PinnedObstacle::Operator),
+            Some(Obstacle::Overage { until }) => Some(PinnedObstacle::Overage { until: *until }),
+            Some(Obstacle::Spent { until, .. }) => Some(PinnedObstacle::Spent { until: *until }),
+            None => None,
+        };
+        if let Some(obstacle) = standing {
+            let exhaustion = Exhaustion::Pinned { obstacle };
+            return (answered(rec, facts, exhaustion), writes);
         }
         rec.step("probe", "passed", facts);
     }
@@ -2080,7 +2133,8 @@ fn run(
     }
     // Step 4: the moves, for a portable request with a live pin. A pin on an account past its saved end never
     // reaches them: step 5 releases it as it releases a cooled account's. A token count follows its pin: it
-    // creates no pin (step 7), so a move it made would leave the session with none.
+    // creates no pin (step 7), so a move it made would leave the session with none. A probe follows its pin too,
+    // so a rule that would move it, a standing mark's among them, waits for the session's next real request.
     let mut migrated = None;
     let mut shed_from = None;
     // The row a move takes off its source, whose burn and last prompt the new row carries.
@@ -2100,9 +2154,11 @@ fn run(
         current = as_written(current);
         let mut moved_off = false;
         let ended = subscription_ended(snapshot, &current.account_id, request.now);
-        if request.count || ended {
+        if request.count || request.probe || ended {
             let reason = if request.count {
                 "count"
+            } else if request.probe {
+                "probe"
             } else {
                 "subscription_ended"
             };
@@ -7836,6 +7892,7 @@ fn exhaustion_facts(exhaustion: &Exhaustion) -> ExhaustionFacts {
             ..facts("fast_credits")
         },
         Exhaustion::Pinned { obstacle } => ExhaustionFacts {
+            deadline: obstacle.until(),
             obstacle: Some(obstacle.as_str()),
             ..facts("pinned")
         },

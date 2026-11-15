@@ -1300,6 +1300,7 @@ async fn a_probe_and_a_count_take_no_key_permit() {
 
     // The engine's own probe: no credential header, the key named by id.
     up.push_credential_rule(A, "/v1/messages", json_200());
+    pin_session(&h, "s2", "main", MODEL).await;
     let mut probe = request_for(KEY, MODEL, "s2");
     probe.headers_mut().remove("authorization");
     probe
@@ -1372,6 +1373,7 @@ async fn a_probe_takes_no_read_permit_and_no_budget() {
         "a request from a socket meets the bounds"
     );
 
+    pin_session(&h, "s2", "main", MODEL).await;
     let mut probe = request_for(KEY, MODEL, "s2");
     probe.headers_mut().remove("authorization");
     probe
@@ -2859,58 +2861,6 @@ async fn the_forks_commit_alone_releases_the_waiter_and_an_error_event_releases_
     );
     drain(turn).await;
     drain(fork).await;
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_probe_that_moved_the_pin_and_was_lost_before_its_commit_frees_the_pins_next_request() {
-    let up = FakeUpstream::start(vec![]).await;
-    up.add_credential_rule(B, "/v1/messages", json_200());
-    up.push_credential_rule(
-        B,
-        "/v1/messages",
-        Respond::Gated(Box::new(Respond::CloseAfterRequest)),
-    );
-    let h = moved_harness(&up, &[oauth("a", A, 0), oauth("b", B, 1)]).await;
-    let mut events = h.router.subscribe_events();
-    tokio::time::pause();
-    let probe = phoebis_relay::Probe {
-        key_id: "desktop".into(),
-        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
-    };
-    let relay = h.relay.clone();
-    let probing =
-        tokio::spawn(async move { relay.probe(probe, request_for(KEY, MODEL, "s1")).await });
-    let probe_id = moved_to(&mut events, "b").await;
-    wait_for(Duration::from_secs(5), || (posts(&up) == 2).then_some(())).await;
-    let turn = sent(&h, request_for(KEY, MODEL, "s1"));
-    let hold = next_held(&mut events)
-        .await
-        .outcome
-        .hold
-        .expect("a held outcome");
-    assert_eq!(
-        (hold.reason, hold.waits_for.as_deref()),
-        (HoldReason::Rewrite, Some(probe_id.as_str()))
-    );
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    still_held(&up, &turn, 2);
-    up.release();
-    let released = tokio::time::Instant::now();
-    let turn = answered(turn).await;
-    assert!(
-        released.elapsed() <= TICK,
-        "the probe's lost leg releases the turn"
-    );
-    assert_eq!(turn.status(), 200);
-    let waits = waits_of(&turn);
-    assert_eq!(waits.len(), 1, "the turn is not held again");
-    assert!(
-        (500..u64::from(MOVED_HOLD_SECONDS) * 1_000).contains(&waits[0].1),
-        "the wait ran to the probe's end: {waits:?}"
-    );
-    drain(turn).await;
-    let _ = tokio::time::timeout(Duration::from_secs(5), probing).await;
     up.shutdown().await;
 }
 

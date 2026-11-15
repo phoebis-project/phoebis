@@ -466,6 +466,7 @@ async fn a_probe_is_not_evaluated() {
     let (h, mut sub) = harness(&up, PoolSpec::default()).await;
     let row = summary(GuardrailMode::Enforce);
     guarded(&h, &row, &["main"], &[]).await;
+    pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
     // The engine holds the key's id and replays the request without a credential or a recorded head.
     let mut req = fork();
     req.headers_mut().remove("authorization");

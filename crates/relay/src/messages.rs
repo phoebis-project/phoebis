@@ -244,20 +244,26 @@ impl RelayOutcome {
 }
 
 /// The obstacle `RelayOutcome` names for a probe the keepalive holds on rather than pausing as an exhausted pool.
-/// The selector's pinned standings (`PinnedObstacle`) keep their words: `attempted`, `budget_unknown`, `operator`
-/// and `subscription_ended`, each answered untimed since no wait clears it. The relay adds three of its own:
-/// `budget` for a probe the selector answered with the pinned member's spend budget window, `pool_moved` for a
-/// request whose key moved to another pool between its admission and its selection, which the keepalive retries
-/// since the next probe admits under the new pool, and `reauth_required` for a probe whose leg marked its account for
-/// re-authentication, which the keepalive pauses under its authentication reason.
+/// The selector's pinned standings (`PinnedObstacle`) keep their words: `attempted`, `budget_unknown`, `no_pin`,
+/// `operator` and `subscription_ended`, each answered untimed since no wait clears it, and `cooldown`, `credits`,
+/// `overage` and `spent`, each answered as a wait. The relay adds three of its own: `budget` for a probe the selector
+/// answered with the pinned member's spend budget window, `pool_moved` for a request whose key moved to another pool
+/// between its admission and its selection, which the keepalive retries since the next probe admits under the new
+/// pool, and `reauth_required` for a probe whose leg marked its account for re-authentication, which the keepalive
+/// pauses under its authentication reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProbeObstacle {
     Attempted,
     Budget,
     BudgetUnknown,
+    Cooldown,
+    Credits,
+    NoPin,
     Operator,
+    Overage,
     PoolMoved,
     ReauthRequired,
+    Spent,
     SubscriptionEnded,
 }
 
@@ -266,7 +272,12 @@ impl From<PinnedObstacle> for ProbeObstacle {
         match obstacle {
             PinnedObstacle::Attempted => ProbeObstacle::Attempted,
             PinnedObstacle::BudgetUnknown => ProbeObstacle::BudgetUnknown,
+            PinnedObstacle::Cooldown { .. } => ProbeObstacle::Cooldown,
+            PinnedObstacle::Credits => ProbeObstacle::Credits,
+            PinnedObstacle::NoPin => ProbeObstacle::NoPin,
             PinnedObstacle::Operator => ProbeObstacle::Operator,
+            PinnedObstacle::Overage { .. } => ProbeObstacle::Overage,
+            PinnedObstacle::Spent { .. } => ProbeObstacle::Spent,
             PinnedObstacle::SubscriptionEnded => ProbeObstacle::SubscriptionEnded,
         }
     }
@@ -3373,8 +3384,7 @@ impl Relay {
                             ctx.account.kind,
                             ctx.admitted.identity.canonical_model.clone(),
                             ctx.admitted.identity.folded_model.clone(),
-                            ctx.admitted
-                                .portable
+                            (ctx.admitted.portable && ctx.admitted.trace.kind != Kind::Probe)
                                 .then(|| ctx.selection.pin.clone())
                                 .flatten(),
                             ctx.admitted.trace.request_id.clone(),
@@ -3383,8 +3393,9 @@ impl Relay {
                         let on_error = Box::new(move |data: Bytes, waiting: &mut Waiting| {
                             // After commit nothing fails over. A rate-limit error records the cooldown
                             // and, on a portable request, invalidates the pin so the next request
-                            // migrates; a non-portable request keeps its pin. The deadline is measured
-                            // from the error's arrival, not from the selection.
+                            // migrates. A non-portable request keeps its pin, and so does a probe, which
+                            // never moves the pin it warms. The deadline is measured from the error's
+                            // arrival, not from the selection.
                             let now = clock();
                             let verdict = classify(
                                 &head,
@@ -3483,15 +3494,18 @@ impl Relay {
         );
         // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
         // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
-        // for the siblings, and the pin stays where the retry lands.
+        // for the siblings, and the pin stays where the retry lands. So does a probe, which never moves the pin it
+        // warms: its next selection reads the cooldown or the mark on the pinned member and answers it.
+        let hands_pin = ctx.admitted.portable
+            && ctx.admitted.trace.kind != Kind::Probe
+            && moves_pin
+            && retry_in_place.is_none();
         for report in failover_reports(
             &ctx.account.id,
             &ctx.admitted.identity.canonical_model,
             cooldown,
             mark.map(marked),
-            (ctx.admitted.portable && moves_pin && retry_in_place.is_none())
-                .then(|| ctx.selection.pin.clone())
-                .flatten(),
+            hands_pin.then(|| ctx.selection.pin.clone()).flatten(),
             &ctx.admitted.trace.request_id,
             generations,
             arrived,

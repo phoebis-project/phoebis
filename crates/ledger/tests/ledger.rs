@@ -4569,6 +4569,15 @@ async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepal
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // The session's own request places the pin a probe renews.
+    let real = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(real.status(), 200);
+    let _ = real.into_body().collect().await.unwrap();
     let resp = h
         .relay
         .probe(

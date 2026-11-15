@@ -2087,6 +2087,7 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
     let bus = Bus::new();
     let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
     // No credential header at all: the engine holds the key's id, never its secret.
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
     req.headers_mut().remove("authorization");
@@ -2217,6 +2218,7 @@ async fn a_probe_from_an_earlier_generation_of_a_reused_id_is_refused_before_any
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
     let live = h.store.api_key("desktop").unwrap().unwrap().created_at;
     let probe = |generation: i64| phoebis_relay::Probe {
         key_id: "desktop".into(),
@@ -2244,10 +2246,11 @@ async fn a_probe_from_an_earlier_generation_of_a_reused_id_is_refused_before_any
     up.shutdown().await;
 }
 
-/// A 429 on the account a probe first reaches fails it over to the sibling a real request's failover would take,
-/// whatever the sibling's kind.
+/// A 429 on the account a probe's pin names records the account's cooldown and hands the router no pin, so the
+/// probe's next selection answers the pinned member's cooldown rather than placing the probe on the sibling, and the
+/// session's next real request is the one that moves.
 #[tokio::test]
-async fn a_probe_fails_over_to_an_oauth_sibling_as_a_real_request_does() {
+async fn a_probe_rate_limited_on_its_pinned_account_answers_the_cooldown_and_moves_no_pin() {
     let up = FakeUpstream::start_tls_for(
         vec![Rule {
             path_prefix: "/v1/messages".into(),
@@ -2256,11 +2259,8 @@ async fn a_probe_fails_over_to_an_oauth_sibling_as_a_real_request_does() {
         &["api.anthropic.com"],
     )
     .await;
-    up.add_credential_rule(
-        "sk-ant-api03-AAAA",
-        "/v1/messages",
-        json_429_unified(4_600, "five_hour"),
-    );
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[
@@ -2268,9 +2268,24 @@ async fn a_probe_fails_over_to_an_oauth_sibling_as_a_real_request_does() {
             oauth("o", "sk-ant-oat01-OOOO", 1),
         ],
         PoolSpec::default(),
-        Bus::new(),
+        bus,
     )
     .await;
+    let real = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&real).account_id, "a", "the session pins on a");
+    real.into_body().collect().await.unwrap();
+    drain_until_complete(&mut sub).await;
+    up.add_credential_rule(
+        "sk-ant-api03-AAAA",
+        "/v1/messages",
+        json_429_unified(4_600, "five_hour"),
+    );
+
     let resp = h
         .relay
         .probe(
@@ -2281,9 +2296,52 @@ async fn a_probe_fails_over_to_an_oauth_sibling_as_a_real_request_does() {
             request_for(KEY, "claude-sonnet-4-5", "s1"),
         )
         .await;
+    // An API key's 429 names no wait its kind reads, so the cooldown runs the harness's 60 second fallback and the
+    // classifier's one second margin.
+    let header = |name: &str| {
+        resp.headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_string())
+    };
     assert_eq!(
-        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
-        (200, "o")
+        (
+            resp.status().as_u16(),
+            header("x-phoebis-error-code").as_deref(),
+            header("retry-after").as_deref(),
+            outcome(&resp).obstacle,
+        ),
+        (
+            429,
+            Some("accounts_exhausted"),
+            Some("61"),
+            Some(ProbeObstacle::Cooldown)
+        ),
+        "the probe is answered on its pin's cooldown while o could serve it"
+    );
+    resp.into_body().collect().await.unwrap();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Some(Event::RequestComplete(complete)) = events.last() else {
+        panic!("last event: {:?}", events.last())
+    };
+    assert_eq!(complete.outcome, Outcome::Rejected);
+    assert_eq!(
+        credentials_seen(&up),
+        vec![
+            "sk-ant-api03-AAAA".to_string(),
+            "sk-ant-api03-AAAA".to_string()
+        ],
+        "the real request and the probe reached a alone"
+    );
+    let next = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome(&next).account_id,
+        "o",
+        "the session's next real request moves off the cooled pin"
     );
     up.shutdown().await;
 }
@@ -2373,6 +2431,7 @@ async fn a_probe_answered_a_forwarded_rejection_reads_no_code_on_its_relay_outco
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
     let resp = h
         .relay
         .probe(

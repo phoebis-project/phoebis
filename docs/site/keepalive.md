@@ -21,19 +21,23 @@ set to `0`, `stream` set to `false` and the client's `safeguards` member removed
 mode check on the turn's tool use, which a replayed turn has no use for, whatever the pool's `auto_mode_server` says).
 The request's `anthropic-beta` line travels as kept, and a pool or key set off drops the `dangerous-tool-use-2026-09-03`
 beta from a probe as from any request (see [The betas](relay.md#the-betas)). The probe follows the session's pin and
-renews it. A probe whose pinned member is at its spend budget, on an account the operator disabled, past its
-subscription's end, or already tried by this probe while a sibling could take it is answered rather than placed on a
-sibling, since a sibling would move the session's pin onto a member no request asked for. A probe never moves the pin
-for those standings, and the agent reads `budget`, `paused` (a disabled account), `ineligible_credential` (an ended
-subscription) or `retryable_probe_error` until the next real request lands. A probe whose pinned account was deleted is
-held as `paused` before it is sent, as one on a disabled account is. A probe whose pinned account's subscription ended
-is held before it is sent too, and so is one due nearer to the end than its own interval, the entry's TTL less the lead.
-The agent reads `ineligible_credential` under that hold as well, and the hold is a live one: it ends when the term
-clears, and the recipe leaves as `expired` once its entry has expired. That last interval falls inside the pool's
-wind-down, or reaches before it where the interval is longer than `wind_down_minutes`, so no probe writes a cache the
-end discards and the pin turns cold at the end ([Subscription end](routing.md#subscription-end)). A 429 on the pinned
-account, a credits block, overage under `never`, an account that is disconnected or unpaired, and the pool's move rules
-move it as they move a real request.
+renews it, and it never moves the pin. Where the pinned member can serve, the probe goes to it, and a rule that would
+move the pin, a standing shed mark among them, waits for the session's next real request. Where the pinned member cannot
+serve, the probe is answered rather than placed on a sibling, since a sibling would move the session's pin onto a member
+no request asked for. The agent then reads `budget` at a spend budget, `paused` on an account the operator disabled, on
+a deleted account and on one in a state other than ready that the probe did not try, `ineligible_credential` past the
+subscription's end, `retryable_probe_error` on a member this probe already tried or on one with a budget while the
+ledger is degraded (`budget_unknown`), and `probe_quota_exhausted` under a cooldown, a credits block, overage under
+`never` or a seat at its spend cap, with the wait the answer names. A probe whose session holds no pin, because the pin
+idled out or its account left the pool, places nothing either, and the recipe pauses under `no_pin` until the next real
+request lands. A probe's own 429 cools the account and leaves the pin, which the session's next real request then moves.
+A probe whose pinned account was deleted is held as `paused` before it is sent, as one on a disabled account is. A probe
+whose pinned account's subscription ended is held before it is sent too, and so is one due nearer to the end than its
+own interval, the entry's TTL less the lead. The agent reads `ineligible_credential` under that hold as well, and the
+hold is a live one: it ends when the term clears, and the recipe leaves as `expired` once its entry has expired. That
+last interval falls inside the pool's wind-down, or reaches before it where the interval is longer than
+`wind_down_minutes`, so no probe writes a cache the end discards and the pin turns cold at the end ([Subscription
+end](routing.md#subscription-end)).
 
 A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
 the router reads no overage on such a seat ([Overage](routing.md#overage)).
@@ -315,7 +319,7 @@ Each state reads these causes:
 - `held`: `affinity_too_short`, `budget`, `cooled`, `horizon`, `ineligible_credential`, `keepalive_off`,
   `ledger_behind`, `no_probe_cache_evidence`, `overage`, `paused`, `pool_disabled`, `probe_pool_exhausted`,
   `probe_quota_exhausted`, `probe_transport_error`, `reauth`, `retryable_probe_error`, `slow_probe`.
-- `paused`: `invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
+- `paused`: `invalid_probe_usage`, `missing_account`, `no_pin`, `partial_cache_coverage`, `probe_authentication_error`,
   `probe_retry_limit`, `repeated_cold_probe`, `request_rejected`, `unexpected_output`, `unsupported_probe`.
 - `not_retained`: `agent_limit`, `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`,
   `invalid_cache_control`, `invalid_model`, `invalid_request`, `no_cache_evidence`, `owner_mismatch`, `request_limit`,
@@ -327,31 +331,26 @@ Each state reads these causes:
 A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's structural error
 (`invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
 `repeated_cold_probe`, `unexpected_output`, `unsupported_probe`) pauses the recipe and clears its schedule, as a
-rejected request does. `probe_retry_limit` names a ladder that ran to the entry's expiry still failing. A real request
-that fails or is canceled leaves the last answered recipe armed on its schedule where one was armed at its arrival, the
-row reading `retained` under the request's own word and `not_retained` where none was, while a rejected request pauses
-it. A gate's hold that lands on a paused recipe at a later tick (`budget`, `cooled`, `ineligible_credential` or
-`paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next real request. The paused
-prompt itself leaves when its entry goes cold: at the entry's expiry the engine drops it, writes off its probes under
-`expired`, each as its chain's last entry ends, and sends nothing, and the row still reads `paused`. The same hold on an
-armed recipe reads `held`, since the gate reads it again at every tick and probing resumes when it clears. A recipe held
-on a disabled pool reads `retained` again at the first tick after the pool is enabled. A `held` or `retained` cause
-reads `not_retained` when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off`
-and `opted_out` are recorded when the request arrives and no body is kept, while `ineligible_credential` is read at the
-account selection. A request refused at its arrival credits no probe, so a probe outstanding when the pool's keepalive
-is turned off or the key's `keepalive` permission is taken away is judged at the agent's next followed turn or completed
-compaction, or settles as wasted.
+rejected request does. `no_pin` names a probe whose session held no pin to renew, and it pauses the recipe the same way.
+`probe_retry_limit` names a ladder that ran to the entry's expiry still failing. A real request that fails or is
+canceled leaves the last answered recipe armed on its schedule where one was armed at its arrival, the row reading
+`retained` under the request's own word and `not_retained` where none was, while a rejected request pauses it. A gate's
+hold that lands on a paused recipe at a later tick (`budget`, `cooled`, `ineligible_credential` or `paused`) re-arms
+nothing, so the row stays `paused` with the hold's cause until the next real request. The paused prompt itself leaves
+when its entry goes cold: at the entry's expiry the engine drops it, writes off its probes under `expired`, each as its
+chain's last entry ends, and sends nothing, and the row still reads `paused`. The same hold on an armed recipe reads
+`held`, since the gate reads it again at every tick and probing resumes when it clears. A recipe held on a disabled pool
+reads `retained` again at the first tick after the pool is enabled. A `held` or `retained` cause reads `not_retained`
+when the agent holds no prompt, as a request refused at its account selection does. `keepalive_off` and `opted_out` are
+recorded when the request arrives and no body is kept, while `ineligible_credential` is read at the account selection. A
+request refused at its arrival credits no probe, so a probe outstanding when the pool's keepalive is turned off or the
+key's `keepalive` permission is taken away is judged at the agent's next followed turn or completed compaction, or
+settles as wasted.
 
 `partial_cache_coverage` names a probe that did not leave the whole prefix in the cache. The measure is the count of the
 agent's last request, the tokens it read and wrote. A probe on the recipe's own account covers by reading that many
 tokens back. One that read part of the prefix, or that read or wrote some of it and stayed under the count, pauses the
-recipe, and one that read nothing and rewrote the prefix counts as a cold probe. A probe the failover served on another
-account moves the agent there and covers where its read and write reach the count, or where it read or wrote some of it
-and left at most 64 tokens of its prompt uncached, the tokens a body carries after its last cache marker. An upstream
-can count a cold write lower than the warm read of the same prompt, and a probe that left so little uncached read or
-wrote the rest whatever the count says. A body that carries more than that after its last marker is judged on the count
-alone. A covering probe on another account arms the schedule at the expiry of the entry it wrote, and the next probe has
-to read back what it counted.
+recipe, and one that read nothing and rewrote the prefix counts as a cold probe.
 
 A session's recipes end together when the session does. A `session_end` report, a registration that replaces the
 instance and the session's own expiry each discard every recipe of the session at once, and the deletion of the key that
@@ -448,14 +447,14 @@ prices the saving from the two counts at read time, and the console reads it: th
 rate less the read it paid. The credit row is keyed under the client of the request it credits, so the saving prices
 under that client's regime as the request's own row does. It also files under the account tier of the request's own row,
 the one the router's snapshot holds when the credit is booked. A probe's cost is its own request row's counts priced
-when read, and `probe_migrated` counts a probe that landed on a different account than the recipe's. `wasted_probes`
-counts the probes settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The
-wasted probes' five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe
-files beside its own cost row, in the hour the relay received the probe and under the funding that row took (the kind of
-the account that served it, whether that account is a usage-based seat, the speed its answer reported and whether its
-answer reported overage in use), so the wasted part of the probes' figure, read in the chosen week, is the plan-funded
-probes' waste against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than
-sending, for example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
+when read, and `probe_migrated` counts no probe, since a probe never moves the pin. `wasted_probes` counts the probes
+settled wasted by one of the reasons above, and `wasted_probe_reasons` counts them by the reason. The wasted probes'
+five token counts sit on the hourly rollup beside their count, priced the same way. Each wasted probe files beside its
+own cost row, in the hour the relay received the probe and under the funding that row took (the kind of the account that
+served it, whether that account is a usage-based seat, the speed its answer reported and whether its answer reported
+overage in use), so the wasted part of the probes' figure, read in the chosen week, is the plan-funded probes' waste
+against their own cost. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for
+example because a cooldown already held the recipe. `probes_held` counts a probe the router refused with
 `503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`failed`, `held`, `migrated`, `ok`,
@@ -528,6 +527,7 @@ The state's cause on the Sessions view reads a label in place of the engine's id
 | ledger behind | `ledger_behind` |
 | missing account | `missing_account` |
 | no cache evidence | `no_cache_evidence` |
+| no pin | `no_pin` |
 | no probe cache evidence | `no_probe_cache_evidence` |
 | cache warming not permitted | `opted_out` |
 | overage | `overage` |

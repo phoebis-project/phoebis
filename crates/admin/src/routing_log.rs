@@ -267,6 +267,8 @@ pub(crate) struct SummaryExhaustion {
     pub deadline: Option<i64>,
     pub window: Option<String>,
     pub reason: Option<String>,
+    /// On a `pinned` exhaustion, the standing a probe was answered on: `attempted`, `budget_unknown`, `cooldown`,
+    /// `credits`, `no_pin`, `operator`, `overage`, `spent` or `subscription_ended`. Null on every other kind.
     pub obstacle: Option<String>,
 }
 
@@ -425,16 +427,18 @@ pub(crate) struct DecisionRecord {
     /// `waits_for` (under `rewrite` the request whose head the hold waited for, absent otherwise), and under
     /// `slow_down` the read the hold was sized from, null otherwise: `factor`, `speed` (the speed the account's holds
     /// realize together), `stretch_ms`, `threshold_ms` and `cycle_ms` (the pin's cycle)), `exhaustion` (`kind`,
-    /// `deadline`, `window`, `reason`, `obstacle`), `refusal` (`kind`, `code`, `reason`), `cohort_hold`
-    /// (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`, `reset`, `slow_down` or
-    /// `rewrite`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`, `marked_on`,
-    /// `marked_window`, `projection`, `stretch_ms` and `threshold_ms` (the stretch and the threshold the heal read
-    /// where the stretch made the mark), and `limit` (the line the healing projection read under: 1.0 at the wall, the
-    /// pool's ceiling at the five-hour bound, null on a heal by the stretch and under `moved` and `released`, absent on
-    /// a row of an earlier build)), `reservation` (`account_id`, `rewrite` and `burn` by plan window, the burn per
-    /// hour, `expires_at`, null for a decision that booked nothing), `cause` (why the failover this decision lands
-    /// moved the session: a cooldown's `scope`, `reason` and `window`, or a mark's `state` and `cause`, null for every
-    /// other decision), `completion`.
+    /// `deadline`, `window`, `reason`, `obstacle` (on a `pinned` exhaustion the standing a probe was answered on:
+    /// `attempted`, `budget_unknown`, `cooldown`, `credits`, `no_pin`, `operator`, `overage`, `spent` or
+    /// `subscription_ended`, with `deadline` filled on `cooldown`, `overage` and `spent`)), `refusal` (`kind`, `code`,
+    /// `reason`), `cohort_hold` (`waited_on`, `cohort`, `held_ms` (every wait summed), `waits` (each `reason`, `cap`,
+    /// `reset`, `slow_down` or `rewrite`, and its `held_ms`)), `shed_marks`, `mark_cleared` (`reason`, `marked_at`,
+    /// `marked_on`, `marked_window`, `projection`, `stretch_ms` and `threshold_ms` (the stretch and the threshold the
+    /// heal read where the stretch made the mark), and `limit` (the line the healing projection read under: 1.0 at the
+    /// wall, the pool's ceiling at the five-hour bound, null on a heal by the stretch and under `moved` and `released`,
+    /// absent on a row of an earlier build)), `reservation` (`account_id`, `rewrite` and `burn` by plan window, the
+    /// burn per hour, `expires_at`, null for a decision that booked nothing), `cause` (why the failover this decision
+    /// lands moved the session: a cooldown's `scope`, `reason` and `window`, or a mark's `state` and `cause`, null for
+    /// every other decision), `completion`.
     ///
     /// A refusal's `code` is its structured word beside the display `reason`: `disabled`, `expired`,
     /// `pool_disabled`, `pool_missing`, `replaced`, `revoked` or `unknown` for a key refusal, `model_not_allowed`

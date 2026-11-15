@@ -1317,9 +1317,10 @@ fn message_start(id: &str, read: u64, write: u64) -> BusEvent {
     })
 }
 
-/// A turn of main on the engine's side alone: its observation, its selection on `a` and its first stream event, which
-/// arms the schedule from the turn's start.
-fn open_turn(r: &Rig, id: &str, read: u64, write: u64) {
+/// A turn of main on the engine's side alone: its observation, its selection on `a` with the router's pin it stands
+/// for, and its first stream event, which arms the schedule from the turn's start.
+async fn open_turn(r: &Rig, id: &str, read: u64, write: u64) {
+    r.pin("main", "claude-sonnet-4-5", "a").await;
     r.engine.observe(r.observed(id, "main", BODY));
     r.engine.observe(r.selected(id, "a"));
     r.engine.observe(message_start(id, read, write));
@@ -1468,7 +1469,7 @@ async fn a_canceled_compaction_keeps_the_previous_recipe_its_schedule_and_its_pr
 /// A recipe armed on the engine's side 0 s in, and two probes 270 and 540 s in that each read the entry back, their own
 /// entries ending 570 and 840 s in: one chain, its last entry ending 840 s in.
 async fn a_chain_of_two_probes(r: &mut Rig) {
-    open_turn(r, "first", 0, 2_000);
+    open_turn(r, "first", 0, 2_000).await;
     r.engine.observe(completed(r, "first", 0));
     for _ in 0..2 {
         r.advance_attended(270_000);
@@ -1531,7 +1532,7 @@ async fn a_completed_compaction_answers_the_chain_earns_its_credit_and_stops_the
     r.advance_attended(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 2, "no probe on the old context");
-    open_turn(&r, "next", 0, 2_000);
+    open_turn(&r, "next", 0, 2_000).await;
     r.engine.observe(completed(&r, "next", 0));
     let rearmed = r.status("main");
     assert_eq!(
@@ -1557,12 +1558,12 @@ async fn a_completed_compaction_judges_the_kept_and_the_unanswered_probes_as_one
         ..RigSpec::default()
     })
     .await;
-    open_turn(&r, "first", 0, 2_000);
+    open_turn(&r, "first", 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     r.advance_attended(270_000);
     r.step().await;
     r.advance_attended(10_000);
-    open_turn(&r, "second", 2_000, 0);
+    open_turn(&r, "second", 2_000, 0).await;
     r.advance_attended(270_000);
     r.step().await;
     r.engine
@@ -1600,7 +1601,7 @@ async fn a_completed_compaction_that_reads_nothing_settles_the_probes_before_it_
         ..RigSpec::default()
     })
     .await;
-    open_turn(&r, "first", 0, 2_000);
+    open_turn(&r, "first", 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     r.advance_attended(270_000);
     r.step().await;
@@ -1678,14 +1679,14 @@ async fn a_turn_admitted_while_a_compaction_is_open_ends_the_compaction_as_a_fai
         ..RigSpec::default()
     })
     .await;
-    open_turn(&r, "first", 0, 2_000);
+    open_turn(&r, "first", 0, 2_000).await;
     r.engine.observe(completed(&r, "first", 0));
     r.advance_attended(270_000);
     r.step().await;
     r.advance_attended(10_000);
     r.engine.observe(compaction(&r, "compaction"));
     r.advance_attended(10_000);
-    open_turn(&r, "next", 2_000, 0);
+    open_turn(&r, "next", 2_000, 0).await;
     r.engine.observe(r.selected("compaction", "a"));
     r.engine.observe(head(&r, "compaction", 200));
     r.engine.observe(message_start("compaction", 2_000, 0));
@@ -1768,7 +1769,7 @@ async fn the_lapse_sweep_leaves_the_probes_of_an_open_compaction_to_its_completi
     .await;
     a_chain_of_two_probes(&mut r).await;
     r.advance_attended(10_000);
-    open_turn(&r, "second", 2_000, 0);
+    open_turn(&r, "second", 2_000, 0).await;
     r.engine
         .observe(r.complete("second", Outcome::Failed, Some(usage(0, 0))));
     r.advance_attended(10_000);

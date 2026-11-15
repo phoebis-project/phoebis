@@ -60,6 +60,7 @@ pub fn recipe_state(reason: Reason, paused: bool) -> RecipeState {
         | RetryableProbeError | SlowProbe => RecipeState::Held,
         InvalidProbeUsage
         | MissingAccount
+        | NoPin
         | PartialCacheCoverage
         | ProbeAuthenticationError
         | ProbeRetryLimit

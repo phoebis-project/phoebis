@@ -5695,6 +5695,245 @@ fn a_probe_whose_attempt_marked_its_pinned_account_with_no_sibling_left_answers_
     );
 }
 
+/// `s1` stands marked on the 5-hour window while a projection window waits and `b` fits its burn, the setup on which a
+/// real request moves under `Shed`: a probe at that instant renews the pin on `a`, and the move waits for the
+/// session's next real request. A pool that slows its pins would not do here, since a probe reads no pace and so no
+/// stretch, and the shed rule answers it `no` before the mark is read.
+#[test]
+fn a_probe_on_a_marked_pin_renews_it_in_place_and_the_next_real_request_moves_it() {
+    let s = projection_pool(vec![("a", 0), ("b", 1)]);
+    let mut st = marked_s1(10.0, 5.0, 0.80);
+    st.record_sample("b", refreshing(0.1, T + HOUR, T + 72 * HOUR, T), 0);
+    let probe = SelectRequest {
+        probe: true,
+        ..auxiliary(&s, "s1", T)
+    };
+    let d = decide(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("a".into(), None),
+        "the probe renews the marked pin where it stands"
+    );
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(
+        (shed.verdict, fact(shed, "reason")),
+        ("not_run", &FactValue::Text("probe".into()))
+    );
+    assert!(marked(&st, "s1"), "the mark stands after the probe");
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the session's next real request moves under the mark"
+    );
+}
+
+/// A pin on `a` of `a_before_b` written by a request at 1_000 under a plain snapshot, `edit` applied to the state,
+/// then a probe of that session at 2_000 under `at_probe`, fast where `fast_probe` holds: the probe's decision and the
+/// account the session's pin names after it.
+fn probe_on_a_after(
+    at_probe: &RegistrySnapshot,
+    edit: fn(&mut RoutingState),
+    fast_probe: bool,
+) -> (Decided, Option<String>) {
+    let before = snapshot(a_before_b());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &before,
+                &request(&before, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves the session's first request"
+    );
+    edit(&mut st);
+    let probe = SelectRequest {
+        probe: true,
+        ..request(at_probe, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
+    };
+    let probe = if fast_probe { fast(probe) } else { probe };
+    let d = decide(&mut st, at_probe, &probe, &mut rng());
+    let pinned = st.pin(&pin_key("s1")).map(|p| p.account_id.clone());
+    (d, pinned)
+}
+
+#[test]
+fn a_probe_whose_pinned_member_waits_or_is_out_answers_that_obstacle_beside_an_eligible_sibling() {
+    // Each row's state, as the snapshot the probe reads, the edit after the pin and whether the probe is fast: a
+    // cooldown, overage under `never`, a seat at its spend cap, a fast probe on a credits block, and a member marked
+    // for re-authentication that the probe did not try.
+    type Row = (RegistrySnapshot, fn(&mut RoutingState), bool);
+    let rows: [Row; 5] = [
+        (
+            snapshot(a_before_b()),
+            |st| {
+                st.record_cooldown(cooled("a", "account", 10_000, "five_hour", "rate_limit"));
+            },
+            false,
+        ),
+        (
+            snapshot(Pool {
+                policy: OveragePolicy::Never,
+                ..a_before_b()
+            }),
+            |st| {
+                st.record_overage("a", overage(true, 1_500, Some(9_000)));
+            },
+            false,
+        ),
+        (
+            snapshot_with_terms(a_before_b(), vec![usage_based_seat("a")]),
+            |st| {
+                st.record_credits("a", credits(true, None, Some(1.0), 1_500));
+            },
+            false,
+        ),
+        (
+            snapshot(a_before_b()),
+            |st| {
+                st.record_credits("a", credits(false, Some("org_level_disabled"), None, 1_500));
+            },
+            true,
+        ),
+        (
+            snapshot_with(a_before_b(), &[("a", true, AccountState::ReauthRequired)]),
+            |_| {},
+            false,
+        ),
+    ];
+    // A placement reads as the account it landed on, so a row that moved the probe names `b`.
+    let answers: Vec<_> = rows
+        .into_iter()
+        .map(|(at_probe, edit, fast_probe)| {
+            let (d, pinned) = probe_on_a_after(&at_probe, edit, fast_probe);
+            let answer = match d.result {
+                SelectResult::Exhausted(exhaustion) => Ok(exhaustion),
+                placed => Err(picked(&placed).to_string()),
+            };
+            let exhaustion = d
+                .record
+                .outcome
+                .exhaustion
+                .as_ref()
+                .map(|e| (e.kind, e.obstacle, e.deadline));
+            (answer, pinned, d.writes.is_empty(), exhaustion)
+        })
+        .collect();
+    let pinned_on_a = |obstacle: PinnedObstacle, word: &'static str, deadline: Option<i64>| {
+        (
+            Ok(Exhaustion::Pinned { obstacle }),
+            Some("a".to_string()),
+            true,
+            Some(("pinned", Some(word), deadline)),
+        )
+    };
+    assert_eq!(
+        answers,
+        vec![
+            pinned_on_a(
+                PinnedObstacle::Cooldown { until: 10_000 },
+                "cooldown",
+                Some(10_000)
+            ),
+            pinned_on_a(
+                PinnedObstacle::Overage { until: 9_000 },
+                "overage",
+                Some(9_000)
+            ),
+            pinned_on_a(
+                PinnedObstacle::Spent {
+                    until: SPEND_ESTIMATE
+                },
+                "spent",
+                Some(SPEND_ESTIMATE)
+            ),
+            pinned_on_a(PinnedObstacle::Credits, "credits", None),
+            pinned_on_a(PinnedObstacle::Operator, "operator", None),
+        ],
+        "each probe answers its pinned member's obstacle, writes nothing and leaves the pin on a, and a dated answer's \
+         record names its end"
+    );
+}
+
+#[test]
+fn a_probe_whose_pinned_member_cools_with_no_sibling_left_answers_the_pools_exhaustion() {
+    let (d, pinned) = probe_on_a_after(
+        &snapshot(a_before_b()),
+        |st| {
+            st.record_cooldown(cooled("a", "account", 8_000, "five_hour", "rate_limit"));
+            st.record_cooldown(cooled("b", "account", 10_000, "five_hour", "rate_limit"));
+        },
+        false,
+    );
+    assert_eq!(
+        d.result,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 8_000,
+            window: "five_hour".into(),
+        }),
+        "with no sibling to move to, the pool's own exhaustion is the truer answer"
+    );
+    assert_eq!(pinned.as_deref(), Some("a"), "the pin still names a");
+    assert!(
+        d.writes.is_empty(),
+        "the probe writes nothing: {:?}",
+        d.writes
+    );
+}
+
+#[test]
+fn a_probe_whose_pin_idled_past_the_ttl_answers_no_pin_and_leaves_the_row_to_the_next_real_request()
+{
+    let s = snapshot(a_before_b());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves the session's first request"
+    );
+    // One millisecond past the pool's affinity TTL of an hour.
+    let idle = 1_000 + HOUR + 1;
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], idle)
+    };
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: PinnedObstacle::NoPin
+        }),
+        "a probe with no live pin places nothing"
+    );
+    assert!(writes.is_empty(), "the probe writes nothing: {writes:?}");
+    assert_eq!(
+        st.pin(&pin_key("s1"))
+            .map(|p| (p.account_id.as_str(), p.last_used_at)),
+        Some(("a", 1_000)),
+        "the idle row stands as step 1 left it"
+    );
+    let real = request(&s, Some("s1"), "claude-sonnet-5", true, &[], idle);
+    assert_eq!(picked(&select(&mut st, &s, &real, &mut rng()).0), "a");
+    assert_eq!(
+        pinned(&st, "s1").created_at,
+        idle,
+        "the session's next real request places a fresh pin"
+    );
+}
+
 #[test]
 fn a_non_portable_request_bound_to_a_member_at_its_budget_answers_the_timed_exhaustion_with_the_overage_claim(
 ) {
@@ -23284,8 +23523,8 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
 
 #[test]
 fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_account_alone() {
-    // A count, a probe and a fast request book nothing whatever the destination prices, and a destination with no
-    // tier prices nothing to book: each walk still ends at the reserve station, naming the account it landed on.
+    // A count and a fast request book nothing whatever the destination prices, and a destination with no tier prices
+    // nothing to book: each walk still ends at the reserve station, naming the account it landed on.
     let priced = tiered(Pool {
         members: vec![("a", 0)],
         ..Pool::default()
@@ -23300,14 +23539,6 @@ fn a_placement_or_a_move_that_books_nothing_records_reserve_none_with_the_accoun
             &priced,
             SelectRequest {
                 count: true,
-                ..placing(&priced, "r-1", "s1", T)
-            },
-        ),
-        (
-            "probe",
-            &priced,
-            SelectRequest {
-                probe: true,
                 ..placing(&priced, "r-1", "s1", T)
             },
         ),

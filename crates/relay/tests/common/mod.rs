@@ -23,7 +23,8 @@ use phoebis_relay::{
     ShutdownMark, UpstreamGzip,
 };
 use phoebis_routing::{
-    spawn, DecisionRecord, DecisionSummary, RefusalFacts, RouterConfig, RouterEvent, RouterHandle,
+    lane_key, resolve, spawn, ClientClass, DecisionRecord, DecisionSummary, RefusalFacts, Report,
+    RouterConfig, RouterEvent, RouterHandle, SelectRequest, SelectResult,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Failover, Identity,
@@ -1225,6 +1226,79 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
     );
     set_header(&mut req, "x-claude-code-session-id", session);
     req
+}
+
+static NEXT_PIN: AtomicU64 = AtomicU64::new(0);
+
+/// Places the pin of `session`'s `agent` on `model` under the harness key through the router's own selection, asked
+/// as the relay asks it for a request's first wire attempt, then ends the selection as the relay ends a request that
+/// used nothing, so no booking stands. Nothing goes upstream and no bus event leaves, so a case that sends a keepalive
+/// probe holds the pin the probe renews without a real request's counts. The account the selection placed it on.
+pub async fn pin_session(h: &Harness, session: &str, agent: &str, model: &str) -> String {
+    let snapshot = h.router.snapshot();
+    let key = snapshot
+        .key("desktop")
+        .expect("the harness key is in the snapshot")
+        .clone();
+    let folded = phoebis_store::canonical_id(model);
+    let canonical = h.catalog.canonical_for(&folded).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let request_id = format!("pin-{}", NEXT_PIN.fetch_add(1, Ordering::Relaxed));
+    let answer = h
+        .router
+        .select(SelectRequest {
+            request_id: request_id.clone(),
+            attempt: 1,
+            seq: 1,
+            key_id: key.id.clone(),
+            key_generation: key.created_at,
+            agent_id: agent.into(),
+            session_id: session.into(),
+            candidates: resolve(&snapshot, &key, &canonical, &folded)
+                .expect("the pool's model rules allow the model"),
+            canonical_model: canonical.clone(),
+            folded_model: folded,
+            portable: true,
+            credit_account: None,
+            attempted: Vec::new(),
+            now,
+            received_at: now,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            boundaries: Arc::from([]),
+            client: ClientClass::ClaudeCode,
+            entrypoint: None,
+            static_boundaries: Arc::from([]),
+            marker: true,
+            parent_agent_id: None,
+            failed_over: None,
+            holds: Vec::new(),
+            dialed: false,
+            held_out: false,
+            lane: lane_key(&canonical, "standard", "none", "-"),
+            fast: false,
+            classifier: false,
+            body_tokens: 0,
+            effort: None,
+        })
+        .await
+        .expect("the router answers the selection");
+    let SelectResult::Selected(selection) = answer.result else {
+        panic!("the session's selection placed no pin: {:?}", answer.result)
+    };
+    h.router
+        .report(Report::Ended {
+            request_id,
+            attempt: 1,
+            at: now,
+            cause: "canceled",
+        })
+        .await;
+    selection.account.id
 }
 
 /// The OAuth non-first-party fixture with its `messages` replaced, so a scenario sends a real conversation turn

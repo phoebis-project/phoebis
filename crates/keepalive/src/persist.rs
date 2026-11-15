@@ -126,7 +126,6 @@ pub(crate) struct PersistedAgent {
     pub hold_counted: bool,
     pub paused: bool,
     pub probes: u64,
-    pub migrations: u64,
     pub usage: PersistedUsage,
     pub unanswered: Vec<PersistedUnanswered>,
     pub kept: Vec<PersistedKept>,
@@ -536,7 +535,6 @@ impl PersistedAgent {
             hold_counted: agent.hold_counted,
             paused: agent.paused,
             probes: agent.probes,
-            migrations: agent.migrations,
             usage: persisted_usage(&agent.usage),
             unanswered: agent
                 .unanswered
@@ -641,7 +639,6 @@ impl PersistedAgent {
         agent.hold_counted = self.hold_counted;
         agent.paused = self.paused;
         agent.probes = self.probes;
-        agent.migrations = self.migrations;
         agent.usage = probe_usage(self.usage);
         agent.unanswered = self
             .unanswered

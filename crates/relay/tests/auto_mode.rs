@@ -310,6 +310,7 @@ async fn a_probe_under_an_off_key_loses_the_beta_as_an_inference_does() {
     for pool in [PoolSpec::default(), key_off()] {
         let up = FakeUpstream::start(vec![messages_rule(json_200())]).await;
         let h = harness(&up, &[account()], pool).await;
+        pin_session(&h, FIRST_PARTY_SESSION, "main", "claude-sonnet-4-5").await;
         // The engine replays the recipe's head with no credential and no recorded head.
         let mut req = request_from_fixture(&head, native, KEY);
         remove_header(&mut req, "authorization");

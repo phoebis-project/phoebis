@@ -8,7 +8,6 @@ use phoebis_routing::{PinUsage, SEVEN_DAY};
 use phoebis_store::AccountKind;
 
 use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
-use crate::probe::{ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
 
 /// The serving attempt's funding as the credit and the probe price it: one `Copy` value the saved forms convert at
@@ -108,9 +107,9 @@ pub(crate) fn settlement_unit(
 /// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, the one every
 /// reader groups an unattributed row under, since an empty string would read as an account of its own. A client the
 /// carrier holds none of takes the reserved id too, as an agent restored from a save that predates its label does
-/// until its next request. A `fast` delta files under speed `fast`: a credit, a skip or a migration mark at its
-/// recipe's speed, beside the fast requests the recipe keeps warm, and a settlement at its probe's answer's, beside the
-/// probe's own request row.
+/// until its next request. A `fast` delta files under speed `fast`: a credit or a skip at its recipe's speed, beside
+/// the fast requests the recipe keeps warm, and a settlement at its probe's answer's, beside the probe's own request
+/// row.
 #[allow(clippy::too_many_arguments)]
 fn delta(
     at: i64,
@@ -147,34 +146,6 @@ fn delta(
 }
 
 impl Engine {
-    /// Every probe the upstream served lands here, landed on its recipe or not: the probe is the pool's whatever
-    /// happened to the recipe while it was in flight. A probe that migrated its session counts on its key. The delta
-    /// carries no dollar and no token, since the probe's own request row carries its counts, which a reader prices.
-    /// The mark files at `now`, the probe's completion, while that request row files at the probe's receipt, so a probe
-    /// answered past an hour's end leaves the two in different hours.
-    pub(crate) fn record_probe(&self, record: &ProbeRecord, now: i64) {
-        // The migration is all the delta carries, so any other probe's would fold a row of zeros under the credit key,
-        // which reads as an empty group of its own.
-        if record.outcome != ProbeOutcome::Migrated {
-            return;
-        }
-        let mut d = delta(
-            now,
-            &record.key,
-            record.key_generation,
-            &record.pool_id,
-            Some(&record.account),
-            &record.canonical_model,
-            "probe",
-            record.client.as_deref(),
-            record.user_agent.as_deref(),
-            record.fast,
-            record.funding,
-        );
-        d.probe_migrated = 1;
-        self.parts.ledger.record(Record::Keepalive(d));
-    }
-
     /// One request the previous recipe kept warm, its keys read off the agent under the lock into `credit`, so nothing
     /// here needs the lock back. `tier` and `band` are its request row's, so the credit prices at the cells and the
     /// windows that row does.

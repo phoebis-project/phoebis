@@ -97,7 +97,6 @@ pub(crate) enum ProbeOutcome {
     Exhausted,
     Failed,
     Held,
-    Migrated,
     Ok,
     RateLimited,
     Rejected,
@@ -109,8 +108,8 @@ pub(crate) enum ProbeOutcome {
 /// fails to build here rather than counting as `failed` unread.
 pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'static str {
     match outcome {
-        ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
-        ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
+        ProbeOutcome::Ok if cache_read => "landed",
+        ProbeOutcome::Ok => "cold",
         ProbeOutcome::Held => "held",
         ProbeOutcome::Canceled
         | ProbeOutcome::Exhausted
@@ -121,27 +120,10 @@ pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'
     }
 }
 
-/// The most uncached input a migrated probe may report and still cover, in tokens: what a body carries after its last
-/// cache marker, which the upstream neither reads nor writes. A measured probe on a main turn's body, whose last
-/// marker sits on its last block, carried 2. A body that leaves more than this after its last marker reports that
-/// tail on every probe, so its uncached input proves nothing and its count decides.
-const MIGRATED_UNCACHED_MAX: u64 = 64;
-
-/// The coverage judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's.
-/// A probe on its own account covers by reading back the count `expected` holds, the last request's read and write or,
-/// after a migrated probe that covered, what that probe counted. A migrated probe wrote the prefix on its new account,
-/// and it covers where its read and write reach that count or where it read or wrote some of it and left at most
-/// `MIGRATED_UNCACHED_MAX` tokens uncached. An upstream can count a cold write below the warm read of the same prompt,
-/// and every token of a prompt is read, written or uncached, so a probe that left that little uncached read or wrote
-/// the rest whatever the count says. A probe that reports no cache read and no cache write covers nothing, whatever it
-/// left uncached, and the probe counter keeps `cold` for it.
-pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool {
-    if migrated {
-        usage.evidence() >= expected
-            || (usage.evidence() > 0 && usage.input <= MIGRATED_UNCACHED_MAX)
-    } else {
-        usage.read >= expected
-    }
+/// The coverage judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's:
+/// a probe covers by reading back the count `expected` holds, the last request's read and write.
+pub(crate) fn covers(usage: &ProbeUsage, expected: u64) -> bool {
+    usage.read >= expected
 }
 
 /// The counts one probe used and how it ended, from the job and the exchange alone. Whether the recipe it ran for
@@ -153,19 +135,13 @@ pub(crate) struct ProbeRecord {
     pub(crate) agent_id: String,
     pub(crate) canonical_model: String,
     /// The client and the user agent the probe's own request row keys: the job's label, and `user_agent_of` over the
-    /// headers the probe replayed, the read the ledger makes for that row. The mark keys both, and the charge carries
-    /// them on to a settlement.
+    /// headers the probe replayed, the read the ledger makes for that row. The charge carries both on to a settlement.
     pub(crate) client: Option<String>,
-    /// The recipe carried `speed: "fast"`, the speed its migration mark files under. The probe's cost and its waste
-    /// file under the speed its answer reported, the `speed` of `usage`.
-    pub(crate) fast: bool,
     /// The served account's kind and class as the leg that answered stamped them, off the answer rather than the
     /// registry, and whether the answer reported overage in use: the facts its request row files under, so the credit
     /// row keys the same funding even when the account leaves while the probe is in flight, and the settlement unit
     /// follows the same side. No kind where no leg answered, which prices nothing.
     pub(crate) funding: AttemptFunding,
-    pub(crate) key: SessionKey,
-    pub(crate) key_generation: i64,
     pub(crate) outcome: ProbeOutcome,
     pub(crate) pool_id: String,
     pub(crate) usage: ProbeUsage,
@@ -359,14 +335,9 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     engine
         .lock()
         .apply_probe(&job, exchange, &record, covered_unit, now);
-    engine.record_probe(&record, now);
     // Read off the answer rather than off what the fenced half did with it, so a probe whose recipe moved on while it
     // was in flight, or paused on its answer, still counts as the upstream served it.
-    let cache_read = covers(
-        record.outcome == ProbeOutcome::Migrated,
-        &record.usage,
-        job.expected,
-    );
+    let cache_read = covers(&record.usage, job.expected);
     engine.parts.metrics.observe_probe(
         &record.pool_id,
         probe_outcome_label(record.outcome, cache_read),
@@ -380,9 +351,8 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
 
 impl Inner {
     /// The immutable half: the outcome the exchange had, the counts it used and their prompt-length band on `table`,
-    /// the price revision in force at `at`, the relay's receipt of the probe.
-    /// A migrated probe is one the relay served on an account other than the job's; it is priced like any other
-    /// and reported as migrated.
+    /// the price revision in force at `at`, the relay's receipt of the probe. The record files under the account that
+    /// served the probe, which the answer names.
     pub(crate) fn probe_record(
         job: &ProbeJob,
         exchange: &Exchange,
@@ -394,10 +364,7 @@ impl Inner {
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
             client: job.client_label.clone(),
-            fast: job.recipe.fast,
             funding: AttemptFunding::default(),
-            key: job.key.clone(),
-            key_generation: job.key_generation,
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
@@ -429,9 +396,6 @@ impl Inner {
             record.usage = usage;
             let counts = typed(usage);
             record.band = table.band_of(&job.canonical_model, counts.prompt_tokens());
-        }
-        if record.account != job.account {
-            record.outcome = ProbeOutcome::Migrated;
         }
         record
     }
@@ -505,9 +469,7 @@ impl Inner {
             }
             // The idle limit keeps its probes pending until their entry lapses or a turn reads them, so a success
             // still in flight at the ceiling joins them by the entry it wrote, computed as the landing computes it.
-            if label == Wasted::IdleLimit
-                && matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated)
-            {
+            if label == Wasted::IdleLimit && record.outcome == ProbeOutcome::Ok {
                 if let Exchange::Answered(result) = &exchange {
                     if let Some(agent) = agent_mut(&mut self.sessions, key, agent_id)
                         .filter(|agent| agent.incarnation == job.incarnation)
@@ -550,9 +512,7 @@ impl Inner {
             Exchange::Canceled | Exchange::TimedOut => None,
         };
         let result = match answered {
-            Some(result) if matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated) => {
-                result
-            }
+            Some(result) if record.outcome == ProbeOutcome::Ok => result,
             answered => {
                 self.probe_error(
                     key,
@@ -568,8 +528,7 @@ impl Inner {
         // The upstream served this one and the pool was charged for it, so it goes on the recipe's own books
         // here, before any branch below pauses the recipe over what the answer said: the settlement a stop leaves
         // would otherwise disagree with the ledger. Every probe since the last real request is unanswered until one
-        // arrives, a migrated one at its price like any other.
-        let migrated = record.outcome == ProbeOutcome::Migrated;
+        // arrives.
         // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
         // pauses still settles by its own entry.
         let previous_ms = agent.ttl_ms;
@@ -585,10 +544,10 @@ impl Inner {
             expires: job.started + ttl,
             covered: false,
         });
-        let Some(account) = result.account.clone() else {
+        if result.account.is_none() {
             self.pause(key, agent_id, Reason::MissingAccount);
             return;
-        };
+        }
         let body = result.body.unwrap_or_default();
         let root: Option<Value> = serde_json::from_slice(&body).ok();
         let output_known = root
@@ -610,22 +569,13 @@ impl Inner {
             self.pause(key, agent_id, Reason::UnexpectedOutput);
             return;
         }
-        if migrated {
-            agent.account = Some(account.clone());
-            agent.migrations += 1;
-            agent.cold = 0;
-        }
         // Full coverage is the whole prefix read back, which is what the next real request would read. A write
-        // beside it is the prefix rebuilt, which the cold streak counts. A migrated probe wrote the prefix on its new
-        // account instead: it covers by its count or, with a read or a write, by what it left uncached, and it
-        // counts toward no cold streak.
-        let covered = covers(migrated, &usage, job.expected);
-        if !migrated {
-            if covered {
-                agent.cold = 0;
-            } else {
-                agent.cold += 1;
-            }
+        // beside it is the prefix rebuilt, which the cold streak counts.
+        let covered = covers(&usage, job.expected);
+        if covered {
+            agent.cold = 0;
+        } else {
+            agent.cold += 1;
         }
         let cold = agent.cold;
         if cold >= cold_limit {
@@ -642,9 +592,9 @@ impl Inner {
             );
             return;
         }
-        // A probe on its own account that read none of the prefix and wrote all of it rebuilt the entry, which the cold
-        // streak counts instead. Any other probe that does not cover never warmed the whole entry.
-        let rebuilt = !migrated && usage.read == 0 && usage.evidence() >= job.expected;
+        // A probe that read none of the prefix and wrote all of it rebuilt the entry, which the cold streak counts
+        // instead. Any other probe that does not cover never warmed the whole entry.
+        let rebuilt = usage.read == 0 && usage.evidence() >= job.expected;
         if !covered && !rebuilt {
             self.pause(key, agent_id, Reason::PartialCacheCoverage);
             return;
@@ -663,14 +613,6 @@ impl Inner {
         agent.cache_started = job.started;
         agent.expires = Some(job.started + ttl);
         agent.jitter_frac = rand::random::<f64>();
-        if migrated {
-            // The next probe runs on this account and reads the entry this one left, which holds what this probe
-            // counted. An upstream can count a cold write below the last request's warm read, so that request's count
-            // would read the next probe short.
-            if let Some(observation) = agent.current.as_mut() {
-                observation.expected = usage.evidence();
-            }
-        }
         // A full read and an accepted complete rewrite alike leave the whole prefix in an entry the next request
         // can read, so either covers from here.
         if let Some(probe) = agent.unanswered.last_mut() {
@@ -701,15 +643,17 @@ impl Inner {
     /// without a pause, since only a raised budget or the period's end clears it, never a wait. A probe the router
     /// refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no idle tick. A
     /// probe the selector answered on its pinned member's standing holds under that standing: `Paused` for the
-    /// operator's pause, `IneligibleCredential` for a subscription that ended between the gate's read and the
-    /// selection (both read `paused` in the console), a retry for a member this probe already tried, or for one whose
-    /// budget the degraded ledger leaves unknown, which the ledger's recovery clears without a real request. A pinned
-    /// member a leg of the probe marked for re-authentication pauses under the authentication reason. The untimed
-    /// exhaustion 503, when every account of the pool was unusable at selection, retries under its own reason. A 5xx
-    /// forwarded from upstream retries. A 403 under `client_contract` or `client_drift` refuses the probe's own request
-    /// shape and pauses as an unsupported probe, any other 401 or 403 pauses under the authentication reason, any other
-    /// 4xx is a shape the upstream refuses, and a canceled, timed-out, or lost exchange (status 0) retries as a
-    /// transport error.
+    /// operator's pause and for a deleted member or one in a state other than ready, `IneligibleCredential` for a
+    /// subscription that ended between the gate's read and the selection (both read `paused` in the console), a retry
+    /// for a member this probe already tried or for one whose budget the degraded ledger leaves unknown, which the
+    /// ledger's recovery clears without a real request, and `NoPin` for a session that held no pin to renew, paused
+    /// until its next real request. A pinned member's cooldown, credits block, overage or spend cap answers a 429,
+    /// which retries under `probe_quota_exhausted` as above. A pinned member a leg of the probe marked for
+    /// re-authentication pauses under the authentication reason. The untimed exhaustion 503, when every account of the
+    /// pool was unusable at selection, retries under its own reason. A 5xx forwarded from upstream retries. A 403 under
+    /// `client_contract` or `client_drift` refuses the probe's own request shape and pauses as an unsupported probe,
+    /// any other 401 or 403 pauses under the authentication reason, any other 4xx is a shape the upstream refuses, and
+    /// a canceled, timed-out, or lost exchange (status 0) retries as a transport error.
     pub(crate) fn probe_error(
         &mut self,
         key: &SessionKey,
@@ -774,6 +718,12 @@ impl Inner {
                 self.pause(key, agent_id, Reason::ProbeAuthenticationError);
                 return;
             }
+            // A retry would send a probe that still has no pin to renew, so the recipe waits for the session's next
+            // real request.
+            (true, Some(ProbeObstacle::NoPin)) => {
+                self.pause(key, agent_id, Reason::NoPin);
+                return;
+            }
             (_, Some(ProbeObstacle::Budget)) if outcome == ProbeOutcome::RateLimited => {
                 // The pinned member reached its spend budget between the gate's read and the selection. A pause
                 // would outlive the budget (nothing but a real request undoes one), and the reason alone leaves
@@ -782,18 +732,29 @@ impl Inner {
                 self.set_reason(key, agent_id, Reason::Budget);
                 return;
             }
+            // The four waits reach here as a 429, which retries on the ladder below with the answer's wait.
             (
                 false,
                 Some(
                     ProbeObstacle::Attempted
                     | ProbeObstacle::BudgetUnknown
+                    | ProbeObstacle::NoPin
                     | ProbeObstacle::Operator
                     | ProbeObstacle::PoolMoved
                     | ProbeObstacle::ReauthRequired
                     | ProbeObstacle::SubscriptionEnded,
                 ),
             )
-            | (_, Some(ProbeObstacle::Budget))
+            | (
+                _,
+                Some(
+                    ProbeObstacle::Budget
+                    | ProbeObstacle::Cooldown
+                    | ProbeObstacle::Credits
+                    | ProbeObstacle::Overage
+                    | ProbeObstacle::Spent,
+                ),
+            )
             | (_, None) => {}
         }
         if outcome == ProbeOutcome::Held {
@@ -1074,6 +1035,7 @@ mod tests {
                 true,
             ),
             (ProbeObstacle::Attempted, Reason::RetryableProbeError, false),
+            (ProbeObstacle::NoPin, Reason::NoPin, true),
         ] {
             let (mut inner, key) = one_agent_inner();
             inner.probe_error(
@@ -1096,6 +1058,32 @@ mod tests {
                 "the {obstacle:?} answer holds the agent under its own standing, not the exhausted pool"
             );
         }
+    }
+
+    /// A wait on the pinned member clears on its own, so the probe goes back on the ladder no sooner than the
+    /// answer's header rather than pausing until a real request.
+    #[test]
+    fn a_pinned_cooldowns_429_retries_after_its_header_under_probe_quota_exhausted() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(
+            &key,
+            "main",
+            ProbeOutcome::RateLimited,
+            Some(&answered(
+                429,
+                Some("accounts_exhausted"),
+                Some(ProbeObstacle::Cooldown),
+                Some(120),
+            )),
+            false,
+            1_000,
+        );
+        let agent = &inner.sessions[&key].agents["main"];
+        assert_eq!(
+            (agent.paused, agent.reason, agent.retry_at),
+            (false, Reason::ProbeQuotaExhausted, Some(121_000)),
+            "the header's 120 seconds outlast the ladder's first rung"
+        );
     }
 
     #[test]
@@ -1517,16 +1505,13 @@ mod tests {
 
     #[test]
     fn a_probe_reads_landed_cold_or_failed_by_its_outcome_and_its_cache_read() {
-        for outcome in [ProbeOutcome::Migrated, ProbeOutcome::Ok] {
-            assert_eq!(
-                (
-                    probe_outcome_label(outcome, true),
-                    probe_outcome_label(outcome, false)
-                ),
-                ("landed", "cold"),
-                "{outcome:?}"
-            );
-        }
+        assert_eq!(
+            (
+                probe_outcome_label(ProbeOutcome::Ok, true),
+                probe_outcome_label(ProbeOutcome::Ok, false)
+            ),
+            ("landed", "cold")
+        );
         assert_eq!(
             (
                 probe_outcome_label(ProbeOutcome::Failed, true),
@@ -1537,27 +1522,21 @@ mod tests {
     }
 
     #[test]
-    fn a_probe_covers_its_prefix_by_reading_it_back_or_by_writing_it_after_a_migration() {
+    fn a_probe_covers_its_prefix_by_reading_it_back() {
         let usage = |read, write, input| ProbeUsage {
             read,
             write,
             input,
             ..ProbeUsage::default()
         };
-        let over = MIGRATED_UNCACHED_MAX + 1;
         assert_eq!(
             [
-                covers(false, &usage(2_000, 0, 0), 2_000),
-                covers(false, &usage(1_999, 1, 0), 2_000),
-                covers(false, &usage(0, 2_000, 0), 2_000),
-                covers(true, &usage(0, 2_000, over), 2_000),
-                covers(true, &usage(0, 1_999, over), 2_000),
-                covers(true, &usage(0, 1_999, MIGRATED_UNCACHED_MAX), 2_000),
-                covers(true, &usage(0, 0, 0), 2_000),
+                covers(&usage(2_000, 0, 0), 2_000),
+                covers(&usage(1_999, 1, 0), 2_000),
+                covers(&usage(0, 2_000, 0), 2_000),
             ],
-            [true, false, false, true, false, true, false],
-            "a whole read, a partial read, a rebuild, a migrated write, a migrated short write one token over the \
-             bound, a migrated short write at the bound, a migrated probe with no cache evidence"
+            [true, false, false],
+            "a whole read, a partial read, a rebuild"
         );
     }
 }

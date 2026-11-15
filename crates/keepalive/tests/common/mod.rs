@@ -695,6 +695,16 @@ impl Rig {
         })
     }
 
+    /// The router's pin of the rig's session for `agent` on `model`, placed on `account` through the relay harness's
+    /// own selection: the pin a synthetic `selected` event on `account` stands for, which the recipe's probe renews.
+    pub async fn pin(&self, agent: &str, model: &str, account: &str) {
+        assert_eq!(
+            relay_common::pin_session(&self.h, "session", agent, model).await,
+            account,
+            "the router placed the session where the synthetic selection names it"
+        );
+    }
+
     pub fn selected(&self, id: &str, account: &str) -> BusEvent {
         BusEvent::AccountSelected(AccountSelected {
             request_id: id.into(),

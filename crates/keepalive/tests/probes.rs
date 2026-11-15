@@ -1086,161 +1086,8 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
     assert_eq!(probes(&r), agents.len() as u64, "the capacity recovered");
 }
 
-#[tokio::test]
-async fn a_migration_does_not_accumulate_a_cold_streak() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
-        timing: KeepaliveTiming {
-            cold_probe_limit: 3,
-            ..RigSpec::default().timing
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
-    // Probe 1: the pinned account rejects, the sibling serves it cold (a write, no read): migrated.
-    // Probes 2 and 3: cold on the new account. Probe 3 reaches the limit.
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    for _ in 0..3 {
-        r.advance(270_000);
-        r.step().await;
-    }
-    let status = r.status("main");
-    assert_eq!(
-        (
-            status.migrations,
-            status.probes,
-            status.cold,
-            status.reason,
-            status.probe_usage.write
-        ),
-        (1, 3, 2, Reason::Scheduled, 6_000),
-        "{status:?}"
-    );
-    let text = r
-        .metrics
-        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
-    assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#),
-        "the migrated probe's write covers the prefix on its new account: {text}"
-    );
-    assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 2"#),
-        "the two probes after it read nothing back: {text}"
-    );
-    assert_eq!(
-        status.account_id.as_deref(),
-        Some(if first == "a" { "b" } else { "a" })
-    );
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (
-            r.status("main").cold,
-            r.status("main").reason,
-            r.status("main").next_probe_at
-        ),
-        (3, Reason::RepeatedColdProbe, None)
-    );
-}
-
-/// A rig of two equal accounts whose armed recipe counts 2,000 tokens, stepped through one probe that the pinned
-/// account rejects and the sibling answers with `read`, `write` and `input`. Answers the rig and the sibling's secret.
-async fn migrated_probe(read: u64, write: u64, input: u64) -> (Rig, &'static str) {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other) = if first == "a" { (A, B) } else { (B, A) };
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    let answer = format!(
-        r#"{{"id":"msg_p","type":"message","content":[],"usage":{{"input_tokens":{input},"cache_read_input_tokens":{read},"cache_creation_input_tokens":{write},"cache_creation":{{"ephemeral_5m_input_tokens":{write},"ephemeral_1h_input_tokens":0}},"output_tokens":0}}}}"#
-    );
-    r.up.push_credential_rule(other, "/v1/messages", json(200, &answer));
-    r.advance(270_000);
-    r.step().await;
-    (r, other)
-}
-
-/// A probe the relay serves on another account can count fewer tokens than the agent's last request did. What it left
-/// uncached then decides, and the next probe is held to what the migrated probe counted.
-#[tokio::test]
-async fn a_migrated_probe_under_the_count_covers_by_its_uncached_input_and_hands_the_next_probe_its_count(
-) {
-    // The sibling reads 100 tokens and writes 1,500, 400 under the count, and leaves 2 uncached.
-    let (mut r, other) = migrated_probe(100, 1_500, 2).await;
-    let status = r.status("main");
-    assert_eq!(
-        (
-            status.migrations,
-            status.paused,
-            status.reason,
-            status.next_probe_at
-        ),
-        (1, false, Reason::Scheduled, Some(r.now() + 270_000)),
-        "the five-minute entry the probe wrote ends 300 s on, and the rig's lead places the next probe 30 s ahead \
-         of it: {status:?}"
-    );
-    // The next probe reads back the 1,600 tokens the migrated probe counted.
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(1_600, 0));
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(
-        (status.probes, status.cold, status.paused, status.reason),
-        (2, 0, false, Reason::Scheduled),
-        "the entry on the new account holds what the migrated probe counted: {status:?}"
-    );
-    // One token under that count is a partial read of the entry.
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(1_599, 0));
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(
-        (status.probes, status.paused, status.reason),
-        (3, true, Reason::PartialCacheCoverage),
-        "{status:?}"
-    );
-}
-
-/// A body that leaves a long tail after its last cache marker reports that tail as uncached input on every probe, so
-/// its migrated probe is judged on the count alone.
-#[tokio::test]
-async fn a_migrated_probe_under_the_count_that_left_a_long_tail_uncached_pauses_the_recipe() {
-    // The sibling writes 1,500 tokens, 500 under the count, and leaves 1,000 uncached.
-    let (r, _) = migrated_probe(0, 1_500, 1_000).await;
-    let status = r.status("main");
-    assert_eq!(
-        (
-            status.migrations,
-            status.paused,
-            status.reason,
-            status.next_probe_at
-        ),
-        (1, true, Reason::PartialCacheCoverage, None),
-        "{status:?}"
-    );
-}
-
 /// A probe on its own account that reads the whole prefix and writes beside it covers, and the next probe is held to
-/// the same count: only a migrated probe hands the next one what it counted.
+/// the same count.
 #[tokio::test]
 async fn a_probe_on_its_own_account_that_also_writes_leaves_the_next_probe_the_same_count() {
     let mut r = rig(RigSpec {
@@ -1255,14 +1102,8 @@ async fn a_probe_on_its_own_account_that_also_writes_leaves_the_next_probe_the_s
     r.step().await;
     let status = r.status("main");
     assert_eq!(
-        (
-            status.migrations,
-            status.probes,
-            status.cold,
-            status.paused,
-            status.reason
-        ),
-        (0, 1, 0, false, Reason::Scheduled),
+        (status.probes, status.cold, status.paused, status.reason),
+        (1, 0, false, Reason::Scheduled),
         "{status:?}"
     );
     // The next probe reads the 2,000 tokens back and writes nothing.
@@ -2127,6 +1968,7 @@ async fn a_tick_past_the_expiry_with_a_rung_still_due_sends_no_probe_and_lapses_
 #[tokio::test]
 async fn a_probe_pause_survives_late_stream_usage() {
     let r = rig(RigSpec::default()).await;
+    r.pin("main", "claude-sonnet-4-5", "a").await;
     r.engine.observe(r.observed("req", "main", BODY));
     r.engine.observe(r.selected("req", "a"));
     let chunk = phoebis_bus::Event::ResponseChunk(phoebis_bus::ResponseChunk {
@@ -2168,6 +2010,7 @@ async fn shorter_stream_evidence_recomputes_from_the_last_refresh() {
         r#""cache_control":{"type":"ephemeral"}"#,
         r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
     );
+    r.pin("main", "claude-sonnet-4-5", "a").await;
     r.engine.observe(r.observed("req", "main", &body));
     r.engine.observe(r.selected("req", "a"));
     let emit = |bucket: &str| {
@@ -2260,6 +2103,7 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
     };
     // The first turn: the start proves the hour, the delta repeats the total unsplit.
     let first = r.now();
+    r.pin("main", "claude-sonnet-4-5", "a").await;
     r.engine.observe(r.observed("one", "main", &body));
     r.engine.observe(selected_hour("one"));
     r.engine.observe(phase(
@@ -2356,10 +2200,11 @@ fn held_stream() -> Respond {
     }
 }
 
-/// A pool at its cap answers a probe `429 accounts_at_cap` with `Retry-After` the bound: the pool is momentarily
-/// full, so the engine retries at the header's seconds.
+/// A probe whose pinned account is in a state other than ready is answered `operator` while a sibling could take it,
+/// though that sibling sits at its cap, so the probe neither waits for the sibling's slot nor lands there: the recipe
+/// pauses with nothing dialled.
 #[tokio::test]
-async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pausing() {
+async fn a_probe_whose_pinned_account_is_unready_pauses_beside_a_sibling_at_its_cap() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
         pool: PoolSpec {
@@ -2387,7 +2232,7 @@ async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pau
         .unwrap();
     r.h.router.reload().await.unwrap();
 
-    // A second session takes `b`, over its cap of one: the probe's own selection can find nothing free.
+    // A second session takes `b`, over its cap of one.
     let mut req = r.request("main");
     relay_common::set_header(&mut req, "x-claude-code-session-id", "other");
     let other = r.h.app.clone().oneshot(req).await.unwrap();
@@ -2398,14 +2243,19 @@ async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pau
     r.step().await;
     let status = r.status("main");
     assert_eq!(
-        (status.failures, status.next_probe_at.map(|at| at - r.now())),
-        (1, Some(2_000)),
-        "retried after the header rather than paused: {status:?}"
+        (
+            status.paused,
+            status.reason,
+            status.failures,
+            status.next_probe_at
+        ),
+        (true, Reason::Paused, 0, None),
+        "the probe is answered on its pinned member's state: {status:?}"
     );
     assert_eq!(
         relay_common::credentials_seen(&r.up),
         [A, B],
-        "the pool answered at_cap before either account was dialled for the probe"
+        "neither account was dialled for the probe"
     );
     drop(other);
     r.up.release();

@@ -64,6 +64,13 @@ pub fn exhaustion_response(
 pub(crate) fn exhaustion_failure(exhaustion: &Exhaustion, now: i64) -> Failure {
     let (error_type, message, retry_after) = match exhaustion {
         Exhaustion::ModelRejected => return MODEL_REJECTED,
+        // The timed answer's message would be false while a sibling can serve, and only the router's own probe reads
+        // this one.
+        Exhaustion::Pinned { obstacle } if obstacle.waits() => (
+            "rate_limit_error",
+            "the session's pinned account cannot serve this request now",
+            obstacle.until().map(|until| whole_seconds(until, now)),
+        ),
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => (
             "api_error",
             "no account in this pool can serve requests",
@@ -114,6 +121,7 @@ fn exhaustion_class(exhaustion: &Exhaustion) -> FailureClass {
 fn exhaustion_code(exhaustion: &Exhaustion) -> &'static str {
     match exhaustion {
         Exhaustion::ModelRejected => MODEL_REJECTED.code,
+        Exhaustion::Pinned { obstacle } if obstacle.waits() => ACCOUNTS_EXHAUSTED,
         Exhaustion::Untimed | Exhaustion::Pinned { .. } => ACCOUNTS_UNAVAILABLE,
         Exhaustion::Timed { .. } => ACCOUNTS_EXHAUSTED,
         Exhaustion::FastLane { .. } => "fast_lane_exhausted",

@@ -662,23 +662,23 @@ window's wall instant beside its horizon, `wall_seven_day` beside `horizon_seven
 window's burn reads nothing. The wait's stamp, the first reading over the ceiling, belongs to the window whose reset it
 was set under, so a reading whose reset lies an hour or more from that one, earlier or later, opens a new window whose
 wait starts at that reading, while a smaller move is the upstream's drift inside one window. The wait holds the round
-back and nothing else: the request is served as before, a mark already standing moves at its pin's next request, and a
-window inside its wait yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on crosses when
-the stretch the slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the round's horizon
-moves earlier by the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the window is younger
-than twice `burn_average_seconds` (an hour at the default), whatever fired the trigger, because each session's burn
-average still carries the previous window's last half hour over the reset and the projection would apply that rate to a
-horizon of up to five hours. While the hold runs, the routing log's record of the selection reads the shed rule `no`
-with the window's age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep running, a
-weekly window past its wait fires in the 5-hour window's place, and a standing mark still moves. The weekly windows take
-no hold, since the same burst after a weekly reset is a small share of a week over a weekly horizon. A weekly window's
-horizon lies five hours ahead at most, so at the default `weekly_ceiling` of 1.0 a weekly round fires where the window
-would reach its wall inside the next five hours, near its reset or days from it, when the gate also stops placing new
-sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs one round at
-most. The excess is the burn that, removed now, lands the fired window's projection at its horizon on the line it
-crossed, the wall or the window's own ceiling, and under the slow-down the demand's projection at the moved horizon on
-`five_hour_ceiling`. The round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn of the
-round's pins on that window, so the excess sets the amount and the cap bounds it.
+back and nothing else: the request is served as before, a mark already standing moves at its pin's next real request,
+and a window inside its wait yields to the next in the order. The 5-hour window of a pool whose `slow_down` is on
+crosses when the stretch the slow-down reads has stood over `slow_down_stretch_seconds` for its safety wait, and the
+round's horizon moves earlier by the threshold (see [Slow-down](#slow-down), below). No 5-hour round fires while the
+window is younger than twice `burn_average_seconds` (an hour at the default), whatever fired the trigger, because each
+session's burn average still carries the previous window's last half hour over the reset and the projection would apply
+that rate to a horizon of up to five hours. While the hold runs, the routing log's record of the selection reads the
+shed rule `no` with the window's age (`age_five_hour`) against the hold (`hold_five_hour`), the stamp and the wait keep
+running, a weekly window past its wait fires in the 5-hour window's place, and a standing mark still moves. The weekly
+windows take no hold, since the same burst after a weekly reset is a small share of a week over a weekly horizon. A
+weekly window's horizon lies five hours ahead at most, so at the default `weekly_ceiling` of 1.0 a weekly round fires
+where the window would reach its wall inside the next five hours, near its reset or days from it, when the gate also
+stops placing new sessions there. A round runs on an account at most once per `shed_dwell_seconds`, and a selection runs
+one round at most. The excess is the burn that, removed now, lands the fired window's projection at its horizon on the
+line it crossed, the wall or the window's own ceiling, and under the slow-down the demand's projection at the moved
+horizon on `five_hour_ceiling`. The round's target is the lesser of the excess and `shed_cap` (default 0.5) of the burn
+of the round's pins on that window, so the excess sets the amount and the cap bounds it.
 
 With `load_shedding` off no round runs and nothing is marked, and a mark already standing is released at the session's
 next request, which renews the pin in place. The destination gate, the reservations and the two ceilings on every move
@@ -692,16 +692,17 @@ reservation still holds all of it. An account no reservation applies to, an API-
 account with no Fable reading, never reads over. The test keeps a stamp of its own from its first reading over and fires
 once the room has read short for the projection's wait: a quarter of the time from the stamp to the 7-day reset, at most
 twice `burn_average_seconds`. The wait holds back the round alone, as a window's wait does, so a mark already standing
-moves at its pin's next request. One dwell paces this round and a window's round alike on an account. The round's window
-is `seven_day`, and its record reads that window's prediction, projection, horizon and ceiling as a projection round's
-does, names its trigger `fable_reservation` and states the reservation as `fable_reservation`. The round walks the pins
-whose model draws no model week, since the account's Fable use is what the reservation keeps room for, so a Fable pin
-stays out of it as `fable_model`, though it draws the 7-day window. Every walked pin's burn spends the reserved room, so
-the round's target is `shed_cap` of their burn, and its record states that burn as the excess. The order, the pick, the
-guards and the destination gate are the round's own, and each mark carries the window `seven_day`. While the room reads
-short, the shed rule's line in the routing log's record of the selection names the reservation (`fable_reservation`),
-inside the wait the stamp and the wait (`over_since_fable_reservation`, `wait_fable_reservation`), and once the test
-fires `trigger` `seven_day` and `fired_by` `fable_reservation`, with no `excess`, which a window's trigger alone names.
+moves at its pin's next real request. One dwell paces this round and a window's round alike on an account. The round's
+window is `seven_day`, and its record reads that window's prediction, projection, horizon and ceiling as a projection
+round's does, names its trigger `fable_reservation` and states the reservation as `fable_reservation`. The round walks
+the pins whose model draws no model week, since the account's Fable use is what the reservation keeps room for, so a
+Fable pin stays out of it as `fable_model`, though it draws the 7-day window. Every walked pin's burn spends the
+reserved room, so the round's target is `shed_cap` of their burn, and its record states that burn as the excess. The
+order, the pick, the guards and the destination gate are the round's own, and each mark carries the window `seven_day`.
+While the room reads short, the shed rule's line in the routing log's record of the selection names the reservation
+(`fable_reservation`), inside the wait the stamp and the wait (`over_since_fable_reservation`,
+`wait_fable_reservation`), and once the test fires `trigger` `seven_day` and `fired_by` `fable_reservation`, with no
+`excess`, which a window's trigger alone names.
 
 The round orders the pool's pins on the account, cold ones first, those whose move drops no thinking by burn and then
 the others by burn over the thinking they drop at the weight of output, then warm ones by burn over their move's size. A
@@ -757,8 +758,8 @@ carried that word, `unpriced` when no burn was priced, `last_pin` when every pin
 too little burn unmarked, and `standing` when every pin walked was a pending move. Either way the round is recorded, so
 the dwell holds.
 
-A marked session moves at its next request, the request that ran the round included, since the mark check follows the
-round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
+A marked session moves at its next real request, the request that ran the round included, since the mark check follows
+the round. It moves only to a sibling it fits, the one the strategy ranks first with the longest runway among its ties,
 never within `shed_dwell_seconds` back to an account that shed it, and with none it renews in place and keeps its mark.
 A mark from a round on plan quota moves a standard request alone: a fast-mode request of the marked session stays where
 it is. A pin on an account cooling for the session's model, marked or not, is replaced rather than renewed, with
@@ -770,12 +771,12 @@ expires, or its account heals: when the account's projection on the marked windo
 next request, or, for a mark the stretch made, when the stretch reads at or under `slow_down_stretch_seconds`, the mark
 clears and the pin stays. On a pool that sheds on the Fable reservation, a `seven_day` mark on a pin whose model draws
 no model week heals only once the account's 7-day room also reads at or above its reservation, so a mark of the
-reservation's round stands while either test reads over and does not clear on the projection alone before its pin
-moves. A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the
-pause between two rounds on one account and the time a shed session keeps off the account that shed it. The marks live
-on the pins' rows in the registry, beside each account's last round, so a restart neither forgets a mark nor starts a
-fresh round inside the dwell. A held request does not survive one (the relay's open connection closes and the client
-retries), and the routing log's router started row says so.
+reservation's round stands while either test reads over and does not clear on the projection alone before its pin moves.
+A later round adds its marks beside the standing ones. `shed_dwell_seconds` (default 900) thus has two roles, the pause
+between two rounds on one account and the time a shed session keeps off the account that shed it. The marks live on the
+pins' rows in the registry, beside each account's last round, so a restart neither forgets a mark nor starts a fresh
+round inside the dwell. A held request does not survive one (the relay's open connection closes and the client retries),
+and the routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -1237,11 +1238,16 @@ proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has
 with the `overage` claim, the same one an account in overage carries ([Pools](#pools)), and a probe pinned to a member
 at its budget is answered with the end of the latest period whose budget is reached as its reset, whatever its siblings
 hold. A probe whose pinned account is disabled, past its subscription's end, or a member with a budget while the ledger
-is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one that already tried its
-pinned account while a sibling could take it, where moving would otherwise land the pin on that sibling. Such a probe
-never moves the pin, and its request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the
-`phoebis_attention` gauge does not count it. A probe that already tried its pinned account with no sibling to take it
-gets the pool's own answer above.
+is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one whose session holds no
+pin. While a sibling could take it, a probe that already tried its pinned account gets the same `503`, and so does one
+whose pinned account was deleted or is in a state other than ready, under the obstacle `operator`. A probe whose pinned
+account cools, is out of usage credits for a fast request, is in overage under `never` or is a usage-based seat at its
+spend cap is answered `429` `accounts_exhausted` while a sibling could take it, with the wait as its `retry-after` where
+the obstacle names one. Such a probe never moves the pin and creates none, and its request row reads rejected rather
+than exhausted, so the `pool_exhausted` condition of the `phoebis_attention` gauge does not count it. With no sibling to
+take it, a probe that already tried its pinned account, one whose pinned account was deleted or is in a state other than
+ready, and one whose pinned account cools, is out of credits, is in overage or is at its spend cap get the pool's own
+answer above.
 
 Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
 `anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees one

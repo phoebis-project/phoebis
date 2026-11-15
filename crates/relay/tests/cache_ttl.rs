@@ -685,6 +685,8 @@ async fn a_probe_writes_with_its_agents_branch_ttl() {
         policy(r#"{"enabled":true,"plan":{"main":"5m","subagent":"1h"}}"#),
     )
     .await;
+    pin_session(&h, "s1", "main", "claude-sonnet-4-5").await;
+    pin_session(&h, "s1", "sub-1", "claude-sonnet-4-5").await;
     let probe = || phoebis_relay::Probe {
         key_id: "desktop".into(),
         key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
