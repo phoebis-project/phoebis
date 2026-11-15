@@ -16,7 +16,7 @@ use phoebis_ledger::{funding_of, Speed};
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_relay::{authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{
-    ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot, HOUR_MS,
+    ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot,
 };
 use phoebis_store::{AccountRow, AccountState, CompanionKey, PoolRow};
 use serde::Serialize;
@@ -167,7 +167,7 @@ async fn allowance(
                 },
                 strategy: pool.strategy.as_str(),
             },
-            accounts: accounts(&companion_key, &snapshot, pool, projections, now),
+            accounts: accounts(&companion_key, &snapshot, pool, projections),
             pins: session_pins(&companion_key, pins, now),
         };
         return json(
@@ -197,14 +197,13 @@ fn accounts(
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
     projections: Vec<AccountProjection>,
-    now: i64,
 ) -> Vec<AccountView> {
     let mut accounts: Vec<AccountView> = projections
         .into_iter()
         .filter_map(|projection| {
             let row = snapshot.account(&projection.account_id)?;
             active(row, projection.obstacle.as_ref())
-                .then(|| account_view(companion_key, snapshot, pool, row, projection, now))
+                .then(|| account_view(companion_key, snapshot, pool, row, projection))
         })
         .collect();
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
@@ -223,7 +222,6 @@ fn account_view(
     pool: &PoolRow,
     row: &AccountRow,
     projection: AccountProjection,
-    now: i64,
 ) -> AccountView {
     let funding = funding_of(
         Some(row.kind),
@@ -244,7 +242,7 @@ fn account_view(
                 demand_per_hour: w.demand,
                 projected_at_horizon: w.projection,
                 ceiling: line,
-                runway_minutes: runway_minutes(w.predicted, w.burn, line, now, w.wall),
+                runway_minutes: runway_minutes(w.runway_ms),
             };
             (window, view)
         })
@@ -291,9 +289,7 @@ fn session_pins(companion_key: &CompanionKey, pins: Vec<PinStanding>, now: i64) 
                 last_used_at: stamp(pin.last_used_at),
                 warm: warm(pin, standing.auxiliary_only, now),
                 warm_until: stamp(warm_until(pin, standing.auxiliary_only)),
-                runway_minutes: standing
-                    .runway_ms
-                    .map(|ms| u64::try_from(ms / MINUTE_MS).unwrap_or(0)),
+                runway_minutes: runway_minutes(standing.runway_ms),
                 binding_window: standing.binding,
                 slow_down: standing.slow_down.map(|entry| PinSlowDownView {
                     factor: entry.factor,
@@ -306,34 +302,10 @@ fn session_pins(companion_key: &CompanionKey, pins: Vec<PinStanding>, now: i64) 
     pins
 }
 
-/// The whole minutes until `predicted` reaches `ceiling` at `burn_per_hour`. A window at the ceiling has none left even
-/// with no burn, since an idle exhausted window is spent. With no burn, or where the runway reaches `wall`, it is
-/// unbounded (`None`), since the window resets before the ceiling. A `wall` at or before `now` is a reading past its
-/// reset, which bounds nothing.
-fn runway_minutes(
-    predicted: f64,
-    burn_per_hour: f64,
-    ceiling: f64,
-    now: i64,
-    wall: Option<i64>,
-) -> Option<u64> {
-    if predicted >= ceiling {
-        return Some(0);
-    }
-    if burn_per_hour <= 0.0 {
-        return None;
-    }
-    let hours = (ceiling - predicted) / burn_per_hour;
-    // Compared with the wall before the floor: the floor drops the runway's last partial minute, so a wall inside
-    // that minute would read as after the ceiling.
-    if wall
-        .is_some_and(|wall| wall > now && hours * HOUR_MS as f64 >= wall.saturating_sub(now) as f64)
-    {
-        return None;
-    }
-    // Floored with a tolerance: the difference of two shares can land a hair under a whole minute (0.95 - 0.4 is
-    // 0.5499999999999999), which a bare floor reads a minute short.
-    Some((hours * 60.0 + 1e-9).floor() as u64)
+/// The router's runway in whole minutes, floored, a window's and a pin's alike. The router answers the milliseconds and
+/// whether the runway is bounded, so the route adds no rule of its own.
+fn runway_minutes(runway_ms: Option<i64>) -> Option<u64> {
+    runway_ms.map(|ms| u64::try_from(ms / MINUTE_MS).unwrap_or(0))
 }
 
 /// `ms` in RFC 3339 at UTC, held inside jiff's range so a field the contract types as a time is always one.
@@ -345,43 +317,4 @@ fn stamp(ms: i64) -> String {
             Timestamp::MAX
         })
         .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const NOW: i64 = 1_000_000;
-
-    #[test]
-    fn a_runway_is_zero_at_the_ceiling_unbounded_without_burn_and_cut_by_the_wall() {
-        let wall = NOW + 10 * HOUR_MS;
-        assert_eq!(runway_minutes(0.98, 0.0, 0.95, NOW, Some(wall)), Some(0));
-        assert_eq!(runway_minutes(0.4, 0.0, 0.95, NOW, Some(wall)), None);
-        // The ceiling is 5.5 hours away and the wall one hour.
-        assert_eq!(
-            runway_minutes(0.4, 0.1, 0.95, NOW, Some(NOW + 60 * MINUTE_MS)),
-            None
-        );
-        // A wall at `now` is a reading already past its reset.
-        assert_eq!(runway_minutes(0.4, 0.1, 0.95, NOW, Some(NOW)), Some(330));
-        // 59.52 minutes to the ceiling end inside a wall an hour out, so the runway reads its whole 59.
-        assert_eq!(
-            runway_minutes(0.45, 0.504, 0.95, NOW, Some(NOW + 60 * MINUTE_MS)),
-            Some(59)
-        );
-    }
-
-    #[test]
-    fn a_runway_under_a_minute_is_unbounded_only_when_the_wall_comes_first() {
-        // 0.01 / 0.8 hours puts the ceiling 45 seconds away.
-        assert_eq!(
-            runway_minutes(0.94, 0.8, 0.95, NOW, Some(NOW + 30_000)),
-            None
-        );
-        assert_eq!(
-            runway_minutes(0.94, 0.8, 0.95, NOW, Some(NOW + 60_000)),
-            Some(0)
-        );
-    }
 }

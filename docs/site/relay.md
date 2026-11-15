@@ -635,7 +635,7 @@ Each window:
 | `demand_per_hour` | The share they would burn an hour with no slow-down holding them |
 | `projected_at_horizon` | The predicted share at the earlier of `horizon_at` and five hours from now |
 | `ceiling` | The share of the window the router fills an account to: the pool's `five_hour_ceiling` on `five_hour` and its `weekly_ceiling` on the 7-day window and each model week ([Pools](routing.md#pools)) |
-| `runway_minutes` | The whole minutes until the share reaches the window's `ceiling` at `burn_per_hour`: `0` at or above it, and `null` where nothing burns or where the window resets before it is reached |
+| `runway_minutes` | The whole minutes until the share reaches the window's `ceiling` at the account's burn, with the band's hours weighed as the projection weighs them ([The windows the router works from](routing.md#the-windows-the-router-works-from)): `0` at or above it, and `null` where nothing burns or where the window resets or the account's subscription ends before it is reached |
 
 Each spend row:
 
@@ -657,7 +657,7 @@ Each spend row:
 | `last_used_at` | When a request last used it |
 | `warm` | Whether the pin's cache entry is alive at `now`, by the selector's own reading |
 | `warm_until` | The first instant `warm` reads false: the last refresh, or the last use for a pin only auxiliary requests have used since its placement, plus the cache TTL |
-| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling of the window that binds among those the pin's model draws, `null` where no window bounds it |
+| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling of the window that binds among those the pin's model draws, each window's runway read by the rule of a window's `runway_minutes`, and `null` where no window bounds it |
 | `binding_window` | The window the runway reads, `null` unless the runway is bounded |
 | `slow_down` | `null` without an entry in force on the account, else `factor` and `speed` |
 

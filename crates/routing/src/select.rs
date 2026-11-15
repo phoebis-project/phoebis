@@ -3091,6 +3091,30 @@ pub(crate) fn passes_reset(runway_ms: i64, reset: Option<i64>, now: i64) -> bool
     reset.is_some_and(|reset| now.saturating_add(runway_ms) > reset)
 }
 
+/// The milliseconds the banded `burn` takes to carry `prediction` to `limit`, the one runway a window and a pin read:
+/// `Some(0)` at or past the limit, since an idle spent window has none left, `None` with no burn, and `None` where the
+/// runway reaches its wall, since the quota resets or the account ends before the limit. The wall is the earliest of
+/// the window's `reset` and the account's `end` that lies after `now`, each instant tested by itself, so an end already
+/// passed cannot hide a reset that lies ahead.
+pub(crate) fn runway(
+    prediction: f64,
+    burn: &Banded,
+    limit: f64,
+    now: i64,
+    reset: Option<i64>,
+    end: Option<i64>,
+) -> Option<i64> {
+    if prediction >= limit {
+        return Some(0);
+    }
+    let runway_ms = burn.time_to(limit - prediction)?;
+    let wall = reset.into_iter().chain(end).filter(|&at| at > now).min();
+    if wall.is_some_and(|wall| now.saturating_add(runway_ms) >= wall) {
+        return None;
+    }
+    Some(runway_ms)
+}
+
 /// Which burn a projection reads: the achieved burn, what the upstream sees (the weekly trigger, the reported figures),
 /// or the demand, the achieved burn over the account's realized speed (the fit gate, the slow-down).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4003,7 +4027,7 @@ fn reserve_step(reservation: &Reservation) -> (WalkStep, ReservationFacts) {
     )
 }
 
-fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
+pub(crate) fn account_end(snapshot: &RegistrySnapshot, account_id: &str, now: i64) -> Option<i64> {
     snapshot
         .term(account_id)
         .and_then(|term| term::end_of(term, now))
@@ -8918,7 +8942,7 @@ mod banded_tests {
         SubscriptionTerm,
     };
 
-    use super::{fit_of, lane_key, slow_down_of, Banded, Figures, Judge, SelectRequest};
+    use super::{fit_of, lane_key, runway, slow_down_of, Banded, Figures, Judge, SelectRequest};
     use crate::state::{
         BandSegment, Reservation, RoutingState, SharePricer, UtilizationSample, WindowReading,
         WindowSource, FIVE_HOUR,
@@ -8993,6 +9017,47 @@ mod banded_tests {
             entering.increase() / 2.0
         ));
         assert_eq!(Banded::flat(rate, 0, 7_200_000), Banded::of(rate, &whole));
+    }
+
+    #[test]
+    fn a_runway_is_unbounded_where_it_reaches_the_earliest_wall_after_now() {
+        const NOW: i64 = 1_000_000;
+        // 0.01 at 0.8 an hour puts the limit 45 seconds away.
+        let burn = Banded::flat(0.8 / 3_600.0, NOW, NOW + 3_600_000);
+        let read =
+            |reset: Option<i64>, end: Option<i64>| runway(0.94, &burn, 0.95, NOW, reset, end);
+        assert_eq!(
+            [
+                read(Some(NOW + 45_000), None),
+                read(Some(NOW + 45_001), None),
+                read(Some(NOW), None),
+                read(Some(NOW + 30_000), Some(NOW)),
+            ],
+            [None, Some(45_000), Some(45_000), None],
+            "a reset on the runway's last millisecond, one a millisecond later, a reset at now, an end at now beside a \
+             reset inside the runway"
+        );
+    }
+
+    #[test]
+    fn a_runway_reads_the_band_weighted_time_where_the_band_changes_inside_it() {
+        // The first hour fills 0.36 of the 0.72 left, and the band's second hour at twice the rate fills the rest in
+        // half an hour.
+        let burn = Banded::of(1e-4, &two_hours([1.0, 2.0]));
+        assert_eq!(runway(0.2, &burn, 0.92, 0, None, None), Some(5_400_000));
+    }
+
+    #[test]
+    fn with_no_burn_a_runway_reads_zero_at_the_limit_and_unbounded_under_it() {
+        let idle = Banded::default();
+        assert_eq!(
+            (
+                runway(0.95, &idle, 0.95, 0, None, None),
+                runway(0.5, &idle, 0.95, 0, None, None)
+            ),
+            (Some(0), None),
+            "an idle window at its limit is spent, and one under it is never reached"
+        );
     }
 
     #[test]

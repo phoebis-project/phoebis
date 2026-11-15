@@ -25,9 +25,9 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    budget_facts, burn_unit, decide, fresh_fit, fresh_prior, handed_sums, lane_is_fast,
-    mark_cleared_of, move_read, obstacle, pace_of, passes_reset, projection_of, projections_of,
-    slow_down_ramp, standing_move_read, standing_request, zeroes_sums, BurnRead, Decided,
+    account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, handed_sums,
+    lane_is_fast, mark_cleared_of, move_read, obstacle, pace_of, projection_of, projections_of,
+    runway, slow_down_ramp, standing_move_read, standing_request, zeroes_sums, BurnRead, Decided,
     FailedOver, FitRead, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest,
     SelectResult, RATE_LIMIT_REASON,
 };
@@ -1467,6 +1467,10 @@ pub struct WindowProjection {
     pub burn: f64,
     /// The pins' burn over the speed with the live bookings' burn undivided, in share per hour.
     pub demand: f64,
+    /// The milliseconds the achieved burn takes to bring the window to its ceiling, read by `runway` as a pin's runway
+    /// is: `Some(0)` at or past the ceiling, `None` with no burn or where the runway reaches the earlier of the
+    /// reading's reset and the account's end that lies after the ask's instant.
+    pub runway_ms: Option<i64>,
     /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it, the room
     /// on `seven_day` less the Fable reservation where one applies.
     pub spare_rate: f64,
@@ -1478,7 +1482,8 @@ pub struct WindowProjection {
 }
 
 /// A pin with its burn decayed to now and its runway on its account: the time until the account's projection reaches
-/// the ceiling on the window that binds among those the pin's model draws.
+/// the ceiling on the window that binds among those the pin's model draws. A window whose runway reaches the earlier of
+/// its reset and the account's end binds nothing, since the quota resets or the account ends first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinStanding {
     /// The pin with its four burn copies decayed with its pool's burn average and `burn_at` the instant they are
@@ -1489,8 +1494,8 @@ pub struct PinStanding {
     pub burn_unit: BurnUnit,
     pub runway_ms: Option<i64>,
     /// `None` where the pin's account has no projection on any window the model draws (`runway_ms` null too),
-    /// `Some(false)` for an unbounded runway, one no burn bounds or one past its window's reset on every window
-    /// (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
+    /// `Some(false)` for an unbounded runway, one no burn bounds or one that reaches the earlier of its window's reset
+    /// and the account's end on every window (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
@@ -2875,7 +2880,8 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 /// member's budgets. The fit a fresh placement reads on each member comes from `fresh_fit` over the pool's
 /// `fresh_prior`, read once for the pool: one read on a request whose model draws no week of its own gives the
 /// member's word, its runway and the words of the shared windows, and each model week the account holds a reading of
-/// takes its word from a read on that week's model. Empty for a pool the snapshot does not hold.
+/// takes its word from a read on that week's model. Each window's runway to its ceiling comes from `runway`, as a pin's
+/// does. Empty for a pool the snapshot does not hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2904,6 +2910,7 @@ fn projections(
                 upstream_model: String::new(),
             };
             let tier = snapshot.priced_tier(account_id).unwrap_or_default();
+            let end = account_end(snapshot, account_id, now);
             let achieved = projections_of(
                 state,
                 snapshot,
@@ -2958,6 +2965,14 @@ fn projections(
                             wall: pace.deadline,
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
+                            runway_ms: runway(
+                                projection.predicted,
+                                &projection.banded,
+                                ceiling(pool, window),
+                                now,
+                                projection.reset,
+                                end,
+                            ),
                             spare_rate: pace.score,
                             // A window the reads walk past, one the account's set no longer holds, takes the
                             // member's word.
@@ -3130,13 +3145,14 @@ fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
     }
 }
 
-/// A standing pin's runway on its own account: per window the model draws, the time `projection_of`'s burn takes to
-/// fill `ceiling - predicted` over the band's segments, as the projection beside it weighs them. Its burn already
-/// holds the pin, so neither the pin's burn nor a rewrite is added again (that is `fit_of`'s arithmetic for a
-/// destination). `Some(0)` where `predicted` already reaches the ceiling, an unbounded runway (`None` with no binding
-/// window) where on every drawn window it projects the account's burn is zero or the runway passes the window's reset,
-/// since the window resets before the ceiling is reached, and the binding window the shortest of the rest. The outer
-/// `None` where the account projects none of the drawn windows: an api_key account, or one with no reading of them.
+/// A standing pin's runway on its own account: per window the model draws, `runway` over `projection_of`'s banded burn
+/// to the window's ceiling, the rule a window of the projections reads too. Its burn already holds the pin, so neither
+/// the pin's burn nor a rewrite is added again (that is `fit_of`'s arithmetic for a destination). `Some(0)` where
+/// `predicted` already reaches the ceiling, an unbounded runway (`None` with no binding window) where on every drawn
+/// window the account's burn is zero or the runway reaches the earlier of the window's reset and the account's end,
+/// since the quota resets or the account ends before the ceiling is reached, and the binding window the shortest of the
+/// rest. The outer `None` where the account projects none of the drawn windows: an api_key account, or one with no
+/// reading of them.
 fn standing_runway(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3146,6 +3162,7 @@ fn standing_runway(
     now: i64,
 ) -> Option<(Option<i64>, Option<String>)> {
     let tier = snapshot.priced_tier(account_id).unwrap_or_default();
+    let end = account_end(snapshot, account_id, now);
     let mut projected = false;
     let mut bounded: Vec<(&str, i64)> = Vec::new();
     for window in plan_windows(model) {
@@ -3162,16 +3179,14 @@ fn standing_runway(
             continue;
         };
         projected = true;
-        let limit = ceiling(pool, window);
-        let runway_ms = if projection.predicted >= limit {
-            0
-        } else {
-            let Some(runway_ms) = projection.banded.time_to(limit - projection.predicted) else {
-                continue;
-            };
-            runway_ms
-        };
-        if !passes_reset(runway_ms, projection.reset, now) {
+        if let Some(runway_ms) = runway(
+            projection.predicted,
+            &projection.banded,
+            ceiling(pool, window),
+            now,
+            projection.reset,
+            end,
+        ) {
             bounded.push((window, runway_ms));
         }
     }

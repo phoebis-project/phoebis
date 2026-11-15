@@ -146,12 +146,13 @@ slow-down holding them. `horizon_at` is the window's reset, or the account's sub
 hours from now. `ceiling` is the share of the window the pool fills an account to, the pool's 5-hour ceiling on
 `five_hour` and its weekly ceiling on the other windows. `runway_minutes` is the whole minutes until the share reaches
 the pool's ceiling at the current burn: `0` at or above the ceiling, a number while the burn would reach the ceiling
-before the window resets, and `null` where nothing bounds the runway, because nothing burns or because the window resets
-first.
+before the window resets and before the account's subscription ends, and `null` where nothing bounds the runway, because
+nothing burns or because the window resets or the subscription ends first.
 
 `pins` holds one entry per pin of this session under the key: the `agent` (`main` or the subagent's id), the `model`,
 the `account` by its pseudonym, when the pin was placed and last used, `warm` and `warm_until` for its cache entry, its
-`runway_minutes` on the window that binds it (`binding_window`), and its `slow_down` figures.
+`runway_minutes` on the window that binds it (`binding_window`), read by the same rule as a window's, and its
+`slow_down` figures.
 
 A model reads the answer for pace alone. A long runway, or `null` on every window, means the pool has room for a long
 run or a fan-out. A short runway on the account a pin names means the pool is close to its ceiling on that window at the

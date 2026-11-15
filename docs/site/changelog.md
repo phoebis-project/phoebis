@@ -99,9 +99,10 @@ reads one or more is held out for every model until the spend window's reset, th
 under, and the fast lane's credits read follows the same expiry ([Overage](routing.md#overage)). A usage-based seat's
 poll share and a share-only head's share lapse at the head reset the router holds from a head observed at or before the
 reading while that reset is still ahead of it, and the account view's `spend` reads the share's lapse from the router
-wherever the router holds the reading ([Overage](routing.md#overage)). A session's runway that reaches past its binding
-window's next reset reads unbounded on `GET /admin/sessions` and in the decision record's fit table, while the fit's
-verdict reads the computed figure against the horizon ([The windows the router works
+wherever the router holds the reading ([Overage](routing.md#overage)). A session's runway reads unbounded on
+`GET /admin/sessions` where it reaches its window's next reset or its account's subscription end, whichever comes first,
+and in the decision record's fit table where it reaches past its binding window's next reset, while the fit's verdict
+reads the computed figure against the horizon ([The windows the router works
 from](routing.md#the-windows-the-router-works-from)). A request whose connection could not be opened is retried once
 after about a second, a reused connection that died is retried at once, and a request unsent twice answers 502
 `upstream_unreachable` ([Cooldowns and failover](routing.md#cooldowns-and-failover)). A window read under its limit

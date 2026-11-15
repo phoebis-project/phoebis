@@ -86,11 +86,12 @@ pub(crate) struct Session {
     pub burn_at: Option<i64>,
     /// The time until the pin's account's projection reaches the pool's ceiling on the window that binds among those
     /// the pin's model draws, with the pin's burn counted once and no rewrite. Null for an unbounded runway and where
-    /// the account projects none of those windows. Null too where the runway reaches past the binding window's next
-    /// reset, since the window resets before the ceiling is reached.
+    /// the account projects none of those windows. A window's runway that reaches the earlier of the window's next
+    /// reset and the account's end is unbounded, since the quota resets or the account ends before the ceiling is
+    /// reached.
     pub runway_ms: Option<i64>,
     /// Null where the account projects none of the windows the pin's model draws, false for an unbounded runway or one
-    /// past the window's reset, true where `runway_ms` is set.
+    /// that reaches the earlier of its window's reset and the account's end, true where `runway_ms` is set.
     pub runway_bounded: Option<bool>,
     /// The pin's account's factor under the slow-down, from the entry in force, null on a row with no pin and where no
     /// entry is in force.

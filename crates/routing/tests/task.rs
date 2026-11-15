@@ -13774,6 +13774,45 @@ async fn a_standing_runway_that_reaches_past_its_windows_reset_reads_unbounded()
 }
 
 #[tokio::test]
+async fn a_standing_runway_that_reaches_its_accounts_end_ahead_of_its_windows_reset_reads_unbounded(
+) {
+    let store = shedding_store(&["a"]);
+    with_tier(&store, "a");
+    store
+        .set_canceled(
+            "a",
+            Cancellation::On {
+                ends_at: Some(AT + HOUR),
+            },
+        )
+        .unwrap();
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "a", 1, 10.0))
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    // The pin's 0.1 of the window an hour fills the 0.2 left under the ceiling in two hours. The window resets in
+    // three, but the account ends in one, so the ceiling is never reached before the end.
+    handle
+        .report(observed(
+            "a",
+            sample_with(AT, FIVE_HOUR, 0.75, Some(AT + 3 * HOUR)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let standing = handle.pins_standing().await.unwrap();
+    let s1 = standing
+        .iter()
+        .find(|p| p.pin.session_id == "s1")
+        .unwrap_or_else(|| panic!("no pin of s1: {standing:?}"));
+    assert_eq!(
+        (s1.runway_ms, s1.runway_bounded, s1.binding.as_deref()),
+        (None, Some(false), None),
+        "a runway past its account's end reads unbounded"
+    );
+}
+
+#[tokio::test]
 async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_one_passes_its_reset(
 ) {
     let store = shedding_store(&["a"]);
