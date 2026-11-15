@@ -178,7 +178,7 @@ function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, 
   const ratio = (planPer: number | null, planCount: number | null, whole: number, scale: number) => both(planPer, per(sides.billed ?? null, billedCount(planCount, whole), scale));
   const perRequest = per(figure, g.planRequests, 1);
   const perThousand = per(figure, g.planOutputTokens, 1000);
-  // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
+  // The route labels every group.
   return {
     cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(perRequest, g.planRequests, g.requests, 1), ratio(perThousand, g.planOutputTokens, g.tokens.output, 1000)],
     // The Cost key reads the plan rows' figure, 0 for a group of billed rows alone and null where a plan row priced
@@ -206,6 +206,9 @@ const totalsOf = (groups: AnalyticsGroup[]) => {
   return { ...summed, tokens: withPlainOutput(summed.tokens) };
 };
 const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ at: Date.parse(p.at), ...totalsOf(p.groups) }));
+/** Whether a group counts a request. A group of refused requests alone counts none, and only the Traffic table's
+ *  Refused column has a figure for it. */
+const countsRequest = (g: { requests: number }): boolean => g.requests > 0;
 /**
  * A read that runs while `reads` holds and answers null without a request otherwise (a hidden tab, the rollups in a
  * session view, a side the unit leaves out). It holds its refresh while it reads nothing, since each empty answer still
@@ -837,7 +840,7 @@ export function AnalyticsPage() {
               groupLabel={groupLabel}
               columns={analyticsKeysOf('latency', unit).slice(1).map((k, i) => (i === 0 ? k.label : <PctLabel key={k.id} text={k.label} />))}
               order={tableOrder}
-              rows={groups.map((g) => ({
+              rows={groups.filter(countsRequest).map((g) => ({
                 key: g.key,
                 label: g.label,
                 cells: [
@@ -1022,7 +1025,7 @@ export function AnalyticsPage() {
                 groupLabel={groupLabel}
                 columns={NATIVE_COLUMNS}
                 order={tableOrder}
-                rows={scale === null ? [] : costGroups.map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
+                rows={scale === null ? [] : costGroups.filter(countsRequest).map((g) => nativeRowOf(g, week, scale, rowHint(g)))}
               />
             )}
             {sessionId === null && unit !== 'native' && (
@@ -1034,7 +1037,7 @@ export function AnalyticsPage() {
                 groupLabel={groupLabel}
                 columns={analyticsKeysOf('cost', unit).slice(1).map((k) => k.label)}
                 order={tableOrder}
-                rows={costGroups.map((g) => {
+                rows={costGroups.filter(countsRequest).map((g) => {
                   const perRequest = per(g.costUsd, g.requests, 1) ?? 0;
                   const perThousand = per(g.costUsd, g.tokens.output, 1000) ?? 0;
                   return {
@@ -1676,7 +1679,7 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
         'Expired between turns',
       ]}
       order={order}
-      rows={groups.map((g) => ({
+      rows={groups.filter(countsRequest).map((g) => ({
         key: g.key,
         label: g.label,
         // Expired between turns is no reason the Requests page filters by, so it stays plain.
@@ -1755,7 +1758,7 @@ function Histogram({ h, format, p99 }: { format: (v: number) => string; h: numbe
  */
 function CacheByModel({ failure, funded, groups, loading, reading, unit }: { failure: WeekReading['failure']; funded: Map<string, AnalyticsGroup>; groups: AnalyticsGroup[]; loading: boolean; reading: WeekReading; unit: UnitPosition }) {
   // A request refused before it resolved a model reads no cache, so the group without a model has no row here.
-  const rows = useMemo(() => groups.filter((g) => g.key !== '').sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
+  const rows = useMemo(() => groups.filter((g) => g.key !== '' && countsRequest(g)).sort((a, b) => b.tokens.cacheRead - a.tokens.cacheRead), [groups]);
   const subtitle = unit === 'native' ? `Totals for the selected range and filters, ${NATIVE_SUBSET}` : `Totals for the selected range and filters, ${UNIT_SUBSET[dollarsOf(unit)]}`;
   const { scale: weekFactor, week } = reading;
   const costsOf = (g: AnalyticsGroup, factor: number): ReactNode[] => {
@@ -1905,23 +1908,26 @@ type Stack = { data: Record<string, number | null>[]; keys: string[]; labels: Ma
  * figure is one the route priced nothing on: it leaves its stack's bucket a gap, a dash in the tooltip, since a partial
  * sum would read as the whole. `drawn` keeps only the groups whose figure is above zero somewhere in range or unpriced
  * somewhere, for a side that holds some of the page's groups, so a group priced nothing throughout stays listed with
- * its gaps. `unpriced` names the drawn groups that `flagged` reads unpriced in a bucket, a group folded into Other among
- * them, by their labels in the chart's order, and counts the buckets holding one.
+ * its gaps. A group that counts no request in any bucket and totals zero leaves whatever `drawn` says, as the group
+ * tables leave it out. `unpriced` names the drawn groups that `flagged` reads unpriced in a bucket, a group folded into
+ * Other among them, by their labels in the chart's order, and counts the buckets holding one.
  */
 function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number | null, drawn = false, flagged: (g: AnalyticsGroup) => boolean = () => false): Stack {
   const totals = new Map<string, number>();
   const unpriced = new Set<string>();
+  const counted = new Set<string>();
   const labels = new Map<string, string>();
   for (const p of points) {
     for (const g of p.groups) {
       const v = value(g);
       totals.set(g.key, (totals.get(g.key) ?? 0) + (v ?? 0));
       if (v === null) unpriced.add(g.key);
+      if (countsRequest(g)) counted.add(g.key);
       labels.set(g.key, g.label);
     }
   }
   const ranked = [...totals.entries()]
-    .filter(([k, total]) => !drawn || total > 0 || unpriced.has(k))
+    .filter(([k, total]) => (counted.has(k) || total !== 0) && (!drawn || total > 0 || unpriced.has(k)))
     .sort((a, b) => b[1] - a[1])
     .map(([k]) => k);
   const top = ranked.slice(0, MAX_STACKED_GROUPS);
