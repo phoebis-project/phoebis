@@ -1647,15 +1647,16 @@ export class MockApi implements Api {
     const block = lookup(this.resetBlocks, accountId);
     const index = block?.grants.findIndex((g) => g.id === grantId) ?? -1;
     // The router checks the grant against its stored block before anything leaves, so the table never answers a use
-    // the router refuses, a grant that waits among them.
-    if (block === undefined || index < 0 || grantStates(block, at)[index].state !== 'usable') throw new ApiError(409, 'this reset is not usable now', 'limit_reset_not_usable', path);
+    // the router refuses, a grant that waits among them. A row's null member stands for a store that holds no block,
+    // as a pairing leaves it until the next read.
+    if (a.limitResets === null || block === undefined || index < 0 || grantStates(block, at)[index].state !== 'usable') throw new ApiError(409, 'this reset is not usable now', 'limit_reset_not_usable', path);
     // The router compares the token once the grant read usable, before the claim's token is acquired.
     if (revision !== undefined && revision !== resetsRevision(incarnationOf(a), block)) throw new ApiError(409, 'the account changed while its reset was being used', 'limit_reset_account_changed', path);
     const entry = lookup(RESET_ANSWERS, grantId);
     if (entry === undefined) throw new Error(`the story answers no use of ${grantId}`);
     // Every claim that left writes its row, one the upstream left unanswered included, as the router's task does.
     const sent = 'refusal' in entry ? { answer: null, status: entry.upstream } : { answer: entry.answer, status: 200 };
-    const detail = claimDetail(block.grants[index], this.claimIds.uuid(), sent.status, sent.answer);
+    const detail = claimDetail(block.grants[index], this.claimIds.uuid(), sent.status, sent.answer, incarnationOf(a));
     this.writeEvent('limit_reset_claimed', a.id, 'admin', at, detail);
     if ('refusal' in entry) throw new ApiError(entry.refusal.status, entry.refusal.message, entry.refusal.code, path);
     this.resetBlocks = { ...this.resetBlocks, [accountId]: foldAnswer(block, grantId, entry.answer, at) };

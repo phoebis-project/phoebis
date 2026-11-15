@@ -2688,6 +2688,30 @@ const resetButtonOf = (label) => resetCardOf(label)?.querySelector('.qcard__use'
     missing: [JSON.stringify({ chip, open, rows, toasts })],
   });
 }
+{
+  // A refusal keeps the dialog on its grant, and its fold moves the block's epoch past the opening read's, so only
+  // the token of the member the answer carried passes the second click. Once rg-primary-1 gave the Fable week back, a
+  // use of rg-primary-2 answers `not_limited` (`RESET_ANSWERS`), which spends no count.
+  resetButtonOf('primary')?.click();
+  await m.settle(600);
+  resetDialogs()[0]?.querySelector('.reset-dialog__row button[data-grant="rg-primary-2"]')?.click();
+  await m.settle(100);
+  const button = () => resetDialogs()[0]?.querySelector('.dialog__foot .btn--primary') ?? null;
+  const read = () => ({ callout: resetDialogs()[0]?.querySelector('.callout--critical')?.textContent?.trim() ?? 'no callout', disabled: button()?.disabled ?? null, open: resetDialogs().length });
+  button()?.click();
+  await m.settle(800);
+  const first = read();
+  button()?.click();
+  await m.settle(800);
+  const second = read();
+  await escapeOn(m);
+  const refused = 'Refused: primary stands at no limit this reset clears, so it was not used.';
+  results.push({
+    name: "/quota a second click on a refused grant sends the answer's own token (seed primary)",
+    ok: first.open === 1 && first.callout === refused && first.disabled === false && second.open === 1 && second.callout === refused,
+    missing: [JSON.stringify({ first, second })],
+  });
+}
 // The card chips' tones by account and window, read before the section switch hides the cards, for the timeline's
 // chips to be read against: the cards and the lanes draw the three windows in one order.
 const cardToneOf = new Map([...m.container.querySelectorAll('.qcard')].map((c) => [c.querySelector('.qcard__name')?.textContent?.trim() ?? '', [...c.querySelectorAll('.qchip')].map((q) => [...q.classList].find((n) => n.startsWith('qchip--'))?.slice('qchip--'.length) ?? 'none')]));
@@ -18381,7 +18405,7 @@ await forView('/routing-log', async () => {
       cooldown_set: ['Scope', 'Reason', 'Window', 'Until', 'Set by'],
       fast_credits_changed: ['Before', 'After', 'Cause', 'Effect'],
       ledger_gap: ['Reason', 'Meaning', 'Effect', 'Request'],
-      // Every claim's row holds all twelve keys, so a pair stands by its member's value.
+      // Each claim's row holds each key of the detail, so a pair stands by its member's value.
       limit_reset_claimed: ({ detail: c }) =>
         [
           ['Grant', c.label !== null || c.grant_id !== null],

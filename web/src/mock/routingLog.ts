@@ -2691,14 +2691,16 @@ function planEndedRows(account: Account): EventSeed[] {
 /**
  * A claim's detail as the router writes it: every key on every row, null where the claim has no such fact, and the
  * instants in epoch milliseconds. The claim's request id travels here alone, since the row's own column names a relayed
- * request. A claim the upstream answered without a `result` carries no answer.
+ * request. A claim the upstream answered without a `result` carries no answer. `incarnation` names the account row
+ * that held the id when the claim left, since an id deleted and created again starts a new one.
  */
-export function claimDetail(grant: MockGrant, requestId: string, status: number, answer: MockUse | null): Record<string, unknown> {
+export function claimDetail(grant: MockGrant, requestId: string, status: number, answer: MockUse | null, incarnation: number): Record<string, unknown> {
   return {
     cleared: answer?.cleared ?? [],
     cooldown_until: answer?.cooldown_until ?? null,
     error: null,
     grant_id: grant.id,
+    incarnation,
     label: grant.label,
     // With no answer, the status alone classes the claim as the client classes it.
     outcome: answer?.outcome ?? ([401, 403, 429].includes(status) ? 'refused' : 'unsettled'),
@@ -2713,7 +2715,8 @@ export function claimDetail(grant: MockGrant, requestId: string, status: number,
 
 /**
  * The claims the story's blocks rest on: studio's use at the instant its block stamps, and workshop's refusal 20
- * minutes back, the claim its block's cooldown comes from.
+ * minutes back, the claim its block's cooldown comes from. A seed is its id's first account, so each claim's holder is
+ * incarnation 1.
  */
 function claimRows(): EventSeed[] {
   const studio = RESET_BLOCKS.studio;
@@ -2726,14 +2729,14 @@ function claimRows(): EventSeed[] {
       accountId: 'studio',
       actor: 'admin',
       at: iso(studio.uses[used.id]),
-      detail: claimDetail(used, '8c1f5a3e-2d74-4b09-9e6a-5f3b7c0d1e82', 200, FABLE_USE),
+      detail: claimDetail(used, '8c1f5a3e-2d74-4b09-9e6a-5f3b7c0d1e82', 200, FABLE_USE, 1),
       kind: 'limit_reset_claimed',
     },
     {
       accountId: 'workshop',
       actor: 'admin',
       at: iso(NOW - 20 * MINUTE),
-      detail: claimDetail(cooled, '3a9e6d1c-7b52-4f80-a4c3-9d2e5b8f0c17', 200, cooldownRefusal(cooldown)),
+      detail: claimDetail(cooled, '3a9e6d1c-7b52-4f80-a4c3-9d2e5b8f0c17', 200, cooldownRefusal(cooldown), 1),
       kind: 'limit_reset_claimed',
     },
   ];

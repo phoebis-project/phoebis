@@ -173,12 +173,17 @@ const FABLE_RESET: MockAnswer = { answer: FABLE_USE };
 /** The answer to a claim the upstream refused with a cooldown that ends at `until`. */
 export const cooldownRefusal = (until: number | null): MockUse => ({ cleared: [], cooldown_until: until, outcome: 'refused', reason: null, resets_left: null, result: 'cooldown', weekly_resets_at: null });
 
+/** The upstream's answer where the account stands at no limit the grant clears: nothing cleared, no cooldown and
+ *  no count, so the grant stays usable under a newer revision. */
+const notLimitedRefusal = (): MockUse => ({ cleared: [], cooldown_until: null, outcome: 'refused', reason: null, resets_left: null, result: 'not_limited', weekly_resets_at: null });
+
 /** What a use of each grant answers: the route's 200 in its own names, or the refusal the call throws. */
 export const RESET_ANSWERS: Readonly<Record<string, MockAnswer>> = {
   // A cooldown on a first attempt is a refusal, whose instant the router folds into the block.
   'rg-nightly-1': { answer: cooldownRefusal(NOW + 25 * MINUTE) },
   'rg-primary-1': FABLE_RESET,
-  'rg-primary-2': FABLE_RESET,
+  // The first grant gave the Fable week back, so primary stands at no limit the second one clears.
+  'rg-primary-2': { answer: notLimitedRefusal() },
   // A status other than 401, 403 or 429 leaves the claim unsettled.
   'rg-secondary-1': { refusal: { code: 'limit_reset_unanswered', message: 'upstream: HTTP 503', status: 502 }, upstream: 503 },
   // The grant is usable once the block's cooldown passed, 40 minutes after the story's clock.

@@ -662,6 +662,8 @@ test("a re-pair of a held account clears the row's limit resets and moves the re
   const before = (await api.readLimitResets('nightly')).limitResets.revision;
   await repair('nightly');
   assert.equal((await storyAccount(api, 'nightly')).limitResets, null, 'the confirm clears the limit resets the row read');
+  // The use names no token, so only the route's read of its stored block can refuse it.
+  await assert.rejects(() => api.useLimitReset('nightly', 'rg-nightly-1'), (e) => e instanceof d.ApiError && e.status === 409 && e.code === 'limit_reset_not_usable', 'a use before the next read finds no stored block');
   const after = (await api.readLimitResets('nightly')).limitResets.revision;
   assert.notEqual(after, before, 'the next read answers a revision no token from before the pairing matches');
   // Secondary's poll waits out a backoff that ends minutes past the story's clock, so the route answers the stored
