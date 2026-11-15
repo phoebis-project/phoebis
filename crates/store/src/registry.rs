@@ -626,6 +626,9 @@ pub fn usage_based_of(tier: Option<&str>, profile: Option<&serde_json::Value>) -
         })
 }
 
+/// The organization type that a profile reads once its account holds no plan.
+const FREE_ORGANIZATION_TYPE: &str = "claude_free";
+
 /// The one resolution of the plan, shared by the registry load and `Store::subscription_term`: the usage-based class
 /// above both, then the document's `organization.organization_type`, then the rate-limit tier alone.
 pub fn plan_of(
@@ -644,7 +647,7 @@ pub fn plan_of(
         _ => None,
     };
     match organization_type {
-        Some("claude_free") => Some("free"),
+        Some(FREE_ORGANIZATION_TYPE) => Some("free"),
         Some("claude_pro") => Some("pro"),
         Some("claude_team") => Some("team"),
         Some("claude_enterprise") => Some("enterprise"),
@@ -660,6 +663,12 @@ pub fn plan_of(
 /// The stored document's `organization.organization_type`, `None` without a document or the member.
 pub(crate) fn organization_type_of(profile: Option<&serde_json::Value>) -> Option<&str> {
     profile.and_then(|document| document["organization"]["organization_type"].as_str())
+}
+
+/// Whether the profile document names an organization with no plan, the type an ended subscription's profile reads.
+/// The poll flags an account by it, and the pairing confirm keeps the flag by it.
+pub fn reports_no_plan(profile: &serde_json::Value) -> bool {
+    organization_type_of(Some(profile)) == Some(FREE_ORGANIZATION_TYPE)
 }
 
 #[derive(Clone, Debug, Default)]

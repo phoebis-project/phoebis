@@ -14,7 +14,7 @@ use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, SEVEN_DAY_FABLE,
 };
-use phoebis_store::{AccountExtras, AccountKind, AccountRow, AccountState, Store};
+use phoebis_store::{reports_no_plan, AccountExtras, AccountKind, AccountRow, AccountState, Store};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -67,12 +67,6 @@ enum ProfileRead {
     NoPlan,
     Plan,
     Unread,
-}
-
-/// Whether the profile document names an organization with no plan, the type an ended subscription's profile reads.
-/// The poll flags an account by it, and the pairing confirm keeps the flag by it.
-pub fn reports_no_plan(profile: &serde_json::Value) -> bool {
-    profile["organization"]["organization_type"] == "claude_free"
 }
 
 /// One warning per account and tier word for a stored Team or Enterprise document whose tier the cost model in force

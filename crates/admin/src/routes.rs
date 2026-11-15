@@ -1883,7 +1883,7 @@ async fn pairing_confirm(
     }
     // The confirmed pairing names the plan its profile holds, so a flag an ended plan left goes with it, published by
     // the reload below. A profile that still reports no plan keeps the flag, as the poll would set it again.
-    if !created && !phoebis_ledger::reports_no_plan(&pending.profile.raw) {
+    if !created && !phoebis_store::reports_no_plan(&pending.profile.raw) {
         match state.store.clear_plan_ended(&row.id) {
             Ok(true) => state.ledger.record(phoebis_ledger::plan_restored(
                 &row.id,

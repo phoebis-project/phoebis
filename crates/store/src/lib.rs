@@ -124,13 +124,13 @@ pub use keepalive::{
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{
-    canonical_id, key_prefix, AccountUpdate, Affinity, AffinityMode, ApiKeyRow, AttachmentSubject,
-    BudgetPeriod, Cancellation, CompanionPermission, CompanionPermissions, Failover,
-    GuardrailAttachment, GuardrailIndex, GuardrailRow, MemberWrite, ModelRule, OveragePolicy,
-    PoolMember, PoolRow, PresetStamp, RegistryChange, RegistryLoad, RetiredSecret, ReturnToPlan,
-    RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement, SubjectKind,
-    SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND, KEY_SECRET_PREFIX, LONG_CONTEXT_SUFFIX,
-    ROTATION_GRACE_MS,
+    canonical_id, key_prefix, reports_no_plan, AccountUpdate, Affinity, AffinityMode, ApiKeyRow,
+    AttachmentSubject, BudgetPeriod, Cancellation, CompanionPermission, CompanionPermissions,
+    Failover, GuardrailAttachment, GuardrailIndex, GuardrailRow, MemberWrite, ModelRule,
+    OveragePolicy, PoolMember, PoolRow, PresetStamp, RegistryChange, RegistryLoad, RetiredSecret,
+    ReturnToPlan, RulesMode, SessionPlacement, Shedding, SlowDown, Strategy, SubagentPlacement,
+    SubjectKind, SubscriptionTerm, WarmSessions, GUARDRAIL_BOUND, KEY_SECRET_PREFIX,
+    LONG_CONTEXT_SUFFIX, ROTATION_GRACE_MS,
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CooldownScope, CreditsRow, EvidenceSource,
