@@ -757,8 +757,18 @@ async fn a_request_that_reads_no_cache_after_a_covering_probe_settles_the_probe_
 /// client the relay classed `class` (`OTHER_CLIENT` where a case names no client) and its selection on `a`, then the
 /// first stream event, which arms the schedule from the request's start with the cache it read and wrote.
 fn open_request_as(r: &Rig, id: &str, class: &str, read: u64, write: u64) {
-    r.engine
-        .observe(sent_by(r.observed(id, "main", BODY), class));
+    open_observed(
+        r,
+        id,
+        sent_by(r.observed(id, "main", BODY), class),
+        read,
+        write,
+    );
+}
+
+/// `open_request_as` over an observation of `id` the test built.
+fn open_observed(r: &Rig, id: &str, observed: phoebis_bus::Event, read: u64, write: u64) {
+    r.engine.observe(observed);
     r.engine.observe(r.selected(id, "a"));
     r.engine.observe(message_start(
         id,
@@ -1449,8 +1459,8 @@ async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past
             .filter(|row| row.kind == "probe" && row.wasted_probes > 0)
             .map(|row| row.client.as_str())
             .collect::<Vec<_>>(),
-        [UNATTRIBUTED],
-        "a probe's settlement answers no request, so it files under the reserved client"
+        [OTHER_CLIENT],
+        "a probe's settlement files under the probe's client, the label of the request whose headers it replayed"
     );
 }
 
@@ -2052,8 +2062,9 @@ async fn an_api_key_account_s_credit_settlement_and_skip_rows_file_under_billed(
 }
 
 /// A due probe a gate withholds files one skip row under the keys its recipe held when the hold placed it, the key and
-/// its generation, the pool, the account, the model and the speed, and counts once under the pool and the state the
-/// hold leaves.
+/// its generation, the pool, the account, the model, the speed, the client and the user agent, and counts once under
+/// the pool and the state the hold leaves. The rig's request carries the fixture head's agent,
+/// `claude-cli/2.1.310 (external, sdk-cli)`, which the relay classes `claude-code/sdk-cli`.
 #[tokio::test]
 async fn a_withheld_probe_files_its_skip_row_under_the_keys_its_recipe_held() {
     let mut r = rig(RigSpec {
@@ -2085,13 +2096,26 @@ async fn a_withheld_probe_files_its_skip_row_under_the_keys_its_recipe_held() {
                 row.canonical_model.as_str(),
                 row.speed.as_str(),
                 row.funding.as_str(),
+                row.client.as_str(),
+                row.user_agent.as_str(),
                 row.probes_skipped,
             )
         })
         .collect();
     assert_eq!(
         skipped,
-        [("desktop", generation, "main", "a", PRICED, "standard", "billed", 1)]
+        [(
+            "desktop",
+            generation,
+            "main",
+            "a",
+            PRICED,
+            "standard",
+            "billed",
+            "claude-code/sdk-cli",
+            "claude-cli/2.1.310",
+            1
+        )]
     );
     let counted: Vec<String> = r
         .metrics
@@ -3566,9 +3590,22 @@ fn sent_by(mut event: phoebis_bus::Event, class: &str) -> phoebis_bus::Event {
     event
 }
 
-/// A kept-warm credit keys the client of the request it credits, so its saving prices under that client's regime as
-/// the request's own row does: a turn's credit takes the turn's own client over the one the turn before it named, and
-/// a compaction's credit takes the compaction's own.
+/// `sent_by` under the user agent `agent` in place of the rig's, which the recipe keeps and its probes replay.
+fn sent_from(event: phoebis_bus::Event, class: &str, agent: &str) -> phoebis_bus::Event {
+    let mut event = sent_by(event, class);
+    if let phoebis_bus::Event::RequestObserved(observed) = &mut event {
+        for (name, value) in &mut observed.headers {
+            if name == "user-agent" {
+                *value = agent.into();
+            }
+        }
+    }
+    event
+}
+
+/// A kept-warm credit keys the client and the user agent of the request it credits, so its saving prices under that
+/// client's regime as the request's own row does: a turn's credit takes the turn's own over the ones the turn before it
+/// sent, and a compaction's credit takes the compaction's own.
 #[tokio::test]
 async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
     let mut r = rig(RigSpec {
@@ -3576,13 +3613,33 @@ async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
         ..RigSpec::default()
     })
     .await;
-    open_request_as(&r, "first", "claude-code/desk", 0, 2_000);
+    open_observed(
+        &r,
+        "first",
+        sent_from(
+            r.observed("first", "main", BODY),
+            "claude-code/desk",
+            "claude-cli/2.1.301 (external, desk)",
+        ),
+        0,
+        2_000,
+    );
     r.engine.observe(completed(&r, "first", 0));
     r.advance_attended(270_000);
     r.step().await;
     // Past each request's five minutes and inside the entry the probe after it kept.
     r.advance_attended(60_000);
-    open_request_as(&r, "second", "claude-code/cli", 2_000, 0);
+    open_observed(
+        &r,
+        "second",
+        sent_from(
+            r.observed("second", "main", BODY),
+            "claude-code/cli",
+            "claude-cli/2.1.302 (external, cli)",
+        ),
+        2_000,
+        0,
+    );
     r.engine.observe(completed(&r, "second", 2_000));
     r.advance_attended(270_000);
     r.step().await;
@@ -3592,7 +3649,7 @@ async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
         "a probe kept the second request's entry"
     );
     r.advance_attended(60_000);
-    r.engine.observe(sent_by(
+    r.engine.observe(sent_from(
         r.observed_with(
             "compaction",
             "main",
@@ -3603,6 +3660,7 @@ async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
             "claude-sonnet-4-5",
         ),
         "claude-code/pane",
+        "claude-cli/2.1.303 (external, pane)",
     ));
     r.engine.observe(r.selected("compaction", "a"));
     r.engine.observe(message_start(
@@ -3614,19 +3672,175 @@ async fn a_kept_warm_credit_keys_the_client_of_the_request_it_credits() {
     ));
     r.engine.observe(completed(&r, "compaction", 2_000));
     let rows = final_rollups(&r).await;
-    let mut credits: Vec<(String, u64)> = rows
+    let mut credits: Vec<(String, String, u64)> = rows
         .iter()
         .filter(|row| row.kept_warm_requests > 0)
-        .map(|row| (row.client.clone(), row.kept_warm_requests))
+        .map(|row| {
+            (
+                row.client.clone(),
+                row.user_agent.clone(),
+                row.kept_warm_requests,
+            )
+        })
         .collect();
     credits.sort();
     assert_eq!(
         credits,
         [
-            ("claude-code/cli".to_string(), 1),
-            ("claude-code/pane".to_string(), 1)
+            (
+                "claude-code/cli".to_string(),
+                "claude-cli/2.1.302".to_string(),
+                1
+            ),
+            (
+                "claude-code/pane".to_string(),
+                "claude-cli/2.1.303".to_string(),
+                1
+            )
         ],
-        "each credit keys the client of the request it credits"
+        "each credit keys the client and the user agent of the request it credits"
+    );
+}
+
+/// A probe's migration mark and its settlement key the client and the user agent its own request row keys, the class
+/// the relay reads off the user agent the probe replays and that agent folded to its first product token, so the User
+/// agent filter keeps the wasted probe. The probe moves off `a`, whose 429 answers it, and the session's end writes it
+/// off.
+#[tokio::test]
+async fn a_probes_mark_and_settlement_key_the_client_and_the_user_agent_of_its_own_request_row() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_observed(
+        &r,
+        "first",
+        sent_from(
+            r.observed("first", "main", BODY),
+            "claude-code/cli",
+            "claude-cli/2.1.286 (external, cli)",
+        ),
+        0,
+        2_000,
+    );
+    r.engine.observe(completed(&r, "first", 0));
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        relay_common::json_429_unified(4_600, "five_hour"),
+    );
+    r.up.push_credential_rule(B, "/v1/messages", probe_answer(0, 2_000));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").migrations, 1, "the probe moved to b");
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = final_rollups(&r).await;
+    let keys = |held: fn(&RollupRow) -> bool| {
+        rows.iter()
+            .filter(|row| held(row))
+            .map(|row| (row.client.clone(), row.user_agent.clone()))
+            .collect::<Vec<_>>()
+    };
+    let probes = [(
+        "claude-code/cli".to_string(),
+        "claude-cli/2.1.286".to_string(),
+    )];
+    assert_eq!(
+        keys(|row| row.probe_migrated > 0),
+        probes,
+        "the mark: {rows:?}"
+    );
+    assert_eq!(
+        keys(|row| row.wasted_probes > 0),
+        probes,
+        "the settlement: {rows:?}"
+    );
+    let filter = phoebis_ledger::RollupFilter {
+        user_agents: phoebis_ledger::Patterns::new(vec!["claude-cli/2.1.286".into()]).unwrap(),
+        ..phoebis_ledger::RollupFilter::default()
+    };
+    let groups = phoebis_ledger::breakdown_paged(
+        &r.db,
+        &filter,
+        &phoebis_ledger::LiveKeys::default(),
+        NOW - 3_600_000,
+        r.now() + 3_600_000,
+        phoebis_ledger::GroupBy::UserAgent,
+        &r.pricing,
+        &r.tables,
+        r.now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| (group.key.as_str(), group.wasted_probes))
+            .collect::<Vec<_>>(),
+        [("claude-cli/2.1.286", 1)],
+        "the agent's pattern keeps the wasted probe: {groups:?}"
+    );
+}
+
+/// A failed turn re-arms the recipe its arrival set aside, and that recipe's probes replay the headers of the turn that
+/// armed it, so the next probe keys that turn's client.
+#[tokio::test]
+async fn a_probe_of_a_recipe_a_failed_turn_rearmed_keys_the_client_of_the_turn_that_armed_it() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_observed(
+        &r,
+        "first",
+        sent_from(
+            r.observed("first", "main", BODY),
+            "claude-code/desk",
+            "claude-cli/2.1.301 (external, desk)",
+        ),
+        0,
+        2_000,
+    );
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(60_000);
+    open_observed(
+        &r,
+        "second",
+        sent_from(
+            r.observed("second", "main", BODY),
+            "claude-code/cli",
+            "claude-cli/2.1.302 (external, cli)",
+        ),
+        0,
+        2_000,
+    );
+    r.engine.observe(failed(&r, "second", Some(40)));
+    r.advance_attended(210_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").probes,
+        1,
+        "the re-armed recipe's probe went out"
+    );
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = final_rollups(&r).await;
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.wasted_probes > 0)
+            .map(|row| row.client.as_str())
+            .collect::<Vec<_>>(),
+        ["claude-code/desk"],
+        "the probe files under the client of the turn whose recipe it replayed: {rows:?}"
     );
 }
 

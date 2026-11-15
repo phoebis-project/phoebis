@@ -1226,7 +1226,10 @@ each pool's saving beside its Probe cost. Probe cost, Saved by probes, Net savin
 the by-pool Probe cost and Saved read in the top bar's unit: under Native the plan side's figure in the chosen week over
 the billed side's dollars, with no hint, and under the three dollar positions the position's figures in dollars. The
 chart draws dollars under the three dollar positions and the figure in the chosen week under Native, with the billed
-dollars on hover, and the billed dollars alone under Native where the range holds no plan side. What a probe is and when
+dollars on hover, and the billed dollars alone under Native where the range holds no plan side. The tab's keepalive
+figures follow the Client and User agent filters and groupings from the hours folded by this build on. In an hour folded
+before it each keepalive row stands under no user agent, and a probe's own rows under no client, so the User agent
+filter drops the tab's figures there and the Client filter drops all but the kept-warm figures. What a probe is and when
 it counts as wasted is on [Keepalive](keepalive.md).
 
 Accounts draws Peak 5-hour utilization, then Window usage and Pace under a "Window" switch whose positions are the three

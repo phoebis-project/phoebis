@@ -106,10 +106,11 @@ pub(crate) fn settlement_unit(
 }
 
 /// One delta of a recipe's key. An account the recipe never reached takes the ledger's reserved id, the one every
-/// reader groups an unattributed row under, since an empty string would read as an account of its own. The client
-/// takes the reserved id too, which a credit replaces with its request's. A `fast` delta files under speed `fast`: a
-/// credit, a skip or a migration mark at its recipe's speed, beside the fast requests the recipe keeps warm, and a
-/// settlement at its probe's answer's, beside the probe's own request row.
+/// reader groups an unattributed row under, since an empty string would read as an account of its own. A client the
+/// carrier holds none of takes the reserved id too, as an agent restored from a save that predates its label does
+/// until its next request. A `fast` delta files under speed `fast`: a credit, a skip or a migration mark at its
+/// recipe's speed, beside the fast requests the recipe keeps warm, and a settlement at its probe's answer's, beside the
+/// probe's own request row.
 #[allow(clippy::too_many_arguments)]
 fn delta(
     at: i64,
@@ -119,6 +120,8 @@ fn delta(
     account: Option<&str>,
     canonical_model: &str,
     kind: &str,
+    client: Option<&str>,
+    user_agent: Option<&str>,
     fast: bool,
     funding: AttemptFunding,
 ) -> KeepaliveDelta {
@@ -133,7 +136,8 @@ fn delta(
             .to_string(),
         canonical_model: canonical_model.to_string(),
         kind: kind.to_string(),
-        client: UNATTRIBUTED.to_string(),
+        client: client.unwrap_or(UNATTRIBUTED).to_string(),
+        user_agent: user_agent.map(String::from),
         speed: if fast { Speed::Fast } else { Speed::Standard },
         account_kind: funding.kind,
         usage_based: funding.usage_based,
@@ -162,6 +166,8 @@ impl Engine {
             Some(&record.account),
             &record.canonical_model,
             "probe",
+            record.client.as_deref(),
+            record.user_agent.as_deref(),
             record.fast,
             record.funding,
         );
@@ -187,12 +193,11 @@ impl Engine {
             credit.account.as_deref(),
             &credit.model,
             "inference",
+            credit.client.as_deref(),
+            credit.user_agent.as_deref(),
             credit.fast,
             credit.funding,
         );
-        if let Some(client) = &credit.client {
-            d.client = client.clone();
-        }
         d.kept_warm_request_id = Some(request_id.to_string());
         d.kept_warm_requests = 1;
         if credit.ttl_ms == crate::config::ONE_HOUR_MS {
@@ -219,6 +224,8 @@ impl Engine {
             charge.account.as_deref(),
             &settlement.canonical_model,
             "probe",
+            charge.client.as_deref(),
+            charge.user_agent.as_deref(),
             // The speed the probe's answer reported, so the waste prices at the cells and files under the funding its
             // own cost row took even when a fast recipe's answer came back at standard speed.
             charge.usage.speed == Speed::Fast,
@@ -246,6 +253,8 @@ impl Engine {
             skip.account.as_deref(),
             &skip.canonical_model,
             "probe",
+            skip.client.as_deref(),
+            skip.user_agent.as_deref(),
             skip.fast,
             skip.funding,
         );
@@ -356,6 +365,8 @@ mod tests {
                 account,
                 "claude-sonnet-5",
                 "probe",
+                None,
+                None,
                 false,
                 AttemptFunding::default(),
             )

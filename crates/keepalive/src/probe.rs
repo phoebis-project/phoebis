@@ -44,6 +44,9 @@ pub(crate) struct ProbeJob {
     /// The agent's entrypoint at dispatch, which the probe's headers carry, so the probe settles under the regime it
     /// was sent with even when the agent observes another before it lands.
     pub entrypoint: Option<String>,
+    /// The agent's client label at dispatch, taken beside `entrypoint` for the same reason: the probe's own request row
+    /// keys the client of the headers it replays, and its mark and its settlement key that client too.
+    pub client_label: Option<String>,
     pub recipe: Recipe,
     pub expected: u64,
     /// The dispatch counted this probe in the agent's `idle_ticks`, as it does for an idle main agent or an unattended
@@ -149,6 +152,10 @@ pub(crate) struct ProbeRecord {
     pub(crate) account: String,
     pub(crate) agent_id: String,
     pub(crate) canonical_model: String,
+    /// The client and the user agent the probe's own request row keys: the job's label, and `user_agent_of` over the
+    /// headers the probe replayed, the read the ledger makes for that row. The mark keys both, and the charge carries
+    /// them on to a settlement.
+    pub(crate) client: Option<String>,
     /// The recipe carried `speed: "fast"`, the speed its migration mark files under. The probe's cost and its waste
     /// file under the speed its answer reported, the `speed` of `usage`.
     pub(crate) fast: bool,
@@ -162,6 +169,7 @@ pub(crate) struct ProbeRecord {
     pub(crate) outcome: ProbeOutcome,
     pub(crate) pool_id: String,
     pub(crate) usage: ProbeUsage,
+    pub(crate) user_agent: Option<String>,
     /// The instant the relay received the probe's request, the one its request row files under, so the settlement
     /// keys the same hour and prices at the same revision whenever the answer lands. The instant the engine sent the
     /// request, on the same clock, where the relay built no answer.
@@ -385,6 +393,7 @@ impl Inner {
             account: job.account.clone(),
             agent_id: job.agent_id.clone(),
             canonical_model: job.canonical_model.clone(),
+            client: job.client_label.clone(),
             fast: job.recipe.fast,
             funding: AttemptFunding::default(),
             key: job.key.clone(),
@@ -392,6 +401,7 @@ impl Inner {
             outcome: ProbeOutcome::Failed,
             pool_id: job.pool_id.clone(),
             usage: ProbeUsage::default(),
+            user_agent: phoebis_bus::user_agent_of(&job.recipe.headers),
             at,
             band: Band::Standard,
             tier: None,
@@ -444,9 +454,11 @@ impl Inner {
             account: Some(record.account.clone()),
             at: record.at,
             band: record.band,
+            client: record.client.clone(),
             funding: record.funding,
             tier: record.tier.clone(),
             usage: record.usage,
+            user_agent: record.user_agent.clone(),
         };
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
@@ -989,6 +1001,7 @@ mod tests {
             pool_id: "main".into(),
             canonical_model: "m".into(),
             entrypoint: None,
+            client_label: None,
             recipe: Recipe {
                 body: Bytes::new(),
                 headers: Vec::new(),

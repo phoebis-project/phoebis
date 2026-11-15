@@ -1932,6 +1932,88 @@ async fn a_saved_probe_whose_speed_reads_null_restores_and_settles_at_standard()
     );
 }
 
+/// A probe left unanswered at a save settles as wasted after the load, and a due probe the restored recipe withholds
+/// files its skip. Both rows key the client and the user agent of the request the recipe came from, so a restarted
+/// router files neither under the reserved ones.
+#[tokio::test]
+async fn a_restored_recipes_settlement_and_skip_key_the_client_and_the_user_agent_of_its_request() {
+    let mut r = rig(on_disk()).await;
+    let BusEvent::RequestObserved(mut observed) = r.observed("first", "main", BODY) else {
+        unreachable!("the rig builds an observation")
+    };
+    observed.client.class = "claude-code/desk".into();
+    for (name, value) in &mut observed.headers {
+        if name == "user-agent" {
+            *value = "claude-cli/2.1.301 (external, desk)".into();
+        }
+    }
+    r.engine.observe(BusEvent::RequestObserved(observed));
+    r.engine.observe(r.selected("first", "a"));
+    let written = Usage {
+        cache_write_5m_tokens: Some(2_000),
+        ..Default::default()
+    };
+    r.engine
+        .observe(BusEvent::ResponseChunk(phoebis_bus::ResponseChunk {
+            request_id: "first".into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phoebis_bus::Phase::MessageStart {
+                usage: written.clone(),
+            }),
+        }));
+    r.engine
+        .observe(r.complete("first", Outcome::Succeeded, Some(written)));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "one probe left unanswered");
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+    r.reregister();
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.enabled = false;
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        r.status("main").reason,
+        Reason::PoolDisabled,
+        "the restored recipe's due probe was withheld"
+    );
+    r.state("main", "released");
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    let keys = |held: fn(&phoebis_ledger::RollupRow) -> bool| {
+        rows.iter()
+            .filter(|row| held(row))
+            .map(|row| (row.client.clone(), row.user_agent.clone()))
+            .collect::<Vec<_>>()
+    };
+    let recipe = [(
+        "claude-code/desk".to_string(),
+        "claude-cli/2.1.301".to_string(),
+    )];
+    assert_eq!(
+        keys(|row| row.wasted_probes > 0),
+        recipe,
+        "the settlement: {rows:?}"
+    );
+    assert_eq!(
+        keys(|row| row.probes_skipped > 0),
+        recipe,
+        "the skip: {rows:?}"
+    );
+}
+
 /// A saved session of record version 2 carries a probe's dollars in place of its usage, its account tier, its
 /// instant and its band, so nothing would settle its waste under the cells and the revision the probe ran at: the
 /// load drops it whole.

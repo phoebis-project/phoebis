@@ -113,6 +113,10 @@ pub(crate) struct PersistedAgent {
     /// request names one.
     #[serde(default)]
     pub entrypoint: Option<String>,
+    /// Absent from a row saved before agents carried one, which loads as `None`, so the recipe's probes and skips key
+    /// the reserved client until the next admitted request sets it.
+    #[serde(default)]
+    pub client_label: Option<String>,
     pub reason: Reason,
     pub last_guard: Option<Guard>,
     pub hold_counted: bool,
@@ -258,6 +262,10 @@ pub(crate) struct PersistedCharge {
     pub at: i64,
     /// `Band::as_str`'s word.
     pub band: String,
+    /// Absent from a payload written before the client and the user agent rode the probe, each read as `None`, which
+    /// settles under the reserved one.
+    #[serde(default)]
+    pub client: Option<String>,
     pub in_overage: bool,
     pub kind: Option<phoebis_store::AccountKind>,
     pub tier: Option<String>,
@@ -265,6 +273,8 @@ pub(crate) struct PersistedCharge {
     /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
     #[serde(default)]
     pub usage_based: bool,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 impl PersistedCharge {
@@ -273,11 +283,13 @@ impl PersistedCharge {
             account: charge.account.clone(),
             at: charge.at,
             band: charge.band.as_str().to_string(),
+            client: charge.client.clone(),
             in_overage: charge.funding.in_overage,
             kind: charge.funding.kind,
             tier: charge.tier.clone(),
             usage: persisted_usage(&charge.usage),
             usage_based: charge.funding.usage_based,
+            user_agent: charge.user_agent.clone(),
         }
     }
 
@@ -286,6 +298,7 @@ impl PersistedCharge {
             account: self.account,
             at: self.at,
             band: Band::of_rollup(&self.band),
+            client: self.client,
             funding: AttemptFunding {
                 kind: self.kind,
                 usage_based: self.usage_based,
@@ -293,6 +306,7 @@ impl PersistedCharge {
             },
             tier: self.tier,
             usage: probe_usage(self.usage),
+            user_agent: self.user_agent,
         }
     }
 }
@@ -510,6 +524,7 @@ impl PersistedAgent {
             pool_id: agent.pool_id.clone(),
             canonical_model: agent.canonical_model.clone(),
             entrypoint: agent.entrypoint.clone(),
+            client_label: agent.client_label.clone(),
             reason: agent.reason,
             last_guard: agent.last_guard,
             hold_counted: agent.hold_counted,
@@ -615,6 +630,7 @@ impl PersistedAgent {
         agent.reason = self.reason;
         agent.last_guard = self.last_guard;
         agent.entrypoint = self.entrypoint;
+        agent.client_label = self.client_label;
         agent.hold_counted = self.hold_counted;
         agent.paused = self.paused;
         agent.probes = self.probes;
@@ -1572,9 +1588,11 @@ mod tests {
                 account: Some("o".into()),
                 at: 0,
                 band: Band::Standard,
+                client: None,
                 funding: AttemptFunding::default(),
                 tier: Some("default_claude_max_20x".into()),
                 usage: ProbeUsage::default(),
+                user_agent: None,
             },
             unit: Some(SavingsUnit::WindowShare),
             window: SEVEN_DAY,

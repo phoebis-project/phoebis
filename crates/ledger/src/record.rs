@@ -498,10 +498,13 @@ pub struct KeepaliveDelta {
     pub account_id: String,
     pub canonical_model: String,
     pub kind: String,
-    /// The client label the row keys under: the observed request's on a kept-warm credit, so the credit prices under
-    /// that client's regime as the request row does, and the reserved id on every other delta. An empty value folds
-    /// under the reserved id.
+    /// The client label the row keys under, that of the probe's own request row on a mark, a settlement and a skip, and
+    /// of the credited request on a credit, so the row prices under that client's regime as its request row does. An
+    /// empty value folds under the reserved id.
     pub client: String,
+    /// The user agent of the probe's own request row on a mark, a settlement and a skip, and of the credited request
+    /// on a credit.
+    pub user_agent: Option<String>,
     /// The request the credit is for, marked `kept_warm` by id.
     pub kept_warm_request_id: Option<String>,
     pub kept_warm_requests: u64,

@@ -114,7 +114,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     let inference = rows
         .iter()
         .find(|r| r.kind == "inference" && r.user_agent == "-")
-        .expect("the credit lands on a user-agent-less row of the request's key");
+        .expect("a credit that carries no user agent lands on the reserved agent's row of the request's key");
     assert_eq!(
         (
             inference.kept_warm_requests,
@@ -479,10 +479,10 @@ fn a_kept_warm_credit_folds_under_its_requests_client_and_prices_its_saving_unde
     );
 }
 
-/// A settlement, a skip and a migration mark belong to the key rather than to one caller, so each folds under the
-/// reserved client the savings code hands it.
+/// A settlement, a skip and a migration mark that carry no client of their own, as the deltas of an agent saved before
+/// the agent kept its client label do, take the reserved client from the savings code and share its row.
 #[test]
-fn a_settlement_a_skip_and_a_migration_mark_fold_under_the_reserved_client() {
+fn a_settlement_a_skip_and_a_migration_mark_without_a_client_fold_under_the_reserved_one() {
     let at = 1_700_000_000_000;
     let reserved = |delta: KeepaliveDelta| KeepaliveDelta {
         client: UNATTRIBUTED.into(),

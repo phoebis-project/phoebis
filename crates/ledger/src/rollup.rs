@@ -206,8 +206,8 @@ pub struct RollupRow {
     pub kind: String,
     /// The `User-Agent` of the request the row folded, `UNATTRIBUTED` for a request that sent none.
     pub user_agent: String,
-    /// The class of the request the row folded, `UNATTRIBUTED` for a keepalive credit and for a row folded
-    /// before the column existed; a dimension, so it sits in the key.
+    /// The class of the request the row folded, `UNATTRIBUTED` for a row folded before the column existed. A
+    /// dimension, so it sits in the key.
     pub client: String,
     /// The request's effort as the drawer shows it (the last per-turn control entry's level, else the top-level
     /// `output_config.effort`), `NO_EFFORT` when it sent none; a dimension, so it sits in the key.
@@ -1158,11 +1158,11 @@ fn reread_utilization(
 }
 
 /// The keepalive engine's own delta: one row of its key, holding a kept-warm request's credit, a probe's migration
-/// mark, a skip, and the counts a stopped recipe wasted. The user agent is the reserved id, since a probe's own request
-/// row carries the agent the recipe replays. A credit keys its request's client, so its saving prices under that
-/// client's regime, and every other delta keys the reserved id. The row keys the delta's own instant, band and account
-/// tier, so a settlement filed after its probe sits in the probe's hour and prices at the cells and the revision the
-/// probe ran at.
+/// mark, a skip, and the counts a stopped recipe wasted. The delta keys the client and the user agent of the probe's
+/// own request row, or of the credited request on a credit, each folded as `deltas_of` folds that row's, so the
+/// Client and User agent filters and groupings reach the keepalive's figures and a row prices under its client's
+/// regime. The row keys the delta's own instant, band and account tier, so a settlement filed after its probe sits in
+/// the probe's hour and prices at the cells and the revision the probe ran at.
 pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<(), LedgerError> {
     let key = RollupRow::key(
         hour_of(delta.at),
@@ -1172,8 +1172,11 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         &delta.account_id,
         &delta.canonical_model,
         &delta.kind,
-        UNATTRIBUTED,
-        // Folded as `deltas_of` folds the request row's, so a credit lands on the label its request's row keys, and an
+        &delta
+            .user_agent
+            .as_deref()
+            .map_or_else(|| UNATTRIBUTED.into(), fold_user_agent),
+        // Folded as `deltas_of` folds the request row's, so a delta lands on the label its request's row keys, and an
         // empty client, a default-built delta's, where an unlabeled request does.
         &if delta.client.is_empty() {
             UNATTRIBUTED.into()
@@ -2827,8 +2830,7 @@ mod tests {
     }
 
     /// A caller picks its user agent, client hints, effort and class, so each reaches the hour row's key folded to
-    /// a bounded vocabulary; an absent one keeps the reserved id, which the agent shares with its key's keepalive
-    /// credits.
+    /// a bounded vocabulary, and an absent one keeps the reserved id, which a keepalive delta that carries none shares.
     #[test]
     fn the_rollup_key_folds_each_caller_controlled_dimension_to_a_bounded_vocabulary() {
         let long = "x".repeat(300);

@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{
-    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome, Phase,
-    RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
+    spawn_subscriber, user_agent_of, AccountSelected, Bus, Delivery, Event as BusEvent, Outcome,
+    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead,
 };
 use phoebis_ledger::{funding_of, Band, Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
@@ -679,8 +679,9 @@ pub(crate) struct Agent {
     /// The entrypoint of the observed request's `client` label, what its probes price under, and `None` for a label
     /// that names none.
     pub entrypoint: Option<String>,
-    /// The client label of the last turn admitted, whole, which that turn's kept-warm credit keys. Never saved: only a
-    /// request admitted in this process earns a credit.
+    /// The client label of the last turn admitted, whole, set with `entrypoint`. That turn's kept-warm credit keys it,
+    /// a probe takes it at dispatch for its mark and its settlement, and a skip reads it, since a probe replays that
+    /// turn's headers. A save carries it, and an aside recipe keeps its own and takes it back where it is re-armed.
     pub client_label: Option<String>,
     pub reason: Reason,
     /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
@@ -1031,8 +1032,9 @@ pub(crate) struct OpenCompaction {
     pub ttl_ms: i64,
     /// What the previous recipe had proved at the admission, as a turn's observation takes it.
     pub prior: Option<PriorCoverage>,
-    /// The compaction request's own client label, the one its kept-warm credit keys.
+    /// The compaction request's own client label and user agent, the ones its kept-warm credit keys.
     pub client_label: String,
+    pub user_agent: Option<String>,
 }
 
 /// What a request that completed answers the probes before it with: when it reached the cache, the lineage it read on
@@ -1048,8 +1050,9 @@ struct Answer {
 /// A kept-warm credit a completion earned, its keys read under the lock and recorded once the lock is released. `at` is
 /// the credited request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
 /// whenever the answer completes, and `ttl_ms` the TTL its own write would have taken. `funding` is its serving
-/// attempt's, so the credit files under the funding word its request row took, and `client` its client label as the
-/// relay observed it, so the credit prices under that client's regime.
+/// attempt's, so the credit files under the funding word its request row took, and `client` and `user_agent` its client
+/// label and user agent as the relay observed them, so the credit keys its request row's client and agent and prices
+/// under that client's regime.
 pub(crate) struct Credit {
     pub(crate) at: i64,
     pub(crate) key: SessionKey,
@@ -1062,6 +1065,7 @@ pub(crate) struct Credit {
     pub(crate) fast: bool,
     pub(crate) funding: AttemptFunding,
     pub(crate) client: Option<String>,
+    pub(crate) user_agent: Option<String>,
 }
 
 /// What a walk whose caller just read the agent under the same lock expects of it.
@@ -1214,6 +1218,9 @@ pub(crate) struct AsideRecipe {
     pub failures: u32,
     pub canonical_model: String,
     pub entrypoint: Option<String>,
+    /// The label of the turn that armed the recipe, which its probes key since they replay that turn's headers. The
+    /// arrival that set the recipe aside wrote its own label to the agent.
+    pub client_label: Option<String>,
     pub account: Option<String>,
     pub pool_id: String,
     pub key_generation: i64,
@@ -1228,6 +1235,9 @@ pub(crate) struct ProbeCharge {
     /// counts at the cells and the revision the probe ran at.
     pub at: i64,
     pub band: Band,
+    /// The client and the user agent the probe's own request row keys, off its `ProbeRecord`, so a settlement filed
+    /// after its recipe ended or past a restart keys them too.
+    pub client: Option<String>,
     /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
     /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
     pub funding: AttemptFunding,
@@ -1235,6 +1245,7 @@ pub(crate) struct ProbeCharge {
     pub tier: Option<String>,
     /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
     pub usage: ProbeUsage,
+    pub user_agent: Option<String>,
 }
 
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
@@ -1261,6 +1272,10 @@ pub(crate) struct Skipped {
     /// The kind, the class and the overage of the request the recipe came from, off its observation, so the skip files
     /// under the funding that request ran under.
     pub funding: AttemptFunding,
+    /// The agent's client label and `user_agent_of` over the recipe's headers, the client and the user agent the
+    /// withheld probe's own request row would have keyed.
+    pub client: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 impl Skipped {
@@ -1278,6 +1293,11 @@ impl Skipped {
                 .as_ref()
                 .map(|o| o.funding)
                 .unwrap_or_default(),
+            client: agent.client_label.clone(),
+            user_agent: agent
+                .current
+                .as_ref()
+                .and_then(|o| user_agent_of(&o.recipe.headers)),
         }
     }
 }
@@ -1761,6 +1781,7 @@ impl Inner {
                     failures: agent.failures,
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
+                    client_label: agent.client_label.clone(),
                     account: agent.account.clone(),
                     pool_id: agent.pool_id.clone(),
                     key_generation: agent.key_generation,
@@ -1807,6 +1828,7 @@ impl Inner {
         agent.failures = aside.failures;
         agent.canonical_model = aside.canonical_model;
         agent.entrypoint = aside.entrypoint;
+        agent.client_label = aside.client_label;
         agent.account = aside.account;
         agent.pool_id = aside.pool_id;
         agent.key_generation = aside.key_generation;
@@ -2975,6 +2997,7 @@ impl Engine {
                 ttl_ms: 0,
                 prior: prior_coverage(agent, now),
                 client_label: observed.client.class.clone(),
+                user_agent: user_agent_of(&observed.headers),
             };
             agent_mut(&mut inner.sessions, &key, &agent_id)
                 .expect(AGENT_HELD)
@@ -3392,6 +3415,7 @@ impl Engine {
                         fast,
                         funding: served.map(|o| o.funding).unwrap_or_default(),
                         client: agent.client_label.clone(),
+                        user_agent: served.and_then(|o| user_agent_of(&o.recipe.headers)),
                     }
                 })
         };
@@ -3620,6 +3644,7 @@ impl Inner {
                 fast: compaction.fast,
                 funding: compaction.funding,
                 client: Some(compaction.client_label.clone()),
+                user_agent: compaction.user_agent.clone(),
             });
         if credit.is_some() {
             agent.count_credit(now);
@@ -3954,6 +3979,7 @@ impl Engine {
                     pool_id: agent.pool_id.clone(),
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
+                    client_label: agent.client_label.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
                     counted_idle_tick: idle,
