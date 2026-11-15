@@ -65,7 +65,6 @@ struct AccountView {
     funding: &'static str,
     tier: Option<String>,
     obstacle: Option<&'static str>,
-    pace_score: f64,
     slow_down: Option<AccountSlowDownView>,
     windows: BTreeMap<String, WindowView>,
     spend: Vec<SpendView>,
@@ -87,6 +86,9 @@ struct WindowView {
     projected_at_horizon: f64,
     /// The line `runway_minutes` reads to, so a reader needs no rule for which of the pool's ceilings a window takes.
     ceiling: f64,
+    /// The fit a fresh placement reads on the window, for a request that prices no rewrite: `fits`, `rewrite_only`,
+    /// `least_bad`, `ending` or `spent`.
+    fit: &'static str,
     runway_minutes: Option<u64>,
 }
 
@@ -242,6 +244,7 @@ fn account_view(
                 demand_per_hour: w.demand,
                 projected_at_horizon: w.projection,
                 ceiling: line,
+                fit: w.fit,
                 runway_minutes: runway_minutes(w.runway_ms),
             };
             (window, view)
@@ -264,7 +267,6 @@ fn account_view(
         funding,
         tier: snapshot.priced_tier(&row.id).map(String::from),
         obstacle: projection.obstacle.as_ref().map(Obstacle::name),
-        pace_score: projection.pace_score,
         slow_down: projection.slow_down.map(|entry| AccountSlowDownView {
             factor: entry.factor,
             speed: entry.speed,

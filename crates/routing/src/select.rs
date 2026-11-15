@@ -3586,9 +3586,11 @@ pub(crate) struct FitRead {
     pub rewrite: BTreeMap<String, f64>,
     pub reserved: BTreeMap<String, f64>,
     pub end: Option<i64>,
-    /// The word of each window the read holds a reading of, by three tests in order: `spent` at a prediction of 1.0
-    /// or more, `ending` inside the account's wind-down, else `fits`, `rewrite_only` or `least_bad` on the window's own
-    /// runway. A paid source and, on a placement, an untiered account give each window the read's verdict.
+    /// The word of each window the request's model draws that the account holds a reading of, one its set no longer
+    /// holds included, by three tests in order: `spent` at a prediction of 1.0 or more, `ending` inside the account's
+    /// wind-down, else `fits`, `rewrite_only` or `least_bad` on the window's own runway. A window outside the set has no
+    /// runway read, so the third test reads `fits` there. A paid source and, on a placement, an untiered account give
+    /// each window the read's verdict.
     pub words: BTreeMap<String, &'static str>,
 }
 
@@ -3637,10 +3639,10 @@ pub(crate) fn fit_of(
         end: None,
         words: BTreeMap::new(),
     };
-    // The answers ahead of the window loop word each window the model draws that the account holds a reading of.
+    // Each answer words every window the model draws that the account holds a reading of, one its set no longer holds
+    // included, since `holds_allowance` reads that reading too and the word must not promise allowance it denies.
     let held = || {
-        state
-            .plan_windows_held(candidate, &request.canonical_model)
+        plan_windows(&request.canonical_model)
             .filter(move |window| state.predicted(candidate, window, now).is_some())
     };
     // An account inside the wind-down is no destination: the operator's `wind_down_minutes` is the one rule before
@@ -3805,6 +3807,16 @@ pub(crate) fn fit_of(
         if !passes_reset(runway_ms, projection.reset, now) {
             shown.push((window, runway_ms, short));
         }
+    }
+    // The loop walks the set's windows alone, so the verdict and the runways never read a window outside it.
+    for window in held() {
+        read.words.entry(window.to_string()).or_insert_with(|| {
+            if window_spent(state, candidate, window, now) {
+                "spent"
+            } else {
+                "fits"
+            }
+        });
     }
     read.rank_runway_ms = binding_of(&bounded).map(|(_, runway_ms)| runway_ms);
     if let Some((window, runway_ms)) = binding_of(&shown) {

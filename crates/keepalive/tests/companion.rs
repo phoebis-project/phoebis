@@ -8,7 +8,7 @@ use phoebis_keepalive::companion_router;
 use phoebis_ledger::{AttemptRecord, PriceRevisions, Record, RequestRecord};
 use phoebis_routing::{
     Report, RouterConfig, SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
-    HOUR_MS, SEVEN_DAY,
+    HOUR_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountState, AccountUpdate, AffinityMode, ApiKeyRow, Cancellation,
@@ -192,7 +192,7 @@ async fn set_affinity(r: &Rig, ttl_seconds: u64, mode: AffinityMode) {
 
 /// One line per value, depth first in key order: the path and the JSON kind (`null`, `boolean`, `integer`, `float`,
 /// `string`, `array`, `object`). Every array entry is walked, since the API-key account and the plan account differ in
-/// shape. Values are not compared: a Pace score or a projection is the routing task's to change.
+/// shape. Values are not compared: a runway or a projection is the routing task's to change.
 fn shape(v: &Value) -> Vec<String> {
     fn walk(v: &Value, path: &str, out: &mut Vec<String>) {
         let kind = match v {
@@ -568,6 +568,36 @@ async fn a_pins_runway_reads_the_routers_milliseconds_as_whole_minutes() {
     assert_eq!(
         answer.body["pins"][0]["runway_minutes"],
         json!(360),
+        "{}",
+        answer.text
+    );
+}
+
+#[tokio::test]
+async fn each_window_answers_its_own_fit_and_a_spent_fable_week_holds_no_obstacle() {
+    let r = rig(RigSpec {
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0)],
+        tier: Some(TIER),
+        ..RigSpec::default()
+    })
+    .await;
+    let app = companion_router(r.engine.clone());
+    read_window(&r, "a", FIVE_HOUR, 0.25, NOW + 2 * HOUR_MS).await;
+    read_window(&r, "a", SEVEN_DAY, 0.4, NOW + 72 * HOUR_MS).await;
+    read_window(&r, "a", SEVEN_DAY_FABLE, 1.0, NOW + 72 * HOUR_MS).await;
+    let answer = get(&app, Some(SESSION), Some(KEY)).await;
+    let account = &answer.body["accounts"][0];
+    let windows = &account["windows"];
+    // Nothing burns, so both shared windows stay under their ceilings, while the Fable week's reading of 1.0 leaves it
+    // no allowance. The obstacle is asked for no model in particular, which draws no model week.
+    assert_eq!(
+        (
+            windows[FIVE_HOUR]["fit"].clone(),
+            windows[SEVEN_DAY]["fit"].clone(),
+            windows[SEVEN_DAY_FABLE]["fit"].clone(),
+            account["obstacle"].clone(),
+        ),
+        (json!("fits"), json!("fits"), json!("spent"), json!(null)),
         "{}",
         answer.text
     );

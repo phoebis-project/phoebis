@@ -4355,6 +4355,32 @@ async fn a_clean_poll_without_five_hour_writes_the_drop_and_the_set_and_a_restar
 }
 
 #[tokio::test]
+async fn a_restored_seven_day_reading_at_one_outside_the_set_reads_spent_beside_a_fitting_five_hour_window(
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    // The 7-day row outlived the set row, which names the 5-hour window alone, so the restart restores both.
+    assert!(store
+        .upsert_window(&window_row("a", FIVE_HOUR, 0.25, Some(1_000 + 2 * HOUR)))
+        .unwrap());
+    assert!(store
+        .upsert_window(&window_row("a", SEVEN_DAY, 1.0, Some(1_000 + 48 * HOUR)))
+        .unwrap());
+    assert!(store.upsert_window_set(&set_row(FIVE_HOUR, 500)).unwrap());
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let a = projection_of_account(&handle.projections("p").await.unwrap(), "a");
+    assert_eq!(
+        (
+            a.windows.get(FIVE_HOUR).map(|w| w.fit),
+            a.windows.get(SEVEN_DAY).map(|w| w.fit)
+        ),
+        (Some("fits"), Some("spent")),
+        "{a:?}"
+    );
+}
+
+#[tokio::test]
 async fn an_api_key_account_and_an_account_without_a_tier_are_charged_nothing() {
     let store = seeded_oauth(&["a", "n"]);
     store

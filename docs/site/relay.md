@@ -619,8 +619,7 @@ overage stay in, with the hold as their obstacle. Each entry:
 | `id` | The account's pseudonym |
 | `funding` | `plan`, `usage_based` or `api_key` |
 | `tier` | The rate-limit tier the router prices the account under, `null` where it has none |
-| `obstacle` | What the selector holds against the account for a request on no model in particular: `attempted`, `budget`, `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `spent` or `subscription_ended`, or `null` where it would place on the account |
-| `pace_score` | The score Pace ranks the account by, its spare rate on the 7-day window, or the room left in its worst bucket for an API-key account ([Pools](routing.md#pools)) |
+| `obstacle` | A hold on the whole account, what the selector holds against it for a request on no model in particular: `budget`, `budget_unknown`, `cooldown`, `overage` or `spent`, the last for a usage-based seat at its spend cap. `null` means no such hold, and each window's `fit` says whether new work lands on it |
 | `slow_down` | `null` without an entry in force, else `factor`, the target, `speed`, the realized speed the holds reached, and `since`, when the span the factor reads under 1 for began, or `null` outside a span ([Slow-down](routing.md#slow-down)) |
 | `windows` | A map from the window id (`five_hour`, `seven_day`, a model's own week) to the window's figures, one entry per plan window the account has a reading of, empty for an account with no plan window |
 | `spend` | One row per spend budget the ledger has reported for the member, empty without one ([Pools](routing.md#pools)) |
@@ -635,7 +634,11 @@ Each window:
 | `demand_per_hour` | The share they would burn an hour with no slow-down holding them |
 | `projected_at_horizon` | The predicted share at the earlier of `horizon_at` and five hours from now |
 | `ceiling` | The share of the window the router fills an account to: the pool's `five_hour_ceiling` on `five_hour` and its `weekly_ceiling` on the 7-day window and each model week ([Pools](routing.md#pools)) |
+| `fit` | The fit a fresh placement reads on the window, for a request that prices no rewrite ([Selection](routing.md#selection)): `fits`, a fresh session at the pool's usual burn stays under the window's `ceiling` until the earlier of `horizon_at` and five hours from now. `rewrite_only`, a request still lands under the `ceiling`, and the usual burn after it reaches the `ceiling` before the earlier of `horizon_at` and five hours from now. `least_bad`, the window stands at or over its `ceiling`. `ending`, the window has allowance left and its account is inside its wind-down ([Subscription end](routing.md#subscription-end)). `spent`, the share stands at 1.0 or more, whatever the account's end, so the window holds no allowance until `horizon_at` |
 | `runway_minutes` | The whole minutes until the share reaches the window's `ceiling` at the account's burn, with the band's hours weighed as the projection weighs them ([The windows the router works from](routing.md#the-windows-the-router-works-from)): `0` at or above it, and `null` where nothing burns or where the window resets or the account's subscription ends before it is reached |
+
+A window's `fit` prices no rewrite, so a session with a large first prompt can land one word worse than the window
+reads. A model week's `fit` holds for the models that draw that week alone.
 
 Each spend row:
 
@@ -657,7 +660,7 @@ Each spend row:
 | `last_used_at` | When a request last used it |
 | `warm` | Whether the pin's cache entry is alive at `now`, by the selector's own reading |
 | `warm_until` | The first instant `warm` reads false: the last refresh, or the last use for a pin only auxiliary requests have used since its placement, plus the cache TTL |
-| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling of the window that binds among those the pin's model draws, each window's runway read by the rule of a window's `runway_minutes`, and `null` where no window bounds it |
+| `runway_minutes` | The whole minutes until the account's projection reaches the ceiling of the window that binds among those the pin's model draws, each window's runway read by the rule of a window's `runway_minutes` with the account's subscription end counted only while it lies ahead, and `null` where no window bounds it |
 | `binding_window` | The window the runway reads, `null` unless the runway is bounded |
 | `slow_down` | `null` without an entry in force on the account, else `factor` and `speed` |
 
@@ -679,19 +682,17 @@ session's main agent is pinned to:
   "pool": { "pinning": "always", "strategy": "priority" },
   "accounts": [
     {
-      "id": "aaaaaaaa", "funding": "api_key", "tier": null, "obstacle": null, "pace_score": 1.0,
-      "slow_down": null, "windows": {},
+      "id": "aaaaaaaa", "funding": "api_key", "tier": null, "obstacle": null, "slow_down": null, "windows": {},
       "spend": [{ "period": "day", "spent_usd": 2.5, "budget_usd": 10.0, "period_end": "1970-01-02T00:00:00Z" }]
     },
     {
-      "id": "bbbbbbbb", "funding": "plan", "tier": "default_claude_max_20x", "obstacle": null,
-      "pace_score": 0.008333333333333333, "slow_down": null,
+      "id": "bbbbbbbb", "funding": "plan", "tier": "default_claude_max_20x", "obstacle": null, "slow_down": null,
       "windows": {
         "five_hour": { "utilization": 0.25, "horizon_at": "1970-01-01T02:16:40Z", "burn_per_hour": 0.0,
-                       "demand_per_hour": 0.0, "projected_at_horizon": 0.25, "ceiling": 0.95,
+                       "demand_per_hour": 0.0, "projected_at_horizon": 0.25, "ceiling": 0.95, "fit": "fits",
                        "runway_minutes": null },
         "seven_day": { "utilization": 0.4, "horizon_at": "1970-01-04T00:16:40Z", "burn_per_hour": 0.0,
-                       "demand_per_hour": 0.0, "projected_at_horizon": 0.4, "ceiling": 1.0,
+                       "demand_per_hour": 0.0, "projected_at_horizon": 0.4, "ceiling": 1.0, "fit": "fits",
                        "runway_minutes": null }
       },
       "spend": []

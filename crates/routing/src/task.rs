@@ -1472,13 +1472,10 @@ pub struct WindowProjection {
     /// is: `Some(0)` at or past the ceiling, `None` with no burn or where the runway reaches the earlier of the
     /// reading's reset and the account's end that lies after the ask's instant.
     pub runway_ms: Option<i64>,
-    /// `remaining / hours - burn` on this window, what Pace scores a candidate by for a model that draws it, the room
-    /// on `seven_day` less the Fable reservation where one applies.
-    pub spare_rate: f64,
     /// The fit a fresh placement reads on the window for a request that prices no rewrite: `spent`, `ending`,
     /// `fits`, `rewrite_only` or `least_bad`. A model week reads it on a request for a model that draws the week, a
-    /// member with no priced tier reads `fits`, and a window the account's set no longer holds reads the member's
-    /// `fit`.
+    /// member with no priced tier reads `fits`, and a window the account's set no longer holds reads `spent` at a
+    /// prediction of 1.0 or more, else `ending` inside the wind-down and `fits` outside it.
     pub fit: &'static str,
 }
 
@@ -2876,14 +2873,14 @@ fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
 
 /// The members of `pool_id` in account order, each with its projection per plan window and its Pace score at `now`
 /// under that pool's settings: the windows from one `projections_of` read on the achieved burn and one on the demand,
-/// so each window is built once per read, with `pace_of`'s spare rate on each, the score and the Fable reservation
-/// from `pace_of` on `seven_day`, the window Pace reads for a model without a week of its own, the slow-down entry in
-/// force, which the last pinned selection on the account wrote, the selector's obstacle on the account and the
-/// member's budgets. The fit a fresh placement reads on each member comes from `fresh_fit` over the pool's
-/// `fresh_prior`, read once for the pool: one read on a request whose model draws no week of its own gives the
-/// member's word, its runway and the words of the shared windows, and each model week the account holds a reading of
-/// takes its word from a read on that week's model. Each window's runway to its ceiling comes from `runway`, as a pin's
-/// does. Empty for a pool the snapshot does not hold.
+/// so each window is built once per read, the score and the Fable reservation from `pace_of` on `seven_day`, the
+/// window Pace reads for a model without a week of its own, the slow-down entry in force, which the last pinned
+/// selection on the account wrote, the selector's obstacle on the account and the member's budgets. The fit a fresh
+/// placement reads on each member comes from `fresh_fit` over the pool's `fresh_prior`, read once for the pool: one
+/// read on a request whose model draws no week of its own gives the member's word, its runway and the words of the
+/// shared windows, and each model week the account holds a reading of takes its word from a read on that week's model.
+/// Each window's runway to its ceiling comes from `runway`, as a pin's does. Empty for a pool the snapshot does not
+/// hold.
 fn projections(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2957,6 +2954,7 @@ fn projections(
                 .filter_map(|window| {
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
+                    let word = words.get(window).copied()?;
                     let pace = pace_of(state, snapshot, pool, &candidate, window, now, None);
                     Some((
                         window.to_string(),
@@ -2975,10 +2973,7 @@ fn projections(
                                 projection.reset,
                                 end,
                             ),
-                            spare_rate: pace.score,
-                            // A window the reads walk past, one the account's set no longer holds, takes the
-                            // member's word.
-                            fit: words.get(window).copied().unwrap_or(fit),
+                            fit: word,
                         },
                     ))
                 })

@@ -11,7 +11,6 @@
       "funding": "api_key",
       "tier": null,
       "obstacle": null,
-      "pace_score": 1.0,
       "slow_down": null,
       "windows": {},
       "spend": [
@@ -28,7 +27,6 @@
       "funding": "plan",
       "tier": "default_claude_max_20x",
       "obstacle": null,
-      "pace_score": 0.008333333333333333,
       "slow_down": null,
       "windows": {
         "five_hour": {
@@ -38,6 +36,7 @@
           "demand_per_hour": 0.0,
           "projected_at_horizon": 0.25,
           "ceiling": 0.95,
+          "fit": "fits",
           "runway_minutes": null
         },
         "seven_day": {
@@ -47,6 +46,7 @@
           "demand_per_hour": 0.0,
           "projected_at_horizon": 0.4,
           "ceiling": 1.0,
+          "fit": "fits",
           "runway_minutes": null
         }
       },
