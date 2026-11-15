@@ -1496,23 +1496,27 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
 }
 {
   // A window whose reset has passed says nothing until its next reading, as the Quota cell's expired line does, so a
-  // served projection on it stays off its bar: legacy's 5-hour window, given one here.
+  // served projection on it stays off its bar: reserve's 5-hour window, which reset twenty minutes before the story's
+  // anchor, given one here. The route withholds every window of an account that needs re-auth, so legacy's card reads
+  // its state in the bars' place.
   const at = Date.now();
   const { listAccounts } = api;
   api.listAccounts = async (...args) =>
-    (await listAccounts.apply(api, args)).map((a) => (a.id !== 'legacy' ? a : { ...a, windows: a.windows.map((w) => (w.id === '5h' ? { ...w, burn: 0.02, horizon: new Date(at + 5 * 3_600_000).toISOString(), projection: 0.3 } : w)) }));
+    (await listAccounts.apply(api, args)).map((a) => (a.id !== 'reserve' ? a : { ...a, windows: a.windows.map((w) => (w.id === '5h' ? { ...w, burn: 0.02, horizon: new Date(at + 5 * 3_600_000).toISOString(), projection: 0.3 } : w)) }));
   const page = await mount('/', { now: at });
   api.listAccounts = listAccounts;
-  const legacy = (await api.listAccounts()).find((a) => a.id === 'legacy');
-  const card = [...page.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === 'legacy');
-  const bar = [...(card?.querySelectorAll('.wbar') ?? [])].find((b) => b.querySelector('.wbar__label')?.textContent === '5h');
-  const text = bar?.querySelector('.wbar__reset')?.textContent ?? 'no 5h bar on legacy';
-  const reset = legacy?.windows.find((w) => w.id === '5h')?.resetsAt ?? null;
+  const reserve = (await api.listAccounts()).find((a) => a.id === 'reserve');
+  const cardOf = (id) => [...page.container.querySelectorAll('a.account-mini')].find((c) => idOf(c) === id);
+  const bar = [...(cardOf('reserve')?.querySelectorAll('.wbar') ?? [])].find((b) => b.querySelector('.wbar__label')?.textContent === '5h');
+  const text = bar?.querySelector('.wbar__reset')?.textContent ?? 'no 5h bar on reserve';
+  const reset = reserve?.windows.find((w) => w.id === '5h')?.resetsAt ?? null;
   results.push({
     name: '/ a window bar whose reset has passed reads its reset alone, though the window carries a projection',
     ok: reset !== null && Date.parse(reset) < at && text === fmtRelative(reset, at),
     missing: [text, String(reset)],
   });
+  const reauth = cardOf('legacy')?.querySelector('.wbar__none')?.textContent ?? 'no line on legacy';
+  results.push({ name: "/ an account card that needs re-auth reads its state in its window bars' place", ok: reauth === 'Needs re-auth, no window', missing: [reauth] });
   page.unmount();
 }
 {
@@ -1804,13 +1808,18 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 }
 {
   // The page leaves out a disconnected account, one awaiting re-authentication and one whose plan ended whatever its
-  // row carries: legacy holds the windows of its last clean read and spare those of its last poll before the
-  // disconnect, yet neither draws a card, and the route answers no window for the sunset seed, a ready account whose
-  // plan ended. The timeline's lanes are read on the Quota windows section below, and the Accounts view's rows and
-  // spare's and sunset's details in the Accounts block.
+  // row carries: the route withholds the windows of legacy and spare, so the list here hands both primary's, yet
+  // neither draws a card, and the route answers no window for the sunset seed, a ready account whose plan ended. The
+  // timeline's lanes are read on the Quota windows section below, and the Accounts view's rows and spare's and sunset's
+  // details in the Accounts block.
+  const { listAccounts } = api;
+  const primary = (await listAccounts.call(api)).find((a) => a.id === 'primary');
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'legacy' || a.id === 'spare' ? { ...a, fableWindow: primary.fableWindow, windows: primary.windows } : a));
+  const page = await mount('/quota');
   const left = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && !quotaListed(a));
+  api.listAccounts = listAccounts;
   const leftLabels = left.map((a) => a.label).sort();
-  const cards = [...m.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
+  const cards = [...page.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
   results.push({
     name: '/quota draws no card for a disconnected account, one awaiting re-authentication or one whose plan ended, though the first two hold windows',
     ok:
@@ -1818,9 +1827,10 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
       left.every((a) => (a.planEndedAt === null ? a.windows.length > 0 : a.windows.length === 0 && a.status === 'ready')) &&
       cards.length > 0 &&
       !cards.some((c) => leftLabels.includes(c)) &&
-      !m.text().includes('sunset'),
+      !page.text().includes('sunset'),
     missing: [`left out ${JSON.stringify(leftLabels)}`, `windows ${JSON.stringify(left.map((a) => a.windows.length))}`, `cards ${JSON.stringify(cards)}`],
   });
+  page.unmount();
 }
 {
   // The bar's sort control on a bare /quota. The recovery orders are written from the story's accounts (`SEEDS` in
@@ -2098,13 +2108,18 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
 {
   // No listed row of the story holds an expired window, its extra usage off with the provider's reason, no
   // subscription block, a failed poll or none, or reads funding_required, so one mount reads them all under one
-  // override: nightly reads funding_required, its 5-hour window is legacy's, read two days ago before its reset and
-  // never since, and its poll is null, while studio carries legacy's extra usage block, off with the provider's reason,
-  // legacy's poll, whose last attempt ran the refresh that lapsed it two days and two hours before the story's anchor,
-  // and no subscription block, with the plan the decoder derives from it.
+  // override: nightly reads funding_required, its 5-hour window is the one legacy's seed in `web/src/mock/accounts.ts`
+  // holds, read two days ago before its reset and never since, which the route withholds from legacy's answer, and its
+  // poll is null, while studio carries legacy's extra usage block, off with the provider's reason, legacy's poll, whose
+  // last attempt ran the refresh that lapsed it two days and two hours before the story's anchor, and no subscription
+  // block, with the plan the decoder derives from it.
   const { listAccounts } = api;
-  const legacy = (await listAccounts.call(api)).find((a) => a.id === 'legacy');
-  const stale = legacy.windows.find((w) => w.id === '5h');
+  const story = await listAccounts.call(api);
+  const legacy = story.find((a) => a.id === 'legacy');
+  const at = Date.now();
+  const iso = (ms) => new Date(ms).toISOString();
+  const five = story.find((a) => a.id === 'nightly').windows.find((w) => w.id === '5h');
+  const stale = { ...five, burn: null, demand: null, horizon: null, lead: null, observedAt: iso(at - 51 * 3_600_000), projection: null, resetsAt: iso(at - 48 * 3_600_000), utilization: 0.18 };
   api.listAccounts = async () =>
     (await listAccounts.call(api)).map((a) =>
       a.id === 'nightly'
@@ -2261,11 +2276,14 @@ quotaStoryCount = /^(\d+) accounts?, (\d+) needs? attention$/.exec(m.container.q
   // same however late the run reaches the block. The mock anchors its story as it loads, a moment after the origin, so
   // the phrase comes from the shared words and the mock's own windows rather than a literal span. The story's figures
   // are the burns its windows carry: nightly's 5-hour window runs out before its reset, primary's reaches its reset
-  // with a share left, and primary's 7-day window reads its five hours. No listed row of the story carries a window
-  // without a projection, so studio's 7-day window is overridden to legacy's, which no router has read for two days.
+  // with a share left, and primary's 7-day window reads its five hours. No listed row of the story carries a live
+  // window without a projection, so studio's 7-day window is overridden to the one legacy's seed in
+  // `web/src/mock/accounts.ts` holds, which no router has read for two days and which the route withholds from legacy's
+  // answer.
   const at = CLOCK_ORIGIN;
   const { listAccounts } = api;
-  const unprojected = (await listAccounts.call(api)).find((a) => a.id === 'legacy').windows.find((w) => w.id === '7d');
+  const week = (await listAccounts.call(api)).find((a) => a.id === 'studio').windows.find((w) => w.id === '7d');
+  const unprojected = { ...week, burn: null, demand: null, horizon: null, lead: null, observedAt: new Date(at - 51 * 3_600_000).toISOString(), projection: null, resetsAt: new Date(at + 48 * 3_600_000).toISOString(), utilization: 0.52 };
   api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'studio' ? { ...a, windows: a.windows.map((w) => (w.id === '7d' ? unprojected : w)) } : a));
   const q = await mount('/quota', { now: at });
   const accounts = (await api.listAccounts()).filter(quotaListed);
@@ -2723,8 +2741,8 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
 }
 {
-  // legacy and spare hold windows, yet the timeline draws no lane for either, and none for the sunset seed, whose plan
-  // ended.
+  // The timeline draws no lane for legacy or spare, whose windows the route withholds, and none for the sunset seed,
+  // whose plan ended.
   const lanes = [...m.container.querySelectorAll('.lane .lane__name')].map((n) => n.textContent?.trim() ?? '');
   results.push({ name: '/quota#quota-windows draws no lane for a disconnected account, one awaiting re-authentication or one whose plan ended', ok: lanes.length > 0 && !lanes.includes('legacy') && !lanes.includes('spare') && !lanes.includes('sunset'), missing: lanes });
 }
@@ -4063,10 +4081,9 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
     // A confirmed pairing's first reading: the Usage card reads the hint until the account's windows land, which the
     // mock answers on a list read 2 s after the confirm on its clock. On a frozen mount of its own, so the auto reload,
     // the re-read under Off and the mock's landing move on `tick` alone.
-    // The story's spare holds the windows of its last poll, which a confirm keeps and the first reading lands on no row
-    // that holds any, so the slot the block pairs last is put with no window before the page reads the list.
+    // The route withholds the windows of the story's spare, so the first reading lands on the slot the block pairs last
+    // as on a new account.
     const spare = (await api.listAccounts()).find((a) => a.id === 'spare');
-    api.putAccount({ ...spare, fableWindow: null, windows: [] });
     // The shared mount's auto reload lands inside the ticked span when the run is young, so the spy would count its
     // reads. Its Refresh first reads the list without fresh-desk, the pairing it confirmed above, so Off arms no
     // re-read for that pairing's first reading.
@@ -4321,7 +4338,7 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   cancels.restore();
 }
 await m.navigate('/accounts/legacy');
-expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'no Fable window', 'Payment method declined']);
+expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'Needs re-auth, so no quota window is read.', 'Payment method declined']);
 {
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pool');
   results.push({ name: '/accounts/legacy reads in its Pool card that it is in no pool', ok: card?.querySelector('p.muted')?.textContent === 'Not a member of a pool.', missing: [card?.textContent ?? 'no Pool card'] });
@@ -4331,8 +4348,13 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
   results.push({ name: '/accounts/legacy stays at its path on the Accounts page', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/legacy', missing: [JSON.stringify(at)] });
   const repair = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
   results.push({ name: '/accounts/legacy Re-pair is primary while re-auth is required', ok: repair?.classList.contains('btn--primary') === true, missing: [repair?.className ?? 'no Re-pair'] });
+}
+// The route withholds legacy's windows, so the missing Fable week reads on reserve, a listed row with its two windows
+// and no Fable week.
+await m.navigate('/accounts/reserve');
+{
   const absent = m.container.querySelectorAll('.detail .wbar--absent[title="no Fable window"]').length;
-  results.push({ name: '/accounts/legacy greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
+  results.push({ name: '/accounts/reserve greys the Fable bar', ok: absent === 1, missing: [String(absent)] });
 }
 {
   // The mock seals legacy's stored credential under another storage key, so its re-pair's confirm meets the router's
@@ -4524,6 +4546,10 @@ expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off
     ok: refusedAnswer === 404 && fresh !== refused && freshSubmitted && openAtConfirm && JSON.stringify(confirms.calls) === JSON.stringify([[fresh]]) && closed,
     missing: [`the refused pairing's confirm ${refusedAnswer}`, `fresh pairing ${fresh === refused ? 'none' : 'started'}`, `Confirm enabled ${freshSubmitted}`, `open at the confirm ${openAtConfirm}`, `confirmPairing ${confirms.calls.length} calls`, `${openDialogs(page).length} open`],
   });
+  // The route withholds the disconnected row's windows, so the fresh confirm's first reading lands on the list read
+  // two seconds on. It lands here, on the row the case puts back, and never on the story's legacy after it.
+  tick(2_000);
+  await api.listAccounts();
   delete api.startPairing;
   page.unmount();
   api.putAccount(legacy);
@@ -4767,19 +4793,19 @@ await emailLines('/accounts/overflow the head draws no line under the name of an
 }
 await m.navigate('/accounts/spare');
 {
-  // The Quota view leaves out legacy and spare, which the Accounts view lists with their states, and spare's Usage card
-  // draws the three windows of its last poll before the disconnect.
+  // The Quota view leaves out legacy and spare, which the Accounts view lists with their states, and the route
+  // withholds the windows of spare's last poll before the disconnect, so its Usage card reads its state in their place.
   const stateOf = (label) => {
     const row = [...m.container.querySelectorAll('a.account-row')].find((r) => r.querySelector('.account-row__name')?.textContent?.trim() === label);
     return [...(row?.querySelectorAll('.account-row__head > .badge') ?? [])].pop()?.textContent?.trim() ?? 'no row';
   };
   const states = { legacy: stateOf('legacy'), spare: stateOf('spare') };
   const usage = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
-  const bars = usage?.querySelectorAll('.wbars .wbar:not(.wbar--absent)').length ?? 0;
+  const sentence = usage?.querySelector('p.muted')?.textContent ?? 'no sentence';
   results.push({
-    name: '/accounts lists the disconnected account and the one awaiting re-authentication with their states, and the disconnected one draws the windows of its last reading',
-    ok: JSON.stringify(states) === JSON.stringify({ legacy: 'Needs re-auth', spare: 'Not paired' }) && bars === 3,
-    missing: [JSON.stringify(states), `${bars} bars on spare's Usage card`],
+    name: '/accounts lists the disconnected account and the one awaiting re-authentication with their states, and the disconnected one reads its state on its Usage card',
+    ok: JSON.stringify(states) === JSON.stringify({ legacy: 'Needs re-auth', spare: 'Not paired' }) && sentence === 'Not paired, so no quota window is read.',
+    missing: [JSON.stringify(states), `spare's Usage card reads ${JSON.stringify(sentence)}`],
   });
   const pair = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pair');
   results.push({ name: '/accounts/spare Pair is primary on an unpaired account', ok: pair?.classList.contains('btn--primary') === true, missing: [pair?.className ?? 'no Pair'] });
@@ -4804,6 +4830,23 @@ await m.navigate('/accounts/spare');
   });
 }
 m.unmount();
+});
+await forView('/accounts', async () => {
+  // The route withholds every window of a row that is not paired, so a disconnect of a paired row leaves its list line
+  // and its Usage card the state's words, where an unread paired row reads "Not read yet". One mock instance backs
+  // every mount, so reserve goes back as the story holds it.
+  const reserve = (await api.listAccounts()).find((a) => a.id === 'reserve');
+  await api.disconnectAccount('reserve');
+  const page = await mount('/accounts/reserve', { now: CLOCK_ORIGIN });
+  const usage = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+  const drawn = { row: page.container.querySelector('a.account-row[href="/accounts/reserve"] .wbar__none')?.textContent ?? null, usage: usage?.querySelector('p.muted')?.textContent ?? null };
+  page.unmount();
+  api.putAccount(reserve);
+  results.push({
+    name: '/accounts a disconnected account reads its state where it read no window',
+    ok: JSON.stringify(drawn) === JSON.stringify({ row: 'Not paired, no window', usage: 'Not paired, so no quota window is read.' }),
+    missing: [JSON.stringify(drawn)],
+  });
 });
 await forView(['/accounts', '/routing-log'], async () => {
   // Sunset's stored document names the free organization its canceled plan left (`claude_free` in mock/accounts.ts),
@@ -24427,9 +24470,10 @@ await forView('/accounts', async () => {
 await forView('/accounts', async () => {
   // The bar's sort control on a bare /accounts. The usage and reset orders are written from the story's accounts
   // (`SEEDS` in `web/src/mock/accounts.ts`) at the mount's frozen clock: their windows' utilizations and the resets
-  // still ahead, the plan-ended sunset holding no window, zephyr's 5-hour window not open with no reset, and spare gone
-  // with the Delete account case above. An account without a key's figure reads after every one with it under either
-  // direction, by label. A key's own direction leaves the address, so a pick of Most used writes `sort=usage` alone.
+  // still ahead, the plan-ended sunset and legacy, whose windows the route withholds, holding no window, zephyr's
+  // 5-hour window not open with no reset, and spare gone with the Delete account case above. An account without a
+  // key's figure reads after every one with it under either direction, by label. A key's own direction leaves the
+  // address, so a pick of Most used writes `sort=usage` alone.
   const name = "/accounts the sort control reads its key and its direction's arrow, lists the keys over the directions, and each pick writes the address and orders the rows";
   const accounts = await api.listAccounts();
   const usage = (a) => (a.windows.length === 0 ? null : Math.max(...a.windows.map((w) => w.utilization)));
@@ -24437,11 +24481,11 @@ await forView('/accounts', async () => {
   const ordered = (rows, compare) => [...rows].sort((a, b) => compare(a, b) || byLabel(a, b)).map((a) => a.id);
   const want = {
     name: ordered(accounts, () => 0),
-    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'legacy', 'workshop', 'zephyr', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
-    usageAsc: ['zephyr', 'workshop', 'legacy', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usage: ['secondary', 'nightly', 'studio', 'reserve', 'primary', 'workshop', 'zephyr', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    usageAsc: ['zephyr', 'workshop', 'primary', 'reserve', 'studio', 'nightly', 'secondary', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
     status: ordered(accounts, (a, b) => a.status.localeCompare(b.status)),
     reset5h: ['secondary', 'studio', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'annex', 'sunset', 'workshop', 'zenith', 'zephyr'],
-    reset7d: ['nightly', 'legacy', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'zephyr', 'contract', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
+    reset7d: ['nightly', 'reserve', 'primary', 'workshop', 'studio', 'secondary', 'zephyr', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'annex', 'sunset', 'zenith'],
     resetFable: ['nightly', 'primary', 'workshop', 'studio', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith', 'zephyr'],
     resetFableDesc: ['studio', 'workshop', 'primary', 'nightly', 'contract', 'legacy', 'youngest', 'overflow', 'research', 'reserve', 'secondary', 'annex', 'sunset', 'zenith', 'zephyr'],
   };

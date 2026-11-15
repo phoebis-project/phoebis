@@ -389,8 +389,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
     // A fact's peaks are readings, so an hour that starts after the account's newest window reading has none behind it.
+    // The answer withholds the windows of a row that is not paired or needs re-auth, whose usage block keeps the
+    // instant of its last reading.
     for (const a of s.accounts) {
-      const readings = [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+      const withheld = a.status === 'unpaired' || a.status === 'reauth_required';
+      const readings = withheld ? (a.usage?.fetchedAt ? [Date.parse(a.usage.fetchedAt)] : []) : [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
       const late = facts.filter((r) => r.accountId === a.id && Date.parse(r.hour) > Math.max(...readings));
       assert.equal(late.length, 0, `${a.id}'s newest reading is ${readings.length ? iso(Math.max(...readings)) : 'none'}, before ${late.length} of its account facts from ${late[0]?.hour}`);
     }
@@ -400,8 +403,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
     // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account without the window never sends,
-    // and the story's cooldowns come from that peak alone.
-    const has5h = new Map(s.accounts.map((a) => [a.id, a.windows.some((w) => w.id === '5h')]));
+    // and the story's cooldowns come from that peak alone. The answer withholds the windows of a row that is not paired
+    // or needs re-auth, so its window set reads on neither side.
+    const has5h = new Map(s.accounts.filter((a) => a.status !== 'unpaired' && a.status !== 'reauth_required').map((a) => [a.id, a.windows.some((w) => w.id === '5h')]));
     const without = facts.filter((r) => has5h.get(r.accountId) === false);
     const withWindow = facts.filter((r) => has5h.get(r.accountId) === true);
     assert.ok(without.length > 0 && withWindow.length > 0, 'the story holds account facts on both sides');
@@ -1348,7 +1352,6 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const log = (await logOf(s)).filter((row) => row.type === 'event' && row.accountId === 'legacy');
     const legacy = s.accounts.find((a) => a.id === 'legacy');
-    const five = legacy.windows.find((w) => w.id === '5h');
     const samples = (await s.api.getQuotaHistory('legacy')).find((h) => h.windowId === '5h').samples;
     const sampleAt = (at) => samples.find((x) => x.at === at);
     const [spent, cleared] = ['window_spent', 'window_cleared'].map((kind) => log.find((e) => e.kind === kind && e.detail.window === 'five_hour'));
@@ -1359,9 +1362,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(between.length > 0 && between.every((x) => x.utilization === cleared.detail.utilization_before), between.map((x) => `${x.at} ${x.utilization}`).join(', '));
     assert.equal(samples.at(-1).at, cleared.at, 'the samples end at the last clean poll');
     // No poll read the window after its reset, so the clock announced it, from the reading the last clean poll stored.
+    // The answer withholds the windows of an account that needs re-auth, so that reading is the cleared row's, at the
+    // last clean poll its usage block keeps.
     const resets = log.filter((e) => e.kind === 'window_reset' && e.detail.window === 'five_hour');
-    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[five.resetsAt, { next_reset: null, observed: 'clock', plan: legacy.subscription.plan, reset_at: Date.parse(five.resetsAt), tier: legacy.subscription.rateLimitTier, utilization_before: five.utilization, window: 'five_hour' }]]);
-    assert.ok(Date.parse(five.resetsAt) > Date.parse(cleared.at) && cleared.detail.reset === Date.parse(five.resetsAt));
+    const reset = cleared.detail.reset;
+    assert.deepEqual(resets.map((e) => [e.at, e.detail]), [[iso(reset), { next_reset: null, observed: 'clock', plan: legacy.subscription.plan, reset_at: reset, tier: legacy.subscription.rateLimitTier, utilization_before: cleared.detail.utilization, window: 'five_hour' }]]);
+    assert.ok(reset > Date.parse(cleared.at) && cleared.at === legacy.usage.poll.lastCleanAt);
   });
 
   test(`the story's weekly resets run a week apart back from each window's reset, and the unused allowance route answers them with sunset's term end, at ${at}`, async () => {
@@ -1452,11 +1458,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([spare.usage.error, spare.usage.heldUntil, spare.usage.poll], [null, null, null], "spare's snapshot");
     const read = Date.parse(spare.usage.fetchedAt);
     const history = await s.api.getQuotaHistory('spare');
-    assert.deepEqual(
-      history.map((h) => h.windowId),
-      [...spare.windows, ...(spare.fableWindow ? [spare.fableWindow] : [])].map((w) => w.id),
-      'one history per window of the reading',
-    );
+    // The answer withholds a disconnected row's windows, so the reading's are those of spare's seed in
+    // `web/src/mock/accounts.ts`: the 5-hour, the 7-day and the 7-day Fable window.
+    assert.deepEqual(history.map((h) => h.windowId), ['5h', '7d', '7d_fable'], 'one history per window of the reading');
     assert.ok(history.length > 0 && history.every((h) => h.samples.length > 0), 'spare has samples');
     assert.deepEqual(
       history.map((h) => h.samples.at(-1).at),
@@ -1470,8 +1474,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const spare = s.accounts.find((a) => a.id === 'spare');
     const read = Date.parse(spare.usage.fetchedAt);
     const history = await s.api.getQuotaHistory('spare');
-    const windows = [...spare.windows, ...(spare.fableWindow ? [spare.fableWindow] : [])];
-    assert.equal(windows.length, 3, 'the 5-hour, the 7-day and the 7-day Fable window');
+    // The answer withholds a disconnected row's windows, so the periods are those of spare's seed in
+    // `web/src/mock/accounts.ts`: the 5-hour window reset 3 days 15 hours back, and both weeks reset 3 days 4 hours on.
+    const windows = [
+      { id: '5h', periodHours: 5, resetsAt: iso(s.now - (3 * DAY + 15 * HOUR)) },
+      { id: '7d', periodHours: 168, resetsAt: iso(s.now + 3 * DAY + 4 * HOUR) },
+      { id: '7d_fable', periodHours: 168, resetsAt: iso(s.now + 3 * DAY + 4 * HOUR) },
+    ];
+    assert.deepEqual(windows.map((w) => w.id), history.map((h) => h.windowId), 'the 5-hour, the 7-day and the 7-day Fable window');
     const off = windows.flatMap((w) => {
       const reset = Date.parse(w.resetsAt);
       const opened = reset - w.periodHours * HOUR;
@@ -1490,9 +1500,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const last = u?.poll?.lastOutcome === 'failed' ? u.poll.lastCleanAt : a.status === 'unpaired' ? u?.fetchedAt : null;
       return iso(last ? Date.parse(last) : s.now);
     };
-    // A flagged account answers no window, so its series read against the readings of the sunset seed's literal,
-    // `win('5h', 0.12, ...)` and `win('7d', 0.46, ...)`, the last clean poll's before the end.
-    const SEEDED = { sunset: { '5h': 0.12, '7d': 0.46 } };
+    // A flagged account, a disconnected one and one that needs re-auth answer no window, so their series read against
+    // the readings of their seeds' literals: sunset's `win('5h', 0.12, ...)` and `win('7d', 0.46, ...)`, the last clean
+    // poll's before the end, legacy's `win('5h', 0.18, ...)` and `win('7d', 0.52, ...)`, and spare's
+    // `win('5h', 0.4, ...)`, `win('7d', 0.02, ...)` and `win('7d_fable', 0, ...)`.
+    const SEEDED = { legacy: { '5h': 0.18, '7d': 0.52 }, spare: { '5h': 0.4, '7d': 0.02, '7d_fable': 0 }, sunset: { '5h': 0.12, '7d': 0.46 } };
     const off = [];
     let read = 0;
     for (const a of s.accounts) {

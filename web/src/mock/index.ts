@@ -895,8 +895,9 @@ export class MockApi implements Api {
     if (held !== undefined) {
       // The router's pairing clears the stored reset block and moves its epoch, so the row reads no limit resets until
       // the next read, whose member no token from before the pairing matches. The upstream's grants and uses stay in
-      // the block, since a pairing changes nothing upstream.
-      this.putAccount({ ...held, credential: { ...held.credential, ...tokens }, limitResets: null, ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
+      // the block, since a pairing changes nothing upstream. Its confirm sets the account's state ready, which the
+      // account view folds with the enabled bit and the cooldowns.
+      this.putAccount({ ...held, credential: { ...held.credential, ...tokens }, limitResets: null, status: statusOf(held, held.routingEnabled, null), ...(flagged !== null && !kept ? { planEndedAt: null } : {}) });
       const block = lookup(this.resetBlocks, held.id);
       if (block !== undefined) this.resetBlocks = { ...this.resetBlocks, [held.id]: { ...block, folds: block.folds + 1 } };
     }
@@ -1075,8 +1076,9 @@ export class MockApi implements Api {
   async disconnectAccount(accountId: string) {
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
-    // the poll's standing goes too.
-    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) }));
+    // the poll's standing goes too. The usage block keeps the last reading's instant off the windows the row held,
+    // while the answer withholds them, as it does every disconnected row's.
+    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, fableWindow: null, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }), windows: [] }));
     return latency(undefined, 250);
   }
 

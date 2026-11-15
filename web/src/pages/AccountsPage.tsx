@@ -29,7 +29,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDated, fmtDayMonth, fmtDayShort, f
 import { accountPatchOf, advancesOwnToken, derivedId, endZoneLabel, subscriptionEndFormOf, subscriptionEndRefusal, tickCanceled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useLatest, useNow, useQueryFilters, type Loaded } from '@/lib/hooks';
 import { byWindow, meterGroups } from '@/lib/meter';
-import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, planEndedSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
+import { ACCOUNT_STATUSES, STATUS_LABEL, STATUS_TONE, accountCooldown, canceledEndOf, noWindowSentence, planExtraUsage, planOverage, planWordLabel, readWindows, resetOf, slowedOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { slowDownChip } from '@/lib/selection';
 import { orderRows, type SortFigure } from '@/lib/sort';
@@ -639,13 +639,7 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
 
         <Card title="Usage" subtitle="Remaining share of each window" className="card--fill">
           {!account.usageBased && readWindows(account).length === 0 ? (
-            awaitingReading ? (
-              <p className="muted">The first quota reading is in flight.</p>
-            ) : account.planEndedAt !== null ? (
-              <p className="muted">{planEndedSentence(account.planEndedAt, now)}</p>
-            ) : (
-              <p className="muted">This account does not report quota windows.</p>
-            )
+            <p className="muted">{awaitingReading ? 'The first quota reading is in flight.' : noWindowSentence(account, now)}</p>
           ) : (
             <WindowTriple account={account} now={now} others />
           )}

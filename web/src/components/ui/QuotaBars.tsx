@@ -1,6 +1,6 @@
 import type { Account, AccountSlowDown, RateLimitWindow, Spend } from '@/api/types';
 import { fmtAbsolute, fmtMinor, fmtPct, fmtRelative } from '@/lib/format';
-import { NO_RESET_TITLE, hasSpendReading, isExpired, isSubscription, meterTone, noResetWord, planEndedSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
+import { NO_RESET_TITLE, hasSpendReading, isExpired, meterTone, noResetWord, noWindowSentence, projectionParts, remainingOf, slowedOf, spendResetTitle, windowOf } from '@/lib/quota';
 import { slowDownChip } from '@/lib/selection';
 import { WINDOW_ORDER, windowTag, windowWord } from '@/lib/windows';
 import { Meter, MeterAbsent } from './primitives';
@@ -123,15 +123,7 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const slots = WINDOW_ORDER.map((id) => ({ id, w: windowOf(account, id) }));
   const known: readonly string[] = WINDOW_ORDER;
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
-  // An API-key account has no quota window by nature, so only a subscription account's empty triple waits on a read.
-  if (slots.every((s) => s.w === null) && rest.length === 0) {
-    const unread = account.planEndedAt === null && isSubscription(account);
-    return (
-      <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`}>
-        {account.planEndedAt !== null ? planEndedSentence(account.planEndedAt, now, compact) : unread ? 'Not read yet' : 'No quota windows'}
-      </div>
-    );
-  }
+  if (slots.every((s) => s.w === null) && rest.length === 0) return <div className={`wbar__none muted ${compact ? 'wbar__none--compact' : ''}`}>{noWindowSentence(account, now, compact)}</div>;
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>
       {slots.map(({ id, w }) => {

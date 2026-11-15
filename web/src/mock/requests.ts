@@ -15,7 +15,7 @@ import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { MODEL_SCOPE_PREFIX, endOf, isPaidSource, readWindows } from '@/lib/quota';
 import { WINDOW_KEY } from '@/lib/windows';
-import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, rankTier, sharedWindowsOf } from './accounts';
+import { ACCOUNTS, QUOTA_HISTORY, SHARED_WINDOWS, accountById, lastReadingOf, rankTier, sharedWindowsOf } from './accounts';
 import type { HourlyRollup } from './analytics';
 import { cellsFor, promptOf } from './catalog';
 import { leadOf, leftPerHour, paceDeadline } from './lead';
@@ -2974,7 +2974,7 @@ function accountRollups(): AccountRollup[] {
   // of zero across the story's accounts.
   const sampledWindows = (account: (typeof ACCOUNTS)[number], t: number): AccountRollup['windows'] => {
     const windows: AccountRollup['windows'] = {};
-    for (const w of readWindows(account)) {
+    for (const w of readWindows(lastReadingOf(account))) {
       const key = WINDOW_KEY[w.id];
       const sample = lastSample.get(`${account.id}|${w.id}`)?.get(t);
       if (key === undefined || sample === undefined) continue;
@@ -2993,14 +2993,16 @@ function accountRollups(): AccountRollup[] {
     let driftF = h.float(0.05, 0.4);
     // An hour holds facts from the one the plan started in to the one of the newest window reading, since a peak needs
     // a reading behind it. Every hour is still drawn, so cutting one account's hours moves no other account's values.
-    // With no reading `Math.max` answers -Infinity, so such an account holds no hour.
+    // The ledger keeps the readings of a row whose windows the answer withholds, so its last reading stands in. With no
+    // reading `Math.max` answers -Infinity, so such an account holds no hour.
     const since = account.subscription?.since;
     const from = since ? startOfHour(Date.parse(since)) : start;
-    const readings = readWindows(account).map((w) => Date.parse(w.observedAt));
+    const last = lastReadingOf(account);
+    const readings = readWindows(last).map((w) => Date.parse(w.observedAt));
     const until = Math.max(...readings);
     // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account whose set lacks the window
     // never sends. Its drift is still drawn, so every account after it keeps its stream.
-    const fiveHour = account.windows.some((w) => w.id === '5h');
+    const fiveHour = last.windows.some((w) => w.id === '5h');
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
       const sampled7 = sampleIndex.get(`${account.id}|7d`)?.get(t);
@@ -3010,7 +3012,7 @@ function accountRollups(): AccountRollup[] {
       driftF = Math.max(0, Math.min(1, driftF + h.float(-0.03, 0.03)));
       const peak5 = fiveHour ? (sampled5 ?? drift5) : null;
       const peak7 = sampled7 ?? drift7;
-      const peakF = account.fableWindow ? sampledF ?? driftF : null;
+      const peakF = last.fableWindow ? sampledF ?? driftF : null;
       const cooldown = peak5 !== null && peak5 >= 0.97 ? h.int(600, 3_600) : 0;
       const overage = account.extraUsage?.enabled && peak5 !== null && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;

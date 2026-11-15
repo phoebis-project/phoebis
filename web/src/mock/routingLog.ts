@@ -10,7 +10,7 @@ import { SHED_MARK_SHARE } from '@/lib/presets';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
 import { compareRows } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
-import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, rankTier } from './accounts';
+import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
@@ -2866,9 +2866,11 @@ function buildEvents(): RoutingEvent[] {
     seeds.push({ accountId: 'nightly', at: iso(nightlyClear.at), detail, kind: 'window_cleared', requestId: nightlyClear.requestId });
   }
   // Legacy's 5-hour window, spent at a poll and read back under its limit under the same reset by its last clean poll,
-  // the reading its account still answers, so no reading at the limit follows the clear. Its history carries both
-  // readings, and the clock announced the reset that passed after the last clean poll, as no poll read it again.
-  const legacy = accountById.get('legacy')?.windows.find((w) => w.id === '5h');
+  // the reading the ledger keeps while its account answers no window, so no reading at the limit follows the clear. Its
+  // history carries both readings, and the clock announced the reset that passed after the last clean poll, as no poll
+  // read it again.
+  const legacyRow = accountById.get('legacy');
+  const legacy = legacyRow && lastReadingOf(legacyRow).windows.find((w) => w.id === '5h');
   if (legacy?.resetsAt && legacy.utilization !== null && legacy.utilization < 1) {
     const reset = Date.parse(legacy.resetsAt);
     const read = { reset, source: 'poll', source_request_id: null, window: 'five_hour' };

@@ -88,7 +88,7 @@ export const SUNSET_WEEK_RESETS_IN = 4 * DAY - SUNSET_END_AGO;
 const SNAPSHOT_OF: Readonly<Record<string, (a: Pick<Account, 'id'>) => QuotaSnapshot>> = {
   // The polls after the last clean read failed on the endpoint's 503 until the slot whose acquisition ran the refresh
   // the provider refused, and the poll asks a lapsed account nothing, so that attempt stands as the last, under the
-  // words the usage service records for a failed acquisition, while the windows of the last clean read still answer.
+  // words the usage service records for a failed acquisition, while the snapshot keeps the last clean read.
   legacy: (a) => failedSinceClean(a.id, LEGACY_CLEAN_AGO, iso(LEGACY_LAPSED_AT), 'acquire: account has to be paired again'),
   // A 503 is a passing fault, neither a 429 nor a 401, so the poll holds nothing back and asks again at its next slot,
   // while the windows of the last clean read still answer.
@@ -371,7 +371,8 @@ const SEEDS = [
   // Disconnected: the credential is gone and the identity it paired with stays, as a disconnect leaves the row, and
   // with no subscription block a page has to go by the kind to call it OAuth. The router records `operator` as the
   // row's `state_cause`, which the decoded row does not carry. The windows are the last poll's before the disconnect,
-  // standing in for a router that still answers them for a disconnected row, and none is projected.
+  // which the answer withholds as the route does while the sample history and the usage block read them, and none is
+  // projected.
   {
     ...ACCOUNT_SAMPLE,
     id: 'spare',
@@ -631,6 +632,12 @@ function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | 
   return PLAN_OF_TYPE.get(sub.organizationType) ?? PLAN_OF_TIER.get(sub.rateLimitTier) ?? null;
 }
 
+/** Whether the route withholds a row's windows for its state: not paired, or awaiting re-authentication. */
+const withholdsWindows = (a: Pick<Account, 'status'>): boolean => a.status === 'unpaired' || a.status === 'reauth_required';
+
+/** Each row's last reading as the final map builds it, ahead of the state's withholding. */
+const READINGS = new Map<string, Pick<Account, 'fableWindow' | 'windows'>>();
+
 export const ACCOUNTS: Account[] = SEEDS.map((a) => {
   const subscription: Subscription | null = a.subscription && { ...a.subscription, plan: resolvedPlan(a) };
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
@@ -638,8 +645,18 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
   const led = (w: RateLimitWindow): RateLimitWindow => ({ ...w, lead: leadOf(w, w.periodHours * HOUR, NOW, end) });
   // The poll no longer asks an account whose plan ended, so the route shows no reset of it.
   const limitResets = a.planEndedAt === null ? decodeLimitResets(limitResetsWire(a.id, RESET_BLOCKS, NOW)) : null;
-  return { ...a, fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: a.planEndedAt === null ? a.windows.map(led) : [] };
+  const reading = { fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, windows: a.planEndedAt === null ? a.windows.map(led) : [] };
+  READINGS.set(a.id, reading);
+  const answered = withholdsWindows(a) ? { fableWindow: null, windows: [] } : reading;
+  return { ...a, fableWindow: answered.fableWindow, limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: answered.windows };
 });
+
+/**
+ * The windows of a row's last reading. The route withholds them from the answer on a row that is not paired or needs
+ * re-auth, while the ledger keeps the hours and the events its polls wrote, so the history reads the reading the final
+ * map built for such a row, and every other row's own.
+ */
+export const lastReadingOf = (a: Account): Pick<Account, 'fableWindow' | 'windows'> => (withholdsWindows(a) ? (READINGS.get(a.id) ?? a) : a);
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 /**
@@ -671,8 +688,8 @@ export function sharedWindowsOf(accountId: string): ('five_hour' | 'seven_day')[
 }
 
 /**
- * A snapshot whose polls failed since its last clean read, whose windows still answer. A declaration, since the
- * account list above reads the snapshots while the module loads.
+ * A snapshot whose polls failed since its last clean read, which it keeps. A declaration, since the account list above
+ * reads the snapshots while the module loads.
  */
 function failedSinceClean(accountId: string, cleanAgo: number, lastAttemptAt: string, lastError: string): QuotaSnapshot {
   return {
