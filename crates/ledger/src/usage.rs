@@ -67,7 +67,10 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 }
 
 /// The two windows the self-service answer carries, from one read: the day is the tail of the week's own
-/// rows, so a caller polling the route costs one scan of its own key rather than two of every key's.
+/// rows, so a caller polling the route costs one scan of its own key rather than two of every key's. While a
+/// boundary hour of the price list lies in the trailing week, a call also reads that hour's requests of every key
+/// received ahead of its last instant, to load the hour's sides. The answer still shows the caller's key alone,
+/// since the pairing starts from the key's own rows.
 ///
 /// The key is bound in SQL from the authenticated id and from nothing the caller sent: the ceiling on what
 /// this route may show is that one argument. The ledger files what it could not attribute under `-`, which

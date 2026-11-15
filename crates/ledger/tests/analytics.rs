@@ -10236,6 +10236,38 @@ fn a_members_spend_prices_each_request_of_a_split_hour_at_the_entry_in_force_whe
     assert_eq!(spent, 15.0);
 }
 
+/// A member's day and month in one call, a day after the split hour, with one more million of the first scope at 10:00
+/// on 2026-01-16: the day reads that request's $10 alone, though the month's split hour is bound out of the same call,
+/// and the month reads the split hour's $15 and the hours behind it, $25.
+#[test]
+fn a_members_day_and_month_each_read_their_own_hours_around_a_split_hour() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_a_split_hour(&db);
+    let next_day = ms(2026, 1, 16, 10, 0);
+    plant_billed(&db, "next-day", FIRST_SCOPE, next_day, 1_000_000, &prices);
+    let (pool, account) = (FIRST_SCOPE.1, FIRST_SCOPE.2);
+    let spends = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[
+                    budgeted(pool, account, BudgetPeriod::Day),
+                    budgeted(pool, account, BudgetPeriod::Month),
+                ],
+                ms(2026, 1, 16, 12, 0),
+                &prices,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        spends
+            .iter()
+            .map(|s| (s.period, s.spent_usd))
+            .collect::<Vec<_>>(),
+        [(BudgetPeriod::Day, 10.0), (BudgetPeriod::Month, 25.0)]
+    );
+}
+
 /// Opus 5.5 at $5 per million input tokens, at $10 from 18:20 UTC on 2026-01-15 and at $20 from 18:40, two instants
 /// inside one hour.
 const THREE_RATES_IN_ONE_HOUR: &str = "\

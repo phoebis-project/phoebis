@@ -3710,7 +3710,8 @@ const SIDE_CHUNK: usize = 500;
 /// and no token count. The read takes the requests received from the hour's first millisecond up to its last instant,
 /// since each later request belongs to the stored row's remainder. A request that arrives on an entry's own
 /// millisecond joins the side after it, as `in_force` reads that entry from its instant on. An hour whose request rows
-/// the purge took answers sides that hold no count.
+/// the purge took answers sides that hold no count. The sides assume that today's `deltas_of` names the key under
+/// which a kept request's tokens stand, so a request whose stored row keeps an older band can split a row of today's.
 pub(crate) fn earlier_sides(
     conn: &Connection,
     hour: i64,
@@ -3854,7 +3855,7 @@ fn unsplit_ranges(from_hour: i64, to_hour: i64, hours: &[i64]) -> Vec<(i64, i64)
 }
 
 /// One part of a stored row: the instant it prices at and its five token counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Part {
     /// In milliseconds.
     pub(crate) at: i64,
@@ -3863,7 +3864,7 @@ pub(crate) struct Part {
 
 impl Part {
     /// The row's own counts at the last millisecond of its hour.
-    pub(crate) fn whole(row: &RollupRow) -> Part {
+    fn whole(row: &RollupRow) -> Part {
         Part {
             at: last_millisecond(row.hour),
             usage: row.usage(),
@@ -3895,7 +3896,8 @@ impl Iterator for Parts {
 /// no token is left out, since it would charge nothing and could null a figure. Where a count of the row's summed sides
 /// stands above the row's own, the request rows are no split of the row, so it prices whole at its hour's end, as an
 /// hour does whose request rows the purge took. A side that no stored row of the read carries prices nothing, since
-/// the pairing starts from the rows.
+/// the pairing starts from the rows. The pairing assumes that today's `deltas_of` names the key under which a kept
+/// request's tokens stand.
 pub(crate) fn row_parts(row: &RollupRow, sides: &Sides) -> Parts {
     let whole = Part::whole(row);
     let Some(hour) = sides.0.get(&row.hour) else {
@@ -6773,7 +6775,11 @@ mod tests {
             own_key.shares.is_some(),
             "the tier is sized, so the row's own key prices its windows: {own_key:?}"
         );
-        let read = priced(&row, Part::whole(&row), &prices, &costs, HOUR * 1_000);
+        let part = Part {
+            at: last_millisecond(row.hour),
+            usage: row.usage(),
+        };
+        let read = priced(&row, part, &prices, &costs, HOUR * 1_000);
         assert_eq!(read.shares, None, "{read:?}");
         assert_eq!(
             (&read.usd, &read.equivalent),
@@ -7009,14 +7015,16 @@ mod tests {
         };
         let sides = Sides(BTreeMap::from([(HOUR, vec![side])]));
         assert_eq!(
-            row_parts(&row, &sides).collect::<Vec<_>>(),
-            [Part {
-                at: HOUR * 1_000 + 3_599_999,
-                usage: PinUsage {
+            row_parts(&row, &sides)
+                .map(|part| (part.at, part.usage))
+                .collect::<Vec<_>>(),
+            [(
+                HOUR * 1_000 + 3_599_999,
+                PinUsage {
                     input: 100,
                     ..PinUsage::default()
                 },
-            }]
+            )]
         );
     }
 

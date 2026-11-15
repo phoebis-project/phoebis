@@ -1371,9 +1371,10 @@ pub type WindowShares = IndexMap<&'static str, Option<f64>>;
 
 /// `share_at` under the account tier and the regime `entrypoint` names on each window `plan_windows(canonical_model)`
 /// walks, `None` inside the map on a window the model has no weight for. `at` selects the cost revision (the request's
-/// receipt, or a rollup row's last millisecond, as the dollars select theirs) and `band_at` the peak band inside that
-/// revision (the completion where a reader has one, else the rollup row's hour start). The revision never reads
-/// `band_at`.
+/// receipt, or the instant of a rollup row's part, the hour's last millisecond or, for an earlier side of a boundary
+/// hour, the last millisecond before the side's entry, as the dollars select theirs) and `band_at` the peak band
+/// inside that revision (the completion where a reader has one, else the rollup row's hour start). The revision never
+/// reads `band_at`.
 pub fn price_shares(
     tables: &PlanTables,
     entrypoint: Option<&str>,
