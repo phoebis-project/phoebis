@@ -18,10 +18,9 @@ import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
 import { dollarsOf, dollarsUnder, equivalentOrDash, nativeSidesOf, probeParts, UNIT_TILE_LABEL, type WeekReading } from '@/lib/analytics';
-import { groupInto } from '@/lib/counts';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
-import { isFinished, lineTotals, sessionLines } from '@/lib/keepalive';
+import { isFinished, lineTotals, recipeFiler, sessionLines } from '@/lib/keepalive';
 import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } from '@/lib/quota';
 import { REFUSED_TITLE, costHeaderTitle, glanceCellOf, requestCostUnit, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
@@ -423,9 +422,9 @@ function SessionsSummary({ activePins, busGaps, expired, keepalive, now, recipes
   const recipeData = recipes.data;
   const totals = useMemo(() => {
     if (sessions === null || recipeData === null) return null;
-    const bySession = groupInto(recipeData, (r) => `${r.keyId}:${r.sessionId}`);
+    const recipesOf = recipeFiler(recipeData);
     const live = sessions.flatMap((session) => {
-      const lines = sessionLines(session, session.historical ? [] : (bySession.get(`${session.keyId}:${session.sessionId}`) ?? []));
+      const lines = sessionLines(session, recipesOf(session));
       return isFinished(lines) ? [] : [{ lines }];
     });
     return lineTotals(live);

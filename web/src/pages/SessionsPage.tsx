@@ -19,10 +19,9 @@ import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
-import { groupInto } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
-import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyGenerationOf, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -194,16 +193,10 @@ function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
  */
 function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], keys: ApiKey[], pools: Pool[], poolsFailed: boolean, sort: SessionsAddress['sort'], dir: SortDir, limits: ListingLimits | null): Row[] {
   const keyById = new Map(keys.map((k) => [k.id, k]));
-  // A recipe names no generation and belongs to the live key alone, so it is filed under that generation and
-  // an earlier holder of the same key id reads none of them.
-  const generationById = new Map(keys.map((k) => [k.id, keyGenerationOf(k)]));
   const poolById = new Map(pools.map((p) => [p.id, p]));
-  const bySession = groupInto(recipes, (r) => {
-    const g = generationById.get(r.keyId);
-    return g === undefined ? null : rowKey({ keyGeneration: g, keyId: r.keyId, sessionId: r.sessionId });
-  });
+  const recipesOf = recipeFiler(recipes);
   const rows = sessions.map((session) => {
-    const agents = bySession.get(rowKey(session)) ?? [];
+    const agents = recipesOf(session);
     const key = keyById.get(session.keyId) ?? null;
     const pool = key ? poolById.get(key.poolId) ?? null : null;
     // Every agent ended at the idle limit means the retained prompts are already
@@ -657,8 +650,8 @@ function RowAccount({ accent, account, others, session, speed }: { accent: boole
   );
 }
 
-/** The window a mark's trigger read, as the routing log's Pin fold words it, and nothing where the mark names none. */
-const triggerWords = (window: string | null): string => (window === null ? '' : ` ${triggerPhrase(window)}`);
+/** The window a mark's trigger read, as the routing log's Pin fold words it. */
+const triggerWords = (window: string): string => ` ${triggerPhrase(window)}`;
 
 /**
  * The warning badge `leaving` while a shedding round's mark stands on the session's pin, the mark's account, window and
@@ -668,7 +661,7 @@ function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'mark'> }
   const mark = openMark(session);
   if (mark === null) return null;
   return (
-    <Badge tone="warning" title={`Marked to leave ${mark.on}${triggerWords(mark.window)}${mark.at === null ? '' : ` at ${fmtAbsolute(mark.at)}`}. The next request moves the session`}>
+    <Badge tone="warning" title={`Marked to leave ${mark.on}${triggerWords(mark.window)} at ${fmtAbsolute(mark.at)}. The next request moves the session`}>
       leaving
     </Badge>
   );
@@ -677,7 +670,7 @@ function ShedBadge({ session }: { session: Pick<Session, 'accountId' | 'mark'> }
 /** The pin's no-return stamp as the move that wrote it, in the Pin fold's words, or null with no stamp. */
 const movedWord = (session: Pick<Session, 'shed'>): string | null => {
   if (session.shed === null) return null;
-  return `${shedOrigin(session.shed.reason)} ${session.shed.from}${session.shed.at === null ? '' : ` at ${fmtAbsolute(session.shed.at)}`}`;
+  return `${shedOrigin(session.shed.reason)} ${session.shed.from} at ${fmtAbsolute(session.shed.at)}`;
 };
 
 /** The mod's state for a session: `reporting` with `seen {ago}`, `silent` with how long, or `none` muted. */

@@ -1,7 +1,7 @@
 import type { AgentContext, AgentRequests, KeepaliveRecipe, Lifecycle, RecipeCause, Session, SessionSpend, SessionSpendPart } from '@/api/types';
 import { ACTIVE_WITHIN, RANGE_PRESETS, type SessionsAddress, type SortDir } from '@/lib/address';
 import { clientVersion } from '@/lib/client';
-import { countOf, lookup } from '@/lib/counts';
+import { countOf, groupInto, lookup } from '@/lib/counts';
 import { fmtCompact, fmtDuration, keyLifetime } from '@/lib/format';
 import type { BadgeTone } from '@/lib/quota';
 import { compareFigures, orderRows, type SortFigure } from '@/lib/sort';
@@ -366,6 +366,13 @@ export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'age
   // A row whose pin is another agent's carries that agent's model, so main's line reads main's ledger entry.
   const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (newest.get(MAIN_AGENT)?.model ?? null);
   return [{ agentId: MAIN_AGENT, agentType: typeOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
+}
+
+/** Files the recipes under their rows on the route's flag. A recipe names no generation and belongs to the live
+ *  key alone, and the route marks an earlier holder of the key id `historical`, so such a row reads none. */
+export function recipeFiler(recipes: readonly KeepaliveRecipe[]): (session: Pick<Session, 'historical' | 'keyId' | 'sessionId'>) => KeepaliveRecipe[] {
+  const bySession = groupInto(recipes, (r) => `${r.keyId}:${r.sessionId}`);
+  return (session) => (session.historical ? [] : (bySession.get(`${session.keyId}:${session.sessionId}`) ?? []));
 }
 
 /** An agent's entry without its id: its sums over every model it ran, with its newest client request's account, model
