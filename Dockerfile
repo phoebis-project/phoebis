@@ -38,16 +38,16 @@ ARG PHOEBIS_BUILD_COMMIT=unknown
 # the failure and embed a placeholder page in a binary that builds green.
 RUN cd web && npm ci --no-audit --no-fund && npm run build
 # PHOEBIS_SKIP_UI_BUILD=1 embeds the bundle the step above produced as it is, with no mtime judgement against the
-# sources the context just copied. The data directory is created here so the runtime stage copies it with its
-# owner already set.
+# sources the context just copied. The data directory made here gives the runtime stage an empty source to copy,
+# and that copy sets the owner and the mode.
 RUN PHOEBIS_SKIP_UI_BUILD=1 cargo build --release --locked --package phoebis-router \
- && install -d -o 65532 -g 65532 -m 0750 /var/lib/phoebis
+ && install -d -o 65532 -g 65532 -m 0700 /var/lib/phoebis
 
 # gcr.io/distroless/cc-debian13:nonroot, resolved 2026-09-22
 FROM gcr.io/distroless/cc-debian13@sha256:54df941ed0d06a1bd95ef5e0ce391fd8d9f94b64782dc9a60062727849ee3f97
 COPY --from=builder /src/target/release/phoebis /usr/local/bin/phoebis
 COPY --from=builder /src/LICENSE /usr/share/doc/phoebis/LICENSE
-COPY --from=builder --chown=65532:65532 /var/lib/phoebis /var/lib/phoebis
+COPY --from=builder --chown=65532:65532 --chmod=0700 /var/lib/phoebis /var/lib/phoebis
 WORKDIR /var/lib/phoebis
 ENV PHOEBIS_CONFIG=/etc/phoebis/config.yaml
 USER 65532

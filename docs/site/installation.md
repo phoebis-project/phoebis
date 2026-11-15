@@ -204,8 +204,10 @@ mounted paths under `tls`, the certificate world-readable and the key at `0400` 
 ([TLS on the listeners](#tls-on-the-listeners)), and reload a replaced pair with
 `docker compose exec phoebis phoebis tls reload`.
 
-The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use, and a bind mount in its
-place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/api_prices.yaml` on
+The named volume `phoebis-data` takes the image's ownership and mode of `/var/lib/phoebis` on first use, uid 65532 at
+`0700`, and a bind mount in its place needs `chown 65532` and `chmod 0700` on the host directory first. A volume or a
+bind mount from an earlier image keeps the mode it has, and the router warns at each start until it is set to `0700`,
+from the host or from a one-off container that mounts it. A price table dropped at `/var/lib/phoebis/api_prices.yaml` on
 the volume is read at the next start, as `stats.api_prices_path` in the container configuration names it, and a
 subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` the same. Pulling the image needs
 `docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on

@@ -284,6 +284,9 @@ jobs:
           done
           [ "$status" = healthy ] \
             || { docker logs phoebis-smoke; echo "the container is '$status' after 30 s"; exit 1; }
+          docker logs phoebis-smoke > "$tmp/start.log" 2>&1
+          ! grep -q '/var/lib/phoebis is ' "$tmp/start.log" \
+            || { cat "$tmp/start.log"; echo "the data directory draws the store's warning"; exit 1; }
           # The console's shell is served without a session: the page must be the built bundle, not the
           # placeholder the crate's build script embeds when npm fails, and one of its assets must be served.
           shell=$(curl -fsS http://127.0.0.1:18081/)

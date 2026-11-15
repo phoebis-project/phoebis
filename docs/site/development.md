@@ -443,30 +443,36 @@ on a published release, on a manual dispatch, and on a pull request that touches
 (`.dockerignore`, the workflow, `Cargo.lock`, `Cargo.toml`, `Cross.toml`, the Dockerfile, the crates, the deploy files,
 `rust-toolchain.toml`, and `web/` outside its `e2e`, `smoke` and `test` directories). To release:
 
-1. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease), head
+1. Resolve the Dockerfile's two pinned digests again: the node stage's and the runtime base's, each under the tag its
+   comment names. `docker buildx imagetools inspect <tag>` prints the tag's current digest. Where one moved, write the
+   new digest into the `FROM` line and the day into the comment above it, and run the manual dispatch below as a dry run
+   on that change before it merges. A base update reaches a published image with the next release and no earlier, and a
+   version tag stays on the one build its release made.
+2. Set `[workspace.package].version` in `Cargo.toml` to the version (`X.Y.Z`, or `X.Y.Z-rc.1` for a prerelease), head
    the changelog's section for it `## X.Y.Z`, and merge to `main`.
-2. Create the release on GitHub with the tag `X.Y.Z` at that head, no `v` prefix. Publishing it starts the workflow.
-3. The workflow's guard refuses the release before anything builds when the tag has another shape
+3. Create the release on GitHub with the tag `X.Y.Z` at that head, no `v` prefix. Publishing it starts the workflow.
+4. The workflow's guard refuses the release before anything builds when the tag has another shape
    (`release tag '{TAG}' is not X.Y.Z or X.Y.Z-suffix`), differs from the workspace version
    (`release tag '{TAG}' differs from the workspace version '{version}' in Cargo.toml`), or has no section in the
    changelog (`docs/site/changelog.md has no '## {TAG}' section for this release`). Otherwise it builds `linux/amd64`
    and `linux/arm64` on native runners and pushes each by digest, and runs the amd64 image through `--version` (which
    must print `phoebis {VERSION}`), `check-config` against `deploy/config.container.yaml`, a container in the compose
-   example's shape that must reach `healthy` within 30 seconds, serve the built console (the page from the admin
-   listener is not the placeholder and one of its assets is served) and the API reference page with a document of
-   OpenAPI 3.1.0 holding the admin listener's paths, answer `phoebis status` inside the container with a first line
-   ending in `, ready`, take a `phoebis backup` onto the volume and stop within the 40-second grace period, and a second
-   container under a certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the
-   images it builds the console and checks its bundle with `scripts/check-build.mjs`, failing before the static binaries
-   build. Then it builds a static binary for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the
-   `cross` tool's images (`cross` 0.2.5, the console embedded as built), runs each on its own platform (`--version`, a
-   static link check, an embedded bundle, `init --non-interactive` and `check-config` in a temporary directory) and
-   packs it with the license as `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and
-   libclang without tzdata's time zone prompt, so the build runs through rather than waiting for an answer. Once every
-   smoke passes it publishes one manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y` and `X` (from
-   major 1, never for a prerelease), `latest` (never for a prerelease), and `sha-<short sha>`, checks that the list
-   holds amd64 and arm64, and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the
-   image's node stage to `node:26.11.1-trixie-slim` by digest, resolved 2026-10-22, as it pins the runtime base.
+   example's shape that must reach `healthy` within 30 seconds with no warning of the store on the data directory, serve
+   the built console (the page from the admin listener is not the placeholder and one of its assets is served) and the
+   API reference page with a document of OpenAPI 3.1.0 holding the admin listener's paths, answer `phoebis status`
+   inside the container with a first line ending in `, ready`, take a `phoebis backup` onto the volume and stop within
+   the 40-second grace period, and a second container under a certificate pair the smoke generates, whose certificate
+   verifies the console over TLS. Beside the images it builds the console and checks its bundle with
+   `scripts/check-build.mjs`, failing before the static binaries build. Then it builds a static binary for
+   `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images (`cross` 0.2.5, the
+   console embedded as built), runs each on its own platform (`--version`, a static link check, an embedded bundle,
+   `init --non-interactive` and `check-config` in a temporary directory) and packs it with the license as
+   `phoebis-{VERSION}-{TARGET}.tar.gz`. The `cross` images install clang, cmake and libclang without tzdata's time zone
+   prompt, so the build runs through rather than waiting for an answer. Once every smoke passes it publishes one
+   manifest list at `ghcr.io/phoebis-project/phoebis` under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a
+   prerelease), `latest` (never for a prerelease), and `sha-<short sha>`, checks that the list holds amd64 and arm64,
+   and uploads the two archives with `SHA256SUMS` to the release. The Dockerfile pins the image's node stage and its
+   runtime base by digest, each with its tag and the day it was resolved in the comment above its `FROM` line.
 
 A failed smoke, of the image or of a binary, or a failed bundle check leaves untagged digests in the registry, no tag
 and no archive on the release. A failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the
