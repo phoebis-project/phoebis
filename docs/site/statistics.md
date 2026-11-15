@@ -548,7 +548,7 @@ the new figures.
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (365 days by default, 0 keeps them forever) |
+| Requests and their per-session totals, attempts, events, decisions, kept-warm marks | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Quota and extra-usage samples | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Resolved credential refresh attempts and registry changes | `stats.retention_days` (365 days by default, 0 keeps them forever) |
 | Captured bodies | The hours the capture named |

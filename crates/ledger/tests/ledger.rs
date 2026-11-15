@@ -2055,6 +2055,157 @@ fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hou
     );
 }
 
+/// Session `s` under the key `desktop`, as the sessions route names it.
+fn desktop_session() -> phoebis_ledger::SessionSpendKey {
+    phoebis_ledger::SessionSpendKey {
+        key_id: "desktop".into(),
+        key_generation: 0,
+        session_id: "s".into(),
+    }
+}
+
+/// Session `s`'s figures read on `db` at `now`, priced through `prices` and `costs`.
+fn figures_of(
+    db: &LedgerDb,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
+    now: i64,
+) -> phoebis_ledger::SessionFigures {
+    let key = desktop_session();
+    db.read_blocking(|c| {
+        phoebis_ledger::session_figures(c, std::slice::from_ref(&key), prices, costs, now)
+    })
+    .unwrap()
+    .remove(&key)
+    .expect("the read answers every session it names")
+}
+
+/// A cost model of one test tier sized 1,000 on the 5-hour window, whose band halves that window's capacity between
+/// `from_hour` and `to_hour` in `zone` on every day, and a second revision from `second` on, where one is given, that
+/// sizes the window 500. One Sonnet 5.5 input token weighs one unit.
+fn session_costs(zone: &str, from_hour: u8, to_hour: u8, second: Option<&str>) -> PlanTables {
+    let revision = |effective: &str, five_hour: u32| {
+        format!(
+            "  - effective: {effective}\n    capacity:\n      test_tier: {{five_hour: {five_hour}, seven_day: 10000}}\n    \
+             peak:\n      zone: {zone}\n      weekdays: false\n      from_hour: {from_hour}\n      to_hour: {to_hour}\n      \
+             capacity_factor: {{five_hour: 0.5, seven_day: 1}}\n    \
+             type_multiplier: {{cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}}\n    \
+             model_weight:\n      claude-sonnet-5-5: 1\n    model_windows: {{}}\n    overrides: {{}}\n    \
+             tier_order: [fable, opus, sonnet, haiku]\n    model_tier:\n      claude-sonnet-5-5: sonnet\n"
+        )
+    };
+    let mut text = format!(
+        "unit: {{tier: test_tier, window: seven_day}}\nrevisions:\n{}",
+        revision("2026-01-01", 1_000)
+    );
+    if let Some(second) = second {
+        text.push_str(&revision(second, 500));
+    }
+    phoebis_ledger::test_tables::tables(
+        phoebis_ledger::CostRevisions::from_yaml(&text).expect("the cost model parses"),
+    )
+}
+
+/// Two plan-funded Sonnet 5.5 requests of 100 input tokens on account `a` under the test tier, received at
+/// `received.0` and `received.1` and each finished five minutes later, landed through `insert_request_at`.
+fn land_two_plan_requests(db: &LedgerDb, received: (i64, i64)) {
+    for (id, at) in [("r1", received.0), ("r2", received.1)] {
+        let request = RequestRecord {
+            model: "claude-sonnet-5-5".into(),
+            canonical_model: "claude-sonnet-5-5".into(),
+            ..session_request(id, "s", at)
+        };
+        let attempt = AttemptRecord {
+            finished_at: Some(at + 300_000),
+            tier: Some("test_tier".into()),
+            ..answered(id, 1, "a", at, 100)
+        };
+        db.insert_request_at(
+            &request,
+            &[attempt],
+            None,
+            &phoebis_ledger::test_tables::api_prices(),
+        )
+        .unwrap();
+    }
+}
+
+/// Account `a`'s share of its 5-hour window in the session's spend.
+fn five_hour_share(figures: &phoebis_ledger::SessionFigures) -> f64 {
+    figures.spend.shares["a"]["five_hour"]
+}
+
+/// A session the fill has not reached, its one request written before the step, answers the spend of that request
+/// row at the read: a million input tokens of Sonnet 5.5 at the test list's $3 a million.
+#[test]
+fn a_session_the_fill_has_not_reached_reads_the_spend_of_its_request_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let db = LedgerDb::open(&path).unwrap();
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id) VALUES \
+             ('r1', {at}, 'claude-sonnet-5-5', 'claude-sonnet-5-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 's', 'g'); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r1', 1, 'a', 'oauth', {at}, 'succeeded', 1000000);",
+            at = phoebis_ledger::test_tables::JANUARY_2026,
+        ),
+    );
+    let figures = figures_of(
+        &db,
+        &phoebis_ledger::test_tables::api_prices(),
+        &phoebis_ledger::test_tables::subscription_costs(),
+        phoebis_ledger::test_tables::JANUARY_2026,
+    );
+    assert!(!session_marked(&path, "s"), "the read writes no mark");
+    assert_eq!((figures.spend.requests, figures.spend.money.usd), (1, 3.0));
+}
+
+/// Two requests of one sums row on the two sides of a cost entry that takes force at 12:30: the one received at 12:10
+/// spends 100 / 1,000 = 0.1 of the 5-hour window under the first entry, the one received at 12:40 100 / 500 = 0.2 under
+/// the second.
+#[test]
+fn a_cost_entry_inside_a_receipt_hour_prices_each_request_at_the_entry_in_force_at_its_receipt() {
+    const MINUTE: i64 = 60_000;
+    let noon = phoebis_ledger::test_tables::JANUARY_2026;
+    let db = LedgerDb::open_in_memory().unwrap();
+    land_two_plan_requests(&db, (noon + 10 * MINUTE, noon + 40 * MINUTE));
+    let figures = figures_of(
+        &db,
+        &phoebis_ledger::test_tables::api_prices(),
+        &session_costs("UTC", 20, 21, Some("2026-01-15T12:30:00Z")),
+        noon + 60 * MINUTE,
+    );
+    assert!(
+        (five_hour_share(&figures) - 0.3).abs() < 1e-12,
+        "{figures:?}"
+    );
+}
+
+/// Two requests of one sums row complete on the two sides of the band's opening at 18:00 in Kolkata, 12:30 UTC: the
+/// one finished at 12:10 spends 100 / 1,000 = 0.1 of the 5-hour window, the one finished at 12:40 inside the band
+/// 100 / 1,000 / 0.5 = 0.2.
+#[test]
+fn a_peak_band_that_opens_inside_a_completion_hour_prices_each_request_at_its_own_completion() {
+    const MINUTE: i64 = 60_000;
+    let noon = phoebis_ledger::test_tables::JANUARY_2026;
+    let db = LedgerDb::open_in_memory().unwrap();
+    land_two_plan_requests(&db, (noon + 5 * MINUTE, noon + 35 * MINUTE));
+    let figures = figures_of(
+        &db,
+        &phoebis_ledger::test_tables::api_prices(),
+        &session_costs("Asia/Kolkata", 18, 23, None),
+        noon + 60 * MINUTE,
+    );
+    assert!(
+        (five_hour_share(&figures) - 0.3).abs() < 1e-12,
+        "{figures:?}"
+    );
+}
+
 /// A request's `held` names each of its waits with the reason: the hourly row sums the `slow_down` waits under
 /// `slow_down_held_ms` and counts the request once under `slow_down_held`, a request that waited for a slot alone
 /// counts under neither, and a replaced request takes its waits back out of its row.

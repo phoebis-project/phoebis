@@ -88,8 +88,8 @@ Each operation names its request (path segments, query parameters, or body field
             `historical` and reads `companion` `none` with no recipe. The session of a pinned or \
             active row is the one the router keys pins by, the client's own session id. A row the keepalive mod \
             registered keeps the client's own session, the one the mod registered under. The row's `spend`, `day` \
-            and `agent_requests` read one fold over the session's life under its key, the count of its requests \
-            `spend.requests`, so Requests and Cost agree."),
+            and `agent_requests` read the ledger's per-session totals over the requests the retention keeps under \
+            its key, the count of its requests `spend.requests`, so Requests and Cost agree."),
         (name = "Settings"),
         (name = "System"),
     ),

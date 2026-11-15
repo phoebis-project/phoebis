@@ -52,7 +52,6 @@ pub use readiness::Readiness;
 pub use routes::path_count;
 pub use routes::router;
 pub use session::{LoginError, Sessions};
-pub use session_spend::SessionSpendFold;
 pub use tls::{Reloaded, TlsReload};
 
 // A poisoned vault mutex means a prior panic happened while a pending bundle was being moved, so what
@@ -96,9 +95,6 @@ pub struct AdminState {
     /// The rows older than the week that the account and key lifetimes add to their week, cached per route so a poll
     /// walks them once an hour.
     pub old_totals: OldTotals,
-    /// The sessions route's running totals of each session's spend, day and agents, so a poll reads the rows landed
-    /// since the last one and a session's history once.
-    pub spend: session_spend::SessionSpendFold,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
     /// The subscription cost model in force, the one copy the router's burn rates and the keepalive read too, so the

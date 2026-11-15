@@ -7,7 +7,8 @@
 //! The landing keeps a marked session's totals in its own transaction and marks a session at its first request. The
 //! fill in the purge task sums each session no landing marked, a whole session at a time, newest first, so a ledger
 //! from before the tables fills behind the start. A start whose price list moved a threshold clears the sessions whose
-//! rows it re-bands for the fill to sum again, and a family of the retention purge follows the requests' cutoff.
+//! rows it re-bands for the fill to sum again, and a family of the retention purge follows the requests' cutoff. The
+//! sessions route reads the rows through `session_figures` and prices them at its own instant.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -20,18 +21,21 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Params, 
 use serde::{Deserialize, Serialize};
 
 use crate::db::{begin_write, LANDING_STAMP_SQL};
-use crate::plan::funding_of;
-use crate::pricing::{PriceRevisions, Speed};
+use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
+use crate::price::{is_free_classifier, RowKey};
+use crate::pricing::{Band, PriceRevisions, Speed};
 use crate::query::{
-    session_hour_statement, session_requests_of, session_spend_of_statement, SessionSpendKey,
-    SERVING_ATTEMPT_NUMBER,
+    add_figures, boundary_instants, price_request, session_facts_statement, session_hour_statement,
+    session_requests_of, session_spend_of_statement, session_sums_statement, RequestPrice,
+    SessionSpendKey, SERVING_ATTEMPT_NUMBER, SESSION_IDENTITY_CHUNK,
 };
 use crate::record::{AttemptRecord, RequestRecord};
 use crate::refold::{
     first_difference, read_meta, revisions_of, thresholds_of, write_meta, Thresholds,
 };
 use crate::rollup::{
-    fold_identifier, hour_of, serving_speed, NO_CLASS, PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
+    fold_identifier, hour_of, last_millisecond, serving_speed, trailing_day_hours, NO_CLASS,
+    PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
 };
 use crate::{LedgerDb, LedgerError};
 
@@ -735,12 +739,12 @@ const SUMS_ROW_KEY: &str = "key_id = ?1 AND key_generation = ?2 AND session_id =
     AND completed_hour = ?16";
 
 /// The sums columns past the session's three, in `SumsKey`'s order and then the counts'.
-const SUMS_COLUMNS: &str = "agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, \
+pub(crate) const SUMS_COLUMNS: &str = "agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, \
     classifier, request_class, received_hour, completed_hour, requests, input_tokens, cache_read_tokens, \
     cache_write_5m_tokens, cache_write_1h_tokens, output_tokens";
 
 /// The facts columns past the key's four, in `Facts`' order.
-const FACTS_COLUMNS: &str = "last_request_at, last_inference_at, served_at, served_id, user_agent, first_request_at, \
+pub(crate) const FACTS_COLUMNS: &str = "last_request_at, last_inference_at, served_at, served_id, user_agent, first_request_at, \
     newest_at, newest_id, newest_model, newest_agent_type, newest_account_id, probe_at, probe_id, probe_model";
 
 static ADD_SUMS: LazyLock<String> = LazyLock::new(|| {
@@ -956,35 +960,39 @@ fn read_sums(
     let mut binds = session_binds(key).to_vec();
     binds.push(Value::Integer(hour));
     let mut stmt = conn.prepare_cached(&READ_SUMS_OF_HOUR)?;
-    let rows = stmt.query_map(params_from_iter(binds), |row| {
-        let count = |i: usize| -> rusqlite::Result<u64> { Ok(row.get::<_, i64>(i)?.max(0) as u64) };
-        Ok((
-            SumsKey {
-                agent_id: row.get(0)?,
-                probe: row.get(1)?,
-                account_id: row.get(2)?,
-                canonical_model: row.get(3)?,
-                speed: row.get(4)?,
-                funding: row.get(5)?,
-                band: row.get(6)?,
-                tier: row.get(7)?,
-                client: row.get(8)?,
-                classifier: row.get(9)?,
-                request_class: row.get(10)?,
-                received_hour: row.get(11)?,
-                completed_hour: row.get(12)?,
-            },
-            Counts {
-                requests: count(13)?,
-                input_tokens: count(14)?,
-                cache_read_tokens: count(15)?,
-                cache_write_5m_tokens: count(16)?,
-                cache_write_1h_tokens: count(17)?,
-                output_tokens: count(18)?,
-            },
-        ))
-    })?;
+    let rows = stmt.query_map(params_from_iter(binds), |row| sums_row(row, 0))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// The sums row from column `first` on, in `SUMS_COLUMNS`' order.
+fn sums_row(row: &rusqlite::Row, first: usize) -> rusqlite::Result<(SumsKey, Counts)> {
+    let count =
+        |i: usize| -> rusqlite::Result<u64> { Ok(row.get::<_, i64>(first + i)?.max(0) as u64) };
+    Ok((
+        SumsKey {
+            agent_id: row.get(first)?,
+            probe: row.get(first + 1)?,
+            account_id: row.get(first + 2)?,
+            canonical_model: row.get(first + 3)?,
+            speed: row.get(first + 4)?,
+            funding: row.get(first + 5)?,
+            band: row.get(first + 6)?,
+            tier: row.get(first + 7)?,
+            client: row.get(first + 8)?,
+            classifier: row.get(first + 9)?,
+            request_class: row.get(first + 10)?,
+            received_hour: row.get(first + 11)?,
+            completed_hour: row.get(first + 12)?,
+        },
+        Counts {
+            requests: count(13)?,
+            input_tokens: count(14)?,
+            cache_read_tokens: count(15)?,
+            cache_write_5m_tokens: count(16)?,
+            cache_write_1h_tokens: count(17)?,
+            output_tokens: count(18)?,
+        },
+    ))
 }
 
 /// The facts from column `first` on, in `FACTS_COLUMNS`' order.
@@ -1218,4 +1226,447 @@ fn keys_of(
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// One listed session's figures, priced at the read: its spend apart from its probes', its trailing day, its agents'
+/// entries and the picks of its own facts row.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SessionFigures {
+    /// The newest receipt of a client request and of one that is no token count, refused ones included.
+    pub last_request_at: Option<i64>,
+    pub last_inference_at: Option<i64>,
+    /// The newest served client request's user agent, null included, `None` where the session holds no served client
+    /// request.
+    pub user_agent: Option<Option<String>>,
+    pub spend: SpendFigures,
+    pub probes: SpendFigures,
+    pub day: DayFigures,
+    /// One entry per agent that holds a served client request or a served probe, by agent id.
+    pub agents: Vec<AgentFigures>,
+}
+
+/// A set of requests' count and money, with their billed dollars and plan shares by the account that served them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SpendFigures {
+    pub requests: u64,
+    pub money: SpendMoney,
+    /// The billed dollars by account, a zero entry left out, so its sum is the sum of `money.billed_usd`.
+    pub billed_usd_by_account: BTreeMap<String, f64>,
+    /// The plan shares by account and window. An account is keyed on every plan-funded request that priced, so a key
+    /// with no window still marks that a plan paid.
+    pub shares: BTreeMap<String, BTreeMap<&'static str, f64>>,
+}
+
+/// The list dollars, the billed dollars by funding and the Pro-week figure over a set of requests.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpendMoney {
+    pub usd: f64,
+    /// By funding, in the order each funding's first dollars came in, a zero entry left out.
+    pub billed_usd: Vec<(Funding, f64)>,
+    /// `None` once a plan request the cost model priced nothing for leaves the sum unknown.
+    pub equivalent: Option<f64>,
+}
+
+impl Default for SpendMoney {
+    /// No request priced, which reads the Pro-week figure 0.
+    fn default() -> SpendMoney {
+        SpendMoney {
+            usd: 0.0,
+            billed_usd: Vec::new(),
+            equivalent: Some(0.0),
+        }
+    }
+}
+
+/// The session's client requests received in the hours `trailing_day_hours` names, by the class word the sums rows
+/// hold (`NO_CLASS` for a request with none), and their money.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DayFigures {
+    pub requests: BTreeMap<String, u64>,
+    pub money: SpendMoney,
+}
+
+/// One agent's requests of the session over every model it ran.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentFigures {
+    pub agent_id: String,
+    /// The canonical model of the agent's newest served client request, else of its newest served probe.
+    pub model: String,
+    pub agent_type: Option<String>,
+    pub account_id: Option<String>,
+    pub last_request_at: Option<i64>,
+    pub first_request_at: Option<i64>,
+    pub spend: SpendFigures,
+    pub probes: SpendFigures,
+}
+
+impl SpendMoney {
+    /// Answers whether the dollars were filed as billed, so the map by account reads this one condition.
+    fn add(&mut self, price: &RequestPrice) -> bool {
+        self.usd += price.usd;
+        if price.funding == Funding::Plan {
+            self.equivalent = add_figures(self.equivalent, price.equivalent);
+            return false;
+        }
+        if price.usd <= 0.0 {
+            return false;
+        }
+        match self
+            .billed_usd
+            .iter_mut()
+            .find(|(funding, _)| *funding == price.funding)
+        {
+            Some((_, usd)) => *usd += price.usd,
+            None => self.billed_usd.push((price.funding, price.usd)),
+        }
+        true
+    }
+}
+
+impl SpendFigures {
+    /// `requests` requests on `account_id` priced together at `price`, or pricing nothing.
+    fn add(&mut self, requests: u64, account_id: &str, price: Option<&RequestPrice>) {
+        self.requests += requests;
+        let Some(price) = price else {
+            return;
+        };
+        if self.money.add(price) {
+            *self
+                .billed_usd_by_account
+                .entry(account_id.to_string())
+                .or_default() += price.usd;
+        }
+        if price.funding != Funding::Plan {
+            return;
+        }
+        let windows = self.shares.entry(account_id.to_string()).or_default();
+        for (window, share) in price.shares.iter().flatten() {
+            if let Some(share) = share {
+                *windows.entry(*window).or_default() += share;
+            }
+        }
+    }
+}
+
+/// The figures of each of `sessions` on `conn`'s snapshot, priced at `now` through `prices` and `tables`: one seek of
+/// each table's key per session, and for a session with no mark the fill's own sum, with nothing written, so a session
+/// reads the same figures before, during and after the fill.
+pub fn session_figures(
+    conn: &Connection,
+    sessions: &[SessionSpendKey],
+    prices: &PriceRevisions,
+    tables: &PlanTables,
+    now: i64,
+) -> Result<BTreeMap<SessionSpendKey, SessionFigures>, LedgerError> {
+    let mut sums: BTreeMap<SessionSpendKey, BTreeMap<SumsKey, Counts>> = BTreeMap::new();
+    let mut facts: BTreeMap<SessionSpendKey, BTreeMap<String, Facts>> = BTreeMap::new();
+    for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {
+        let (sql, binds) = session_sums_statement(chunk);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(binds), |row| {
+            Ok((session_key_of(row)?, sums_row(row, 3)?))
+        })?;
+        for row in rows {
+            let (key, (sums_key, counts)) = row?;
+            sums.entry(key).or_default().insert(sums_key, counts);
+        }
+        let (sql, binds) = session_facts_statement(chunk);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_from_iter(binds), |row| {
+            Ok((
+                session_key_of(row)?,
+                row.get::<_, String>(3)?,
+                facts_of(row, 4)?,
+            ))
+        })?;
+        for row in rows {
+            let (key, agent, row) = row?;
+            facts.entry(key).or_default().insert(agent, row);
+        }
+    }
+    let mut out = BTreeMap::new();
+    for key in sessions {
+        let totals = match facts.remove(key) {
+            Some(facts) if facts.contains_key(RESERVED_ID) => Totals {
+                sums: sums.remove(key).unwrap_or_default(),
+                facts,
+            },
+            _ => totals_of(conn, key, prices)?,
+        };
+        let figures = priced(conn, key, &totals, prices, tables, now)?;
+        out.insert(key.clone(), figures);
+    }
+    Ok(out)
+}
+
+/// The figure a sums row adds to: the session's spend or its probes', its agent's, or the session's day.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Target {
+    Session { probe: bool },
+    Agent { agent_id: String, probe: bool },
+    Day,
+}
+
+/// The targets a row of `sums` adds to, the day where the row is a client one received inside the day's hours. The
+/// day's money keys no account, so it names the reserved one.
+fn targets(sums: &SumsKey, in_day: bool) -> Vec<(Target, &str)> {
+    let mut targets = vec![(
+        Target::Session { probe: sums.probe },
+        sums.account_id.as_str(),
+    )];
+    if sums.agent_id != RESERVED_ID {
+        targets.push((
+            Target::Agent {
+                agent_id: sums.agent_id.clone(),
+                probe: sums.probe,
+            },
+            sums.account_id.as_str(),
+        ));
+    }
+    if !sums.probe && in_day {
+        targets.push((Target::Day, RESERVED_ID));
+    }
+    targets
+}
+
+/// The parts of a sums key a price reads, so the rows that hold the same ones add their counts and price once.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PriceParts {
+    canonical_model: String,
+    speed: String,
+    funding: String,
+    band: String,
+    tier: String,
+    client: String,
+    classifier: String,
+    received_hour: i64,
+    completed_hour: i64,
+}
+
+impl PriceParts {
+    fn of(sums: &SumsKey) -> PriceParts {
+        PriceParts {
+            canonical_model: sums.canonical_model.clone(),
+            speed: sums.speed.clone(),
+            funding: sums.funding.clone(),
+            band: sums.band.clone(),
+            tier: sums.tier.clone(),
+            client: sums.client.clone(),
+            classifier: sums.classifier.clone(),
+            received_hour: sums.received_hour,
+            completed_hour: sums.completed_hour,
+        }
+    }
+
+    /// The price key at the instant `at` that selects both entries and the instant `band_at` that selects the peak
+    /// band, the stored words read back as the hourly rows' are.
+    fn key(&self, at: i64, band_at: i64, now: i64) -> RowKey<'_> {
+        RowKey {
+            model: &self.canonical_model,
+            speed: Speed::of(Some(self.speed.as_str())),
+            band: Band::of_rollup(&self.band),
+            funding: Funding::of_rollup(&self.funding),
+            tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
+            entrypoint: entrypoint_of_client(&self.client),
+            classifier: is_free_classifier(Some(self.classifier.as_str())),
+            at,
+            band_at: Some(band_at),
+            now,
+        }
+    }
+}
+
+fn usage_of(counts: Counts) -> PinUsage {
+    PinUsage {
+        input: counts.input_tokens,
+        cache_read: counts.cache_read_tokens,
+        write_5m: counts.cache_write_5m_tokens,
+        write_1h: counts.cache_write_1h_tokens,
+        output: counts.output_tokens,
+    }
+}
+
+/// Whether a sums row prices from its request rows: an instant of the price list or of the cost list lies inside its
+/// receipt hour, after the hour's first millisecond, or an edge of the peak band lies inside its completion hour.
+fn boundary_row(prices: &PriceRevisions, tables: &PlanTables, sums: &SumsKey) -> bool {
+    !boundary_instants(prices, Some(&tables.revisions), sums.received_hour).is_empty()
+        || band_edge_inside(tables, sums.received_hour, sums.completed_hour)
+}
+
+/// Whether the peak band of the cost revision in force at the receipt hour opens or closes inside the completion hour:
+/// its state at the hour's first millisecond differs from its state at its last.
+fn band_edge_inside(tables: &PlanTables, received_hour: i64, completed_hour: i64) -> bool {
+    let peak = &tables.revisions.in_force(received_hour * 1_000).peak;
+    peak.covers(completed_hour * 1_000) != peak.covers(last_millisecond(completed_hour))
+}
+
+/// The figures of one session's totals. A row that is no boundary row adds its counts to its targets by account and
+/// price parts, and each sum prices once at the row's receipt hour and completion hour. A receipt hour that holds a
+/// boundary row reads the session's request rows of that hour once, however many boundary rows it holds, and prices
+/// each request whose sums key is a boundary row's by its own receipt and completion. A request of that hour whose
+/// key is another row's is skipped, since that row prices from its sums.
+fn priced(
+    conn: &Connection,
+    key: &SessionSpendKey,
+    totals: &Totals,
+    prices: &PriceRevisions,
+    tables: &PlanTables,
+    now: i64,
+) -> Result<SessionFigures, LedgerError> {
+    let (day_from, day_to) = trailing_day_hours(now);
+    let in_day = |hour: i64| (day_from..day_to).contains(&hour);
+    let mut accrued = Accrued::default();
+    let mut grouped: BTreeMap<(Target, String, PriceParts), Counts> = BTreeMap::new();
+    let mut split: BTreeMap<i64, BTreeSet<SumsKey>> = BTreeMap::new();
+    for (sums, counts) in &totals.sums {
+        if boundary_row(prices, tables, sums) {
+            split
+                .entry(sums.received_hour)
+                .or_default()
+                .insert(sums.clone());
+            continue;
+        }
+        let day = in_day(sums.received_hour);
+        accrued.count_day(sums, counts.requests, day);
+        for (target, account_id) in targets(sums, day) {
+            grouped
+                .entry((target, account_id.to_string(), PriceParts::of(sums)))
+                .or_default()
+                .add(*counts);
+        }
+    }
+    for ((target, account_id, parts), counts) in &grouped {
+        let key = parts.key(
+            parts.received_hour * 1_000,
+            parts.completed_hour * 1_000,
+            now,
+        );
+        let price = price_request(prices, tables, key, usage_of(*counts));
+        accrued.add(target, counts.requests, account_id, price.as_ref());
+    }
+    for (hour, rows) in &split {
+        let (sql, binds) = session_hour_statement(key, *hour);
+        for request in session_requests_of(conn, &sql, binds)? {
+            let Some((sums, counts)) = sums_of(&request, prices) else {
+                continue;
+            };
+            if !rows.contains(&sums) {
+                continue;
+            }
+            let completed = request
+                .serving
+                .as_ref()
+                .map_or(request.received_at, |s| s.completed_at);
+            let parts = PriceParts::of(&sums);
+            let price = price_request(
+                prices,
+                tables,
+                parts.key(request.received_at, completed, now),
+                usage_of(counts),
+            );
+            let day = in_day(sums.received_hour);
+            accrued.count_day(&sums, 1, day);
+            for (target, account_id) in targets(&sums, day) {
+                accrued.add(&target, 1, account_id, price.as_ref());
+            }
+        }
+    }
+    Ok(accrued.answer(&totals.facts))
+}
+
+/// The figures one session's rows add up to, before its facts name the agents' entries.
+#[derive(Default)]
+struct Accrued {
+    spend: SpendFigures,
+    probes: SpendFigures,
+    /// By agent id, its client requests' figures and its probes'.
+    agents: BTreeMap<String, (SpendFigures, SpendFigures)>,
+    day: DayFigures,
+}
+
+impl Accrued {
+    fn add(
+        &mut self,
+        target: &Target,
+        requests: u64,
+        account_id: &str,
+        price: Option<&RequestPrice>,
+    ) {
+        let figures = match target {
+            Target::Session { probe: false } => &mut self.spend,
+            Target::Session { probe: true } => &mut self.probes,
+            Target::Agent { agent_id, probe } => {
+                let (spend, probes) = self.agents.entry(agent_id.clone()).or_default();
+                if *probe {
+                    probes
+                } else {
+                    spend
+                }
+            }
+            Target::Day => {
+                if let Some(price) = price {
+                    self.day.money.add(price);
+                }
+                return;
+            }
+        };
+        figures.add(requests, account_id, price);
+    }
+
+    /// The day's count of a client row by its class, priced or not.
+    fn count_day(&mut self, sums: &SumsKey, requests: u64, in_day: bool) {
+        if !sums.probe && in_day {
+            *self
+                .day
+                .requests
+                .entry(sums.request_class.clone())
+                .or_default() += requests;
+        }
+    }
+
+    fn answer(mut self, facts: &BTreeMap<String, Facts>) -> SessionFigures {
+        let own = facts.get(RESERVED_ID).cloned().unwrap_or_default();
+        let agents = facts
+            .iter()
+            .filter(|(agent_id, row)| {
+                agent_id.as_str() != RESERVED_ID
+                    && (row.newest_id.is_some() || row.probe_id.is_some())
+            })
+            .map(|(agent_id, row)| {
+                let (spend, probes) = self.agents.remove(agent_id).unwrap_or_default();
+                AgentFigures {
+                    agent_id: agent_id.clone(),
+                    model: row
+                        .newest_model
+                        .clone()
+                        .or_else(|| row.probe_model.clone())
+                        .unwrap_or_default(),
+                    agent_type: row.newest_agent_type.clone(),
+                    account_id: row.newest_account_id.clone(),
+                    last_request_at: row.newest_at,
+                    first_request_at: row.first_request_at,
+                    spend,
+                    probes,
+                }
+            })
+            .collect();
+        SessionFigures {
+            last_request_at: own.last_request_at,
+            last_inference_at: own.last_inference_at,
+            user_agent: own.served_id.is_some().then_some(own.user_agent),
+            spend: self.spend,
+            probes: self.probes,
+            day: self.day,
+            agents,
+        }
+    }
+}
+
+/// The session's key from a row's first three columns.
+fn session_key_of(row: &rusqlite::Row) -> rusqlite::Result<SessionSpendKey> {
+    Ok(SessionSpendKey {
+        key_id: row.get(0)?,
+        key_generation: row.get(1)?,
+        session_id: row.get(2)?,
+    })
 }

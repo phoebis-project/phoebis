@@ -126,7 +126,7 @@ impl Peak {
         Ok(())
     }
 
-    fn covers(&self, at: i64) -> bool {
+    pub(crate) fn covers(&self, at: i64) -> bool {
         let Some(zone) = &self.resolved else {
             return false;
         };

@@ -20,7 +20,7 @@ use serde_json::Value;
 use crate::db::{
     event_select, fill_guardrails, opt_u64, request_guardrails, row_to_event,
     row_to_extra_usage_sample, row_to_quota_sample, row_to_request, with_attempts, LedgerDb,
-    LANDING_STAMP_SQL, REQUEST_SELECT,
+    REQUEST_SELECT,
 };
 use crate::histogram::Histogram;
 use crate::pattern::{literal_like, Patterns, ESCAPE};
@@ -38,7 +38,10 @@ use crate::rollup::{
     NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
     TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
-use crate::session_totals::{Serving, SessionRequest};
+use crate::session_totals::{
+    Serving, SessionRequest, FACTS_COLUMNS as SESSION_FACTS_COLUMNS,
+    SUMS_COLUMNS as SESSION_SUMS_COLUMNS,
+};
 use crate::LedgerError;
 
 pub fn parse_range(range: Option<&str>, now: i64) -> Result<(i64, i64), String> {
@@ -4288,7 +4291,7 @@ pub struct SessionIdentity {
 /// At three bound parameters per named session, four in `session_placements`, 900 sessions bind at most 3,600
 /// parameters, a wide margin under the bundled SQLite's 32,766-parameter default cap: a call over more sessions than
 /// this chunks and merges rather than tripping the cap.
-const SESSION_IDENTITY_CHUNK: usize = 900;
+pub(crate) const SESSION_IDENTITY_CHUNK: usize = 900;
 
 /// For each `SessionSpendKey` named, with no time bound: a pin-only session (one whose
 /// requests, if any, are all older than any activity window a caller applies elsewhere) is answered the same
@@ -4304,8 +4307,8 @@ pub fn session_identities(
     Ok(out)
 }
 
-/// The `named` table the identities read and the first fill seek the session index from, with its binds. Its
-/// placeholders number from `?1`, so a statement's further binds go after these.
+/// The `named` table the identities read and the session totals' reads seek from, with its binds. Its placeholders
+/// number from `?1`, so a statement's further binds go after these.
 fn named_sessions(sessions: &[SessionSpendKey]) -> (String, Vec<rusqlite::types::Value>) {
     let mut binds = Vec::with_capacity(sessions.len() * 3);
     let values: Vec<String> = sessions
@@ -5210,8 +5213,8 @@ impl BurnSums {
 /// `BurnSums::add_tiers` reads them, so a bucket with tokens and no plan row reads 0 on every tier and only an idle
 /// bucket reads `None` on every one. A bucket holding a row the table cannot price answers `None` on that window and
 /// in each entry that row latched, whichever row came first, and a row with no token has nothing to price and leaves
-/// every figure as the other rows set it. The dollars and the shares are `price_request`'s, which the session fold
-/// prices a request through too, so a session's spend and its burn series price one way.
+/// every figure as the other rows set it. The dollars and the shares are `price_request`'s, which a session's totals
+/// price through too, so a session's spend and its burn series price one way.
 pub(crate) fn price_usage(
     point: &mut BurnSums,
     prices: &PriceRevisions,
@@ -5938,55 +5941,13 @@ pub struct SessionSpendKey {
     pub session_id: String,
 }
 
-/// A request the session fold prices, with its serving attempt where an account served it. The reads hand its key
-/// beside it, so the fold's row names none. Both reads answer a refused request with its flag, which the fold reads
-/// for the session's newest instants and its agent's first request alone, and neither answers one with no key or no
-/// session, which has no row to land on, as the activity read drops it. The first fill answers them by session,
-/// `received_at` and request id, the incremental read by `landed_at`.
-#[derive(Debug)]
-pub struct SessionSpendRow {
-    /// The request's id, which orders two requests of one instant for the session fold's newest pick.
-    pub id: String,
-    pub agent_id: Option<String>,
-    pub agent_type: Option<String>,
-    pub user_agent: Option<String>,
-    pub request_class: Option<String>,
-    pub canonical_model: String,
-    pub kind: String,
-    pub received_at: i64,
-    pub landed_at: i64,
-    /// The router refused the request before it asked any account, so no attempt joins it.
-    pub refused: bool,
-    pub attempt: Option<SpendAttempt>,
-}
-
-/// One attempt's facts the fold prices, `PricedAttempt`'s with the account beside them.
-#[derive(Debug)]
-pub struct SpendAttempt {
-    pub account_id: String,
-    priced: PricedAttempt,
-}
-
-impl SpendAttempt {
-    /// The attempt priced through the key the burn series builds for an attempt, `now` the read's instant.
-    pub fn price(
-        &self,
-        prices: &PriceRevisions,
-        tables: &PlanTables,
-        now: i64,
-    ) -> Option<RequestPrice> {
-        let (key, usage) = self.priced.usage(prices, now);
-        price_request(prices, tables, key, usage)
-    }
-}
-
-/// The request half of the session spend reads, ahead of `PRICED_ATTEMPT_COLUMNS`, in the order
-/// `SessionSpendRow::read` reads them.
+/// The request half of the session reads, ahead of `PRICED_ATTEMPT_COLUMNS`, in the order `session_request_of` reads
+/// them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
      r.user_agent, r.request_class, r.landed_at, a.account_id, r.kind, r.refused";
 
-/// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session spend reads.
+/// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session reads.
 const SESSION_SPEND_PRICED_FROM: usize = 12;
 
 /// The columns past `PRICED_ATTEMPT_COLUMNS` that `session_request_of` takes for a session's totals, from
@@ -5997,72 +5958,19 @@ const SESSION_REQUEST_COLUMNS: &str = "r.requested_speed";
 const SESSION_REQUEST_FROM: usize = SESSION_SPEND_PRICED_FROM + 15;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
-/// facts from. The spend reads join that attempt's own row, since its price reads members the request row does not
+/// facts from. The session reads join that attempt's own row, since its price reads members the request row does not
 /// carry: the completion, the two cache writes apart, the account kind, the overage flag, the tier and the
 /// usage-based class.
 pub(crate) const SERVING_ATTEMPT_NUMBER: &str =
     "(SELECT a.attempt FROM attempts a WHERE a.request_id = r.id ORDER BY a.attempt DESC LIMIT 1)";
 
-impl SessionSpendRow {
-    /// A request no account served joins no attempt, so its attempt half reads null and must not reach
-    /// `PricedAttempt::read`. Its model and receipt are request columns inside `PRICED_ATTEMPT_COLUMNS`, read by their
-    /// place there whether an attempt joined or not.
-    fn read(row: &Row) -> rusqlite::Result<(SessionSpendKey, SessionSpendRow)> {
-        let first = SESSION_SPEND_PRICED_FROM;
-        let attempt = match row.get::<_, Option<String>>(9)? {
-            Some(account_id) => Some(SpendAttempt {
-                account_id,
-                priced: PricedAttempt::read(row, first)?,
-            }),
-            None => None,
-        };
-        Ok((
-            SessionSpendKey {
-                key_id: row.get(1)?,
-                key_generation: row.get(2)?,
-                session_id: row.get(0)?,
-            },
-            SessionSpendRow {
-                id: row.get(3)?,
-                agent_id: row.get(4)?,
-                agent_type: row.get(5)?,
-                user_agent: row.get(6)?,
-                request_class: row.get(7)?,
-                landed_at: row.get(8)?,
-                canonical_model: row.get(first + PricedAttempt::MODEL)?,
-                received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
-                kind: row.get(10)?,
-                refused: row.get(11)?,
-                attempt,
-            },
-        ))
-    }
-}
-
-/// `session_spend_rows_since`'s statement: every request landed after the watermark with a key and a session, a
-/// refused one with its flag, with its serving attempt, oldest landing first, through the landing index the writer's
-/// poll rule names. The index is named so the seek holds whatever statistics a file carries. The request id keeps the
-/// two statements' orders one shape.
-pub(crate) fn session_spend_since_statement(
-    landed_after: i64,
-) -> (String, Vec<rusqlite::types::Value>) {
-    let sql = format!(
-        "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
-         FROM requests r INDEXED BY requests_landed_at \
-         LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
-         WHERE r.landed_at > ? AND r.key_id IS NOT NULL AND r.session_id IS NOT NULL \
-         ORDER BY r.landed_at, r.id"
-    );
-    (sql, vec![rusqlite::types::Value::Integer(landed_after)])
-}
-
-/// `session_spend_rows_of`'s statement for one chunk of named sessions: every request of each under its key lifetime,
-/// a refused one with its flag, with its serving attempt, seeking the session index per named session as the
-/// identities read does, each session's rows oldest first. The key and its generation scope the rows, as
-/// `session_identities_statement` scopes its own. The named sessions hold the outer loop through `CROSS JOIN`: the
-/// session index yields the order the statement sorts by, and on statistics that make a session look large the
-/// planner would walk the whole index in that order to spare the sort. The fill of a session's totals reads the same
-/// rows through `session_request_of`.
+/// The statement of a session's totals summed from its requests, the fill's and a reader's for a session with no mark,
+/// for one chunk of named sessions: every request of each under its key lifetime, a refused one with its flag, with its
+/// serving attempt, seeking the session index per named session as the identities read does, each session's rows
+/// oldest first. The key and its generation scope the rows, as `session_identities_statement` scopes its own. The
+/// named sessions hold the outer loop through `CROSS JOIN`: the session index yields the order the statement sorts by,
+/// and on statistics that make a session look large the planner would walk the whole index in that order to spare the
+/// sort.
 pub(crate) fn session_spend_of_statement(
     sessions: &[SessionSpendKey],
 ) -> (String, Vec<rusqlite::types::Value>) {
@@ -6074,6 +5982,36 @@ pub(crate) fn session_spend_of_statement(
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
          LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
          ORDER BY r.session_id, r.received_at, r.id"
+    );
+    (sql, binds)
+}
+
+/// The stored sums rows of one chunk of named sessions, each row's key ahead of its columns, one seek of the table's
+/// key per named session. The named sessions hold the outer loop through `CROSS JOIN`, since on statistics that make
+/// the table look small the planner would walk it and look each row up among the named sessions.
+pub(crate) fn session_sums_statement(
+    sessions: &[SessionSpendKey],
+) -> (String, Vec<rusqlite::types::Value>) {
+    let (named, binds) = named_sessions(sessions);
+    let sql = format!(
+        "WITH {named} \
+         SELECT n.key_id, n.key_generation, n.session_id, {SESSION_SUMS_COLUMNS} \
+         FROM named n CROSS JOIN session_sums s ON s.key_id = n.key_id \
+         AND s.key_generation = n.key_generation AND s.session_id = n.session_id"
+    );
+    (sql, binds)
+}
+
+/// `session_sums_statement`'s read of `session_facts`, the agent id ahead of the facts' columns.
+pub(crate) fn session_facts_statement(
+    sessions: &[SessionSpendKey],
+) -> (String, Vec<rusqlite::types::Value>) {
+    let (named, binds) = named_sessions(sessions);
+    let sql = format!(
+        "WITH {named} \
+         SELECT n.key_id, n.key_generation, n.session_id, s.agent_id, {SESSION_FACTS_COLUMNS} \
+         FROM named n CROSS JOIN session_facts s ON s.key_id = n.key_id \
+         AND s.key_generation = n.key_generation AND s.session_id = n.session_id"
     );
     (sql, binds)
 }
@@ -6159,47 +6097,6 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
         requested_speed: row.get(SESSION_REQUEST_FROM)?,
         serving,
     })
-}
-
-/// Every request landed after `landed_after` with a key and a session, a refused one with its flag, with its serving
-/// attempt, each beside its `SessionSpendKey`.
-pub fn session_spend_rows_since(
-    conn: &Connection,
-    landed_after: i64,
-) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
-    let (sql, binds) = session_spend_since_statement(landed_after);
-    read_session_spend_rows(conn, &sql, binds)
-}
-
-/// Chunks of `SESSION_IDENTITY_CHUNK` named sessions, merged, as `session_identities` chunks its own, each row beside
-/// its `SessionSpendKey`, the key `sessions` holds.
-pub fn session_spend_rows_of(
-    conn: &Connection,
-    sessions: &[SessionSpendKey],
-) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
-    let mut out = Vec::new();
-    for chunk in sessions.chunks(SESSION_IDENTITY_CHUNK) {
-        let (sql, binds) = session_spend_of_statement(chunk);
-        out.extend(read_session_spend_rows(conn, &sql, binds)?);
-    }
-    Ok(out)
-}
-
-fn read_session_spend_rows(
-    conn: &Connection,
-    sql: &str,
-    binds: Vec<rusqlite::types::Value>,
-) -> Result<Vec<(SessionSpendKey, SessionSpendRow)>, LedgerError> {
-    let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(params_from_iter(binds), SessionSpendRow::read)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-/// The newest `landed_at` the ledger holds, 0 with no request: the watermark a session fold starts from, so its
-/// incremental read walks what lands after the start and never the history (the first fill answers a listed session
-/// whole). The writer's `LANDING_STAMP_SQL`, which the planner serves off `requests_landed_at`.
-pub fn newest_landed_at(conn: &Connection) -> Result<i64, LedgerError> {
-    Ok(conn.query_row(LANDING_STAMP_SQL, [], |r| r.get(0))?)
 }
 
 /// The twenty sessions with the most tokens over the filter's range, each priced per bucket the way
@@ -6435,32 +6332,7 @@ mod tests {
         }
     }
 
-    /// The incremental read seeks the landing index and walks no table, on statistics that make the received index
-    /// look selective: a poll reads the rows written since its watermark and nothing older.
-    #[test]
-    fn the_session_spend_read_since_a_landing_seeks_the_landing_index() {
-        let (sql, binds) = session_spend_since_statement(1_000);
-        let plan = plan_under(
-            &sql,
-            binds,
-            &[
-                ("requests", "requests_received", "1000 1"),
-                ("requests", "requests_landed_at", "1000 1000"),
-            ],
-        );
-        assert!(
-            seeks_without_a_scan(
-                &plan,
-                "requests",
-                &["r"],
-                "requests_landed_at",
-                &["landed_at>?"]
-            ),
-            "{plan:?}"
-        );
-    }
-
-    /// The first fill seeks the session index once per named session and walks no table, as the identities read does.
+    /// The fill's sum seeks the session index once per named session and walks no table, as the identities read does.
     #[test]
     fn the_session_spend_first_fill_seeks_the_session_index_for_each_named_session() {
         let sessions = vec![
@@ -6496,14 +6368,53 @@ mod tests {
         );
     }
 
-    /// Each read answers a request once with its highest-index attempt, the one that served it: each request's retry
-    /// starts, and so completes, before its first attempt, so a pick of the latest start or completion takes the wrong
-    /// one, and each attempt sits on its own account, so an answer names the attempt it took. Two requests of a
-    /// session received at one instant tie on every first-fill order column before the request id. The writer stamps
-    /// each landing above the last, so the incremental read's boundary is what can slip: a request landed at the
-    /// watermark was folded by the poll that set it.
+    /// The plan of each statement the sessions route reads its listed sessions' stored totals through, on statistics
+    /// that make the table look small, as an empty file's do.
+    fn totals_plan(sql: &str, binds: Vec<rusqlite::types::Value>, table: &str) -> Vec<String> {
+        plan_under(
+            sql,
+            binds,
+            &[
+                (table, &format!("sqlite_autoindex_{table}_1"), "1 1 1 1 1"),
+                ("session_sums", "session_sums_received_hour", "1 1"),
+            ],
+        )
+    }
+
+    /// Each read of a listed session's stored totals seeks its table's key once per named session and walks neither
+    /// table, so a poll costs a seek per session whatever the tables hold.
     #[test]
-    fn the_session_spend_reads_take_the_highest_attempt_and_the_read_since_skips_the_watermark() {
+    fn the_session_totals_reads_seek_each_tables_key_once_per_named_session() {
+        let sessions = vec![
+            SessionSpendKey {
+                key_id: "k".to_string(),
+                key_generation: 0,
+                session_id: "s1".to_string(),
+            },
+            SessionSpendKey {
+                key_id: "k".to_string(),
+                key_generation: 0,
+                session_id: "s2".to_string(),
+            },
+        ];
+        let seek = ["key_id=?", "key_generation=?", "session_id=?"];
+        for (table, (sql, binds)) in [
+            ("session_sums", session_sums_statement(&sessions)),
+            ("session_facts", session_facts_statement(&sessions)),
+        ] {
+            let plan = totals_plan(&sql, binds, table);
+            assert!(
+                seeks_without_a_scan(&plan, table, &["s"], "PRIMARY KEY", &seek),
+                "{table}: {plan:?}"
+            );
+        }
+    }
+
+    /// The totals' read answers a request once with its highest-index attempt, the one that served it: each request's
+    /// retry starts, and so completes, before its first attempt, so a pick of the latest start or completion takes the
+    /// wrong one, and each attempt sits on its own account, so an answer names the attempt it took.
+    #[test]
+    fn the_session_totals_read_takes_the_highest_attempt() {
         let db = LedgerDb::open_in_memory().unwrap();
         let request = |id: &str| RequestRecord {
             id: id.into(),
@@ -6533,34 +6444,26 @@ mod tests {
             None,
         )
         .unwrap();
-        let served = |rows: Vec<(SessionSpendKey, SessionSpendRow)>| -> Vec<Option<String>> {
-            rows.into_iter()
-                .map(|(_, row)| row.attempt.map(|a| a.account_id))
-                .collect()
-        };
         let sessions = [SessionSpendKey {
             key_id: "k".to_string(),
             key_generation: 0,
             session_id: "s".to_string(),
         }];
-        let filled = db
-            .read_blocking(|c| session_spend_rows_of(c, &sessions))
-            .unwrap();
-        assert_eq!(
-            served(filled),
-            [Some("b".to_string()), Some("d".to_string())]
-        );
-        let since = db
-            .read_blocking(|c| session_spend_rows_since(c, 1))
-            .unwrap();
-        assert_eq!(served(since), [Some("d".to_string())]);
+        let (sql, binds) = session_spend_of_statement(&sessions);
+        let served: Vec<Option<String>> = db
+            .read_blocking(|c| session_requests_of(c, &sql, binds))
+            .unwrap()
+            .into_iter()
+            .map(|request| request.serving.map(|s| s.account_id))
+            .collect();
+        assert_eq!(served, [Some("b".to_string()), Some("d".to_string())]);
     }
 
-    /// The fold reads a refused request for the session's newest instants and its agent's first request, so both reads
-    /// answer it with its flag. A request with no key or no session has no row to land on and stays out of both: the
-    /// incremental read drops each in its statement, and the fill's key join leaves them out on its own.
+    /// A session's totals read a refused request for the session's newest instants and its agent's first request, so
+    /// the totals' read answers it with its flag. A request with no key or no session has no row to land on, and the
+    /// read's key join leaves it out.
     #[test]
-    fn the_session_spend_reads_answer_a_refused_request_with_its_flag_and_leave_keyless_and_sessionless_ones_out(
+    fn the_session_totals_read_answers_a_refused_request_with_its_flag_and_leaves_keyless_and_sessionless_ones_out(
     ) {
         let db = LedgerDb::open_in_memory().unwrap();
         let request =
@@ -6607,24 +6510,19 @@ mod tests {
             None,
         )
         .unwrap();
-        let receipts = |rows: Vec<(SessionSpendKey, SessionSpendRow)>| {
-            rows.into_iter()
-                .map(|(_, row)| (row.received_at, row.refused))
-                .collect::<Vec<_>>()
-        };
         let sessions = [SessionSpendKey {
             key_id: "k".to_string(),
             key_generation: 0,
             session_id: "s".to_string(),
         }];
-        let filled = db
-            .read_blocking(|c| session_spend_rows_of(c, &sessions))
-            .unwrap();
-        assert_eq!(receipts(filled), [(1_000, false), (2_000, true)]);
-        let since = db
-            .read_blocking(|c| session_spend_rows_since(c, 0))
-            .unwrap();
-        assert_eq!(receipts(since), [(1_000, false), (2_000, true)]);
+        let (sql, binds) = session_spend_of_statement(&sessions);
+        let receipts: Vec<(i64, bool)> = db
+            .read_blocking(|c| session_requests_of(c, &sql, binds))
+            .unwrap()
+            .into_iter()
+            .map(|request| (request.received_at, request.refused))
+            .collect();
+        assert_eq!(receipts, [(1_000, false), (2_000, true)]);
     }
 
     #[test]

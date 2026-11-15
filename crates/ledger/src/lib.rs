@@ -65,24 +65,23 @@ pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 pub mod test_tables;
 pub use query::session_placements;
 pub use query::{
-    account_request_counts, add_figures, breakdown_paged, bucket_seconds, burn_groups_paged,
-    burn_series_over, dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil,
-    hourly_window_samples, key_request_totals, key_request_totals_by_generation,
-    latest_extra_usage, latest_extra_usage_polled, latest_extra_usage_share, latest_quota,
-    limit_reset_uses, list_requests, list_routing_log, member_spends, moves_by_reason,
-    moves_by_reason_and_fit, names_one_account, newest_landed_at, parked_count, parked_summary,
-    parse_range, pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic,
+    account_request_counts, breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over,
+    dashboard_on, decision_record, guardrail_counts, held_series, hour_ceil, hourly_window_samples,
+    key_request_totals, key_request_totals_by_generation, latest_extra_usage,
+    latest_extra_usage_polled, latest_extra_usage_share, latest_quota, limit_reset_uses,
+    list_requests, list_routing_log, member_spends, moves_by_reason, moves_by_reason_and_fit,
+    names_one_account, parked_count, parked_summary, parse_range,
+    pin_migrations_by_account_and_reason, placements, pool_traffic, pools_traffic,
     recent_events_of_kind, recent_gaps, request_by_id, request_events, revision_spans,
     rewrite_series, routing_conditions, series_paged, session_activity, session_burn_series,
-    session_identities, session_spend_rows_of, session_spend_rows_since, BudgetedMember, BurnPoint,
-    CacheEquivalent, CacheFacts, Dashboard, DecisionListRow, EventListRow, FundingFilter, GroupBy,
-    GroupRow, GuardrailCountRow, HourlyWindowSample, LimitResetUsed, LiveKeys, LogKinds,
-    ParkedSummary, PlacementRow, ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor,
-    RequestFilter, RequestPrice, RollupFilter, RoutingCondition, RoutingLogCursor,
-    RoutingLogFilter, RoutingLogPage, RoutingLogRow, SeriesFilter, SeriesPoint, SessionActivity,
-    SessionIdentity, SessionSpendKey, SessionSpendRow, Span, SpendAttempt, Totals, TrafficBucket,
-    DECISION_KINDS, EVENT_KINDS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL, MAX_POINTS,
-    MAX_RANGE_MS, PROBE_KIND,
+    session_identities, BudgetedMember, BurnPoint, CacheEquivalent, CacheFacts, Dashboard,
+    DecisionListRow, EventListRow, FundingFilter, GroupBy, GroupRow, GuardrailCountRow,
+    HourlyWindowSample, LimitResetUsed, LiveKeys, LogKinds, ParkedSummary, PlacementRow,
+    ProbeCounts, ProbeEquivalent, ProbeView, RequestCursor, RequestFilter, RollupFilter,
+    RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
+    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SessionSpendKey, Span, Totals,
+    TrafficBucket, DECISION_KINDS, EVENT_KINDS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
+    MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};
@@ -115,7 +114,10 @@ pub use rollup::{
 };
 /// The type `LedgerDb::read` and `read_blocking` lend a closure, so a caller can name it in a signature.
 pub use rusqlite::Connection;
-pub use session_totals::unmark_rebanded_sessions;
+pub use session_totals::{
+    session_figures, unmark_rebanded_sessions, AgentFigures, DayFigures, SessionFigures,
+    SpendFigures, SpendMoney,
+};
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, UnpricedModel,
     BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,

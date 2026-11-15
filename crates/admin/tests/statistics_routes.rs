@@ -1736,7 +1736,11 @@ fn refused_request(id: &str, at: i64, session: &str, agent: &str, key_generation
 
 /// The harness with the pool `main` over `business` and the key `desktop`, and the key's generation.
 async fn sessions_on_desktop() -> (common::Full, String, i64) {
-    let parts = common::admin_parts_full().await;
+    on_desktop(common::admin_parts_full().await).await
+}
+
+/// `sessions_on_desktop` over the harness `parts`.
+async fn on_desktop(parts: common::Full) -> (common::Full, String, i64) {
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&cookie)).await;
     post(
@@ -2138,6 +2142,238 @@ async fn a_sessions_billed_dollars_stand_under_the_account_that_served_them_with
         serde_json::json!({ "a-billed": 1.5 }),
         "the overage request's dollars under the account that served it, the plan request's and the $0 one's \
          under none: {row}"
+    );
+}
+
+/// 11:00 UTC on `common::NOW`'s day, the start of the hour before the one that holds it.
+const ELEVEN: i64 = common::NOW - 4_600_000;
+const MINUTE: i64 = 60_000;
+
+/// A price entry takes force at 11:30, inside the hour of `main`'s two client requests at 11:10 and 11:45 and of the
+/// probe `w` sent at 11:20, so the session's client row and its probe row both stand in that hour. A request's 1,000
+/// input tokens cost $1 under the first entry and $2 under the second, and the output costs nothing. The client
+/// requests read $1 and $2, and the probe $1 apart from them, on the entry of an agent that sent no client request.
+#[tokio::test]
+async fn a_sessions_spend_prices_each_request_of_an_hour_a_price_entry_splits_with_its_probe_apart()
+{
+    let prices = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-sonnet-5: {input: 1000, \
+         cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, output: 0}\n  - effective: 2026-10-11T11:30:00Z\n    \
+         models:\n      claude-sonnet-5: {input: 2000, cache_write_5m: 0, cache_write_1h: 0, cache_read: 0, \
+         output: 0}\n",
+        "file",
+    )
+    .unwrap();
+    let (parts, cookie, generation) =
+        on_desktop(common::admin_parts_full_priced(prices).await).await;
+    for request in [
+        agent_request(
+            "r-early",
+            ELEVEN + 10 * MINUTE,
+            "s-split",
+            "main",
+            "inference",
+            generation,
+        ),
+        agent_request(
+            "r-probe",
+            ELEVEN + 20 * MINUTE,
+            "s-split",
+            "w",
+            phoebis_ledger::PROBE_KIND,
+            generation,
+        ),
+        agent_request(
+            "r-late",
+            ELEVEN + 45 * MINUTE,
+            "s-split",
+            "main",
+            "inference",
+            generation,
+        ),
+    ] {
+        parts.ledger.record(request);
+    }
+    common::landed(&parts, "r-late").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-split");
+    assert_eq!(
+        (&row["spend"]["usd"], &row["spend"]["probes"]["usd"]),
+        (&serde_json::json!(3.0), &serde_json::json!(1.0)),
+        "each request at the entry in force at its receipt, the probe apart: {row}"
+    );
+    let w = row["agent_requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["agent_id"] == "w")
+        .unwrap_or_else(|| panic!("no entry for w: {row}"))
+        .clone();
+    assert_eq!(
+        (
+            w["spend"]["requests"].as_u64(),
+            w["spend"]["probes"]["requests"].as_u64(),
+            w["model"].as_str()
+        ),
+        (Some(0), Some(1), Some("claude-sonnet-5")),
+        "the probe names its agent's entry and adds to its probes alone: {w}"
+    );
+}
+
+/// The band opens at 12:00 UTC, and a plan request received at 11:59:00 completes at 12:00:30 inside it, on the Max
+/// 20x tier, whose 5-hour window holds 20,000 units at a factor of 0.5 inside the band. Its 1,000 input and 100 output
+/// tokens weigh 1,000 + 100 x 10 = 2,000 units, so its 5-hour share reads 2,000 / 20,000 / 0.5 = 0.2.
+#[tokio::test]
+async fn a_plan_request_that_completes_inside_the_peak_band_reads_the_five_hour_share_of_its_completion(
+) {
+    let costs = phoebis_ledger::CostRevisions::from_yaml(
+        "unit: {tier: default_claude_max_20x, window: seven_day}\nrevisions:\n  - effective: 2026-01-01\n    \
+         capacity:\n      default_claude_max_20x: {five_hour: 20000, seven_day: 200000}\n    peak:\n      \
+         zone: UTC\n      weekdays: false\n      \
+         from_hour: 12\n      to_hour: 13\n      capacity_factor: {five_hour: 0.5, seven_day: 1}\n    \
+         type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}\n    \
+         model_weight:\n      claude-sonnet-5: 1\n    model_windows: {}\n    overrides: {}\n    \
+         tier_order: [fable, opus, sonnet, haiku]\n    model_tier:\n      claude-sonnet-5: sonnet\n",
+    )
+    .unwrap();
+    let (parts, cookie, generation) = on_desktop(
+        common::admin_parts_full_costed(phoebis_ledger::test_tables::tables(costs)).await,
+    )
+    .await;
+    // The writer stamps each attempt with the tier the router prices its account by.
+    set_max_20x(&parts).await;
+    let Record::Request {
+        request, attempts, ..
+    } = agent_request(
+        "r-band",
+        common::NOW - 1_060_000,
+        "s-band",
+        "main",
+        "inference",
+        generation,
+    )
+    else {
+        unreachable!("agent_request builds a request")
+    };
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            finished_at: Some(common::NOW - 970_000),
+            ..request
+        },
+        attempts,
+        bodies: None,
+    });
+    common::landed(&parts, "r-band").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-band");
+    assert!(
+        close_to(&row["spend"]["shares"]["business"]["five_hour"], 0.2),
+        "the band at the request's completion halves the window: {row}"
+    );
+}
+
+/// Two requests of 1,000 input and 100 output tokens on the API-key account `a-key`, each under the long-context
+/// threshold of 1,500 while their prompts sum past it, price at the standard cells: 1,100 tokens at $1,000 a million
+/// is $1.10 a request, billed under `api_key`. The long cells would read $5.50 a request.
+#[tokio::test]
+async fn two_requests_under_the_long_context_threshold_bill_at_the_standard_cells_under_api_key() {
+    let prices = phoebis_ledger::PriceRevisions::from_yaml(
+        "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-sonnet-5:\n        input: 1000\n        \
+         cache_write_5m: 1000\n        cache_write_1h: 1000\n        cache_read: 1000\n        output: 1000\n        \
+         long_context: {over: 1500, input: 5000, cache_write_5m: 5000, cache_write_1h: 5000, cache_read: 5000, \
+         output: 5000}\n",
+        "file",
+    )
+    .unwrap();
+    let (parts, cookie, generation) =
+        on_desktop(common::admin_parts_full_priced(prices).await).await;
+    for (id, at) in [
+        ("r-key-1", common::NOW - 2_000),
+        ("r-key-2", common::NOW - 1_000),
+    ] {
+        let Record::Request {
+            request,
+            mut attempts,
+            ..
+        } = agent_request(id, at, "s-key", "main", "inference", generation)
+        else {
+            unreachable!("agent_request builds a request")
+        };
+        attempts[0].account_id = "a-key".into();
+        attempts[0].account_kind = AccountKind::ApiKey;
+        parts.ledger.record(Record::Request {
+            request,
+            attempts,
+            bodies: None,
+        });
+    }
+    common::landed(&parts, "r-key-2").await;
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-key");
+    assert_eq!(
+        (&row["spend"]["usd"], &row["spend"]["billed_usd"]),
+        (
+            &serde_json::json!(2.2),
+            &serde_json::json!({ "api_key": 2.2 })
+        ),
+        "each prompt bands alone, and the dollars bill under the account's kind: {row}"
+    );
+}
+
+/// `w` asks on Sonnet 5 on `business`, then two requests of one instant follow: `r-w-b` on Haiku 4.5 on `b`, which
+/// lands first, and `r-w-a` on Sonnet 5 on `business`, which lands last. The greater id names `w`'s entry.
+#[tokio::test]
+async fn an_agents_entry_is_named_by_the_greater_id_of_its_newest_instant_whichever_lands_last() {
+    let (parts, cookie, generation) = sessions_on_desktop().await;
+    let now = common::NOW;
+    for (id, at, model, account) in [
+        ("r-w-1", now - 3_000, "claude-sonnet-5", "business"),
+        ("r-w-b", now - 1_000, "claude-haiku-4-5", "b"),
+        ("r-w-a", now - 1_000, "claude-sonnet-5", "business"),
+    ] {
+        let Record::Request {
+            request,
+            mut attempts,
+            ..
+        } = agent_request(id, at, "s-agent", "w", "inference", generation)
+        else {
+            unreachable!("agent_request builds a request")
+        };
+        attempts[0].account_id = account.into();
+        parts.ledger.record(Record::Request {
+            request: RequestRecord {
+                model: model.into(),
+                canonical_model: model.into(),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        });
+        common::landed(&parts, id).await;
+    }
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = sessions_row(&sessions, "s-agent");
+    let w = row["agent_requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["agent_id"] == "w")
+        .unwrap_or_else(|| panic!("no entry for w: {row}"))
+        .clone();
+    assert_eq!(
+        (
+            w["model"].as_str(),
+            w["account_id"].as_str(),
+            w["last_request_at"].as_i64(),
+            w["spend"]["requests"].as_u64()
+        ),
+        (
+            Some("claude-haiku-4-5"),
+            Some("b"),
+            Some(now - 1_000),
+            Some(3)
+        ),
+        "the newest instant's greater id names the entry: {w}"
     );
 }
 

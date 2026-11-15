@@ -12,7 +12,7 @@ use utoipa::ToSchema;
 
 use crate::openapi::{LedgerFailure, RouterUnavailable};
 use crate::routes::router_unavailable;
-use crate::session_spend::{AgentRequests, SessionDay, SessionSpend};
+use crate::session_spend::{agent_of, day_of, spend_of, AgentRequests, SessionDay, SessionSpend};
 use crate::AdminState;
 
 /// The live pins joined with what the ledger saw and the keepalive engine's own view, one row per session.
@@ -53,9 +53,9 @@ pub(crate) struct Session {
     /// The user agent of the session's newest client request as the client sent it, the newest served one's where the
     /// session has one.
     pub user_agent: Option<String>,
-    /// The session's spend over its life under its key, null where the ledger holds no request of it the router did
-    /// not refuse. Its `requests` is the session's count of client requests, which a reader takes as 0 where `spend`
-    /// is null.
+    /// The session's spend over its requests the retention keeps under its key, from the ledger's per-session totals,
+    /// null where the ledger holds no request of it the router did not refuse. Its `requests` is the session's count of
+    /// client requests, which a reader takes as 0 where `spend` is null.
     pub spend: Option<SessionSpend>,
     /// The session's client requests of the last 24 hours by class, and their spend.
     pub day: SessionDay,
@@ -386,12 +386,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // the read, the activity's come from the read itself, and a row's fork facts come from the requests of its own
     // session whichever pass surfaced it. Only the sessions the retain below can keep are named: every engine
     // session, and one with a pin use or a request at or after `idle_bound`.
-    let cursor = state.spend.cursor(&state.tables, now);
     let live_keys = phoebis_ledger::LiveKeys(live.clone());
+    let (prices, tables) = (state.pricing.revisions(), state.tables.clone());
     let read = state.ledger.db().read(move |c| {
         // One WAL snapshot for every statement: `read` lends a connection and starts no transaction, and a request
-        // landing between the first fill and the incremental read would be dropped by the filled-session rule and
-        // passed by the watermark.
+        // landing between two reads would show in the activity and not in the totals.
         let tx = c.unchecked_transaction()?;
         // Grouped by the client's own session, which the router keys pins under, so a request shows on the row of
         // the pin it took.
@@ -403,20 +402,17 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .map(activity_key),
         );
         let keys: Vec<SessionSpendKey> = candidates.into_iter().collect();
-        // The fold's reads ride in this snapshot: the start watermark where the fold starts, the whole history of
-        // each candidate the fold does not hold yet, and the rows landed since the watermark, so one reader hold
-        // serves the poll.
-        let poll = crate::session_spend::read_poll(&tx, &cursor, &keys)?;
+        let figures = phoebis_ledger::session_figures(&tx, &keys, &prices, &tables, now)?;
         Ok((
             activity,
             phoebis_ledger::session_identities(&tx, &keys)?,
             phoebis_ledger::session_placements(&tx, &keys, &live_keys)?,
-            poll,
+            figures,
         ))
     });
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
     let (reported, read) = tokio::join!(crate::routes::reported_samples(state), read);
-    let (activity, identities, placements, poll) = match read {
+    let (activity, identities, placements, figures) = match read {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
@@ -446,9 +442,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     // window over its tier's capacity ratio there, both under the pin's regime. The 7-day anchor rates alone are the
     // Pro-week figure. Each account's window set is read once per request.
     let revisions = state.pricing.revisions();
-    // Both spend reads are in, so the fold applies the poll's rows in one call, and before the passes, so a session
-    // the fill named reads its figures in this poll.
-    state.spend.fold(poll, &revisions, &state.tables, now);
     let prices = revisions.in_force(now);
     let rates = BurnRates {
         dollars: prices.rate_table(),
@@ -553,8 +546,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             // Without a pin the serving account is the ledger's: the newest attempt of the newest request.
             entry.account_id = a.account_id;
         }
-        // The fold picks its user agent among the served requests alone, so a session whose every request was refused
-        // keeps the agent of its newest one, and the fold's own replaces it below where the fold holds a served one.
+        // The totals pick their user agent among the served requests alone, so a session whose every request was
+        // refused keeps the agent of its newest one, which the totals' own replaces below where one was served.
         entry.user_agent = a.user_agent;
     }
     for (key, view) in &engine {
@@ -733,23 +726,23 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.first_request_at = identity.and_then(|i| i.first_request_at);
         entry.placements = placements.get(key).copied().unwrap_or(0);
     }
-    // The spend is the fold's over the session's life and carries the count Requests reads, so Requests and Cost read
-    // the same requests. The two newest instants take the later of the activity's and the fold's over the session's
-    // life, after the retention above read the activity's alone, so the rows it keeps do not move.
-    let fold = state.spend.read();
+    // The spend reads the session's totals and carries the count Requests reads, so Requests and Cost read the same
+    // requests. The two newest instants take the later of the activity's and the totals', after the retention above
+    // read the activity's alone, so the rows it keeps do not move.
     for (key, entry) in rows.iter_mut() {
-        let Some(figures) = fold.answer(key, now) else {
+        let Some(figures) = figures.get(key) else {
             continue;
         };
         entry.last_request_at = entry.last_request_at.max(figures.last_request_at);
         entry.last_inference_at = entry.last_inference_at.max(figures.last_inference_at);
-        if let Some(user_agent) = figures.user_agent {
-            entry.user_agent = user_agent;
+        if let Some(user_agent) = &figures.user_agent {
+            entry.user_agent = user_agent.clone();
         }
-        entry.spend = figures.spend;
-        entry.day = figures.day;
-        entry.agent_requests = figures.agent_requests;
-        // The fold prices by the tier a row recorded, so a share of a window the account's set lacks today is dropped
+        entry.spend = (figures.spend.requests > 0 || figures.probes.requests > 0)
+            .then(|| spend_of(&figures.spend, &figures.probes));
+        entry.day = day_of(&figures.day);
+        entry.agent_requests = figures.agents.iter().map(agent_of).collect();
+        // The totals price by the tier a row recorded, so a share of a window the account's set lacks today is dropped
         // at the answer, as the request list drops it. The account's key stays, since it marks that a plan paid.
         if let Some(spend) = entry.spend.as_mut() {
             strip_lacked(spend, &lacked);
@@ -758,7 +751,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             strip_lacked(&mut agent.spend, &lacked);
         }
     }
-    fold.retain(|key| rows.contains_key(key), now, state.session_expiry);
     let mut out: Vec<Session> = rows.into_values().collect();
     let latest = |row: &Session| {
         row.last_used_at

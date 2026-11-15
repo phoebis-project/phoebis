@@ -1319,43 +1319,44 @@ a "+N" for the agents pinned on another account. A session that a round's move o
 an account reads no badge. While a Model or an Account filter stands, that column's "+N" takes the accent tone where one
 of the agents it names matches every Agents filter. A row with no account reads a dash.
 
-Requests counts the session's client requests over its life under its key, the ones the router refused before any
+Requests counts the session's client requests the retention keeps under its key, the ones the router refused before any
 account was asked left out, with its last request's age under it and the instant on hover, and "View in requests" lists
 the refused ones with the rest, so a session whose every request was refused still opens its analytics and its request
-log. Cost reads the spend of the same requests, which the same fold of the ledger answers as the Requests count: under
-Native the session's share of the chosen week, and under the other positions its dollars as the request log's Cost cell
-reads a request, then a `+$` badge where its requests billed dollars beside a plan figure and a "+N" naming every other
-account the requests spent on, by a plan share or by billed dollars. The badge's hover leads with "Other accounts the
-requests spent on:", and a billed account's line reads `{label}, {dollars} billed in dollars`. The cell's hover counts
-the requests, reads the figure in full with the account's shares of its windows where the requests spent on one account,
-the dollars billed by funding and the probes' figure. Under the figure stands the pin's burn per hour as the Unit
-setting reads it. A plan pin reads its share of the chosen week per hour under Native, `0.09% Ultra week/h`, its plan
-dollars per hour at the API price list under All in dollars and Dollar equivalent, `$0.12/h`, and a dash under Billed
-dollars. A billed pin reads its dollars per hour under Native, All in dollars and Billed dollars, and a dash under
-Dollar equivalent. The hover keeps the pin's share of the account's own window, and no line stands where the figure its
-position needs reads null. A session with no ledgered request reads a dash with "No ledgered request yet". Last used,
-the last use the sort reads, is the newest use across the session's conversation pins, main's and its agents'. On a
-session no mod reports, `expires in {span}` stands under it and counts to the instant the router stops listing the
-session, the lesser of the non-companion timeout and the session expiry after the latest of its last use, its last
-request and, where its companion ended the session, that end, with "The router stops listing this session at {time}" on
-hover. A companion session reads no such line. Cache reads main's pin `warm` within its cache TTL of the pin's last
-refresh, the last turn that rewrote its prefix, or `cold` past it, a pin with no refresh on record reading `cold` until
-the next turn or probe that refreshes it, with the recipe's state word under it (main's recipe, or the newest other
-agent's where main holds none) or `no recipe`, and `no pin` on a row with no pin, the pin's, the state's and the cause's
-sentences and the next probe on hover. Of the optional columns, Companion reads the mod's state, `reporting` with `seen
-{ago}` under it, `silent` with how long it has been silent, or `none`. Context reads main's context in tokens, `184K`,
-with a dash for a session with no pin or no figure, and Effort the effort of its pin's last turn, `high`, with a dash
-for none, both from main's conversation pin (or, where main holds none, the newest conversation pin of another agent).
-Created reads the session's first request as an age with the instant on hover, and Key links to the key's row in the
-Keys view, with `deleted holder` under an earlier holder's. Last request reads the last request's instant, or `none`.
-Next probe reads the instant, "pending" or "not scheduled". Runway reads the time until the projection of the pin's
-account reaches the ceiling of the window that binds, among those the pin's model draws: a span such as `6 h 55 min`,
-`none` where the runway is gone, `unbounded` where nothing burns or where the runway would reach the window's next reset
-or the account's end, and a dash for an unpinned row or a pinned row with no projection. On a pinned row whose pin
-carries a cycle its hover reads `cycle 20 s`, the gap between the session's requests the slow-down's hold is sized from.
-Before the first session the card reads "No live sessions" with "A session appears here on its first request, or as
-soon as the companion mod registers it, and leaves when the router stops listing it." While the filters hide every row
-the router lists, the card reads "No sessions kept by the filters" with `{h} sessions hidden by the filters.`
+log. Cost reads the spend of the same requests from the ledger's per-session totals, which hold the Requests count too:
+under Native the session's share of the chosen week, and under the other positions its dollars as the request log's Cost
+cell reads a request, then a `+$` badge where its requests billed dollars beside a plan figure and a "+N" naming every
+other account the requests spent on, by a plan share or by billed dollars. The badge's hover leads with "Other accounts
+the requests spent on:", and a billed account's line reads `{label}, {dollars} billed in dollars`. The cell's hover
+counts the requests, reads the figure in full with the account's shares of its windows where the requests spent on one
+account, the dollars billed by funding and the probes' figure. Under the figure stands the pin's burn per hour as the
+Unit setting reads it. A plan pin reads its share of the chosen week per hour under Native, `0.09% Ultra week/h`, its
+plan dollars per hour at the API price list under All in dollars and Dollar equivalent, `$0.12/h`, and a dash under
+Billed dollars. A billed pin reads its dollars per hour under Native, All in dollars and Billed dollars, and a dash
+under Dollar equivalent. The hover keeps the pin's share of the account's own window, and no line stands where the
+figure its position needs reads null. A session with no ledgered request reads a dash with "No ledgered request yet".
+Last used, the last use the sort reads, is the newest use across the session's conversation pins, main's and its
+agents'. On a session no mod reports, `expires in {span}` stands under it and counts to the instant the router stops
+listing the session, the lesser of the non-companion timeout and the session expiry after the latest of its last use,
+its last request and, where its companion ended the session, that end, with "The router stops listing this session at
+{time}" on hover. A companion session reads no such line. Cache reads main's pin `warm` within its cache TTL of the
+pin's last refresh, the last turn that rewrote its prefix, or `cold` past it, a pin with no refresh on record reading
+`cold` until the next turn or probe that refreshes it, with the recipe's state word under it (main's recipe, or the
+newest other agent's where main holds none) or `no recipe`, and `no pin` on a row with no pin, the pin's, the state's
+and the cause's sentences and the next probe on hover. Of the optional columns, Companion reads the mod's state,
+`reporting` with `seen {ago}` under it, `silent` with how long it has been silent, or `none`. Context reads main's
+context in tokens, `184K`, with a dash for a session with no pin or no figure, and Effort the effort of its pin's last
+turn, `high`, with a dash for none, both from main's conversation pin (or, where main holds none, the newest
+conversation pin of another agent). Created reads the session's first request as an age with the instant on hover, and
+Key links to the key's row in the Keys view, with `deleted holder` under an earlier holder's. Last request reads the
+last request's instant, or `none`. Next probe reads the instant, "pending" or "not scheduled". Runway reads the time
+until the projection of the pin's account reaches the ceiling of the window that binds, among those the pin's model
+draws: a span such as `6 h 55 min`, `none` where the runway is gone, `unbounded` where nothing burns or where the runway
+would reach the window's next reset or the account's end, and a dash for an unpinned row or a pinned row with no
+projection. On a pinned row whose pin carries a cycle its hover reads `cycle 20 s`, the gap between the session's
+requests the slow-down's hold is sized from. Before the first session the card reads "No live sessions" with "A session
+appears here on its first request, or as soon as the companion mod registers it, and leaves when the router stops
+listing it." While the filters hide every row the router lists, the card reads "No sessions kept by the filters" with
+`{h} sessions hidden by the filters.`
 
 A row's menu offers "View in analytics" and "View in requests" once the session has a ledgered request, each disabled
 with "No ledgered request yet" on hover before it, and "View in routing log", which opens the log on that session's
