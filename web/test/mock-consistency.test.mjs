@@ -751,6 +751,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === (Date.parse(r.at) < created ? generation : created)), 'each request row carries the holder it ran under');
   });
 
+  test(`the burn answer under a bare key id leaves an earlier holder's rows out, at ${at}`, async () => {
+    const s = await story;
+    // The live desktop key and its earlier holder both have rows inside the day, as the case above holds.
+    const burn = await s.api.getAnalyticsBurn({ from: iso(s.now - DAY), to: iso(s.now) }, 'key', { keyIds: ['desktop'] });
+    assert.deepEqual([...new Set(burn.points.map((p) => p.group))], ['desktop']);
+  });
+
   test(`the earlier holder's session row reads its own requests inside the session expiry and is listed while its last request is inside the non-companion timeout, at ${at}`, async () => {
     const s = await story;
     const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);

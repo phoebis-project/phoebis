@@ -446,6 +446,28 @@ test('the placements read sends the range and the key and pool lists, the budget
   );
 });
 
+test('the burn read sends the key and pool filters', async () => {
+  const calls = stub(() => answer(200, {}));
+  await new HttpApi().getAnalyticsBurn({ from: '1970-01-01T00:00:00.000Z', to: '1970-01-02T00:00:00.000Z' }, 'key', { keyIds: ['desktop', 'ci@1'], poolIds: ['all'] });
+  const url = new URL(calls[0].url, 'http://x');
+  assert.deepEqual([url.searchParams.get('keys'), url.searchParams.get('pools')], ['desktop,ci@1', 'all']);
+});
+
+test('the rewrites read sends the account and pool filters', async () => {
+  const calls = stub(() => answer(200, {}));
+  await new HttpApi().getAnalyticsRewrites({ from: '1970-01-01T00:00:00.000Z', to: '1970-01-02T00:00:00.000Z' }, { accountIds: ['primary'], poolIds: ['all'] });
+  const url = new URL(calls[0].url, 'http://x');
+  assert.deepEqual([url.searchParams.get('accounts'), url.searchParams.get('pools')], ['primary', 'all']);
+});
+
+test('the placements read sends the model and the client patterns', async () => {
+  const calls = stub(() => answer(200, { rows: [] }));
+  await new HttpApi().analyticsPlacements({ clients: ['claude-code/*', 'other'], from: '1970-01-01T00:00:00.000Z', models: ['claude-opus-5'], to: '1970-01-02T00:00:00.000Z' });
+  const url = new URL(calls[0].url, 'http://x');
+  // One pattern per line, since a pattern may hold a comma.
+  assert.deepEqual([url.searchParams.get('models'), url.searchParams.get('clients')], ['claude-opus-5', 'claude-code/*\nother']);
+});
+
 test('getSession answers null on 401 without running the hook', async () => {
   let unauthorized = 0;
   setHooks({ onForbidden: () => undefined, onUnauthorized: () => { unauthorized += 1; } });

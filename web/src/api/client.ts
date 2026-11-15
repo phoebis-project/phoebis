@@ -202,10 +202,10 @@ export interface Api {
   /** Every budgeted member's spend in its current period; the route reads no range and no filter. */
   analyticsBudgets(): Promise<MemberBudget[]>;
   /**
-   * Sends the range and the key and pool lists alone: the page's other filters do not narrow this card, though the
-   * route would take them.
+   * Sends the range, the account, key, model and pool lists and the client and user agent patterns. It sends no probe
+   * flag, so the route counts no probe whatever the page's toggle says.
    */
-  analyticsPlacements(query: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>): Promise<PlacementRow[]>;
+  analyticsPlacements(query: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'from' | 'keyIds' | 'models' | 'poolIds' | 'to' | 'userAgents'>): Promise<PlacementRow[]>;
   cancelPairing(pairingId: string): Promise<void>;
   clearCooldown(accountId: string, scope: string): Promise<void>;
   clearFunding(accountId: string): Promise<void>;
@@ -228,17 +228,21 @@ export interface Api {
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping a subscription account's row carries its shares. */
   getAnalyticsBreakdown(query: AnalyticsQuery): Promise<AnalyticsGroup[]>;
   /**
-   * The route reads the range, the grouping, the Accounts filter and the user agent groups, and no other filter of the
-   * page narrows it. Naming exactly one account answers that account's shares and unit under any grouping.
+   * The route reads the range, the grouping, the Accounts, Keys and Pools filters and the user agent groups, and no
+   * other filter of the page narrows it. Naming exactly one account answers that account's shares and unit under any
+   * grouping.
    */
-  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'keyIds' | 'poolIds' | 'userAgentGroups'>): Promise<{ bucketSeconds: number; points: BurnPoint[] }>;
   /** Every guardrail's matches over the range, every key's: the route reads no filter. */
   getAnalyticsGuardrails(range: GuardrailRange): Promise<GuardrailCounts>;
   /** The route reads the Accounts filter alone: its windows are the trailing 30 days, whatever the page's range. */
   getAnalyticsReconciliations(filters?: Pick<AnalyticsQuery, 'accountIds'>): Promise<ReconciliationsAnswer>;
   /** The answers the upstream refused in range by category, read off the attempts at the request, the outcome staying succeeded. */
   getAnalyticsRefusalCategories(query: AnalyticsQuery): Promise<RefusalCategoriesAnswer>;
-  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>): Promise<RewritesAnswer>;
+  /**
+   * The moves and the rewrite tokens keep the named accounts' rows, and the held time the named accounts' and pools'.
+   */
+  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds' | 'poolIds'>): Promise<RewritesAnswer>;
   /** `funding` keeps the billed or the plan-funded rows. Under the account grouping each point's subscription groups carry their shares. */
   getAnalyticsSeries(query: AnalyticsQuery): Promise<AnalyticsPoint[]>;
   /** The weekly resets of the span per subscription account, the Accounts filter alone narrowing it. */

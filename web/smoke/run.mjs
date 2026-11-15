@@ -19674,6 +19674,47 @@ await forView('/analytics', async () => {
 });
 
 await forView('/analytics', async () => {
+  // The Burn cards, Migration rewrites and Placements by rung each send a filter of the bar in a read of their own, so
+  // a filter the page does not hand on, or one the mock's answer does not apply, draws the whole day's figures. The
+  // figures are the story's over the day to 14:30: its rollups, account rollups and request rows (mock/requests.ts)
+  // and its routing events (mock/routingLog.ts).
+  const cardOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  localStorage.removeItem('phoebis.unit');
+  {
+    // The day's key groups are bench, ci, desktop, the desktop key's earlier holder, fleet, laptop and notebook, and a
+    // bare desktop names the live holder alone.
+    const page = await mount('/analytics?by=key&keys=desktop#burn', { now: CLOCK_ORIGIN });
+    const legend = [...(cardOf(page, 'Spend per minute')?.querySelectorAll('.legend li') ?? [])].map((li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''));
+    page.unmount();
+    results.push({ name: '/analytics the Burn tab grouped by key under one key of the Keys filter draws that key alone', ok: JSON.stringify(legend) === JSON.stringify(['desktop']), missing: legend });
+  }
+  {
+    // Primary's moves of the day are its rollup's move in at 10:00, whose turn files it as winding down, and the move
+    // its funding requirement forced off overflow at 11:31. The whole day holds 17 moves under seven reasons.
+    const page = await mount('/analytics?accounts=primary', { now: CLOCK_ORIGIN });
+    const moves = [...(cardOf(page, 'Migration rewrites')?.querySelectorAll('.hbars--moves li') ?? [])].map((li) => [li.querySelector('.hbars__label')?.textContent?.trim() ?? '', li.querySelector('.hbars__value')?.textContent?.trim() ?? '']);
+    page.unmount();
+    results.push({
+      name: "/analytics Migration rewrites under one account of the Accounts filter lists that account's moves alone",
+      ok: JSON.stringify(moves) === JSON.stringify([['Winding down', '1'], ['Funding required', '1']]),
+      missing: moves.map((m) => m.join(' ')),
+    });
+  }
+  {
+    // Sonnet 4.5 placed 8 of the day's 19 traced attempts: 2 by their messages, one of them a hit, 5 by the static
+    // prefix, 4 of them hits, and the one beside the main conversation, a hit.
+    const page = await mount('/analytics?models=claude-sonnet-4-5#cache', { now: CLOCK_ORIGIN });
+    const rows = [...(cardOf(page, 'Placements by rung')?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].slice(0, 3).map((td) => td.textContent?.trim() ?? ''));
+    page.unmount();
+    results.push({
+      name: "/analytics Placements by rung under one model of the Models filter counts that model's placements alone",
+      ok: JSON.stringify(rows) === JSON.stringify([['by its messages', '2', '1'], ['by its static prefix', '5', '4'], ['with the main conversation', '1', '1']]),
+      missing: rows.map((r) => r.join(' ')),
+    });
+  }
+});
+
+await forView('/analytics', async () => {
   // The route's answer with three refusals in its first group's map and its counts as they were: the Traffic line
   // reads as it did, the Refused column and the Refusals by code card read the three, and Errors by code holds none.
   const refusedCheck = '/analytics the Refused column, the Refusals by code card and the Traffic line read a refused group apart from the counts';
@@ -21067,8 +21108,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [JSON.stringify(probeTile), JSON.stringify({ billed: billed.probeCostUsd, probe, probes: [probeCount(whole), probeCount(billed)] })],
       });
       // The route counts a migrated probe in `ok` and in `migrated`, so Probes by outcome's OK is the totals' `ok` less
-      // `migrated`, the totals the page sums off its own breakdown.
-      const outcomes = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes !== true)) ?? []);
+      // `migrated`, the totals of the tab's breakdown that counts probes.
+      const outcomes = sumGroups((await answerOf((q) => q.groupBy === 'key' && q.funding === undefined && q.includeProbes === true)) ?? []);
       const okValue = legendOf('Probes by outcome').find((i) => i.label === 'OK')?.value ?? null;
       results.push({
         name: "/analytics Probes by outcome's legend counts a migrated probe once, its OK the range's ok less the migrated probes the route counts in both",
@@ -21246,16 +21287,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [`template ${template?.key}`, JSON.stringify(tiles), JSON.stringify(legend)],
       });
     }
+    // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
+    // does not, so the two cases below drop it from the mock's groups.
+    const probesCounted = (q, groups) => (q.includeProbes ? groups : groups.filter((g) => g.requests > 0 || g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed === 0));
     {
-      // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
-      // does not, so the wrapper drops it here: grouped by kind with Include probes off, the probe kind is such a
-      // group, and the tile keeps its figures only while the Cache warming reads count probes.
-      const probeCount = (g) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
+      // Grouped by kind with Include probes off, the probe kind is such a group, and the tile keeps its figures only
+      // while the Cache warming reads count probes.
       const breakdownOf = api.getAnalyticsBreakdown;
-      api.getAnalyticsBreakdown = async (q) => {
-        const groups = await breakdownOf.call(api, q);
-        return q.includeProbes ? groups : groups.filter((g) => g.requests > 0 || probeCount(g) === 0);
-      };
+      api.getAnalyticsBreakdown = async (q) => probesCounted(q, await breakdownOf.call(api, q));
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
       const kinds = await mount('/analytics?by=kind#cache-warming', { now: CLOCK_ORIGIN });
@@ -21279,6 +21318,37 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: "/analytics under native grouped by kind with Include probes off the Probe cost tile reads the probe kind's plan figure and billed dollars, a group a read that does not count probes drops",
         ok: q?.includeProbes === false && dropped && want !== null && JSON.stringify(lines) === JSON.stringify(want),
         missing: [`query ${JSON.stringify(q)}`, `dropped ${dropped}`, JSON.stringify(lines), JSON.stringify(want)],
+      });
+    }
+    {
+      // Grouped by kind with Include probes off, the probe kind is such a group in each bucket that holds a probe, so
+      // the series drops it point by point as the breakdown does, and Probes by outcome draws its bars and its legend
+      // only while its own reads count probes. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
+      // mock/requests.ts) over the day to 14:30: 30 ok of which 11 migrated, 1 held, 32 skipped and 4 failed, in 18
+      // hourly buckets that stack 37 nonzero bars. jsdom lays nothing out, so the chart's container reads a browser's
+      // size here.
+      const breakdownOf = api.getAnalyticsBreakdown;
+      const seriesOf = api.getAnalyticsSeries;
+      api.getAnalyticsBreakdown = async (q) => probesCounted(q, await breakdownOf.call(api, q));
+      api.getAnalyticsSeries = async (q) => (await seriesOf.call(api, q)).map((p) => ({ ...p, groups: probesCounted(q, p.groups) }));
+      const measure = window.HTMLElement.prototype.getBoundingClientRect;
+      window.HTMLElement.prototype.getBoundingClientRect = function () {
+        return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+      };
+      localStorage.removeItem('phoebis.unit');
+      const kinds = await mount('/analytics?by=kind#cache-warming', { now: CLOCK_ORIGIN });
+      await kinds.settle();
+      const chart = [...kinds.container.querySelectorAll('#cache-warming .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Probes by outcome');
+      const legend = [...(chart?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+      const bars = chart?.querySelectorAll('path.recharts-rectangle').length ?? 0;
+      window.HTMLElement.prototype.getBoundingClientRect = measure;
+      kinds.unmount();
+      delete api.getAnalyticsBreakdown;
+      delete api.getAnalyticsSeries;
+      results.push({
+        name: '/analytics Probes by outcome counts probes with the toggle off',
+        ok: JSON.stringify(legend) === JSON.stringify([['OK', '19'], ['Migrated', '11'], ['Held', '1'], ['Skipped', '32'], ['Failed', '4']]) && bars === 37,
+        missing: [JSON.stringify(legend), `${bars} bars`],
       });
     }
     {

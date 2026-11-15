@@ -207,7 +207,7 @@ export async function readBurn(
   source: Pick<Api, 'getAnalyticsBurn' | 'listAccounts'>,
   range: Pick<AnalyticsQuery, 'from' | 'to'>,
   groupBy: BurnGroup,
-  filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {},
+  filters: Pick<AnalyticsQuery, 'accountIds' | 'keyIds' | 'poolIds' | 'userAgentGroups'> = {},
 ): Promise<{ accounts: Account[]; answer: { bucketSeconds: number; points: BurnPoint[] } }> {
   const sizes = groupBy === 'account' || filters.accountIds?.length === 1;
   const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy, filters), sizes ? source.listAccounts() : Promise.resolve<Account[]>([])]);

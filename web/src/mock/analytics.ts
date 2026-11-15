@@ -513,17 +513,25 @@ const BURN_SESSIONS = 20;
  */
 const burnGroupOf = (groupBy: BurnGroup, named: string[]): ((r: HourlyRollup) => string) => (groupBy === 'session' ? (r) => r.sessionId : groupKeyOf(groupBy, named));
 
-export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'> = {}): { bucketSeconds: number; points: BurnPoint[] } {
+export function burnOf(rows: HourlyRollup[], range: Range, groupBy: BurnGroup, filters: Pick<AnalyticsQuery, 'accountIds' | 'keyIds' | 'poolIds' | 'userAgentGroups'> = {}): { bucketSeconds: number; points: BurnPoint[] } {
   const { bucketMs, slotOf, starts } = bucketsOf(range);
   const first = starts[0] ?? 0;
   const end = (starts[starts.length - 1] ?? 0) + bucketMs;
   const accounts = filters.accountIds ?? [];
+  const keys = filters.keyIds ?? [];
+  const pools = filters.poolIds ?? [];
   const groupOf = burnGroupOf(groupBy, filters.userAgentGroups ?? []);
   const sums = new Map<string, Map<number, BurnSum>>();
   for (const r of rows) {
     const hour = Date.parse(r.hour);
     // The route prices a row by its account's kind and skips a row whose account left the registry.
-    const kept = hour >= first && hour < end && accountById.has(r.accountId) && (accounts.length === 0 || accounts.includes(r.accountId));
+    const kept =
+      hour >= first &&
+      hour < end &&
+      accountById.has(r.accountId) &&
+      (accounts.length === 0 || accounts.includes(r.accountId)) &&
+      (keys.length === 0 || keys.some((selector) => selectsKey(selector, r))) &&
+      (pools.length === 0 || pools.includes(r.poolId));
     if (!kept) continue;
     const at = starts[slotOf(hour)];
     const oauth = accountById.get(r.accountId)?.kind === 'oauth';
@@ -630,20 +638,26 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
  * would tell a lapse the story holds nowhere, so no cause joins the turns. `moves` is each reason's sum over its fits,
  * as the route answers it. The held time per bucket folds the request rows as the ledger folds the completions, since
  * no account rollup the console reads carries it: the slow-down waits of the bucket's requests summed, and the
- * requests that waited one.
+ * requests that waited one. The moves and the rewrite tokens keep the named accounts' rows, and the held time the named
+ * accounts' and pools', since the account rollups carry no pool.
  */
-export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], events: readonly RoutingEvent[], range: Range): RewritesAnswer {
+export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], events: readonly RoutingEvent[], range: Range, filters: Pick<AnalyticsQuery, 'accountIds' | 'poolIds'> = {}): RewritesAnswer {
   const { slotOf, starts } = bucketsOf(range);
+  const accounts = filters.accountIds ?? [];
+  const pools = filters.poolIds ?? [];
+  const ofAccounts = (accountId: string) => accounts.length === 0 || accounts.includes(accountId);
   // Placed in their buckets in one pass, as the series places its rows: the rollups that moved a pin in, each with its
   // parsed hour, and the requests that waited on a slow-down, each with its summed wait.
   const moved = starts.map((): { hour: number; r: AccountRollup }[] => []);
   for (const r of rollups) {
-    if (r.pins.migratedIn === 0) continue;
+    if (r.pins.migratedIn === 0 || !ofAccounts(r.accountId)) continue;
     const hour = Date.parse(r.hour);
     moved[slotOf(hour)]?.push({ hour, r });
   }
   const slowedMs = starts.map((): number[] => []);
   for (const r of requests) {
+    // The ledger files a request no attempt served under the unattributed id, as its rollups key the row.
+    if (!ofAccounts(r.accountId ?? '-') || (pools.length > 0 && !pools.includes(r.poolId ?? '-'))) continue;
     const slowed = (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down');
     if (slowed.length > 0) slowedMs[slotOf(Date.parse(r.at))]?.push(sumOf(slowed, (w) => w.heldMs));
   }
@@ -667,7 +681,7 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
   // move's word stands in its serving attempt's trace, so the ledger books that attempt's cache write as rewrite tokens.
   for (const e of events) {
     const slot = slotOf(startOfHour(Date.parse(e.at)));
-    if (forcedReasons(e) === null || starts[slot] === undefined) continue;
+    if (forcedReasons(e) === null || starts[slot] === undefined || !ofAccounts(e.accountId ?? '-')) continue;
     addMove(typeof e.detail.reason === 'string' ? e.detail.reason : 'unknown', typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown', 1);
     const served = requests.find((r) => r.keyId === e.keyId && r.sessionId === e.sessionId && r.canonicalModel === e.model && r.at === e.at);
     if (served) points[slot].rewriteTokens += served.usage.cacheWrite5m + served.usage.cacheWrite1h;
@@ -678,11 +692,26 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
 }
 
 /**
- * Placements by rung off the request rows' traces, as the route counts them: each attempt that placed and carried
- * usage, a hit by the rule the request drawer reads its cache line by. The route narrows by the range and the key
- * and pool lists here.
+ * Whether a request row passes the account, model and pattern filters as the request routes match a row: the serving
+ * attempt's account, with a request no attempt served under the unattributed id as the request log files it, the
+ * canonical model, and a pattern as the rollups key a row, the client as recorded and the user agent folded to its
+ * first product token, each `-` where the request named none.
  */
-export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>): PlacementRow[] {
+function passesRequestFilters(r: RequestLog, q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'models' | 'userAgents'>): boolean {
+  if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) return false;
+  if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) return false;
+  if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) return false;
+  if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) return false;
+  return true;
+}
+
+/**
+ * Placements by rung off the request rows' traces, as the route counts them: each attempt that placed and carried
+ * usage, a hit by the rule the request drawer reads its cache line by. The route narrows by the range, the accounts,
+ * the keys, the pools, the models and the client and user agent patterns here. It leaves the probes out too, and no
+ * probe places in the story.
+ */
+export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'from' | 'keyIds' | 'models' | 'poolIds' | 'to' | 'userAgents'>): PlacementRow[] {
   const fromMs = Date.parse(q.from);
   const toMs = Date.parse(q.to);
   const byRung = new Map<string, Omit<PlacementRow, 'hitShare'>>();
@@ -691,6 +720,7 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'fr
     if (at < fromMs || at > toMs) continue;
     if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
     if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) continue;
+    if (!passesRequestFilters(r, q)) continue;
     for (const a of r.attempts) {
       const placement = a.selection?.placement ?? null;
       const read = a.selection?.cacheRead ?? null;
@@ -723,16 +753,11 @@ export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): 
   for (const r of requests) {
     const at = Date.parse(r.at);
     if (at < fromMs || at > toMs) continue;
-    // The serving attempt's account, with a request no attempt served under the unattributed id, as the request log
-    // files it.
-    if (q.accountIds?.length && !q.accountIds.includes(r.accountId ?? '-')) continue;
+    if (!passesRequestFilters(r, q)) continue;
     if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
     if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) continue;
-    if (q.models?.length && !q.models.some((m) => m.toLowerCase() === r.canonicalModel)) continue;
     if (q.kinds?.length && !q.kinds.includes(r.kind)) continue;
     if (r.kind === 'probe' && !q.includeProbes && !q.kinds?.includes('probe')) continue;
-    if (q.userAgents?.length && !q.userAgents.some((p) => matchesPattern(p, agentTokenOf(r.userAgent)))) continue;
-    if (q.clients?.length && !q.clients.some((p) => matchesPattern(p, r.client ?? '-'))) continue;
     if (r.fallbackDigest !== null) fallbacks += 1;
     const answer = servingResponse(r);
     if (answer?.stopReason !== 'refusal') continue;

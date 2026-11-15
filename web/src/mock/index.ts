@@ -814,7 +814,7 @@ export class MockApi implements Api {
     return latency(members.sort((a, b) => a.poolId.localeCompare(b.poolId) || a.accountId.localeCompare(b.accountId)));
   }
 
-  analyticsPlacements(query: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) {
+  analyticsPlacements(query: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'from' | 'keyIds' | 'models' | 'poolIds' | 'to' | 'userAgents'>) {
     return latency(placementsOf(ledger().requests, query));
   }
 
@@ -1075,7 +1075,7 @@ export class MockApi implements Api {
     return latency(breakdownOf(ledger().rollups, query));
   }
 
-  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'userAgentGroups'>) {
+  getAnalyticsBurn(range: Pick<AnalyticsQuery, 'from' | 'to'>, groupBy: BurnGroup, filters?: Pick<AnalyticsQuery, 'accountIds' | 'keyIds' | 'poolIds' | 'userAgentGroups'>) {
     return latency(burnOf(ledger().rollups, range, groupBy, filters));
   }
 
@@ -1114,9 +1114,9 @@ export class MockApi implements Api {
     return latency(refusalCategoriesOf(ledger().requests, query));
   }
 
-  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>) {
+  getAnalyticsRewrites(range: Pick<AnalyticsQuery, 'from' | 'to'>, filters?: Pick<AnalyticsQuery, 'accountIds' | 'poolIds'>) {
     const { accountRollups, requests, routingEvents } = ledger();
-    return latency(rewritesOf(accountRollups, requests, routingEvents, range));
+    return latency(rewritesOf(accountRollups, requests, routingEvents, range, filters));
   }
 
   getAnalyticsSeries(query: AnalyticsQuery) {

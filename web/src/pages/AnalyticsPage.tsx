@@ -340,7 +340,8 @@ export function AnalyticsPage() {
   const series = useGatedRead(sessionId === null, () => api.getAnalyticsSeries(query), [query, sessionId, generation], reload);
   const breakdown = useGatedRead(sessionId === null, () => api.getAnalyticsBreakdown(query), [query, sessionId, generation], reload);
   const byModel = useGatedRead(tab === 'cache' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'model' }), [query, sessionId, tab, generation], reload);
-  const byPool = useGatedRead(tab === 'cache-warming' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool' }), [query, sessionId, tab, generation], reload);
+  // The Cache warming tab counts probe rows whatever the toggle says, its by-pool table among its figures.
+  const byPool = useGatedRead(tab === 'cache-warming' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'pool', includeProbes: true }), [query, sessionId, tab, generation], reload);
   // The log's last answer with the deps it answers, so an auto reload of the same deps reads the first page alone and
   // the later pages stand as the walk loaded them. Other deps walk the pages again. The ref names the current deps from
   // the moment a read starts, so a read under earlier deps that settles later keeps nothing.
@@ -378,9 +379,9 @@ export function AnalyticsPage() {
     tab === 'burn',
     () => {
       const readAt = clock.now();
-      return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
+      return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, keyIds: filters.keyId, poolIds: filters.poolId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
     },
-    [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation],
+    [fromIso, toIso, pageBy, filters.accountId, filters.keyId, filters.poolId, agentGroups, tab, generation],
     reload,
   );
   /** A read with the range's end and the instant it left at, so its card's last-bucket note reads its own answer. */
@@ -407,11 +408,16 @@ export function AnalyticsPage() {
   const costs = costSettings.data?.subscriptionCosts ?? null;
   const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
-  const rewrites = useGatedRead(tab === 'traffic', () => stamped(api.getAnalyticsRewrites({ from: fromIso, to: toIso }), clock.now()), [fromIso, toIso, tab, generation], reload);
+  const rewrites = useGatedRead(
+    tab === 'traffic',
+    () => stamped(api.getAnalyticsRewrites({ from: fromIso, to: toIso }, { accountIds: filters.accountId, poolIds: filters.poolId }), clock.now()),
+    [fromIso, toIso, filters.accountId, filters.poolId, tab, generation],
+    reload,
+  );
   const refusalCategories = useGatedRead(tab === 'traffic', () => api.getAnalyticsRefusalCategories(query), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useGatedRead(tab === 'traffic', () => api.getAnalyticsGuardrails({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
-  // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
+  // Side groupings on the page's own query, as byModel is. A session view folds them from the log.
   const bySpeed = useGatedRead((tab === 'traffic' || tab === 'cost') && sessionId === null, () => stamped(api.getAnalyticsSeries({ ...query, groupBy: 'speed' }), clock.now()), [query, sessionId, tab, generation], reload);
   const byEffort = useGatedRead(tab === 'traffic' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
@@ -436,6 +442,10 @@ export function AnalyticsPage() {
   // series counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost
   // there.
   const warmingSeries = useGatedRead(warming, () => api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }), [query, funding, funded, warming, generation], reload);
+  // Probes by outcome counts the probes of both sides. Under native and All in dollars the two reads above carry no
+  // funding and answer it, and under a dollar side, whose reads keep that side's rows, the chart reads the whole once
+  // more.
+  const probeSeries = useGatedRead(warming && funded, () => api.getAnalyticsSeries({ ...query, includeProbes: true }), [query, funded, warming, generation], reload);
   // Native pairs the whole read's plan probes with the billed probes' dollars, which no member of the whole carries, so
   // the Cache warming tab reads the billed rows once more, counting probes as the whole read does.
   const nativeWarming = warming && unit === 'native';
@@ -451,8 +461,8 @@ export function AnalyticsPage() {
   const fundedByPool = useGatedRead(poolFunding !== undefined, () => api.getAnalyticsBreakdown({ ...query, funding: poolFunding, groupBy: 'pool', includeProbes: true }), [query, poolFunding, generation], reload);
   const placements = useGatedRead(
     tab === 'cache' && sessionId === null,
-    () => api.analyticsPlacements({ from: fromIso, keyIds: filters.keyId, poolIds: filters.poolId, to: toIso }),
-    [fromIso, toIso, filters.keyId, filters.poolId, sessionId, tab, generation],
+    () => api.analyticsPlacements({ accountIds: filters.accountId, clients: a.clients, from: fromIso, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgents: a.userAgents }),
+    [fromIso, toIso, filters.accountId, filters.keyId, filters.model, filters.poolId, a.clients, a.userAgents, sessionId, tab, generation],
     reload,
   );
   const budgets = useAsync(() => (tab === 'burn' ? api.analyticsBudgets() : Promise.resolve(null)), [tab]);
@@ -518,7 +528,6 @@ export function AnalyticsPage() {
   const latest = useMemo(() => latestGenerations(rows), [rows]);
   const points = useMemo(() => (stale ? [] : sessionId === null ? (series.data ?? []) : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups }, latest)), [stale, sessionId, series.data, kept, rangeBucketMs, fromIso, toIso, groupBy, agentGroups, latest]);
   const buckets = useMemo(() => bucketsOf(points), [points]);
-  const probeBuckets = useMemo(() => buckets.map((b) => ({ ...b, probes: probeParts(b.probes) })), [buckets]);
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
@@ -547,7 +556,6 @@ export function AnalyticsPage() {
   // A session fold has no warming facts, so those figures read unavailable rather than zero.
   const { keptWarm } = totals;
   const probesUnmeasured = totals.fromRequests === true;
-  const probeTotals = probeParts(totals.probes);
   // The cost-bearing sections' rows under the position: the funded query's under a dollar side, the page's own under
   // the whole, and in a session view the rows folded by who paid for them.
   const costSeriesAnswer = costSeries.current?.answer;
@@ -577,8 +585,8 @@ export function AnalyticsPage() {
   const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
   const tileHint = namedAccount === null || oneGroup === null ? null : hintOf(namedAccount, oneGroup.costShares);
   const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || a.userAgents.length > 0 || a.clients.length > 0 || sessionId !== null || includeProbes;
-  // The rewrite and fit routes read the range alone, so every filter of the bar passes them by. The burn route reads
-  // the Accounts filter and the user agent groups beside it.
+  // The burn route reads the Accounts, Keys and Pools filters with the user agent groups, and the rewrites route the
+  // Accounts and Pools filters.
   const unfiltered = otherFilters || filters.accountId.length > 0;
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
   // The plan chart sizes its lines by tier where each group holds one account's rows.
@@ -637,6 +645,13 @@ export function AnalyticsPage() {
   const warmingPoints = warmingSeries.current ?? NO_POINTS;
   const billedWarmingPoints = nativeWarming ? billedWarmingSeries.current : null;
   const warmingLoading = warmingSeries.current === null || (nativeWarming && billedWarmingSeries.current === null);
+  // Under the whole the chart's legend reads the tab's breakdown, and under a dollar side it sums the chart's own
+  // buckets. A session view draws the page's fold of the log.
+  const probeAnswer = (funded ? probeSeries : warmingSeries).current;
+  const probeBuckets = useMemo(() => (sessionId === null ? bucketsOf(probeAnswer ?? NO_POINTS) : buckets).map((b) => ({ ...b, probes: probeParts(b.probes) })), [sessionId, probeAnswer, buckets]);
+  const probeTotals = probeParts(sessionId !== null ? totals.probes : funded ? sumGroups((probeAnswer ?? NO_POINTS).flatMap((p) => p.groups)).probes : costTotals.probes);
+  const probeLoading = sessionId === null ? probeAnswer === null || (!funded && costBreakdown.current === null) : loading;
+  const probeFailure = sessionId === null ? failed(funded ? probeSeries.error : (warmingSeries.error ?? costBreakdown.error)) : null;
   const byModelFundedAnswer = byModelFunded.current;
   const fundedModels = useMemo(() => new Map((byModelFundedAnswer ?? []).map((g) => [g.key, g])), [byModelFundedAnswer]);
   const fundedByPoolAnswer = fundedByPool.current;
@@ -1061,7 +1076,7 @@ export function AnalyticsPage() {
               <Tile label="Kept warm" value={loading ? null : keptWarm === null ? '-' : fmtInt(keptWarm.requests)} note={keptWarm === null ? UNAVAILABLE_NOTE : keptWarmNote(keptWarm)} />
             </div>
             <div className="grid-2 warming-grid">
-              <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(probeTotals[s.key]) }))}>
+              <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" failure={probeFailure} loading={probeLoading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(probeTotals[s.key]) }))}>
                 <BarChart data={probeBuckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
@@ -2606,7 +2621,8 @@ function BurnCharts({
 const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised, and one by the static prefix when it read at all";
 const PLACEMENT_UNFILTERED_NOTE = '. The account, model and pattern filters above do not apply here';
 
-/** Placements by rung over the range, narrowed by the key and pool filters, the two the route reads here. */
+/** Placements by rung over the range, narrowed by the Accounts, Keys, Pools, Models, Clients and User agents
+ *  filters. */
 function PlacementTable({ error, rows, unfiltered }: { error: string | null; rows: PlacementRow[] | null; unfiltered: boolean }) {
   return (
     <Card title="Placements by rung" subtitle={`${PLACEMENT_HINT}${unfiltered ? PLACEMENT_UNFILTERED_NOTE : ''}`} padded={false} className="card--table">
