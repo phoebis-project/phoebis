@@ -20058,11 +20058,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 }
 {
   // "Unused allowance by account" over the story's weekly resets (`WEEKLY_RESETS` in mock/routingLog.ts) and sunset's
-  // term end, the last four weeks whatever the range. The priced cases read the four weeks' 7-day shares each account
-  // left: secondary 0.61, 0.55, 0.7 and 0.58 of its week (2.44), sunset 0.54, 0.52, 0.48 and 0.57 (2.11, its newest
-  // the share its term's end left off its seed's 0.46), studio 0.44, 0.39, 0.5 and 0.47 (1.80), primary 0.32, 0.41,
-  // 0.27 and 0.38 (1.38) and nightly 0.18, 0.22, 0.15 and 0.29 (0.84). The smoke runs under TZ=UTC, so the term's end
-  // reads its UTC text.
+  // term end. The first mount reads under the 30-day range, which holds each account's four 7-day resets, so the
+  // priced cases read the four weeks' 7-day shares each account left: secondary 0.61, 0.55, 0.7 and 0.58 of its week
+  // (2.44), sunset 0.54, 0.52, 0.48 and 0.57 (2.11, its newest the share its term's end left off its seed's 0.46),
+  // studio 0.44, 0.39, 0.5 and 0.47 (1.80), primary 0.32, 0.41, 0.27 and 0.38 (1.38) and nightly 0.18, 0.22, 0.15
+  // and 0.29 (0.84). The smoke runs under TZ=UTC, so the term's end reads its UTC text.
   const DAY_MS = 24 * 3_600_000;
   const text = (el) => el?.textContent?.replace(/\s+/g, ' ').trim() ?? null;
   const instantOf = (ms) => `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${new Date(ms).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit' })}`;
@@ -20086,10 +20086,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
   };
   const end = Date.parse((await api.listAccounts()).find((a) => a.id === 'sunset').subscription.endsAt);
-  const SUBTITLE = "Each subscription account's weekly windows left unused at their resets, the last four weeks, under the Accounts filter. The range does not apply here";
-  const HEADS = ['Account', 'Resets', '7-day, last', '7-day, 4 weeks', 'Fable, last', 'Fable, 4 weeks'];
+  const SUBTITLE = "Each subscription account's weekly windows left unused at their resets in the range, under the Accounts filter. Last is the newest reset at or before the range's end";
+  const HEADS = ['Account', 'Resets', '7-day, last', '7-day, in range', 'Fable, last', 'Fable, in range'];
 
-  const page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const page = await mount('/analytics?range=30d#accounts', { now: CLOCK_ORIGIN });
   const native = read(page);
   results.push({
     name: '/analytics the Accounts section draws "Unused allowance by account" after Accounts in range, one row per subscription account with a weekly reset, the term-ended mark under its account',
@@ -20146,17 +20146,33 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       missing: [JSON.stringify(rowOf(pro, 'studio')), JSON.stringify(studioWant('pro')), JSON.stringify(pro?.totals ?? null), fleet('pro')],
     });
   }
-  // The card reads the last four weeks whatever the range, so a 1-hour range draws the same rows and reads nothing new.
+  // A range change reads the card again, once, over the new range and the week before it.
   const ranged = countCalls('getAnalyticsUnusedAllowance');
   await page.navigate('/analytics?range=1h#accounts');
-  const hour = read(page);
   ranged.restore();
   results.push({
-    name: '/analytics a 1-hour range draws the same unused allowance rows, the range not applying to the card',
-    ok: hour !== null && JSON.stringify(hour.rows) === JSON.stringify(native?.rows) && ranged.calls.length === 0,
-    missing: [JSON.stringify(hour?.rows ?? null), `${ranged.calls.length} reads`],
+    name: '/analytics a move to the 1-hour range reads the unused allowance card once, over the hour and the week before it',
+    ok: ranged.calls.length === 1 && Date.parse(ranged.calls[0][0].to) - Date.parse(ranged.calls[0][0].from) === 3_600_000 + 7 * DAY_MS,
+    missing: [`${ranged.calls.length} reads`, ...ranged.calls.map((c) => JSON.stringify(c))],
   });
   page.unmount();
+
+  // Under the default 24 hours no weekly reset of the story falls in the range, and each account's newest one stands
+  // in the week before it: studio's 7-day reset 2 d 14 h 40 m back (`WEEKLY_RESETS` in mock/routingLog.ts). Its row
+  // draws that reset as its last, the figure the first mount drew, beside the note, and its range's cell the dash.
+  const short = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
+  const shortRows = [...short.container.querySelectorAll('#accounts .card')]
+    .find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Unused allowance by account')
+    ?.querySelectorAll('tbody tr');
+  const studioRow = [...(shortRows ?? [])].find((tr) => text(tr.querySelector('td.col-fill a')) === 'studio');
+  const studioShort = studioRow && { cells: [...studioRow.children].slice(1, 4).map((td) => [text(td), td.querySelector('span[title]')?.getAttribute('title') ?? null]), notes: [...studioRow.querySelectorAll('td.col-fill .sub')].map(text) };
+  short.unmount();
+  const studioLast = native?.rows[native.ids.indexOf('studio')]?.[2] ?? null;
+  results.push({
+    name: '/analytics the Unused allowance card reads the week before a short range',
+    ok: studioLast !== null && studioLast !== '-' && JSON.stringify(studioShort) === JSON.stringify({ cells: [['0', null], [studioLast, null], ['-', 'No reset of this window in the range']], notes: ['no reset in range'] }),
+    missing: [JSON.stringify(studioShort ?? null), `the first mount's last ${studioLast}`],
+  });
 
   const filtered = countCalls('getAnalyticsUnusedAllowance');
   const one = await mount('/analytics?accounts=studio#accounts', { now: CLOCK_ORIGIN });
@@ -20164,15 +20180,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   filtered.restore();
   one.unmount();
   results.push({
-    name: '/analytics the Accounts filter narrows the unused allowance card to its account, over the last four weeks',
-    ok: JSON.stringify(narrowed?.ids) === '["studio"]' && filtered.calls.length > 0 && filtered.calls.every(([span, filters]) => JSON.stringify(filters) === '{"accountIds":["studio"]}' && Date.parse(span.to) - Date.parse(span.from) === 29 * DAY_MS),
+    name: '/analytics the Accounts filter narrows the unused allowance card to its account, over the range and the week before it',
+    ok: JSON.stringify(narrowed?.ids) === '["studio"]' && filtered.calls.length > 0 && filtered.calls.every(([span, filters]) => JSON.stringify(filters) === '{"accountIds":["studio"]}' && Date.parse(span.to) - Date.parse(span.from) === 8 * DAY_MS),
     missing: [JSON.stringify(narrowed?.ids ?? null), ...filtered.calls.map((c) => JSON.stringify(c))],
   });
   // Reserve holds no weekly reset in the story, so under a filter on it the table reads its empty row.
   const quiet = await mount('/analytics?accounts=reserve#accounts', { now: CLOCK_ORIGIN });
   const empty = read(quiet);
   quiet.unmount();
-  results.push({ name: '/analytics the unused allowance card reads its muted empty row where no account has a weekly reset', ok: JSON.stringify(empty?.empty) === JSON.stringify({ muted: true, text: 'No weekly reset in the last four weeks' }), missing: [JSON.stringify(empty)] });
+  results.push({ name: '/analytics the unused allowance card reads its muted empty row where no account has a weekly reset', ok: JSON.stringify(empty?.empty) === JSON.stringify({ muted: true, text: 'No weekly reset in the range or the week before it' }), missing: [JSON.stringify(empty)] });
   failNextCall('getAnalyticsUnusedAllowance', '/admin/analytics/unused_allowance', 'ledger locked');
   const failed = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   const down = read(failed);
@@ -20187,10 +20203,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   delete api.getSettings;
   results.push({ name: '/analytics with the settings read failing the unused allowance card draws its error state', ok: refused?.error === 'Could not load the unused allowance' && refused.ids.length === 0, missing: [JSON.stringify(refused)] });
 
-  // A weekly row changes once a week, so the card reads once per Accounts filter and again once the registry's read
-  // answers a weekly window past its reset, never at the list's 5 s cadence, under a custom range whose end is still
-  // ahead as under a preset. Under a preset the registry reads with the window, so a reset shows once the window next
-  // moves.
+  // A weekly row changes once a week, so the card reads once per range and Accounts filter and again once the
+  // registry's read answers a weekly window past its reset, never at the list's 5 s cadence, under a custom range whose
+  // end is still ahead as under a preset. Under a preset the registry reads with the window, so a reset shows once the
+  // window next moves.
   const cadence = countCalls('getAnalyticsUnusedAllowance');
   const watched = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   const mounted = cadence.calls.length;
@@ -20203,8 +20219,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   tick(5_000);
   await watched.settle();
   const unseen = cadence.calls.length;
-  // A range change moves the window here. A tick past the hour would also fire every timer of the pages this run
-  // keeps mounted, and their reads would count.
+  // A range change moves the window here, and the card reads once for the range and once more as the registry's answer
+  // moves primary's reset. A tick past the hour would also fire every timer of the pages this run keeps mounted, and
+  // their reads would count.
   await watched.navigate('/analytics?range=7d#accounts');
   const moved = cadence.calls.length;
   api.listAccounts = listAccounts;
@@ -20221,7 +20238,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   cadence.restore();
   results.push({
     name: "/analytics the unused allowance card reads again once the window's next move reads a weekly reset, and not at the list's cadence, under a custom range whose end is ahead too",
-    ok: mounted === 1 && polled === 1 && unseen === 1 && moved === 2 && opened === moved + 1 && ticked === 0,
+    ok: mounted === 1 && polled === 1 && unseen === 1 && moved === 3 && opened === moved + 1 && ticked === 0,
     missing: [`${mounted} at mount, ${polled} after a tick, ${unseen} at the tick after the reset, ${moved} once the window moved, ${opened - moved} on the custom range's mount, ${ticked} over its two ticks`],
   });
 }

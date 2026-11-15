@@ -23,7 +23,7 @@ import { GroupBy as GroupByControl, GroupsButton } from '@/components/GroupBy';
 import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
-import { ALLOWANCE_WEEKS, allowanceRows, allowanceSpan, fleetFigures, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
+import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
@@ -388,15 +388,15 @@ export function AnalyticsPage() {
   // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
   const registry = useAsync(() => api.listAccounts(), [fromIso, toIso, generation], reload);
   const slotOf = useMemo(() => accountSlots((registry.data ?? []).map((a) => a.id)), [registry.data]);
-  // A weekly row changes once a week, so the unused allowance card reads once per Accounts filter, again on Refresh and
-  // once the registry's read answers a weekly window of an account under the filter past its reset, never at the list's
-  // cadence, under a custom range too. The registry's first answer moves no reset, so the page's load reads once.
+  // A weekly row changes once a week, so the unused allowance card reads once per range and Accounts filter, under a
+  // preset again at each move of the page's `now`, again on Refresh and once the registry's read answers a weekly
+  // window of an account under the filter past its reset, never at the list's cadence, under a custom range too. The
+  // registry's first answer moves no reset, so the page's load reads once.
   const weeklyResetsAt = registry.data === null ? null : weeklyResetsKey(registry.data.filter((a) => filters.accountId.length === 0 || filters.accountId.includes(a.id)));
   const [resets, setResets] = useState({ at: weeklyResetsAt, moved: 0 });
   if (weeklyResetsAt !== resets.at) setResets({ at: weeklyResetsAt, moved: resets.at === null ? resets.moved : resets.moved + 1 });
-  // The weekly resets of the last four weeks whatever the range, so a range change reads nothing, and the Accounts
-  // filter alone narrows them.
-  const unusedAllowance = useAsync(() => (tab === 'accounts' ? api.getAnalyticsUnusedAllowance(allowanceSpan(now), { accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId, generation, resets.moved]);
+  // The weekly resets of the range and of the week before its start, and the Accounts filter alone narrows them.
+  const unusedAllowance = useAsync(() => (tab === 'accounts' ? api.getAnalyticsUnusedAllowance(rangeAllowanceSpan(span.fromMs, span.toMs), { accountIds: filters.accountId }) : Promise.resolve(null)), [tab, filters.accountId, fromIso, toIso, generation, resets.moved]);
   // The cost model, read once per page load whatever the tab: the chosen week's scale reads every week figure the page
   // draws, the plan chart's line category reads each account's stored tier against its capacity rows, and the unused
   // allowance card prices its figures through it.
@@ -2866,7 +2866,7 @@ function AccountsSection({
           ],
         }))}
       />
-      <AllowanceTable {...allowance} week={week} />
+      <AllowanceTable {...allowance} span={span} week={week} />
     </>
   );
 }
@@ -2875,7 +2875,7 @@ function AccountsSection({
 const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
   <td key={key} className="right num col-fit">
     {figure === undefined ? (
-      <span className="muted" title="No reset of this window in the last four weeks">
+      <span className="muted" title={NO_RESET_IN_RANGE}>
         -
       </span>
     ) : figure.kind === 'unpriced' || figure.kind === 'none' ? (
@@ -2889,17 +2889,17 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
 );
 
 /**
- * "Unused allowance by account": each subscription account's weekly windows over the last four weeks under the
- * Accounts filter in the chosen week, ranked most left first, with the fleet's two figures over the table. A failed
- * read, its own or the cost model's, draws in place of the rows and the figures, so no figure stands without the read
- * it prices.
+ * "Unused allowance by account": each subscription account's weekly windows over the range under the Accounts filter in
+ * the chosen week, each window's newest reset at or before the range's end beside the sum over its resets in the
+ * range, ranked most left first, with the fleet's two figures over the table. A failed read, its own or the cost
+ * model's, draws in place of the rows and the figures, so no figure stands without the read it prices.
  */
-function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; week: WeekPosition }) {
-  const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, week)), [answer, costs, week]);
+function AllowanceTable({ answer, costs, error, span, week }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; span: { fromMs: number; toMs: number }; week: WeekPosition }) {
+  const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, week, span)), [answer, costs, span, week]);
   const windows = useMemo(() => weeklyKeys(answer?.accounts ?? []), [answer]);
   const fleet = rows === null ? null : fleetFigures(rows, week, weekScale(costs, week));
   return (
-    <Card title="Unused allowance by account" subtitle="Each subscription account's weekly windows left unused at their resets, the last four weeks, under the Accounts filter. The range does not apply here" padded={false} className="card--table accounts-range allowance-table">
+    <Card title="Unused allowance by account" subtitle="Each subscription account's weekly windows left unused at their resets in the range, under the Accounts filter. Last is the newest reset at or before the range's end" padded={false} className="card--table accounts-range allowance-table">
       {error === null && (
         <div className="req-totals">
           <div>
@@ -2923,7 +2923,7 @@ function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanc
               <th className="right col-fit">Resets</th>
               {windows.flatMap((w) => [
                 <th key={`${w}-last`} className="right col-fit">{`${windowWord(w)}, last`}</th>,
-                <th key={`${w}-weeks`} className="right col-fit">{`${windowWord(w)}, ${ALLOWANCE_WEEKS} weeks`}</th>,
+                <th key={`${w}-range`} className="right col-fit">{`${windowWord(w)}, in range`}</th>,
               ])}
             </tr>
           </thead>
@@ -2938,13 +2938,14 @@ function AllowanceTable({ answer, costs, error, week }: { answer: UnusedAllowanc
                         {`term ended ${resetInstant(r.termEndedAt)}`}
                       </span>
                     )}
+                    {r.resets === 0 && <span className="sub">no reset in range</span>}
                   </td>
                   <td className="right num col-fit">{fmtInt(r.resets)}</td>
-                  {windows.flatMap((w) => [allowanceCell(`${w}-last`, r.figures[w]?.last), allowanceCell(`${w}-weeks`, r.figures[w]?.weeks)])}
+                  {windows.flatMap((w) => [allowanceCell(`${w}-last`, r.figures[w]?.last), allowanceCell(`${w}-range`, r.figures[w]?.inRange)])}
                 </tr>
               ))}
             {(error !== null || rows === null || rows.length === 0) && (
-              <StateRow colSpan={2 + windows.length * 2} empty="No weekly reset in the last four weeks" error={error} errorTitle="Could not load the unused allowance" loading={rows === null} />
+              <StateRow colSpan={2 + windows.length * 2} empty="No weekly reset in the range or the week before it" error={error} errorTitle="Could not load the unused allowance" loading={rows === null} />
             )}
           </tbody>
         </table>

@@ -7,22 +7,33 @@ import { DAY } from '@/lib/time';
 import type { WeekPosition } from '@/lib/unit';
 import { WINDOW_HOURS, inWindowOrder, windowHint } from '@/lib/windows';
 
-/** The weeks the Accounts block and the Analytics card read: the latest reset and the three before it. */
+/** The weeks the Accounts block reads: the latest reset and the three before it. */
 export const ALLOWANCE_WEEKS = 4;
 
-/** The span the block and the card read: 29 days behind now to now, 28 days and a day of slack so the fourth weekly
- *  reset is never cut by the hour of the week or by a clock-walk reading up to a poll interval old. */
+/** The span the block reads: 29 days behind now to now, 28 days and a day of slack so the fourth weekly reset is never
+ *  cut by the hour of the week or by a clock-walk reading up to a poll interval old. */
 export function allowanceSpan(now: number): { from: string; to: string } {
   return { from: iso(now - (7 * ALLOWANCE_WEEKS + 1) * DAY), to: iso(now) };
 }
 
+/** The longest span a route that reads `range` takes: the admin API refuses a custom range of more than 400 days. */
+const MAX_RANGE_DAYS = 400;
+
+/** The span the Analytics card reads: the range with a week ahead of its start, so a range that holds no reset still
+ *  answers the newest one before it. The lead shortens where the week would carry the span past the routes' longest
+ *  range, and the range itself is never cut, so a range longer than that leaves whole for the route to refuse. */
+export function rangeAllowanceSpan(fromMs: number, toMs: number): { from: string; to: string } {
+  return { from: iso(Math.min(fromMs, Math.max(fromMs - 7 * DAY, toMs - MAX_RANGE_DAYS * DAY))), to: iso(toMs) };
+}
+
 /** The resets of the accounts' 168-hour windows, the Fable window's among them, as one key that moves once a week has
- *  passed, so a read keyed on it runs again at a weekly reset and not at a poll's cadence. */
+ *  passed, so a read keyed on it runs again at a weekly reset and not at a poll's cadence. Each reset counts to its
+ *  nearest minute, since a poll moves a reset by a fraction of a second. */
 export const weeklyResetsKey = (accounts: readonly Account[]): string =>
   accounts
     .flatMap(readWindows)
     .filter((w) => w.periodHours === WINDOW_HOURS['7d'])
-    .map((w) => w.resetsAt ?? '')
+    .map((w) => (w.resetsAt === null ? '' : String(Math.round(Date.parse(w.resetsAt) / 60_000))))
     .join(',');
 
 /** The newest `weeks` resets of a window with their total and count: the answer's figures where it lists that many or
@@ -42,6 +53,8 @@ export type AllowanceFigure = { kind: 'equivalent'; share: number; text: string 
  *  words differ, so the test bundle's star exports keep both. */
 export const ALLOWANCE_UNPRICED_TITLE = "Unpriced: the cost model holds no capacity for this account's plan";
 export const NO_READING_TITLE = 'no reading at this reset';
+/** The Analytics card's dash where a window reset at or before the range's end and never inside the range. */
+export const NO_RESET_IN_RANGE = 'No reset of this window in the range';
 export const FREE_NOTE = 'Free has no priced capacity in the cost model, so a reset the router recorded no tier for and the total read a dash, and a week with its own tier prices at it.';
 
 /**
@@ -90,6 +103,17 @@ export function allowanceFigure(share: number | null, window: string, account: P
   return { kind: 'equivalent', share: figure, text: weekShort(figure, week) };
 }
 
+/** The resets' figures, each at its own pair, added, or the dash of the first that prices nothing. */
+function summedFigure(resets: readonly AllowanceReset[], window: string, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceFigure {
+  let sum = 0;
+  for (const reset of resets) {
+    const figure = allowanceFigure(reset.shareLeft, window, account, costs, week, reset);
+    if (figure.kind !== 'equivalent') return figure;
+    sum += figure.share;
+  }
+  return { kind: 'equivalent', share: sum, text: weekShort(sum, week) };
+}
+
 /**
  * A window's four weeks' figure: each reset's figure at its own pair added, so a week before a tier change weighs at
  * the tier it ran under. A reset that prices nothing leaves the total unpriced, since a sum without that week would
@@ -98,13 +122,7 @@ export function allowanceFigure(share: number | null, window: string, account: P
 export function weeksFigure(window: AllowanceWindow, account: Pick<AllowanceAccount, 'plan' | 'tier'>, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceFigure {
   const { resets, total } = newestResets(window);
   if (resets.length === 0) return allowanceFigure(total, window.window, account, costs, week);
-  let sum = 0;
-  for (const reset of resets) {
-    const figure = allowanceFigure(reset.shareLeft, window.window, account, costs, week, reset);
-    if (figure.kind !== 'equivalent') return figure;
-    sum += figure.share;
-  }
-  return { kind: 'equivalent', share: sum, text: weekShort(sum, week) };
+  return summedFigure(resets, window.window, account, costs, week);
 }
 
 /** The block's subtitle, which the week control's position leaves alike. */
@@ -141,13 +159,14 @@ export const ownShareHover = (plan: string, window: string, shareLeft: number): 
 /** A reset's day and time, "Sep 12 20:10", the day written even within a day of now. */
 export const resetInstant = (isoTime: string): string => fmtDated(Date.parse(isoTime));
 
-/** One account of the Analytics card: each weekly window's last and four weeks' figures with the resets counted,
- *  keyed by the wire key, the 7-day window's count, the instant of a latest reset that is the term's end, and whether
- *  one of the newest 7-day weeks prices no capacity at the pair it ran under, the account's own pair standing in where
- *  it holds no 7-day reset. */
+/** One account of the Analytics card: each weekly window's figures keyed by the wire key, the 7-day window's count of
+ *  resets in the range, the instant of a last reset that is the term's end, and whether a 7-day reset the row draws
+ *  prices no capacity at the pair it ran under, the account's own pair standing in where it draws none. */
 export interface AllowanceRow {
   accountId: string;
-  figures: Record<string, { counted: number; last: AllowanceFigure; weeks: AllowanceFigure }>;
+  /** Per weekly window: the resets inside the range counted, their figures added, and the newest reset at or
+   *  before the range's end, which a reset of the lead week can be. */
+  figures: Record<string, { counted: number; inRange: AllowanceFigure; last: AllowanceFigure }>;
   resets: number;
   termEndedAt: string | null;
   unpriced: boolean;
@@ -156,26 +175,31 @@ export interface AllowanceRow {
 /** A figure's value to rank and add by, none for a dash. */
 const valueOf = (figure: AllowanceFigure | undefined): number | null => (figure === undefined || figure.kind === 'none' || figure.kind === 'unpriced' ? null : figure.share);
 
-/** One row of the Analytics card per account: its resets count, each weekly window's last and four weeks' figures, the
- *  term-ended mark of its latest reset where one is, sorted with an unpriced account last, then most left first on the
- *  four weeks' 7-day figure in the chosen week, then the Fable figure, then the id. */
-export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts | null, week: WeekPosition): AllowanceRow[] {
+/** One row of the Analytics card per account over `range`: its 7-day resets in the range counted, each weekly window's
+ *  last and range figures, the term-ended mark of its last reset where one is, sorted with an unpriced account last,
+ *  then most left first on the range's 7-day figure in the chosen week, then the Fable figure, then the id. */
+export function allowanceRows(answer: UnusedAllowanceAnswer, costs: SubscriptionCosts | null, week: WeekPosition, range: { fromMs: number; toMs: number }): AllowanceRow[] {
   const rows = answer.accounts.map((account): AllowanceRow => {
     const figures: AllowanceRow['figures'] = {};
     let termEndedAt: string | null = null;
+    let sevenDay: AllowanceReset[] = [];
     for (const w of allowanceWindows(account)) {
-      const { counted, resets } = newestResets(w);
-      if (resets.length === 0) continue;
-      figures[w.window] = { counted, last: allowanceFigure(resets[0].shareLeft, w.window, account, costs, week, resets[0]), weeks: weeksFigure(w, account, costs, week) };
-      if (termEndedAt === null && resets[0].source === 'term_ended') termEndedAt = resets[0].resetAt;
+      const ended = w.resets.filter((r) => Date.parse(r.resetAt) <= range.toMs);
+      if (ended.length === 0) continue;
+      const last = ended.reduce((newest, r) => (Date.parse(r.resetAt) > Date.parse(newest.resetAt) ? r : newest));
+      const inside = ended.filter((r) => Date.parse(r.resetAt) >= range.fromMs);
+      // An empty sum would read 0%, a week used whole, so a range with no reset draws the dash.
+      const inRange: AllowanceFigure = inside.length === 0 ? { kind: 'none', text: '-', title: NO_RESET_IN_RANGE } : summedFigure(inside, w.window, account, costs, week);
+      figures[w.window] = { counted: inside.length, inRange, last: allowanceFigure(last.shareLeft, w.window, account, costs, week, last) };
+      if (termEndedAt === null && last.source === 'term_ended') termEndedAt = last.resetAt;
+      if (w.window === 'seven_day') sevenDay = [...inside, last];
     }
-    // Read off each newest 7-day week's own pair, so the fleet's note names every account the sum leaves out.
-    const sevenDay = account.windows.find((w) => w.window === 'seven_day');
-    const pairs = sevenDay === undefined || sevenDay.resets.length === 0 ? [account] : newestResets(sevenDay).resets.map((r) => pairOf(account, r));
+    // Read off each drawn 7-day reset's own pair, so the fleet's note names every account the sum leaves out.
+    const pairs = sevenDay.length === 0 ? [account] : sevenDay.map((r) => pairOf(account, r));
     const unpriced = pairs.some((pair) => capacityWeight(pair, 'seven_day', costs) === null);
     return { accountId: account.accountId, figures, resets: figures.seven_day?.counted ?? 0, termEndedAt, unpriced };
   });
-  const lead = (r: AllowanceRow, window: string) => valueOf(r.figures[window]?.weeks) ?? Number.NEGATIVE_INFINITY;
+  const lead = (r: AllowanceRow, window: string) => valueOf(r.figures[window]?.inRange) ?? Number.NEGATIVE_INFINITY;
   // A dash ranks under every figure, so an equal pair of dashes compares as a tie rather than as NaN.
   const by = (a: number, b: number) => (a === b ? 0 : b - a);
   return rows.sort(
@@ -191,7 +215,7 @@ export function allowanceRows(answer: UnusedAllowanceAnswer, costs: Subscription
  *  where the week's `scale` is null, every figure a dash, the note naming the week the cost model does not size. */
 export function fleetFigures(rows: AllowanceRow[], week: WeekPosition, scale: number | null): { fable: string; note: string; sevenDay: string } {
   const sum = (window: string) => {
-    const values = rows.map((r) => valueOf(r.figures[window]?.weeks)).filter((v): v is number => v !== null);
+    const values = rows.map((r) => valueOf(r.figures[window]?.inRange)).filter((v): v is number => v !== null);
     return values.length === 0 ? '-' : weekShort(values.reduce((a, b) => a + b, 0), week);
   };
   // The rows' flags read each account's own pair, which would count accounts as priced over a column of dashes.

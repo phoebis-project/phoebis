@@ -236,8 +236,8 @@ allowance by account card (mock pass: below Accounts in range, its columns under
 range's), a week priced at its own tier in the Ultra week (mock pass: on the studio account's detail the allowance
 block's third-newest 7-day week, run under Pro, in the type size, weight and right edge of the second-newest week's
 figure and from the head figure's right edge, its figures and its total recorded, and on the Analytics view's Accounts
-tab the unused allowance card's studio row's 7-day four weeks' figure, the block's total, in the type size, weight and
-right edge of the next row's), the Analytics tables' columns, each read on the tab that draws it (the Traffic
+tab the unused allowance card's studio row's 7-day figure in range under 30 days, the block's total, in the type size,
+weight and right edge of the next row's), the Analytics tables' columns, each read on the tab that draws it (the Traffic
 breakdown's group column the fill, Key on the misses-by-reason breakdown under its wrapped headers, Cache by model's
 width recorded under native with every column inside its wrap at 1280 by 800 and in the mock pass a cost cell's billed
 line drawn, Rung on the placements table, Pool and Account on the member budgets, whose Spent column is as wide as its

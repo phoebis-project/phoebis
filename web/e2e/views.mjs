@@ -6400,9 +6400,10 @@ async function analyticsAllowanceTable(theme) {
  * A week priced at the tier it ran under, in the default Ultra week. On the studio account's detail the allowance block's
  * 7-day column draws its third-newest week, which ran under Pro before the upgrade, in the type size, weight and right
  * edge of the second-newest week's figure and from the right edge of the head's figure, the figures and the total
- * recorded. On the Analytics view's Accounts tab the unused allowance card's studio row draws its 7-day four weeks'
- * figure in the type size, weight and right edge of the next row's, both texts recorded. The Traffic tab and the bare
- * Accounts view are the pass's again after. The mock pass's alone, since the router pass seeds no weekly reset.
+ * recorded. On the Analytics view's Accounts tab under the 30-day range, which holds studio's four weekly resets, the
+ * unused allowance card's studio row draws its 7-day figure in range, the block's total, in the type size, weight and
+ * right edge of the next row's, both texts recorded. The Traffic tab and the bare Accounts view are the pass's again
+ * after. The mock pass's alone, since the router pass seeds no weekly reset.
  */
 async function allowancePricedWeek(theme) {
   const say = (what) => failures.push(`${theme} a week priced at its own tier: ${what}`);
@@ -6423,7 +6424,7 @@ async function allowancePricedWeek(theme) {
     for (const what of compare(block.pro, block.head, ['right'], "the Pro week's figure against the head's")) say(what);
     for (const [name, read] of Object.entries(block)) if (!/ Ultra week$/.test(read?.text ?? '')) say(`the block's ${name} figure reads ${JSON.stringify(read?.text ?? null)}, not a share of the Ultra week`);
 
-    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await loadAtOrigin('/analytics?range=30d', '.analytics-section#traffic');
     if (!(await tabTo(theme, 'Accounts'))) return;
     const card = await page.evaluate(() => {
       const box = (el) => {
@@ -6432,16 +6433,16 @@ async function allowancePricedWeek(theme) {
         return { fontSize: style.fontSize, fontWeight: style.fontWeight, right: Math.round(el.getBoundingClientRect().right), text: el.textContent?.trim() ?? '' };
       };
       const unused = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Unused allowance by account');
-      const at = [...(unused?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === '7-day, 4 weeks');
+      const at = [...(unused?.querySelectorAll('thead th') ?? [])].findIndex((th) => th.textContent?.trim() === '7-day, in range');
       const rows = [...(unused?.querySelectorAll('tbody tr') ?? [])];
       const own = rows.findIndex((tr) => tr.querySelector('td.col-fill a')?.textContent?.trim() === 'studio');
       const cell = (tr) => (tr && at !== -1 ? box(tr.children[at] ?? null) : null);
       return { next: own === -1 ? null : cell(rows[own + 1]), studio: own === -1 ? null : cell(rows[own]) };
     });
-    measurements.push(`${theme} /analytics Unused allowance by account studio's four weeks ${JSON.stringify(card)}`);
-    for (const what of compare(card.studio, card.next, ['fontSize', 'fontWeight', 'right'], "studio's 7-day four weeks' figure against the next row's")) say(what);
-    if (!/ Ultra week$/.test(card.studio?.text ?? '')) say(`studio's 7-day four weeks' figure reads ${JSON.stringify(card.studio?.text ?? null)}, not a share of the Ultra week`);
-    if (card.studio?.text !== block.total?.text) say(`studio's 7-day four weeks' figure ${JSON.stringify(card.studio?.text ?? null)} is not the block's total ${JSON.stringify(block.total?.text ?? null)}`);
+    measurements.push(`${theme} /analytics under 30d Unused allowance by account studio's 7-day in range ${JSON.stringify(card)}`);
+    for (const what of compare(card.studio, card.next, ['fontSize', 'fontWeight', 'right'], "studio's 7-day figure in range under 30d against the next row's")) say(what);
+    if (!/ Ultra week$/.test(card.studio?.text ?? '')) say(`studio's 7-day figure in range under 30d reads ${JSON.stringify(card.studio?.text ?? null)}, not a share of the Ultra week`);
+    if (card.studio?.text !== block.total?.text) say(`studio's 7-day figure in range under 30d ${JSON.stringify(card.studio?.text ?? null)} is not the block's total ${JSON.stringify(block.total?.text ?? null)}`);
     await tabTo(theme, 'Traffic');
     await atRest();
   } finally {
