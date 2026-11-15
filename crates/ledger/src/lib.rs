@@ -81,7 +81,7 @@ pub use query::{
     RoutingCondition, RoutingLogCursor, RoutingLogFilter, RoutingLogPage, RoutingLogRow,
     SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, SessionSpendKey, Span, Totals,
     TrafficBucket, DECISION_KINDS, EVENT_KINDS, GUARDRAIL_BLOCKED_BYTES_SQL, GUARDRAIL_COUNTS_SQL,
-    MAX_POINTS, MAX_RANGE_MS, PROBE_KIND,
+    MAX_POINTS, MAX_RANGE_MS,
 };
 pub use query::{guardrail_sample_page, request_body, request_body_held, SampleRow};
 pub use query::{list_request_page, refusal_categories, RefusalCount, Refusals, RequestPage};

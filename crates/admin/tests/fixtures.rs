@@ -2879,7 +2879,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     .unwrap();
     let every_kind = phoebis_ledger::DECISION_KINDS
         .iter()
-        .chain([&phoebis_ledger::PROBE_KIND])
+        .chain([&"probe"])
         .chain(phoebis_ledger::EVENT_KINDS)
         .copied()
         .collect::<Vec<_>>()

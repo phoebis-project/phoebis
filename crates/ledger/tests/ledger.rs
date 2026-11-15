@@ -2308,6 +2308,29 @@ fn a_peak_band_that_opens_inside_a_completion_hour_prices_each_request_at_its_ow
     );
 }
 
+/// Two requests received in the hour the band opens in, at 12:30 UTC: the one finished at 12:10 makes its row a
+/// boundary row and spends 100 / 1,000 = 0.1 outside the band, and the one finished at 13:02 lies in a row whose
+/// completion hour the band covers whole, which prices from its sums at 100 / 1,000 / 0.5 = 0.2. The read of the
+/// boundary hour passes the second request over, so the session counts it once.
+#[test]
+fn a_request_of_a_boundary_hour_whose_own_row_is_no_boundary_row_counts_once_from_its_sums() {
+    const MINUTE: i64 = 60_000;
+    let noon = phoebis_ledger::test_tables::JANUARY_2026;
+    let db = LedgerDb::open_in_memory().unwrap();
+    land_two_plan_requests(&db, (noon + 5 * MINUTE, noon + 57 * MINUTE));
+    let figures = figures_of(
+        &db,
+        &phoebis_ledger::test_tables::api_prices(),
+        &session_costs("Asia/Kolkata", 18, 23, None),
+        noon + 120 * MINUTE,
+    );
+    let (requests, share) = (figures.spend.requests, five_hour_share(&figures));
+    assert!(
+        requests == 2 && (share - 0.3).abs() < 1e-12,
+        "{requests} requests and a 5-hour share of {share}"
+    );
+}
+
 /// A request's `held` names each of its waits with the reason: the hourly row sums the `slow_down` waits under
 /// `slow_down_held_ms` and counts the request once under `slow_down_held`, a request that waited for a slot alone
 /// counts under neither, and a replaced request takes its waits back out of its row.

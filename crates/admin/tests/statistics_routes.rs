@@ -1696,7 +1696,7 @@ fn agent_request(
     else {
         unreachable!("record_at builds a request")
     };
-    let origin = if kind == phoebis_ledger::PROBE_KIND {
+    let origin = if kind == "probe" {
         "keepalive"
     } else {
         "client"
@@ -1902,7 +1902,7 @@ async fn a_sessions_last_inference_reads_its_turn_and_its_last_request_the_later
     for (id, at, kind) in [
         ("r-turn", now - 3_000, "inference"),
         ("r-count", now - 2_000, "count_tokens"),
-        ("r-probe", now - 1_000, phoebis_ledger::PROBE_KIND),
+        ("r-probe", now - 1_000, "probe"),
     ] {
         parts
             .ledger
@@ -2180,7 +2180,7 @@ async fn a_sessions_spend_prices_each_request_of_an_hour_a_price_entry_splits_wi
             ELEVEN + 20 * MINUTE,
             "s-split",
             "w",
-            phoebis_ledger::PROBE_KIND,
+            "probe",
             generation,
         ),
         agent_request(

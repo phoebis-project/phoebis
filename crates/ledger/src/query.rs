@@ -1183,7 +1183,7 @@ event_kinds! {
 pub const DECISION_KINDS: &[&str] = &["exhausted", "held", "moved", "placed", "refused", "renewed"];
 
 /// The pseudo-kind that names a probe's decision of any kind in `kinds`.
-pub const PROBE_KIND: &str = "probe";
+const PROBE_KIND: &str = "probe";
 
 /// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the kinds
 /// `completing_attempt` reads.
@@ -5805,7 +5805,7 @@ pub(crate) struct PricedAttempt {
 }
 
 impl PricedAttempt {
-    // Offsets past `first` of the request columns `SessionSpendRow::read` takes, for a request no attempt joined, so
+    // Offsets past `first` of the request columns `session_request_of` takes, for a request no attempt joined, so
     // both readers of `PRICED_ATTEMPT_COLUMNS` name one place.
     const MODEL: usize = 1;
     const RECEIVED_AT: usize = 7;
@@ -5933,8 +5933,8 @@ fn read_session_attempts(
         .map_err(LedgerError::from)
 }
 
-/// The key the session spend reads hand beside each row. Its fields keep this order since the derived order sorts the
-/// sessions route's rows, so a moved field reorders the rows of one instant.
+/// The key the session reads name a session by, its totals' rows and its figures alike. Its fields keep this order
+/// since the derived order sorts the sessions route's rows, so a moved field reorders the rows of one instant.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionSpendKey {
     pub key_id: String,
@@ -5946,10 +5946,10 @@ pub struct SessionSpendKey {
 /// them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
-     r.user_agent, r.request_class, r.landed_at, a.account_id, r.kind, r.refused";
+     r.user_agent, r.request_class, a.account_id, r.kind, r.refused";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session reads.
-const SESSION_SPEND_PRICED_FROM: usize = 12;
+const SESSION_SPEND_PRICED_FROM: usize = 11;
 
 /// The columns past `PRICED_ATTEMPT_COLUMNS` that `session_request_of` takes for a session's totals, from
 /// `SESSION_REQUEST_FROM` on.
@@ -6061,7 +6061,7 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
             .get::<_, Option<i64>>(first + i)?
             .map(|n| n.max(0) as u64))
     };
-    let serving = match row.get::<_, Option<String>>(9)? {
+    let serving = match row.get::<_, Option<String>>(8)? {
         Some(account_id) => Some(Serving {
             account_id,
             account_kind: AccountKind::parse(&row.get::<_, String>(first + 9)?),
@@ -6089,8 +6089,8 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
         agent_type: row.get(5)?,
         user_agent: row.get(6)?,
         request_class: row.get(7)?,
-        kind: row.get(10)?,
-        refused: row.get(11)?,
+        kind: row.get(9)?,
+        refused: row.get(10)?,
         canonical_model: row.get(first + PricedAttempt::MODEL)?,
         received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
         client: row.get(first + 12)?,

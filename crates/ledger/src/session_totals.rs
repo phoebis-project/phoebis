@@ -1540,8 +1540,8 @@ fn band_edge_inside(tables: &PlanTables, received_hour: i64, completed_hour: i64
 /// The figures of one session's totals. A row that is no boundary row adds its counts to its targets by account and
 /// price parts, and each sum prices once at the row's receipt hour and completion hour. A receipt hour that holds a
 /// boundary row reads the session's request rows of that hour once, however many boundary rows it holds, and prices
-/// each request whose sums key is a boundary row's by its own receipt and completion. A request of that hour whose
-/// key is another row's is skipped, since that row prices from its sums.
+/// each request whose own two hours make a boundary row by its own receipt and completion. A request of that hour
+/// whose own two hours make no boundary row is passed over, since its row prices from its sums.
 fn priced(
     conn: &Connection,
     key: &SessionSpendKey,
@@ -1554,13 +1554,10 @@ fn priced(
     let in_day = |hour: i64| (day_from..day_to).contains(&hour);
     let mut accrued = Accrued::default();
     let mut grouped: BTreeMap<(Target, String, PriceParts), Counts> = BTreeMap::new();
-    let mut split: BTreeMap<i64, BTreeSet<SumsKey>> = BTreeMap::new();
+    let mut split: BTreeSet<i64> = BTreeSet::new();
     for (sums, counts) in &totals.sums {
         if boundary_row(prices, tables, sums) {
-            split
-                .entry(sums.received_hour)
-                .or_default()
-                .insert(sums.clone());
+            split.insert(sums.received_hour);
             continue;
         }
         let day = in_day(sums.received_hour);
@@ -1581,13 +1578,13 @@ fn priced(
         let price = price_request(prices, tables, key, usage_of(*counts));
         accrued.add(target, counts.requests, account_id, price.as_ref());
     }
-    for (hour, rows) in &split {
+    for hour in &split {
         let (sql, binds) = session_hour_statement(key, *hour);
         for request in session_requests_of(conn, &sql, binds)? {
             let Some((sums, counts)) = sums_of(&request, prices) else {
                 continue;
             };
-            if !rows.contains(&sums) {
+            if !boundary_row(prices, tables, &sums) {
                 continue;
             }
             let completed = request
