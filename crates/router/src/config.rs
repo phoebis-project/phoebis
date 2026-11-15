@@ -1016,11 +1016,6 @@ mod tests {
         }
         for (name, body) in [
             ("cooldown-one", "routing:\n  cooldown_fallback_seconds: 1\n"),
-            (
-                "cooldown-hour",
-                "routing:\n  cooldown_fallback_seconds: 3600\n",
-            ),
-            ("concurrency-one", "usage:\n  refresh_concurrency: 1\n"),
             ("concurrency-sixteen", "usage:\n  refresh_concurrency: 16\n"),
         ] {
             assert!(

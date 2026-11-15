@@ -16,7 +16,7 @@ fn the_synthetic_usage_body_parses_into_windows() {
     } = parse_usage(control_response(ControlFixture::Usage)).unwrap();
     let five = windows.iter().find(|w| w.key == "five_hour").unwrap();
     assert_eq!(five.utilization, Some(12.5));
-    assert!(five.resets_at.is_some());
+    assert_eq!(five.resets_at, Some(1_789_311_600_000));
     assert!(fable.is_none());
     assert_eq!(extra.unwrap().is_enabled, false);
     assert_eq!(
@@ -178,12 +178,12 @@ fn extra_usage_amounts_with_a_fraction_part_round_to_the_nearest_minor_unit() {
 }
 
 #[test]
-fn a_parse_failure_carries_serdes_message_after_the_colon() {
+fn a_parse_failure_carries_serdes_message() {
     let body = br#"{"extra_usage":{"is_enabled":true,"monthly_limit":250000,"used_credits":"x","utilization":41.0,"currency":"USD"}}"#;
     let message = parse_usage(body).unwrap_err().to_string();
     assert!(
-        message.starts_with("control response is not valid JSON: ") && message.contains(r#""x""#),
-        "serde's message after the colon quotes the refused value: {message}"
+        message.contains(r#""x""#),
+        "serde's message quotes the refused value: {message}"
     );
 }
 

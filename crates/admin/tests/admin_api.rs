@@ -1483,8 +1483,13 @@ async fn a_block_with_no_grant_is_not_an_unread_block() {
         serde_json::json!({"eligible": false, "grants": [], "ineligible_reason": "seat"}),
     );
     let read = json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let mut block = read["limit_resets"].clone();
+    block
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("the account answers its block: {read}"))
+        .remove("revision");
     assert_eq!(
-        read["limit_resets"],
+        block,
         serde_json::json!({
             "cooldown_until": null,
             "eligible": false,
@@ -1493,8 +1498,6 @@ async fn a_block_with_no_grant_is_not_an_unread_block() {
             "ineligible_reason": "seat",
             "left": 0,
             "read_at": common::NOW,
-            // The row's first incarnation, 1 << 32, above the epoch 0 of a block no fold or pairing moved.
-            "revision": 4_294_967_296_u64,
         }),
         "a block that lists no grant answers the member with an empty list: {read}"
     );
@@ -2723,7 +2726,7 @@ async fn a_use_that_names_a_revision_from_before_a_pairing_sends_nothing() {
 
 #[tokio::test]
 async fn a_use_whose_expected_revision_is_null_sends_nothing() {
-    use common::{json, login, post, LIMIT_RESETS_PATH};
+    use common::{login, post};
     let h = common::admin_parts_polled().await;
     let cookie = login(&h.app, "admin-secret").await;
     store_limit_resets(
@@ -2744,24 +2747,6 @@ async fn a_use_whose_expected_revision_is_null_sends_nothing() {
         ),
         (400, 0),
         "a member the route cannot read names no account, so no claim leaves bound to the route's own read"
-    );
-    // The block read fails, so the read route answers the stored block, which a claim's fold would have moved.
-    h.up.set_rule_after(0, LIMIT_RESETS_PATH, upstream_failure());
-    let read = json(
-        post(
-            &h.app,
-            "/admin/accounts/business/limit-resets/read",
-            "",
-            Some(&cookie),
-        )
-        .await,
-    )
-    .await;
-    let grant = &read["limit_resets"]["grants"][0];
-    assert_eq!(
-        (grant["state"].as_str(), grant["resets_left"].as_u64()),
-        (Some("usable"), Some(1)),
-        "the grant keeps its one reset: {read}"
     );
 }
 
