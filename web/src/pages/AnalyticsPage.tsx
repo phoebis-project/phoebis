@@ -380,6 +380,9 @@ export function AnalyticsPage() {
     [fromIso, toIso, pageBy, filters.accountId, agentGroups, tab, generation],
     reload,
   );
+  /** A read with the range's end and the instant it left at, so its card's last-bucket note reads its own answer. */
+  const stamped = <T,>(read: Promise<T>, readAt: number): Promise<{ answer: T; endMs: number; readAt: number }> =>
+    read.then((answer) => ({ answer, endMs: span.toMs, readAt }));
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views. It reads with the window, since
   // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
@@ -401,19 +404,19 @@ export function AnalyticsPage() {
   const costs = costSettings.data?.subscriptionCosts ?? null;
   const { scale } = reading;
   const sized = useMemo(() => (burn.data && costs ? sizedAccounts(burn.data.accounts, costs) : null), [burn.data, costs]);
-  const rewrites = useGatedRead(tab === 'traffic', () => api.getAnalyticsRewrites({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
+  const rewrites = useGatedRead(tab === 'traffic', () => stamped(api.getAnalyticsRewrites({ from: fromIso, to: toIso }), clock.now()), [fromIso, toIso, tab, generation], reload);
   const refusalCategories = useGatedRead(tab === 'traffic', () => api.getAnalyticsRefusalCategories(query), [query, tab, generation], reload);
   // The counts route reads the range alone, which the card's subtitle says, since it carries no filter.
   const guardrailCounts = useGatedRead(tab === 'traffic', () => api.getAnalyticsGuardrails({ from: fromIso, to: toIso }), [fromIso, toIso, tab, generation], reload);
   // Side groupings on the page's own query, as byModel and byPool are; a session view folds them from the log.
-  const bySpeed = useGatedRead((tab === 'traffic' || tab === 'cost') && sessionId === null, () => api.getAnalyticsSeries({ ...query, groupBy: 'speed' }), [query, sessionId, tab, generation], reload);
+  const bySpeed = useGatedRead((tab === 'traffic' || tab === 'cost') && sessionId === null, () => stamped(api.getAnalyticsSeries({ ...query, groupBy: 'speed' }), clock.now()), [query, sessionId, tab, generation], reload);
   const byEffort = useGatedRead(tab === 'traffic' && sessionId === null, () => api.getAnalyticsBreakdown({ ...query, groupBy: 'effort' }), [query, sessionId, tab, generation], reload);
   // A dollar side narrows the three cost-bearing sections to the rows that side paid for, a filter the page's reads
   // cannot carry (Traffic, Latency and the Cache token charts read every row), so those sections read a second query
   // while one of them shows. The whole reads the page's own.
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
-  const costSeries = useGatedRead(funded && fundedTab, () => api.getAnalyticsSeries({ ...query, funding }), [query, funding, funded, fundedTab, generation], reload);
+  const costSeries = useGatedRead(funded && fundedTab, () => stamped(api.getAnalyticsSeries({ ...query, funding }), clock.now()), [query, funding, funded, fundedTab, generation], reload);
   // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
   // rows counted under every position, the whole included: a breakdown that does not count probes drops a group left
   // with probe rows alone, whether a dollar side dropped the group's real rows or the group is probe-only in the whole
@@ -517,15 +520,20 @@ export function AnalyticsPage() {
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
   // A route sums whole hours up to the hour ceiling of the range's end, and a session view's fold of the request log
-  // stops at the end itself. The rewrites card reads its own route in a session view too. Every card takes the page's
-  // clock as its read's instant, so a read that goes out later, as its tab opens with auto reload Off, can fill the
-  // last hour while the note still calls it partial.
+  // stops at the end itself.
   const partial = lastBucketPartial(buckets, bucketMs, span.toMs, now, sessionId === null);
-  const rewritesPartial = lastBucketPartial(buckets, bucketMs, span.toMs, now, true);
+  /** A stamped read's last-bucket flag, off its own buckets, their width, its own end and the instant it left at. Each
+   *  stamped read is a route's read, the rewrites read in a session view too, so the hour ceiling holds. False until
+   *  the read answers. */
+  const stampedPartial = <T,>(read: { answer: T; endMs: number; readAt: number } | null, pointsOf: (answer: T) => readonly { at: string }[]): boolean => {
+    if (read === null) return false;
+    const own = pointsOf(read.answer).map((p) => ({ at: Date.parse(p.at) }));
+    return lastBucketPartial(own, own.length > 1 ? own[1].at - own[0].at : rangeBucketMs, read.endMs, read.readAt, true);
+  };
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
   const byPoolAnswer = byPool.current;
   const poolGroups = useMemo(() => (sessionId === null ? (byPoolAnswer ?? []) : tab === 'cache-warming' ? foldGroups(kept, 'pool', { agentGroups }, latest) : []), [sessionId, byPoolAnswer, tab, kept, agentGroups, latest]);
-  const bySpeedAnswer = bySpeed.current;
+  const bySpeedAnswer = bySpeed.current?.answer;
   const speedPoints = useMemo(
     () => (sessionId === null ? (bySpeedAnswer ?? []) : tab === 'traffic' || tab === 'cost' ? foldRequests(kept, rangeBucketMs, fromIso, toIso, 'speed', { agentGroups }, latest) : []),
     [sessionId, bySpeedAnswer, tab, kept, rangeBucketMs, fromIso, toIso, agentGroups, latest],
@@ -539,7 +547,7 @@ export function AnalyticsPage() {
   const probeTotals = probeParts(totals.probes);
   // The cost-bearing sections' rows under the position: the funded query's under a dollar side, the page's own under
   // the whole, and in a session view the rows folded by who paid for them.
-  const costSeriesAnswer = costSeries.current;
+  const costSeriesAnswer = costSeries.current?.answer;
   const costPoints = useMemo(() => {
     if (sessionId !== null) return funding === undefined ? points : stale || !fundedTab ? [] : foldRequests(kept, rangeBucketMs, fromIso, toIso, groupBy, { agentGroups, funding }, latest);
     return funded ? (costSeriesAnswer ?? []) : points;
@@ -749,9 +757,9 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
-              <RewritesCard answer={rewrites.current} error={rewrites.error} axis={axis} partial={rewritesPartial} unfiltered={unfiltered} />
+              <RewritesCard answer={rewrites.current?.answer ?? null} error={rewrites.error} axis={axis} partial={stampedPartial(rewrites.current, (answer) => answer.points)} unfiltered={unfiltered} />
 
-              <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} partial={partial} />
+              <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} partial={sessionId === null ? stampedPartial(bySpeed.current, (points) => points) : partial} />
 
               <Card title="Effort levels" subtitle="Requests per effort level in range">
                 {sessionId === null && byEffort.error !== null ? (
@@ -985,7 +993,7 @@ export function AnalyticsPage() {
               <Tile label="Fast mode spend" value={speedError !== null ? '-' : speedLoading ? null : fmtUsd(fastSpend)} note="usage credits, at the fast cells" />
             </div>
             <div className="grid-2">
-              <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} partial={partial} reading={reading} unit={unit} />
+              <CostByGroup points={costPoints} groupBy={groupBy} groupSlot={groupSlot} loading={figureLoading} failure={figureFailure} axis={axis} partial={funded ? stampedPartial(costSeries.current, (points) => points) : partial} reading={reading} unit={unit} />
               {/* Native draws a ring per funding, each in its own unit. */}
               <Card title="Cost split" subtitle={unit === 'native' ? NATIVE_SPLIT_NOTE : `By token kind, in dollars at the API price list, ${UNIT_SPLIT[dollars]}`}>
                 {/* The request summary carries one total and no split, so a session view has nothing to draw here. */}

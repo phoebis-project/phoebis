@@ -19440,6 +19440,53 @@ await forView('/analytics', async () => {
   burnPage.unmount();
 });
 
+// A card that draws a read of its own notes its last bucket off that read's buckets, its end and the instant it left
+// at. At the 24-hour range's end of 14:30 each answer's last bucket starts at 14:00.
+await forView('/analytics', async () => {
+  {
+    // Auto reload Off holds the end at 14:30 while the clock runs on to 15:01, where the Cost tab opens under Billed
+    // dollars and sends its read: the read saw the 14:00 bucket up to the hour ceiling of the end, which is whole.
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    await chooseInterval(page, 'Off');
+    tick(31 * 60_000);
+    await chooseUnit(page, 'usd');
+    await tab(page, 'Cost');
+    const card = [...page.container.querySelectorAll('#cost .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Cost by key');
+    // A card still loading draws no note under either rule, so the read must have answered for the subtitle to count.
+    const read = { answered: card !== undefined && card.querySelector('.skeleton') === null, subtitle: card?.querySelector('.card__subtitle')?.textContent?.trim() ?? null };
+    page.unmount();
+    localStorage.removeItem('phoebis.unit');
+    results.push({
+      name: "/analytics the cost card's note reads its own read's instant",
+      ok: read.answered && read.subtitle === 'USD per bucket, stacked, the API key, fast mode, overage and usage-based requests at the API price list',
+      missing: [JSON.stringify(read)],
+    });
+  }
+  {
+    // The first series call is the page's own, held here, so the speed read behind it answers while the page's buckets
+    // are still empty. The rewrites read answers beside them.
+    const held = deferNextCall('getAnalyticsSeries');
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const subtitleOf = (title) => [...page.container.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
+    const read = { held: held.calls[0]?.[0]?.groupBy ?? null, rewrites: subtitleOf('Migration rewrites'), speed: subtitleOf('Requests by speed') };
+    held.release();
+    await page.settle();
+    held.restore();
+    page.unmount();
+    results.push({
+      name: "/analytics Requests by speed and Migration rewrites note their partial bucket before the page's series answers",
+      ok:
+        JSON.stringify(read) ===
+        JSON.stringify({
+          held: 'key',
+          rewrites: "Cache-write tokens the first request after a move wrote, per bucket. The last bucket is partial: it holds the traffic up to the range's end",
+          speed: "Standard and fast per bucket, stacked. The last bucket is partial: it holds the traffic up to the range's end",
+        }),
+      missing: [JSON.stringify(read)],
+    });
+  }
+});
+
 // The running burn bucket keeps its rate, and until it covers a tenth of its width it does not set the axis. jsdom lays
 // nothing out, so the chart containers read a browser's size here.
 await forView('/analytics', async () => {
