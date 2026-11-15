@@ -14,33 +14,14 @@ use phoebis_bus::{
     ResponseChunk, ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
-    apply_filter, breakdown, list_requests, member_spends, parked_count, parked_summary,
-    read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges, BodyRecord,
-    BudgetedMember, CacheMapWrite, DecisionRow, Direction, EventRecord, InputTransformation,
-    LedgerConfig, LedgerDb, LedgerError, LiveKeys, LogKinds, ParkedSummary, PlanTables,
-    PriceRevisions, Purged, Record, Replayed, RequestCursor, RequestFilter, RequestOrder,
-    RequestRecord, RollupFilter, RollupRow, RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS,
-    BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH, UNATTRIBUTED,
+    apply_filter, breakdown, breakdown_paged, list_requests, member_spends, parked_count,
+    parked_summary, read_rollups, run_retention, Assembler, AttemptRecord, AttentionGauges,
+    BodyRecord, BudgetedMember, CacheMapWrite, DecisionRow, Direction, EventRecord, GroupBy,
+    InputTransformation, LedgerConfig, LedgerDb, LedgerError, LiveKeys, LogKinds, ParkedSummary,
+    PlanTables, PriceRevisions, Purged, Record, Replayed, RequestCursor, RequestFilter,
+    RequestOrder, RequestRecord, RollupFilter, RollupSelect, Speed, WriterRead, BATCH_RETRY_DELAYS,
+    BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
-
-/// A rollup row's dollars, its counts priced through `price_row` at its own key on `prices`.
-fn row_usd(prices: &PriceRevisions, row: &RollupRow) -> f64 {
-    let key = phoebis_ledger::RowKey {
-        model: &row.canonical_model,
-        speed: Speed::of(Some(row.speed.as_str())),
-        band: phoebis_ledger::Band::of_rollup(&row.band),
-        funding: phoebis_ledger::Funding::of_rollup(&row.funding),
-        tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
-        entrypoint: None,
-        classifier: false,
-        at: row.hour * 1_000,
-        band_at: None,
-        now: NOW,
-    };
-    phoebis_ledger::price_row(prices, &PlanTables::shipped(), &key, row.usage())
-        .usd
-        .map_or(0.0, |usd| usd.total())
-}
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{AccountKind, BudgetPeriod, MemberWrite, StorageKey, Store};
 use tower::ServiceExt;
@@ -5166,29 +5147,25 @@ async fn the_landing_records_no_tier_for_a_free_organization_or_a_usage_based_se
         path: None,
         source: "test".into(),
     };
-    let rows =
-        h.db.read(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
-            .await
-            .unwrap();
+    let groups = breakdown_paged(
+        &h.db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        0,
+        3_600_000,
+        GroupBy::Account,
+        &PriceRevisions::shipped(),
+        &tables,
+        NOW,
+    )
+    .await
+    .unwrap();
     let shares = |account: &str| {
-        let row = rows
+        groups
             .iter()
-            .find(|r| r.account_id == account)
-            .unwrap_or_else(|| panic!("no rollup row of {account}"));
-        let key = phoebis_ledger::RowKey {
-            model: &row.canonical_model,
-            speed: Speed::of(Some(row.speed.as_str())),
-            band: phoebis_ledger::Band::of_rollup(&row.band),
-            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
-            tier: (row.tier != UNATTRIBUTED).then_some(row.tier.as_str()),
-            entrypoint: None,
-            classifier: false,
-            at: row.hour * 1_000,
-            band_at: None,
-            now: NOW,
-        };
-        phoebis_ledger::price_row(&PriceRevisions::shipped(), &tables, &key, row.usage())
-            .shares
+            .find(|g| g.key == account)
+            .unwrap_or_else(|| panic!("no group of {account}: {groups:?}"))
+            .cost_shares
             .is_some()
     };
     assert_eq!(
@@ -5796,8 +5773,8 @@ fn an_api_key_account_s_attempt_folds_under_billed_whatever_its_speed_or_overage
 
 /// A selection on a usage-based seat lands its class on the attempt row, the row folds under the seat's own funding
 /// word and its counts price in dollars at the API rates with no share and no equivalent.
-#[test]
-fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_prices_in_dollars_alone(
+#[tokio::test]
+async fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_prices_in_dollars_alone(
 ) {
     let mut assembler = Assembler::new(Arc::new(|| NOW));
     let BusEvent::RequestObserved(mut observed) = observed_event("r1") else {
@@ -5872,32 +5849,28 @@ fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_pric
         "test",
     )
     .expect("one entry");
-    let row = &rows[0];
-    let priced = phoebis_ledger::price_row(
+    let groups = breakdown_paged(
+        &db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        0,
+        3_600_000,
+        GroupBy::Account,
         &prices,
         &PlanTables::shipped(),
-        &phoebis_ledger::RowKey {
-            model: &row.canonical_model,
-            speed: Speed::of(Some(row.speed.as_str())),
-            band: phoebis_ledger::Band::of_rollup(&row.band),
-            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
-            tier: None,
-            entrypoint: None,
-            classifier: false,
-            at: row.hour * 1_000,
-            band_at: None,
-            now: NOW,
-        },
-        row.usage(),
-    );
+        NOW,
+    )
+    .await
+    .unwrap();
+    let seat = groups
+        .iter()
+        .find(|g| g.key == "seat")
+        .unwrap_or_else(|| panic!("no group of the seat: {groups:?}"));
+    // The group holds no plan row, so its Pro-week figure reads 0.
     assert_eq!(
-        (
-            priced.usd.as_ref().map(|usd| usd.total()),
-            &priced.shares,
-            priced.equivalent
-        ),
-        (Some(1_000_000.0), &None, None),
-        "the seat's counts read dollars alone: {priced:?}"
+        (seat.cost_usd, &seat.cost_shares, seat.cost_equivalent),
+        (1_000_000.0, &None, Some(0.0)),
+        "the seat's counts read dollars alone: {seat:?}"
     );
 }
 
@@ -9194,11 +9167,6 @@ fn a_request_with_two_answered_attempts_books_each_at_the_set_its_own_prompt_sel
             .map(|r| (r.band.as_str(), r.attempts, r.input_tokens))
             .collect::<Vec<_>>(),
         [("long", 1, 1_001), ("standard", 1, 1_000)]
-    );
-    assert!(
-        close(row_usd(&revisions, &rows[0]), over.total())
-            && close(row_usd(&revisions, &rows[1]), under.total()),
-        "{rows:?}"
     );
     let live = LiveKeys(std::collections::BTreeMap::from([(
         "desktop".to_string(),

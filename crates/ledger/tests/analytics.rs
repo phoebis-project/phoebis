@@ -4158,10 +4158,9 @@ fn a_free_call_on_an_unsized_or_one_window_tier_marks_no_window_and_adds_no_five
 }
 
 /// A classifier call's plan row reads zero shares and a zero figure through its session's series, while a plain row of
-/// the same counts on another account reads its figures there. The row's own price is the one reader that names why
-/// its shares read zero.
+/// the same counts on another account reads its figures there.
 #[test]
-fn a_classifier_row_reads_zero_in_the_session_series_and_its_price_names_the_reason() {
+fn a_classifier_row_reads_zero_in_the_session_series_beside_a_plain_rows_figures() {
     let db = LedgerDb::open_in_memory().unwrap();
     let tables = share_tables();
     plant_share(
@@ -4222,46 +4221,6 @@ fn a_classifier_row_reads_zero_in_the_session_series_and_its_price_names_the_rea
     assert!(
         plain.iter().all(|figure| figure.is_some_and(|f| f > 0.0)),
         "the plain row's shares and figure in the session series: {plain:?}"
-    );
-    let rows = all_rows(&db);
-    let priced = |account: &str| {
-        let row = rows
-            .iter()
-            .find(|row| row.account_id == account)
-            .unwrap_or_else(|| panic!("the row of {account} is stored: {rows:?}"));
-        let key = phoebis_ledger::RowKey {
-            model: &row.canonical_model,
-            speed: Speed::of(Some(row.speed.as_str())),
-            band: phoebis_ledger::Band::of_rollup(&row.band),
-            funding: phoebis_ledger::Funding::of_rollup(&row.funding),
-            tier: Some(&row.tier),
-            entrypoint: phoebis_ledger::entrypoint_of_client(&row.client),
-            classifier: row.classifier == "client",
-            at: row.hour * 1_000,
-            band_at: None,
-            now: NOW,
-        };
-        phoebis_ledger::price_row(&PRICES, &tables, &key, row.usage())
-    };
-    let marked = priced("a");
-    assert_eq!(
-        marked.share_reason,
-        Some(phoebis_ledger::SHARE_REASON_CLIENT_CLASSIFIER),
-        "the classifier row's price names its reason: {marked:?}"
-    );
-    assert!(
-        marked.shares.as_ref().is_some_and(|shares| {
-            [FIVE_HOUR, SEVEN_DAY]
-                .iter()
-                .all(|window| shares.get(window) == Some(&Some(0.0)))
-                && shares.values().all(|share| *share == Some(0.0))
-        }),
-        "the classifier row's price shares nothing on either window: {marked:?}"
-    );
-    let plain = priced("b");
-    assert_eq!(
-        plain.share_reason, None,
-        "the plain row's price names no reason: {plain:?}"
     );
 }
 

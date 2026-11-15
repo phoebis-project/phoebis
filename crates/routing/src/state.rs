@@ -5482,7 +5482,7 @@ mod tests {
                     utilization,
                     reset,
                     observed_at: at,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -5571,7 +5571,7 @@ mod tests {
                     utilization: 0.55,
                     reset: Some(HOUR_MS),
                     observed_at: 2_500,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -5605,7 +5605,7 @@ mod tests {
                 utilization: 0.7,
                 reset: None,
                 observed_at: 1_000,
-                source: WindowSource::Poll,
+                source: WindowSource::Head,
                 plan: None,
                 tier: None,
             }),
@@ -5657,7 +5657,26 @@ mod tests {
     #[test]
     fn a_reading_past_its_reset_is_predicted_from_the_router_s_own_use() {
         let mut state = RoutingState::from_load(RoutingLoad::default());
-        read(&mut state, FIVE_HOUR, 0.5, Some(5_000), 1_000);
+        state.record_sample(
+            "a",
+            UtilizationSample {
+                observed_at: 1_000,
+                poll: true,
+                ..Default::default()
+            }
+            .with(
+                FIVE_HOUR,
+                WindowReading {
+                    utilization: 0.5,
+                    reset: Some(5_000),
+                    observed_at: 1_000,
+                    source: WindowSource::Poll,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+            1_000,
+        );
         assert_eq!(
             state.predicted("a", FIVE_HOUR, 4_000).map(|r| r.source),
             Some(WindowSource::Poll),
@@ -5800,7 +5819,7 @@ mod tests {
                             utilization: *utilization,
                             reset: None,
                             observed_at: 2_000,
-                            source: WindowSource::Poll,
+                            source: WindowSource::Head,
                             plan: None,
                             tier: None,
                         },
@@ -5929,7 +5948,7 @@ mod tests {
         }
     }
 
-    /// A poll's reading of the 5-hour window alone, with no reset.
+    /// A head's reading of the 5-hour window alone, with no reset.
     fn five_hour_reading(utilization: f64, observed_at: i64) -> UtilizationSample {
         UtilizationSample::default().with(
             FIVE_HOUR,
@@ -5937,7 +5956,7 @@ mod tests {
                 utilization,
                 reset: None,
                 observed_at,
-                source: WindowSource::Poll,
+                source: WindowSource::Head,
                 plan: None,
                 tier: None,
             },
@@ -5999,7 +6018,7 @@ mod tests {
         assert!(state.release_reservation("r").is_some());
         let back = five_hour(&state, "a");
         assert!(
-            close(back.utilization, 0.5) && back.source == WindowSource::Poll,
+            close(back.utilization, 0.5) && back.source == WindowSource::Head,
             "the reading returns once the booking leaves: {back:?}"
         );
         state.book_reservation("r", booking("a", 1));

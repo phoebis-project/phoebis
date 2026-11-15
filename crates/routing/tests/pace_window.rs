@@ -120,7 +120,7 @@ fn reading(utilization: f64, reset: Option<i64>, observed_at: i64) -> WindowRead
         utilization,
         reset,
         observed_at,
-        source: WindowSource::Poll,
+        source: WindowSource::Head,
         plan: None,
         tier: None,
     }

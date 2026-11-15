@@ -3490,7 +3490,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             utilization: 0.5,
             reset: Some(10 * HOUR),
             observed_at: 1_000,
-            source: WindowSource::Poll,
+            source: WindowSource::Head,
             plan: None,
             tier: None,
         };
@@ -4681,7 +4681,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
                     utilization: 0.2,
                     reset: None,
                     observed_at: 1_500,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -4731,7 +4731,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
                 utilization: 0.1,
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
-                source: WindowSource::Poll,
+                source: WindowSource::Head,
                 plan: None,
                 tier: None,
             },
@@ -4799,7 +4799,7 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_moves_und
                 utilization: 0.1,
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
-                source: WindowSource::Poll,
+                source: WindowSource::Head,
                 plan: None,
                 tier: None,
             },
@@ -4885,7 +4885,8 @@ fn sample(observed_at: i64) -> UtilizationSample {
     }
 }
 
-/// `sample(observed_at)` with one window's reading folded in.
+/// `sample(observed_at)` with one window's reading folded in. The flag stays clear, as on a response head's sample, so
+/// the reading names `Head`.
 fn sample_with(
     observed_at: i64,
     window: &str,
@@ -4898,11 +4899,32 @@ fn sample_with(
             utilization,
             reset,
             observed_at,
-            source: WindowSource::Poll,
+            source: WindowSource::Head,
             plan: None,
             tier: None,
         },
     )
+}
+
+/// `sample` as `sample_from_usage` builds a clean poll's: the flag set and each reading named `Poll`.
+fn as_poll(sample: UtilizationSample) -> UtilizationSample {
+    UtilizationSample {
+        windows: sample
+            .windows
+            .into_iter()
+            .map(|(window, reading)| {
+                (
+                    window,
+                    WindowReading {
+                        source: WindowSource::Poll,
+                        ..reading
+                    },
+                )
+            })
+            .collect(),
+        poll: true,
+        ..sample
+    }
 }
 
 fn observed(account: &str, sample: UtilizationSample) -> Report {
@@ -5066,7 +5088,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     utilization: 1.0,
                     reset: None,
                     observed_at: 2_000,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -5095,7 +5117,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     utilization: 0.9,
                     reset: None,
                     observed_at: 2_002,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -5152,7 +5174,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         utilization: 0.0,
                         reset: None,
                         observed_at: 2_000,
-                        source: WindowSource::Poll,
+                        source: WindowSource::Head,
                         plan: None,
                         tier: None,
                     },
@@ -5163,7 +5185,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         utilization: 0.0,
                         reset: None,
                         observed_at: 2_000,
-                        source: WindowSource::Poll,
+                        source: WindowSource::Head,
                         plan: None,
                         tier: None,
                     },
@@ -5279,7 +5301,7 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
                     utilization: 0.1,
                     reset: None,
                     observed_at: 2_000,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -5885,7 +5907,7 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
                     utilization: 0.4,
                     reset: None,
                     observed_at: 2_000,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -9611,7 +9633,7 @@ fn windows(account: &str, five_hour: f64, seven_day: f64, at: i64) -> Report {
                 utilization: seven_day,
                 reset: None,
                 observed_at: at,
-                source: WindowSource::Poll,
+                source: WindowSource::Head,
                 plan: None,
                 tier: None,
             },
@@ -10202,7 +10224,7 @@ async fn a_heals_event_names_the_wall_at_the_windows_reset_and_the_pools_ceiling
                     utilization: 0.5,
                     reset: None,
                     observed_at: AT,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -11342,7 +11364,7 @@ async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_
                     utilization,
                     reset: Some(*reset),
                     observed_at: at,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -11371,7 +11393,7 @@ async fn a_sample_whose_every_window_falls_under_its_limit_under_the_same_reset_
                 1.0,
                 0.01,
                 Some(reset),
-                WindowSource::Poll,
+                WindowSource::Head,
                 None
             )),
             "{event:?}"
@@ -12167,7 +12189,7 @@ async fn a_clear_whose_reading_names_no_reset_carries_the_stored_reset() {
         cleared_of(&event).unwrap_or_else(|| panic!("a clear, not {event:?}"));
     assert_eq!(
         (account, window, before, reset_named, source, request),
-        ("a", FIVE_HOUR, 1.0, Some(reset), WindowSource::Poll, None),
+        ("a", FIVE_HOUR, 1.0, Some(reset), WindowSource::Head, None),
         "{event:?}"
     );
     // Under the stored reset the head's percent from 0.4 bounds the stored 1.0 at 0.41.
@@ -12213,7 +12235,7 @@ async fn the_clock_walk_announces_the_stored_reset_once_it_passes_after_a_clear(
             1.0,
             0.01,
             Some(2_000),
-            WindowSource::Poll,
+            WindowSource::Head,
             None
         )),
         "{event:?}"
@@ -12780,10 +12802,7 @@ async fn a_reservation_on_a_destination_whose_set_lacks_the_five_hour_window_boo
     state.set_share(priced_config().share);
     state.record_sample(
         "a",
-        UtilizationSample {
-            poll: true,
-            ..sample_with(AT - 500, SEVEN_DAY, 0.2, Some(AT + 72 * HOUR))
-        },
+        as_poll(sample_with(AT - 500, SEVEN_DAY, 0.2, Some(AT + 72 * HOUR))),
         AT - 500,
     );
     let decided = decide(
@@ -13302,7 +13321,7 @@ async fn the_window_inside_its_reset_binds_the_standing_runway_where_a_shorter_o
                     utilization: 0.9,
                     reset: None,
                     observed_at: AT,
-                    source: WindowSource::Poll,
+                    source: WindowSource::Head,
                     plan: None,
                     tier: None,
                 },
@@ -13551,7 +13570,10 @@ async fn a_head_within_the_margin_holds_the_wall(window: &str, reset: Option<i64
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
     handle
-        .report(observed("a", sample_with(polled, window, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(polled, window, 1.0, reset)),
+        ))
         .await;
     match next_event(&mut events).await {
         RouterEvent::WindowSpent {
@@ -13598,7 +13620,10 @@ async fn a_head_within_the_margin_holds_the_wall(window: &str, reset: Option<i64
     let polled_again = headed + step;
     now.store(polled_again, Ordering::SeqCst);
     handle
-        .report(observed("a", sample_with(polled_again, window, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(polled_again, window, 1.0, reset)),
+        ))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
@@ -13641,7 +13666,7 @@ async fn a_wall_of_the_next_reset_cycle_is_announced_again() {
     handle
         .report(observed(
             "a",
-            sample_with(next_cycle, FIVE_HOUR, 0.99, Some(20 * HOUR)),
+            as_poll(sample_with(next_cycle, FIVE_HOUR, 0.99, Some(20 * HOUR))),
         ))
         .await;
     drop(park);
@@ -13666,7 +13691,12 @@ async fn a_wall_of_the_next_reset_cycle_is_announced_again() {
     handle
         .report(observed(
             "a",
-            sample_with(next_cycle + 1_000, FIVE_HOUR, 1.0, Some(20 * HOUR)),
+            as_poll(sample_with(
+                next_cycle + 1_000,
+                FIVE_HOUR,
+                1.0,
+                Some(20 * HOUR),
+            )),
         ))
         .await;
     match next_event(&mut events).await {
@@ -13723,7 +13753,7 @@ async fn the_margin_is_two_points_and_a_thousandth_under_it_is_a_clear() {
             ..
         } => assert_eq!(
             (spent_reset, source, at),
-            (reset, WindowSource::Poll, 5_000),
+            (reset, WindowSource::Head, 5_000),
             "the clear lets the next crossing announce a wall"
         ),
         other => panic!("{other:?}"),
@@ -13836,7 +13866,10 @@ async fn a_head_under_the_margin_after_a_wall_lets_the_next_poll_announce_it_aga
     );
     now.store(4_000, Ordering::SeqCst);
     handle
-        .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(4_000, FIVE_HOUR, 1.0, reset)),
+        ))
         .await;
     // The next edge is the wall itself, so the head cleared the window once.
     match next_window_edge(&mut events).await {
@@ -14216,7 +14249,10 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
     let reset_at = 10 * HOUR;
     let reset = Some(reset_at);
     handle
-        .report(observed("a", sample_with(2_000, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(2_000, FIVE_HOUR, 1.0, reset)),
+        ))
         .await;
     assert!(matches!(
         next_spent(&mut events).await,
@@ -14277,7 +14313,7 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
     handle
         .report(observed(
             "a",
-            sample_with(reset_at - 40_000, FIVE_HOUR, 1.0, reset),
+            as_poll(sample_with(reset_at - 40_000, FIVE_HOUR, 1.0, reset)),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -14293,7 +14329,7 @@ async fn a_late_reading_under_the_margin_that_the_fold_drops_leaves_the_wall_ann
     handle
         .report(observed(
             "a",
-            sample_with(reset_at - 20_000, FIVE_HOUR, 1.0, reset),
+            as_poll(sample_with(reset_at - 20_000, FIVE_HOUR, 1.0, reset)),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -14784,7 +14820,7 @@ async fn a_poll_at_the_next_cycles_wall_past_a_predicted_walls_reset_announces_t
     handle
         .report(observed(
             "a",
-            sample_with(past, FIVE_HOUR, 1.0, Some(next_reset)),
+            as_poll(sample_with(past, FIVE_HOUR, 1.0, Some(next_reset))),
         ))
         .await;
     match next_spent(&mut events).await {
@@ -14837,7 +14873,7 @@ async fn a_poll_at_the_wall_naming_the_next_reset_past_an_announced_walls_reset_
     handle
         .report(observed(
             "a",
-            sample_with(passed, FIVE_HOUR, 1.0, Some(next_reset)),
+            as_poll(sample_with(passed, FIVE_HOUR, 1.0, Some(next_reset))),
         ))
         .await;
     match next_window_edge(&mut events).await {
