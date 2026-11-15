@@ -424,11 +424,11 @@ resets, with the query Claude Code sends for them. The read leaves in the poll's
 an hour, in the slot whose reading shows another set of windows at their limit than the last read of the resets saw
 while the account holds a reset, in the slot after the upstream refused a use, and after a confirmed pairing in the
 account's first slot that reads no profile. The console's "Use reset", Refresh and "Refresh all" read them too, and so
-does a use whose outcome stayed open, once more where that read left before the use's answer arrived or its request
-failed. A read whose answer could not be stored leaves again in the account's next slot, and so does the read after an
-open outcome where it failed. The read counts against the usage endpoint's per-account limit and waits out its hold, and
-a slot that reads the profile sends none, so a slot sends two requests at most against that limit. An account under a
-plan-ended pause is sent none, and the startup fetch reads none. No key or field turns the read off:
+does a use whose outcome stayed open, once more where the row holds no read of them from after the use's answer arrived
+or its request failed. A read whose answer could not be stored leaves again in the account's next slot, and so does the
+read after an open outcome where it failed. The read counts against the usage endpoint's per-account limit and waits out
+its hold, and a slot that reads the profile sends none, so a slot sends two requests at most against that limit. An
+account under a plan-ended pause is sent none, and the startup fetch reads none. No key or field turns the read off:
 `usage.limit_reset_warning_days` sets the warning alone ([Quota samples](statistics.md#quota-samples)).
 
 **The use of a limit reset.** The router uses a reset on the operator's word alone: a click on "Use reset" on a Quota

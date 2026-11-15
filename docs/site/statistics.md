@@ -204,14 +204,14 @@ them, and stores what it reads on the account's row. That read runs after the us
 an hour per account, in the slot whose reading shows another set of windows at their limit than the last read of the
 resets saw while the account holds a reset, and in the slot after the upstream refused a use. It also runs when the
 operator clicks "Use reset" on a Quota card, with the card's Refresh and "Refresh all", and after a use whose outcome
-stayed open, once more where that read left before the use's answer arrived or its request failed. A read whose answer
-could not be stored, because a pairing or a use changed the account while the read was out, is made again in the
-account's next slot, and so is the read after an open outcome where it failed. A confirmed pairing clears the stored
-resets, and the account's first slot that reads no profile reads them again. The read shares the account's hold and its
-backoff with the usage read, so an account that waits out a 429 is not asked, and a slot whose profile read is due
-leaves it to the next one. An account under a plan-ended pause is not asked, and the startup read asks for no resets. A
-failed read logs one warning, writes no `poll_failed` event, moves the account to no re-pair whatever status it
-answered, and leaves the stored resets as they were.
+stayed open, once more where the row holds no read of the resets from after the use's answer arrived or its request
+failed. A read whose answer could not be stored, because a pairing or a use changed the account while the read was out,
+is made again in the account's next slot, and so is the read after an open outcome where it failed. A confirmed pairing
+clears the stored resets, and the account's first slot that reads no profile reads them again. The read shares the
+account's hold and its backoff with the usage read, so an account that waits out a 429 is not asked, and a slot whose
+profile read is due leaves it to the next one. An account under a plan-ended pause is not asked, and the startup read
+asks for no resets. A failed read logs one warning, writes no `poll_failed` event, moves the account to no re-pair
+whatever status it answered, and leaves the stored resets as they were.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
