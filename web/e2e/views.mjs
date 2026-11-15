@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { selectParts } from './parts.mjs';
 
 const base = process.env.PHOEBIS_E2E_BASE ?? 'http://127.0.0.1:8081';
 const secret = process.env.PHOEBIS_E2E_SECRET;
@@ -122,6 +123,18 @@ const themeOf = (key) => key.split('-')[0];
  * walks the default palette alone, since its test counts one shot per view and theme.
  */
 const WALKS = (mock ? ['default', 'github'] : ['default']).flatMap((palette) => ['light', 'dark'].map((mode) => ({ key: keyOf(mode, palette), mode, palette })));
+/**
+ * The parts this process runs. Unset, that is every part in one process, which the router's pass keeps: its walks
+ * share the router's registry.
+ */
+let parts;
+try {
+  parts = selectParts(process.env.PHOEBIS_E2E_WALKS, WALKS.map((walk) => walk.key));
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
+const walks = WALKS.filter((walk) => parts.includes(walk.key));
 
 /** How far the page's clock moves per step. */
 const CLOCK_STEP_MS = 100;
@@ -13732,17 +13745,13 @@ async function logIn(theme, palette, measured = true) {
 // Where a throw below came from, so the failure it becomes names a view rather than a stack.
 let at = 'the login';
 try {
-  await logIn('light', 'default');
-
   // Each measure below takes the walk's key as its theme, leading its lines with it and writing its shots under it.
-  for (const [step, { key: theme, mode, palette }] of WALKS.entries()) {
-    // The login screen draws on no view, so the session ends before every walk after the first and the screen draws
-    // again in that walk's theme and palette.
-    if (step > 0) {
-      at = `${theme} the login`;
-      await logOut();
-      await logIn(mode, palette);
-    }
+  for (const [step, { key: theme, mode, palette }] of walks.entries()) {
+    // The login screen draws on no view, so each walk signs in on the screen drawn in its own theme and palette, after
+    // a Log out where an earlier walk of the process holds the session.
+    at = `${theme} the login`;
+    if (step > 0) await logOut();
+    await logIn(mode, palette);
     mkdirSync(join(shots, theme), { recursive: true });
     await storeAppearance(mode, palette);
     for (const view of VIEWS) {
@@ -14048,73 +14057,80 @@ try {
   }
   // Only the mock bundle routes the fixture path.
   if (mock) {
-    for (const { key: theme, mode, palette } of WALKS) {
+    for (const { key: theme, mode, palette } of walks) {
       at = `${theme} /fixtures/grouped-dialog`;
       await storeAppearance(mode, palette);
       await groupedDialogFixture(theme);
     }
   }
-  // The measures below read the bare theme, so their loops run under the default palette alone.
-  await page.evaluate(() => localStorage.setItem('phoebis.palette', 'default'));
-  for (const theme of ['light', 'dark']) {
-    at = `${theme} /pools cost reference`;
-    await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
-    await poolCostReference(theme);
-  }
-  for (const theme of ['light', 'dark']) {
-    at = `${theme} /requests default pages`;
-    await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
-    await requestPageWidths(theme);
-  }
-  // The Key created dialog's Copy creates a key, so it runs in the mock pass alone.
-  if (mock) {
+  if (parts.includes('rest')) {
+    // In a process of their own the parts behind the walks sign in first, on a screen no measure reads, since each walk
+    // reads its own.
+    if (walks.length === 0) {
+      at = 'the login';
+      await logIn('light', 'default', false);
+    }
+    // The measures below read the bare theme, so their loops run under the default palette alone.
+    await page.evaluate(() => localStorage.setItem('phoebis.palette', 'default'));
     for (const theme of ['light', 'dark']) {
-      at = `${theme} /keys copy by command`;
+      at = `${theme} /pools cost reference`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
-      await copyFallbackModal(theme);
+      await poolCostReference(theme);
     }
     for (const theme of ['light', 'dark']) {
-      at = `${theme} /analytics reasons panel link`;
+      at = `${theme} /requests default pages`;
       await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
-      await reasonLink(theme);
+      await requestPageWidths(theme);
     }
-    for (const theme of ['light', 'dark']) {
-      at = `${theme} /requests body width floor`;
-      await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
-      await bodyWidthFloor(theme);
-    }
-  }
-  // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes a
-  // right-aligned trigger aside wherever a browser draws scrollbars (Windows and Linux by default). The Keys page's
-  // menus run once more in a browser that shows them, on a page of its own after every shot, since the scrollbars
-  // would change the shots.
-  at = 'the /keys menus with scrollbars shown';
-  const shown = await chromium.launch({ args: RASTER, ignoreDefaultArgs: ['--hide-scrollbars'] });
-  try {
-    page = await openPage(shown);
-    await logIn('light', 'default', false);
-    await page.evaluate(() => localStorage.setItem('phoebis.theme', 'light'));
-    await page.goto(`${base}/keys`);
-    await booted();
-    await advance(LOAD_MS);
-    await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
-    await keysPageMenus('light (scrollbars shown)');
-    // The scroll lock keeps the gutter of a scrollbar the hidden ones never draw, so its read runs here alone, on the
-    // mock's Pools page, which its story draws tall enough to scroll.
+    // The Key created dialog's Copy creates a key, so it runs in the mock pass alone.
     if (mock) {
       for (const theme of ['light', 'dark']) {
-        at = `${theme} /pools dialog scroll lock with scrollbars shown`;
+        at = `${theme} /keys copy by command`;
         await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
-        await page.clock.setSystemTime(clockOrigin);
-        await page.goto(`${base}/pools`);
-        await booted();
-        await advance(LOAD_MS);
-        await page.waitForSelector('.pool .serving', { timeout: 15_000 });
-        await dialogScrollLock(theme);
+        await copyFallbackModal(theme);
+      }
+      for (const theme of ['light', 'dark']) {
+        at = `${theme} /analytics reasons panel link`;
+        await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+        await reasonLink(theme);
+      }
+      for (const theme of ['light', 'dark']) {
+        at = `${theme} /requests body width floor`;
+        await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+        await bodyWidthFloor(theme);
       }
     }
-  } finally {
-    await shown.close().catch((error) => failures.push(`closing the browser that shows scrollbars: ${error.message}`));
+    // Headless Chromium hides scrollbars, and with them the gutter a list in flow gives a clipping wrap, which pushes
+    // a right-aligned trigger aside wherever a browser draws scrollbars (Windows and Linux by default). The Keys page's
+    // menus run once more in a browser of its own that shows them, since the scrollbars would change the shots.
+    at = 'the /keys menus with scrollbars shown';
+    const shown = await chromium.launch({ args: RASTER, ignoreDefaultArgs: ['--hide-scrollbars'] });
+    try {
+      page = await openPage(shown);
+      await logIn('light', 'default', false);
+      await page.evaluate(() => localStorage.setItem('phoebis.theme', 'light'));
+      await page.goto(`${base}/keys`);
+      await booted();
+      await advance(LOAD_MS);
+      await page.waitForSelector('.card--table tbody tr', { timeout: 15_000 });
+      await keysPageMenus('light (scrollbars shown)');
+      // The scroll lock keeps the gutter of a scrollbar the hidden ones never draw, so its read runs here alone, on
+      // the mock's Pools page, which its story draws tall enough to scroll.
+      if (mock) {
+        for (const theme of ['light', 'dark']) {
+          at = `${theme} /pools dialog scroll lock with scrollbars shown`;
+          await page.evaluate((t) => localStorage.setItem('phoebis.theme', t), theme);
+          await page.clock.setSystemTime(clockOrigin);
+          await page.goto(`${base}/pools`);
+          await booted();
+          await advance(LOAD_MS);
+          await page.waitForSelector('.pool .serving', { timeout: 15_000 });
+          await dialogScrollLock(theme);
+        }
+      }
+    } finally {
+      await shown.close().catch((error) => failures.push(`closing the browser that shows scrollbars: ${error.message}`));
+    }
   }
 } catch (error) {
   // Reported, never re-raised: the console errors collected so far are the point of the run, and a rethrow
@@ -14127,5 +14143,10 @@ if (failures.length) {
   console.error(`${failures.length} failures:\n  ${failures.join('\n  ')}`);
   process.exit(1);
 }
-console.log(`browser pass: ${VIEWS.filter((view) => mock || !view.mockOnly).length} views in 2 themes, screenshots under ${shots}`);
+// The router's pass under `cargo test` reads its view count off the words before " views in 2 themes", which its walks,
+// the default palette's two, print.
+const modes = new Set(walks.map((walk) => walk.mode)).size;
+const palettes = new Set(walks.map((walk) => walk.palette)).size;
+const walked = walks.length === 0 ? 'no walk over the views' : `${VIEWS.filter((view) => mock || !view.mockOnly).length} views in ${modes} ${modes === 1 ? 'theme' : 'themes'}${palettes > 1 ? ` under ${palettes} palettes` : ''}`;
+console.log(`browser pass: ${walked} (${parts.join(', ')}), screenshots under ${shots}`);
 for (const line of measurements) console.log(`  ${line}`);

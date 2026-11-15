@@ -498,6 +498,29 @@ cards and its empty state are checked against the router's seeded registry alone
 since the mock's story has subscription accounts and no empty list on the dashboard. The subscription end editor needs
 the story's OAuth account, so against the router's seed that part stands down.
 
+`mock-pass.mjs` runs the pass in parts, one `views.mjs` per part, side by side against the one server: each walk
+(`light`, `dark`, `light-github` and `dark-github`) with its fixture path, and `rest`, the parts behind the walks (the
+bare theme's measures and the browser that shows scrollbars). The mock's story lives in each page, so no part reads
+another's writes. A walk's process logs in on the screen drawn in that walk's theme and palette, the `rest` process
+logs in on a screen no measure reads, and every process writes its shots under the one `PHOEBIS_SCREENSHOT_DIR` and
+closes with a line naming the parts it ran. The pass prints each process's output whole, one part after the other in
+that order, and fails where one of them fails. `PHOEBIS_E2E_WALKS` narrows it to a comma-separated list of those words,
+so a measure that every walk runs can be proved on one walk:
+
+```sh
+PHOEBIS_E2E_WALKS=light PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
+```
+
+Unset or empty, the variable names every part, and a word that names no part stops the pass before a browser starts.
+`views.mjs` reads the same variable and runs the parts it names in one process, every part when it is unset. The pass
+against a running router keeps that one process, since its walks share the router's registry, where one walk's writes
+would reach another's reads.
+
+Under the load of the parts side by side, a page can set its own clock state one step late, so a line that prints an
+instant to the millisecond can differ between two passes by one step of 100 ms. A part that runs alone takes the same
+steps in each run. Where two passes differ in a shot or a line, run that part alone through `PHOEBIS_E2E_WALKS` and
+compare again.
+
 ## Compare the computed styles
 
 ```sh

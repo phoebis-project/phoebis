@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { fanOut, selectParts } from './parts.mjs';
 import { serve } from './serve.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -17,17 +18,24 @@ if (!existsSync(join(bundle, 'index.html'))) {
  */
 const CLOCK = '2026-09-16T14:30:00Z';
 
+/**
+ * The keys of `WALKS` in `views.mjs` under the mock, copied since that file runs its pass on import: a walk added there
+ * runs here only once this list names it. The mock's story lives in each page, so no part reads another's writes, and
+ * each part runs in a `views.mjs` of its own beside the others.
+ */
+const WALK_KEYS = ['light', 'dark', 'light-github', 'dark-github'];
+let parts;
+try {
+  parts = selectParts(process.env.PHOEBIS_E2E_WALKS, WALK_KEYS);
+} catch (error) {
+  console.error(error.message);
+  process.exit(2);
+}
+
 const server = await serve(bundle);
-const child = spawn(process.execPath, [join(here, 'views.mjs')], {
-  env: { ...process.env, PHOEBIS_E2E_BASE: `http://127.0.0.1:${server.port}`, PHOEBIS_E2E_CLOCK: CLOCK, PHOEBIS_E2E_MOCK: '1', PHOEBIS_E2E_SECRET: 'admin' },
-  stdio: 'inherit',
-});
-const code = await new Promise((resolve) => {
-  child.on('error', (error) => {
-    console.error(`the browser pass did not start: ${error.message}`);
-    resolve(1);
-  });
-  child.on('exit', (status) => resolve(status ?? 1));
-});
+const env = { ...process.env, PHOEBIS_E2E_BASE: `http://127.0.0.1:${server.port}`, PHOEBIS_E2E_CLOCK: CLOCK, PHOEBIS_E2E_MOCK: '1', PHOEBIS_E2E_SECRET: 'admin' };
+const pass = await fanOut(parts, (part) => spawn(process.execPath, [join(here, 'views.mjs')], { env: { ...env, PHOEBIS_E2E_WALKS: part }, stdio: ['inherit', 'pipe', 'pipe'] }));
 server.close();
-process.exit(code);
+// Each child's output whole, in the parts' order, so the lines of two children never mix.
+for (const run of pass.runs) for (const { chunk, stream } of run.output) process[stream].write(chunk);
+process.exit(pass.status);
