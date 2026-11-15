@@ -178,7 +178,7 @@ function nativeRowOf(g: AnalyticsGroup, week: WeekPosition, weekFactor: number, 
   const ratio = (planPer: number | null, planCount: number | null, whole: number, scale: number) => both(planPer, per(sides.billed ?? null, billedCount(planCount, whole), scale));
   const perRequest = per(figure, g.planRequests, 1);
   const perThousand = per(figure, g.planOutputTokens, 1000);
-  // The route labels every group.
+  // The route labels every group, the model grouping's empty key included, since the ledger labels that key itself.
   return {
     cells: [fmtInt(g.requests), both(figure, sides.billed ?? null, hint), ratio(perRequest, g.planRequests, g.requests, 1), ratio(perThousand, g.planOutputTokens, g.tokens.output, 1000)],
     // The Cost key reads the plan rows' figure, 0 for a group of billed rows alone and null where a plan row priced
