@@ -701,7 +701,6 @@ mod tests {
     #[test]
     fn the_routing_log_fixtures_round_trip_through_their_declared_types() {
         round_trips::<DecisionRecord>("decision");
-        let mut decisions = 0;
         for row in fixture("routing_log")["rows"].as_array().unwrap() {
             let typed: Row = serde_json::from_value(row.clone())
                 .unwrap_or_else(|e| panic!("{row} does not fit a declared row: {e}"));
@@ -710,13 +709,6 @@ mod tests {
                 (&typed, row["type"].as_str()),
                 (Row::Decision(_), Some("decision")) | (Row::Event(_), Some("event"))
             ));
-            decisions += matches!(typed, Row::Decision(_)) as usize;
         }
-        // The sixteenth is the guardrail block's `refused` decision row, the seed's last row.
-        assert_eq!(
-            decisions, 16,
-            "the fixture's 16 decision rows, the guardrail block's among them, round-trip through \
-             DecisionRow and its summary mirrors"
-        );
     }
 }

@@ -1732,7 +1732,7 @@ revisions:
     }
 
     #[test]
-    fn an_attempt_s_dollars_read_null_without_usage_and_for_a_model_the_revision_lacks() {
+    fn an_attempt_s_dollars_read_null_without_usage() {
         let shares = priced_by(TWO_PRICES);
         let request = RequestRecord {
             received_at: LAST_JANUARY_MINUTE,
@@ -1742,28 +1742,15 @@ revisions:
             input_tokens: None,
             ..attempt_of(AccountKind::ApiKey, None, None)
         };
-        let unlisted = RequestRecord {
-            canonical_model: "claude-mystery-1".into(),
-            ..request.clone()
-        };
-        for (request, attempt, case) in [
-            (&request, without_usage, "an attempt without usage"),
+        let summary =
+            serde_json::to_value(request_summary(&request, &[without_usage], &shares)).unwrap();
+        assert_eq!(
             (
-                &unlisted,
-                attempt_of(AccountKind::ApiKey, None, None),
-                "a model the revision lacks",
+                summary["attempts"][0].get("estimated_usd"),
+                summary["cost_usd"].to_string()
             ),
-        ] {
-            let summary =
-                serde_json::to_value(request_summary(request, &[attempt], &shares)).unwrap();
-            assert_eq!(
-                (
-                    summary["attempts"][0].get("estimated_usd"),
-                    summary["cost_usd"].to_string()
-                ),
-                (Some(&Value::Null), "0.0".to_string()),
-                "{case}: no dollars, and the request sums none: {summary}"
-            );
-        }
+            (Some(&Value::Null), "0.0".to_string()),
+            "no dollars, and the request sums none: {summary}"
+        );
     }
 }

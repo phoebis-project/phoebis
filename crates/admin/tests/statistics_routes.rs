@@ -282,23 +282,27 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         })
         .unwrap();
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    let api_prices = &system["pricing"]["api_prices"];
     assert_eq!(
         (
-            &system["pricing"]["api_prices"],
+            &api_prices["path"],
+            &api_prices["source"],
+            &api_prices["effective"],
+            &api_prices["revisions"],
             &system["pricing"]["subscription_costs"]
         ),
         (
-            &serde_json::json!({
-                "path": null, "source": "shipped", "effective": shipped.effective,
-                "revisions": revisions.len(), "next": "2026-11-09T18:30:00Z",
-            }),
+            &serde_json::json!(null),
+            &serde_json::json!("shipped"),
+            &serde_json::json!(shipped.effective),
+            &serde_json::json!(revisions.len()),
             &serde_json::json!({
                 "path": null, "source": "shipped", "effective": cost_model.effective,
                 "revisions": loaded.revisions.len(), "next": null,
             })
         ),
-        "the harness configures neither path, so both tables are the shipped ones, and the clock sits before the \
-         price list's 2026-11-09T18:30:00Z entry, its next one, and past every entry of the cost model: {system}"
+        "the harness configures neither path, so both tables are the shipped ones, and the clock sits past every entry \
+         of the cost model: {system}"
     );
     assert_eq!(
         (

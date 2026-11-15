@@ -188,7 +188,6 @@ fn rows(db: &LedgerDb, now: i64) -> Vec<ReconciliationRow> {
 fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
     let reset = SATURDAY + 4 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.20, reset),
@@ -253,7 +252,6 @@ fn a_complete_run_prices_its_attempts_and_writes_the_ratio() {
 fn every_account_with_a_reading_reconciles_its_runs() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     let of = |account: &str, sample: QuotaSampleRecord| QuotaSampleRecord {
         account_id: account.into(),
         ..sample
@@ -315,7 +313,6 @@ fn every_account_with_a_reading_reconciles_its_runs() {
 fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -349,7 +346,6 @@ fn a_five_point_rise_between_whole_percent_readings_meets_the_least_rise() {
 fn a_run_of_one_reading_is_skipped() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(&[reading(FIVE_HOUR, SATURDAY, 0.10, reset)], None)
         .unwrap();
     served(&db, "r1", SONNET, SATURDAY + 5 * MINUTE, 20, None);
@@ -380,7 +376,6 @@ fn a_run_of_one_reading_is_skipped() {
 fn a_fall_inside_a_run_splits_it_and_the_row_sums_its_parts() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A grant empties the window between the second and third readings: a rise of 0.84 before it and 0.10 after.
     db.insert_samples(
         &[
@@ -439,7 +434,6 @@ fn a_run_split_at_a_fall(db: &LedgerDb, reset: i64) {
 fn an_attempt_the_tables_cannot_price_in_one_part_skips_the_whole_row() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     a_run_split_at_a_fall(&db, reset);
     // 0.84 of the window from 84 Sonnet units before the grant, and after it an attempt on a model of a tier with no
     // weighted model, which the tables price to no share whatever its tokens.
@@ -458,7 +452,6 @@ fn an_attempt_the_tables_cannot_price_in_one_part_skips_the_whole_row() {
 fn a_part_with_no_priced_attempt_adds_nothing_and_the_other_part_writes_the_row() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     a_run_split_at_a_fall(&db, reset);
     // 0.84 of the window from 84 Sonnet units before the grant, and no attempt after it.
     served(&db, "before", SONNET, SATURDAY + 5 * MINUTE, 84, None);
@@ -527,7 +520,6 @@ fn a_run_with_a_reversed_zero(db: &LedgerDb, reset: i64) {
 fn a_zero_the_next_reading_reverses_leaves_the_run_and_the_row_sums_one_rise() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     a_run_with_a_reversed_zero(&db, reset);
     let row = the_row(&db, reset);
     assert_eq!(
@@ -548,7 +540,6 @@ fn the_fold_holds_no_meter_drift_from_a_zero_the_next_reading_reverses() {
     let reset = SATURDAY + 2 * HOUR;
     let now = reset + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     a_run_with_a_reversed_zero(&db, reset);
     fold(&db, now);
     let tables = subscription_costs();
@@ -574,7 +565,6 @@ fn the_fold_holds_no_meter_drift_from_a_zero_the_next_reading_reverses() {
 fn a_dip_of_three_low_readings_reversed_past_the_prediction_leaves_the_run() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // Three failed polls read zero while two Sonnet units complete, and the next reading climbs 0.42 from the first.
     polls(&db, reset, &[0.10, 0.40, 0.0, 0.0, 0.0, 0.42, 0.50]);
     served_after_poll(&db, 0, 30);
@@ -608,7 +598,6 @@ fn a_dip_of_several_failed_polls_across_parts_leaves_the_run_and_the_row_sums_on
             let reset = SATURDAY + 2 * HOUR;
             let last = utilizations.len() as i64 - 1;
             let db = LedgerDb::open_in_memory().unwrap();
-            seed_request(&db, "seed", SATURDAY - MINUTE);
             polls(&db, reset, utilizations);
             served_after_poll(&db, 0, 50);
             served_after_poll(&db, 2, 1);
@@ -636,7 +625,6 @@ fn a_dip_of_several_failed_polls_across_parts_leaves_the_run_and_the_row_sums_on
 fn a_dip_whose_climb_the_attempts_between_its_ends_predict_keeps_its_split() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A grant empties the window at 0.60, and seventy Sonnet units refill it past that level to 0.70.
     polls(&db, reset, &[0.05, 0.60, 0.0, 0.30, 0.70]);
     served_after_poll(&db, 0, 55);
@@ -655,7 +643,6 @@ fn a_dip_whose_climb_the_attempts_between_its_ends_predict_keeps_its_split() {
 fn a_dip_inside_one_the_attempts_predict_is_judged_on_its_own_and_leaves_the_run() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A grant empties the window at 0.60, and seventy Sonnet units refill it past that level to 0.70. Inside that dip a
     // failed poll reads 0.10 after 0.30, and the forty units completed after it predict far less than its 0.60 climb.
     polls(&db, reset, &[0.05, 0.60, 0.0, 0.30, 0.10, 0.70]);
@@ -675,7 +662,6 @@ fn a_dip_inside_one_the_attempts_predict_is_judged_on_its_own_and_leaves_the_run
 fn a_dip_whose_attempts_the_tables_cannot_price_keeps_its_split() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A grant drops the window from 0.50 to 0.20 and the next poll reads 0.10, so the dip spans two parts. Between them
     // an attempt completes on a model the tables price to no share, so nothing judges the dip, and the sum of the parts
     // leaves that attempt out.
@@ -696,7 +682,6 @@ fn a_dip_whose_attempts_the_tables_cannot_price_keeps_its_split() {
 fn a_dip_that_never_closes_keeps_its_split() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A free reset reads the window at zero and the readings stay low to the run's end.
     polls(&db, reset, &[0.20, 0.70, 0.0, 0.0, 0.0, 0.10]);
     served_after_poll(&db, 0, 50);
@@ -714,7 +699,6 @@ fn a_dip_that_never_closes_keeps_its_split() {
 fn a_fall_inside_a_dip_that_never_closes_is_judged_on_its_own() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A grant empties the window at 0.89 and the readings never climb back to it. Inside that dip a failed poll reads
     // zero between two readings at 0.10, with no attempt between the zero and the next reading.
     polls(&db, reset, &[0.05, 0.89, 0.0, 0.10, 0.0, 0.10, 0.20]);
@@ -734,7 +718,6 @@ fn a_fall_inside_a_dip_that_never_closes_is_judged_on_its_own() {
 fn a_dip_whose_climb_stays_under_the_least_rise_keeps_its_split() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // One poll reads a point under the one before it, with no attempt between it and the next.
     polls(&db, reset, &[0.10, 0.50, 0.49, 0.50, 0.70]);
     served_after_poll(&db, 0, 40);
@@ -752,7 +735,6 @@ fn a_dip_whose_climb_stays_under_the_least_rise_keeps_its_split() {
 fn a_failed_polls_zero_among_heads_is_a_dip_the_walk_judges_whatever_its_source() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // A failed poll reads zero between heads at 0.30 and 0.32, and the two Sonnet units completed between the zero and
     // the next head predict far less than the climb back.
     db.insert_samples(
@@ -791,7 +773,6 @@ fn a_run_closed_inside_the_reset_tolerance_before_its_key_writes_its_row_and_one
     let reset = SATURDAY + HOUR;
     for (early, written) in [(MINUTE, true), (MINUTE + 1_000, false)] {
         let db = LedgerDb::open_in_memory().unwrap();
-        seed_request(&db, "seed", SATURDAY - MINUTE);
         db.insert_samples(
             &[
                 reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -819,7 +800,6 @@ fn a_run_closed_inside_the_reset_tolerance_before_its_key_writes_its_row_and_one
 #[test]
 fn a_run_a_later_reset_closed_while_its_own_lay_ahead_writes_no_row() {
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // The 5-hour reset slides ten minutes with each pair of polls, so each pair's run closes hours before its own
     // reset, until the last pair's reset passes.
     let slides = 4;
@@ -889,7 +869,6 @@ fn a_quiet_stretch_of_polls_and_a_busy_stretch_of_heads_reconcile_from_the_first
 ) {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -921,7 +900,6 @@ fn a_quiet_stretch_of_polls_and_a_busy_stretch_of_heads_reconcile_from_the_first
 fn a_run_of_heads_alone_reconciles_as_a_run_of_polls_does() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -953,7 +931,6 @@ fn a_run_of_heads_alone_reconciles_as_a_run_of_polls_does() {
 fn a_run_of_one_head_and_one_poll_reconciles_between_the_two() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             head_reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -987,7 +964,6 @@ fn a_head_one_percent_under_the_poll_before_it_joins_the_run_and_two_percent_und
     // 0.40 of the window between the first two polls and 0.10 after the head.
     let fold_with = |head: f64| {
         let db = LedgerDb::open_in_memory().unwrap();
-        seed_request(&db, "seed", SATURDAY - MINUTE);
         db.insert_samples(
             &[
                 reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -1022,7 +998,6 @@ fn a_head_one_percent_under_the_poll_before_it_joins_the_run_and_two_percent_und
 fn a_head_one_percent_under_the_poll_before_it_opens_no_dip() {
     let reset = SATURDAY + 2 * HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     // The head reads a point under the poll before it, inside the sources' gap, then falls to 0.10, a dip the 39 Sonnet
     // units completed inside it refill. A dip opened at the head would close only at the last poll, on a climb of 0.49
     // those units cannot explain, and take the three heads with it.
@@ -1100,7 +1075,6 @@ fn a_weekly_reading_almost_a_week_before_the_floor_still_opens_its_run() {
     let reset = SATURDAY + 7 * DAY;
     let opened = SATURDAY + MINUTE;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY);
     db.insert_samples(
         &[
             reading(SEVEN_DAY, opened, 0.10, reset),
@@ -1134,7 +1108,6 @@ fn a_weekly_reading_almost_a_week_before_the_floor_still_opens_its_run() {
 fn the_fable_weeks_run_prices_the_fable_attempts_alone() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(SEVEN_DAY, SATURDAY, 0.10, reset),
@@ -1173,7 +1146,6 @@ fn the_fable_weeks_run_prices_the_fable_attempts_alone() {
 fn a_run_mixing_two_regimes_prices_each_attempt_under_its_own() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -1300,7 +1272,6 @@ fn the_drift_reads_the_windows_that_ended_inside_eight_days_while_the_route_keep
 fn a_second_fold_writes_no_duplicate_row() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -1332,7 +1303,6 @@ fn a_second_fold_writes_no_duplicate_row() {
 fn a_plan_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -1372,7 +1342,6 @@ fn a_plan_attempt_is_counted_and_an_overage_attempt_draws_nothing() {
 fn a_classifier_attempt_beside_a_main_turn_predicts_the_main_turns_share_alone() {
     let reset = SATURDAY + HOUR;
     let db = LedgerDb::open_in_memory().unwrap();
-    seed_request(&db, "seed", SATURDAY - MINUTE);
     db.insert_samples(
         &[
             reading(FIVE_HOUR, SATURDAY, 0.10, reset),
@@ -1408,7 +1377,6 @@ fn a_run_with_a_plan_attempt_the_tables_cannot_price_is_skipped_unless_it_carrie
     // the tables price to no share whatever its tokens.
     let fold_with = |mystery_input: u64| {
         let db = LedgerDb::open_in_memory().unwrap();
-        seed_request(&db, "seed", SATURDAY - MINUTE);
         db.insert_samples(
             &[
                 reading(FIVE_HOUR, SATURDAY, 0.10, reset),

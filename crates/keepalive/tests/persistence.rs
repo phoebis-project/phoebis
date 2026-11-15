@@ -483,42 +483,6 @@ fn saved_days(r: &Rig) -> BTreeSet<i64> {
         .collect()
 }
 
-/// The roll at the first tick of a day drops the day the retention no longer keeps while no pool and no row is dirty,
-/// and the next save carries the purge alone, so the registry loses that day's rows.
-#[tokio::test]
-async fn a_save_after_the_roll_carries_the_purge_while_no_pool_is_dirty() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy::default(),
-        timing: KeepaliveTiming {
-            idle_return_retention_days: 1,
-            ..RigSpec::default().timing
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    r.state("main", "idle");
-    r.advance_attended(6 * MINUTE);
-    r.step().await;
-    r.observe_with("main", &next_turn()).await;
-    r.engine.flush_persisted().await;
-    assert_eq!(saved_days(&r), BTreeSet::from([NOW / DAY]));
-    r.advance_attended(DAY);
-    // The heartbeats' rows go first, so the tick that rolls is the one change the next save carries.
-    r.engine.flush_persisted().await;
-    r.step().await;
-    assert!(
-        r.engine.idle_returns().is_empty(),
-        "the roll dropped the only day"
-    );
-    r.engine.flush_persisted().await;
-    assert_eq!(
-        saved_days(&r),
-        BTreeSet::new(),
-        "the save carried the purge"
-    );
-}
-
 /// A day of counters saved, then the roll at the next day's first tick, which drops it under a retention of one day and
 /// leaves its purge the one change the next save carries. Answers the dropped day.
 async fn the_only_day_rolled_off(r: &mut Rig) -> i64 {

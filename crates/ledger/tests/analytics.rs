@@ -4571,9 +4571,10 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     );
 }
 
-/// A request that asked for fast mode and was answered without it files under the fast speed while its funding reads
-/// the served answer: the burn prices it on the plan it drew from, its window shares and figures as a standard row of
-/// the same usage reads them, while its list dollars read the cells of the speed the row is filed under, as the
+/// The fold files an answered attempt under the speed its answer reported, so no row it folds today holds tokens under
+/// the fast speed with plan funding. A ledger can still hold such rows from a fold before that rule, since rollups stay
+/// for 365 days. The burn prices such a row on the plan it drew from, its window shares and figures as a standard row
+/// of the same usage reads them, while its list dollars read the cells of the speed the row is filed under, as the
 /// breakdown's cost does.
 #[test]
 fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard_row() {
