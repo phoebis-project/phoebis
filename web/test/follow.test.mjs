@@ -364,69 +364,6 @@ test("on a live range whose list holds no next cursor a poll lands a row below t
   assert.deepEqual([f.last().rows.map(byId), [...f.last().fresh]], [rows.map(byId), ['row_026']], 'the second poll lands row 26 below row 25, tinted');
 });
 
-test('under a token order a poll lands a row below a last row shown of count 0, and leaves one below a count of 1 to Next', async () => {
-  // The wire answers 0 for a count the route never stored and files last, so req_z's 0 may stand for such a count, and
-  // the route then pages req_a's stored 0 above req_z, where the list's next cursor never brings it.
-  const clock = frozen();
-  const served = (id, input) => ({ at: at(1), attempts: [{ upstreamStatus: 200 }], id, usage: { input, output: 0 } });
-  const order = { cannotPlace: d.cannotPlaceUnder('input_tokens'), compare: d.requestOrder('input_tokens', 'desc') };
-  const read = async () => ({ landedThrough: 6, nextCursor: null, rows: [served('req_a', 0)] });
-  const zero = follow({ ...order, list: { landedThrough: 5, nextCursor: 'c2', rows: [served('req_z', 0)] }, read });
-  const one = follow({ ...order, list: { landedThrough: 5, nextCursor: 'c2', rows: [served('req_z', 1)] }, read });
-  act(() => clock.tick(5_000));
-  await settled();
-  assert.deepEqual(
-    { one: one.last().rows.map(byId), zero: zero.last().rows.map(byId) },
-    { one: ['req_z'], zero: ['req_z', 'req_a'] },
-    'below a count of 0 the polled row lands, and below a count of 1 a polled row of count 0 stays for Next',
-  );
-});
-
-/** A row whose serving attempt answered 200, with its two token counts as the wire answers them. */
-const served200 = (id, input, output = 0) => ({ at: at(1), attempts: [{ upstreamStatus: 200 }], id, usage: { input, output } });
-
-test("under an ascending token order a poll lands a row above the page's largest count while the list's cursor stands on a count never stored", async () => {
-  // The route files a count it never stored last under either direction and answers it as 0, so its page ends on req_m
-  // and req_n and its cursor stands on req_n. The comparator reads their 0 first, so once the first poll re-sorts the
-  // rows shown, req_p's 5 is the last of them. The route files req_q's stored 9 before req_n, where the list's next
-  // cursor never brings it.
-  const clock = frozen();
-  const read = async (_cursor, _to, landedAfter) => (landedAfter < 6 ? { landedThrough: 6, nextCursor: null, rows: [] } : { landedThrough: 7, nextCursor: null, rows: [served200('req_q', 9)] });
-  const list = { landedThrough: 5, nextCursor: 'c2', rows: [served200('req_p', 5), served200('req_m', 0), served200('req_n', 0)] };
-  const f = follow({ cannotPlace: d.cannotPlaceUnder('input_tokens'), compare: d.requestOrder('input_tokens', 'asc'), list, read });
-  await twoPolls(clock);
-  assert.deepEqual(f.last().rows.map(byId), ['req_m', 'req_n', 'req_p', 'req_q']);
-});
-
-test("under the output token order a poll reads the output count of the row the list's cursor stands on", async () => {
-  // req_z's output count reads 0 beside an input count of 1, so a guard that read the input count would let the
-  // comparator file req_a, of output 0 and a smaller id, below req_z and withhold it.
-  const clock = frozen();
-  const read = async () => ({ landedThrough: 6, nextCursor: null, rows: [served200('req_a', 0)] });
-  const f = follow({ cannotPlace: d.cannotPlaceUnder('output_tokens'), compare: d.requestOrder('output_tokens', 'desc'), list: { landedThrough: 5, nextCursor: 'c2', rows: [served200('req_z', 1)] }, read });
-  act(() => clock.tick(5_000));
-  await settled();
-  assert.deepEqual(f.last().rows.map(byId), ['req_z', 'req_a']);
-});
-
-test("under an ascending token order a poll over a stand-in lands a row above its largest count while a row shown carries a count never stored", async () => {
-  // The stand-in's page answers req_p's 5 and then req_n's count, never stored and answered as 0, which the route
-  // files last, so the stand-in's cursor stands on req_n. The next poll re-sorts the rows shown and req_p's 5 stands
-  // last. The route files req_q's stored 9 before req_n, where the stand-in's cursor never brings it.
-  const clock = frozen();
-  const read = async (_cursor, _to, landedAfter) =>
-    landedAfter === undefined
-      ? { landedThrough: 7, nextCursor: 'p2', rows: [served200('req_p', 5), served200('req_n', 0)] }
-      : landedAfter < 8
-        ? { landedThrough: 8, nextCursor: null, rows: [] }
-        : { landedThrough: 9, nextCursor: null, rows: [served200('req_q', 9)] };
-  const f = follow({ cannotPlace: d.cannotPlaceUnder('input_tokens'), compare: d.requestOrder('input_tokens', 'asc'), error: 'ledger locked', list: null, read });
-  await twoPolls(clock);
-  act(() => clock.tick(5_000));
-  await settled();
-  assert.deepEqual(f.last().rows.map(byId), ['req_n', 'req_p', 'req_q']);
-});
-
 test("a custom range's poll over a stale list with no next cursor leaves a late row below the last row shown to Next", async () => {
   // After the first poll the list answers another query, one with no next cursor, while this query's own list holds
   // one. That cursor is the other query's, so it hands the poll no landing.

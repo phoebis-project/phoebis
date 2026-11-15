@@ -934,6 +934,12 @@ export interface RequestLog {
   shareReason: 'client_classifier' | null;
   status: number | null;
   /**
+   * The serving attempt's two counts as the route stored them. A null is a count the serving attempt never stored: a
+   * token count's, a request's whose serving attempt answered no 200, and one that no attempt served. `usage` reads 0
+   * there, so every sum over it keeps a number.
+   */
+  storedTokens: { input: number | null; output: number | null };
+  /**
    * The serving attempt's account tier, null for an API-key account, a request no attempt served and an unknown tier.
    */
   tier: string | null;

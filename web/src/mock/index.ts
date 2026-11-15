@@ -12,7 +12,7 @@ import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, Gua
 import { AFFINITY_MODE_VALUES, ATTENTION_KIND_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { lookup } from '@/lib/counts';
-import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
 import { tokensTotal } from '@/lib/format';
 import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -491,7 +491,7 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
 
 /**
  * The route's order keys, each read off the row, null where the row carries no figure. The token keys are the serving
- * attempt's counts, the last attempt's, so a request whose last attempt answered no 200 carries none.
+ * attempt's counts as the route stored them, so a count it never stored carries none.
  */
 const figureOf = (r: RequestLog, order: RequestOrder): number | null => {
   switch (order) {
@@ -500,9 +500,9 @@ const figureOf = (r: RequestLog, order: RequestOrder): number | null => {
     case 'duration_ms':
       return r.durationMs;
     case 'input_tokens':
-      return servingAttempt(r)?.upstreamStatus === 200 ? r.usage.input : null;
+      return r.storedTokens.input;
     case 'output_tokens':
-      return servingAttempt(r)?.upstreamStatus === 200 ? r.usage.output : null;
+      return r.storedTokens.output;
     case 'received_at':
       return Date.parse(r.at);
     case 'ttfb_ms':

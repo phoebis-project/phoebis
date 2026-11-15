@@ -14,11 +14,10 @@ import type { UnitPosition, WeekPosition } from '@/lib/unit';
 export const compareRequests = (a: RequestLog, b: RequestLog) => Date.parse(b.at) - Date.parse(a.at) || byteOrder(b.id, a.id);
 
 /**
- * A request's token count: its serving attempt's where that attempt answered a 200, null otherwise, so a row with no
- * served answer draws a dash and sorts last. A token count answered 200 parts from the route, which stores no usage
- * for it and files it without the figure: the wire answers its counts, and this read cannot tell them from stored ones.
+ * A request's token count as the route stored it, null where it stored none, so the row draws a dash and files last
+ * under either direction.
  */
-export const orderedTokens = (r: Pick<RequestLog, 'attempts' | 'usage'>, kind: 'input' | 'output'): number | null => (servingAttempt(r)?.upstreamStatus === 200 ? r.usage[kind] : null);
+export const orderedTokens = (r: Pick<RequestLog, 'storedTokens'>, kind: 'input' | 'output'): number | null => r.storedTokens[kind];
 
 /** The route's order key read off the row, null where the row carries no figure. */
 function figureOf(r: RequestLog, order: RequestOrderWord): number | null {
@@ -54,16 +53,6 @@ export function compareOrderKeys(dir: SortDir): (x: OrderKey, y: OrderKey) => nu
 export function requestOrder(order: RequestOrderWord, dir: SortDir): (a: RequestLog, b: RequestLog) => number {
   const compare = compareOrderKeys(dir);
   return (a, b) => compare({ figure: figureOf(a, order), id: a.id }, { figure: figureOf(b, order), id: b.id });
-}
-
-/**
- * Whether `requestOrder` cannot place a polled row against `row`: under a token order where `row` carries no count
- * above 0, since the wire answers 0 for a count the route never stored and files last.
- */
-export function cannotPlaceUnder(order: RequestOrderWord): (row: RequestLog) => boolean {
-  if (order !== 'input_tokens' && order !== 'output_tokens') return () => false;
-  const kind = order === 'input_tokens' ? 'input' : 'output';
-  return (row) => (orderedTokens(row, kind) ?? 0) <= 0;
 }
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */

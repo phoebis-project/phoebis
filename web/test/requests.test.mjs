@@ -298,11 +298,20 @@ test("the poll's comparator ties by id in the chosen direction and files a row w
 
 test("the poll's comparator orders each token word by its own count", () => {
   // The two rows' input and output counts order opposite ways, so a word that read the other count flips its order.
-  const row = (id, input, output) => ({ at: '2026-09-16T10:00:00.000Z', attempts: [{ upstreamStatus: 200 }], id, usage: { input, output } });
+  const row = (id, input, output) => ({ at: '2026-09-16T10:00:00.000Z', id, storedTokens: { input, output } });
   const inputHeavy = row('req_a', 900, 40);
   const outputHeavy = row('req_b', 100, 700);
   assert.deepEqual([outputHeavy, inputHeavy].sort(d.requestOrder('input_tokens', 'desc')).map((r) => r.id), ['req_a', 'req_b'], 'input_tokens reads the input count');
   assert.deepEqual([inputHeavy, outputHeavy].sort(d.requestOrder('output_tokens', 'desc')).map((r) => r.id), ['req_b', 'req_a'], 'output_tokens reads the output count');
+});
+
+test('a count never stored files after a stored zero', () => {
+  // Both serving attempts answered 200 and both sums read 0, so the stored count alone parts the rows. The row without
+  // one takes the lower id, which a tie on the sums' zero files first under ascending.
+  const row = (id, input) => ({ at: '2026-09-16T10:00:00.000Z', attempts: [{ upstreamStatus: 200 }], id, storedTokens: { input, output: null }, usage: { input: 0, output: 0 } });
+  const unstored = row('req_a', null);
+  const zero = row('req_b', 0);
+  assert.deepEqual([zero, unstored].sort(d.requestOrder('input_tokens', 'asc')).map((r) => r.id), ['req_b', 'req_a']);
 });
 
 test("a session spend with plan and billed requests reads the plan requests' list dollars as its equivalent and the billed ones on the badge", () => {

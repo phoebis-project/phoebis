@@ -16,7 +16,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
@@ -55,11 +55,12 @@ const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes
 export const proWeekRewriteOf = (tokens: number, model: string, client: string | null): number | null =>
   weightOf(TABLES, model, 'seven_day') !== null ? shareIn(tablesFor(client), 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
 /**
- * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock holds no
- * estimate of its own and reads the usage the request reported, so a request that ended with no usage, which the
- * router books at its body's estimate, books and later expires a zero share here.
+ * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock reads
+ * the usage the request reported, so a request that ended with no usage, which the router books at its body's
+ * estimate, books and later expires a zero share here. The router stores no usage for a token count, so a count reads
+ * the estimate the mock keeps beside its row.
  */
-const bodyTokensOf = (r: RequestLog) => promptOf(r.usage);
+const bodyTokensOf = (r: RequestLog) => (r.kind === 'count_tokens' ? (COUNTED_BODY_TOKENS.get(r.id) ?? 0) : promptOf(r.usage));
 /**
  * A fresh session's burn per hour: the pool's warm pins' median as the story's hour reads it. The drawn day's
  * decisions read no burn at all, so they book the rewrite alone.
@@ -1473,7 +1474,8 @@ function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | unde
     freed: spec.heldBefore !== undefined,
     heldMs: spec.heldBefore?.heldMs ?? null,
     hit: cache.hit,
-    inputTokens: cache.hasUsage ? usage.input : null,
+    // A token count's answer is its body's count, which the router stores no usage for.
+    inputTokens: cache.hasUsage ? (r.kind === 'count_tokens' ? bodyTokensOf(r) : usage.input) : null,
     promisedTokens: cache.promised,
     status: attempt?.upstreamStatus ?? null,
   };

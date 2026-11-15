@@ -1363,6 +1363,13 @@ test('a stream that ended before its end decodes as incomplete and a group reads
   assert.equal(desktop.incomplete, 1, 'the route counts the row in the group\'s own column');
 });
 
+test("a request decodes a count the route never stored as null beside the sum's zero", () => {
+  const unstored = d.decodeRequest({ usage: { input: null, output: null } });
+  const zero = d.decodeRequest({ usage: { input: 0, output: 0 } });
+  assert.deepEqual([unstored.storedTokens, unstored.usage.input, unstored.usage.output], [{ input: null, output: null }, 0, 0], 'a count never stored reads null, and the sums read 0');
+  assert.deepEqual([zero.storedTokens, zero.usage.input], [{ input: 0, output: 0 }, 0], 'a stored 0 reads 0');
+});
+
 test('a request reads its auto-mode standing, and a spelling the console does not know reads as none', () => {
   const captured = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   assert.equal(captured.autoMode, null, 'a request that asked for nothing');

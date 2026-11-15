@@ -34,7 +34,7 @@ import { effectiveInterval, ENDED_RANGE, FOLLOW_OVERRUN, pollQuery, readEnd, row
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtDatedTime, fmtInt, fmtMs, fmtRelative, fmtTime, fmtUsd, fmtWeek, forkLabel, modelTitle, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { guardrailLabel, guardrailOptions } from '@/lib/guardrails';
 import { useAsync, useNow, useQueryFilters, useRangeTakenAt, useWeekReading } from '@/lib/hooks';
-import { cannotPlaceUnder, costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, orderedTokens, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
+import { costCellOf, costHeaderTitle, type CostTable, type CostUnit, costUnitOf, FREE_SHARE_TITLE, FUNDING_WORD, heldWords, NO_SHARE_TITLE, orderedTokens, requestCostUnit, requestHintArgs, requestOrder, revisionsTitle } from '@/lib/requests';
 import { requestsWiden } from '@/lib/requestsLink';
 import { type Chip, logHref, requestLink, words } from '@/lib/routingLog';
 import { plainOutputOf } from '@/lib/tokenBar';
@@ -178,7 +178,7 @@ function HeldBadge({ held }: { held: CohortHold }) {
 /** A token count's cell, a component of its own so the expression-bodied row map reads the count once. */
 function OrderedTokensCell({ kind, request }: { kind: 'input' | 'output'; request: RequestLog }) {
   const count = orderedTokens(request, kind);
-  return <td className="right num col-fit">{count === null ? <span className="muted">-</span> : fmtCompact(count)}</td>;
+  return <td className="right num col-fit">{count === null ? <span className="muted" title="No count stored for this request">-</span> : fmtCompact(count)}</td>;
 }
 
 /**
@@ -303,7 +303,6 @@ export function RequestsPage() {
   // waits for either to close.
   const { error, fresh, goNext, goPrevious, nextCursor, overrun, rows, setFollowed } = useFollow<RequestLog>({
     address,
-    cannotPlace: cannotPlaceUnder(order),
     compare: requestOrder(order, dir),
     cursor,
     error: requests.error,

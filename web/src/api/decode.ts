@@ -495,7 +495,7 @@ export function decodeRequest(v: unknown): RequestLog {
     outcome: oneOf(REQUEST_OUTCOME_VALUES, r.outcome) ?? 'failed',
     phases: phasesOf(r.phases, isoOr(r.at, epoch)),
     poolId: strOrNull(r.pool_id), prevToolMs: numOrNull(r.prev_tool_ms), refused: bool(r.refused), requestClass: strOrNull(r.request_class), responseTruncated: bool(r.response_truncated), sessionId: strOrNull(r.session_id), shape: shapeOf(r.shape), shareReason: r.share_reason === 'client_classifier' ? 'client_classifier' : null,
-    status: numOrNull(r.status), tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
+    status: numOrNull(r.status), storedTokens: { input: numOrNull(rec(r.usage).input), output: numOrNull(rec(r.usage).output) }, tier: strOrNull(r.tier), transport: str(r.transport) === 'sse' ? 'sse' : 'json', ttfbMs: numOrNull(r.ttfb_ms), ttftMs: numOrNull(r.ttft_ms), turnOrigin: strOrNull(r.turn_origin), usage: usageOf(r.usage), userAgent: strOrNull(r.user_agent),
   };
 }
 

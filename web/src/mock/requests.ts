@@ -235,7 +235,6 @@ const NO_ANSWER_FACTS = { thinking: 0, webFetch: 0, webSearch: 0 };
 
 function usageFor(model: string, kind: RequestKind): Usage {
   if (kind === 'probe') return { input: 0, cacheRead: rng.chance(0.9) ? rng.int(30_000, 90_000) : 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 1, ...NO_ANSWER_FACTS };
-  if (kind === 'count_tokens') return { input: rng.int(2_000, 60_000), cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
   const big = model.includes('fable') || model.includes('opus');
   const cached = rng.chance(0.72);
   const contextTokens = rng.int(big ? 40_000 : 12_000, big ? 180_000 : 90_000);
@@ -470,6 +469,11 @@ const rateLimitCooldown = (windows: AttemptWindow[], answeredAt: number, retryAf
 
 /** Where the attempts a 429 added after a request's draws begin, by request id. */
 const CHAIN_FROM = new Map<string, number>();
+/**
+ * The relay's estimate of a token count's body, by request id, for a count that answered as drawn. The router stores
+ * no usage for a token count, while its decision record reads the estimate.
+ */
+export const COUNTED_BODY_TOKENS = new Map<string, number>();
 
 /**
  * The attempts of one request: none when no account of the lane could serve it at its time (the router answers it
@@ -632,8 +636,10 @@ function buildRequests(): RequestLog[] {
     const head = tried[tried.length - 1] as Attempt | undefined;
     const model = modelOf(tried, drawn);
     // The usage draws take the size of the model the draws end on, so every later row keeps its draws. A model that
-    // is not asked to think reads none.
-    const drawnUsage = finalStatus === 200 ? usageFor(modelOn(drawnHead ?? '', drawn), kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
+    // is not asked to think reads none. The router stores no usage for a token count, so its usage reads zeros, while
+    // its one draw is still taken where the usage would be and stands for the relay's estimate of the body.
+    const counted = finalStatus === 200 && kind === 'count_tokens' ? rng.int(2_000, 60_000) : null;
+    const drawnUsage = finalStatus === 200 && counted === null ? usageFor(modelOn(drawnHead ?? '', drawn), kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     const usage = model.includes('fable') || model.includes('opus') ? drawnUsage : { ...drawnUsage, thinking: 0 };
     const diagnosis = diagnosed(tried, kind);
     // The story hour's rows leave below, so the rows the drawer reads land before it.
@@ -718,6 +724,7 @@ function buildRequests(): RequestLog[] {
     if (chainFrom < tried.length) CHAIN_FROM.set(id, chainFrom);
     if (head === undefined) Object.assign(rows[rows.length - 1], unservedAnswer());
     else if (!whole) Object.assign(rows[rows.length - 1], endedAnswer(tried, atMs));
+    else if (counted !== null) COUNTED_BODY_TOKENS.set(id, counted);
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
     // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
     // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one
@@ -980,6 +987,8 @@ interface StorySeed {
   agentId: string | null;
   at: number;
   attempts: StoryAttempt[];
+  /** A token count's body as the relay estimated it, which the router stores no usage for. */
+  bodyTokens?: number;
   canonical?: string;
   /** Whether the bodies were captured, where it is not the laptop key's rule. */
   capturedBodies?: boolean;
@@ -1012,6 +1021,8 @@ interface StorySeed {
   landsAfresh?: true;
   model: string;
   outcome?: RequestOutcome;
+  /** The stream ended before the answer reported its output count, so the serving attempt stores none. */
+  outputUnreported?: true;
   /** The upstream's comparison was still running when its one attempt's answer went out. */
   pending?: true;
   /** The router refused the request before any account was asked, which the ledger's landing would have flagged. */
@@ -1328,13 +1339,13 @@ function storySeeds(): StorySeed[] {
       agentId: 'e90b',
       at: t(14, 1, 50),
       attempts: [{ accountId: 'secondary', at: t(14, 1, 50), ms: 300, status: 200 }],
+      bodyTokens: 41_000,
       id: 'req_3b8e51f4-0a9',
       keyId: 'desktop',
       kind: 'count_tokens',
       model: 'claude-sonnet-4-5',
       requestClass: 'subagent',
       session: '407dd39b',
-      usage: { input: 41_000 },
     },
     // The keepalive's probe of a pin on secondary finds its window spent and moves the pin to primary.
     { agentId: 'main', at: t(14, 6, 30), attempts: [{ accountId: 'primary', at: t(14, 6, 30), ms: 1_400, status: 200 }], id: 'req_c41d0311-200', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-4-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, output: 1 } },
@@ -1414,6 +1425,7 @@ function storySeeds(): StorySeed[] {
       keyId: 'laptop',
       model: 'claude-sonnet-4-5',
       outcome: 'incomplete',
+      outputUnreported: true,
       requestClass: 'main',
       session: CLIENT_SESSION_ID,
       usage: { input: 3_200 },
@@ -1698,6 +1710,8 @@ const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.f
 // routing log derives no decision for them: a block is refused before any selection.
 for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
 export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
+/** The story's rows whose stream ended before the answer reported its output count. */
+const OUTPUT_UNREPORTED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.outputUnreported).map((s) => s.id));
 /**
  * A row the seeded passes may draw for or seat a story fact on: neither a routing-log story row nor one written whole.
  */
@@ -1714,6 +1728,8 @@ function traceForks() {
 
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
+// A drawn row can give the story its slot, so the story's own estimates land after the drawn rows' and stand.
+for (const s of storySeeds()) if (s.bodyTokens !== undefined) COUNTED_BODY_TOKENS.set(s.id, s.bodyTokens);
 
 /**
  * The story's late request, an arrival among the rows a page of 50 shows that ran long, so the ledger writes it a few
@@ -2293,6 +2309,16 @@ function costFiguresOf(r: RequestLog): Pick<RequestLog, 'costEquivalent' | 'cost
 }
 
 /**
+ * The serving attempt's two counts as the route answers them: none for a token count, whose answer the router stores
+ * no usage for, none for a request whose serving attempt answered no 200 or that no attempt served, and no output
+ * count for a stream that ended before its answer reported one.
+ */
+function storedTokensOf(r: RequestLog, last: Attempt | null): RequestLog['storedTokens'] {
+  if (r.kind === 'count_tokens' || last?.upstreamStatus !== 200) return { input: null, output: null };
+  return { input: r.usage.input, output: OUTPUT_UNREPORTED_IDS.has(r.id) ? null : r.usage.output };
+}
+
+/**
  * Every row's phases and shares, read off the row as it finally stands: the passes above move an arrival, drop
  * attempts and set nightly's overage flag, so the instants and the funding are read after the last of them. The
  * write lands a few milliseconds into the last attempt, as the route reads it, and the stream's close a few
@@ -2324,7 +2350,7 @@ function phaseRequests() {
       streamEndAt: closes ? iso(finishedMs - tail) : null,
       writtenAt: last === null ? null : iso(Date.parse(last.startedAt) + write),
     };
-    Object.assign(r, costFiguresOf(r), { tier: last === null ? null : accountTier(last.accountId) });
+    Object.assign(r, costFiguresOf(r), { storedTokens: storedTokensOf(r, last), tier: last === null ? null : accountTier(last.accountId) });
   }
 }
 

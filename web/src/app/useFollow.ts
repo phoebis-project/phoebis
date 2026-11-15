@@ -19,12 +19,6 @@ import { armPoll, counted, readQuiet, type Streak, streakFailed, streakLanded, u
  */
 export function useFollow<R>(input: {
   address: string;
-  /**
-   * Whether `compare` cannot place a polled row against `row`. The poll asks it about the row the list's cursor stands
-   * on, and under a stand-in about each row shown. Where it answers yes the poll lands every row it reads, as under a
-   * list with no next cursor. Without one, `compare` places every row.
-   */
-  cannotPlace?: (row: R) => boolean;
   compare: (a: R, b: R) => number;
   cursor: string | undefined;
   error: string | null;
@@ -45,7 +39,7 @@ export function useFollow<R>(input: {
   stack: (string | undefined)[];
   stale: boolean;
 }): { error: string | null; fresh: Set<string>; goNext: () => void; goPrevious: () => void; nextCursor: string | null; overrun: Overrun | null; rows: R[]; setFollowed: Dispatch<SetStateAction<Followed<R> | null>> } {
-  const { address, cannotPlace, compare, cursor, error, fixedEnd, identity, intervalMs, list, pagedTo, paused, read, setPaging, stack, stale } = input;
+  const { address, compare, cursor, error, fixedEnd, identity, intervalMs, list, pagedTo, paused, read, setPaging, stack, stale } = input;
   const [followed, setFollowed] = useState<Followed<R> | null>(null);
   // The tint marks what the last poll brought, or after the tab's return what its read and the tick after it brought,
   // and with auto reload off no poll follows to take it away.
@@ -67,7 +61,7 @@ export function useFollow<R>(input: {
   const overrun = following?.overrun ?? null;
   const standIn = following?.standIn ?? null;
   // The poll outlives renders, so it reads the current address, rows and reader through a ref.
-  const latest = useLatest({ address, cannotPlace, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
+  const latest = useLatest({ address, compare, failed: error !== null, fixedEnd, identity, list: stale ? null : list, mark, overrun, read, shown, standIn });
   const streak = useRef<Streak>({ failing: false, paths: new Set() });
   // When the last poll answered, null until one has, so a wait that ends reads at once only after a full interval.
   const lastAnswered = useRef<number | null>(null);
@@ -91,7 +85,7 @@ export function useFollow<R>(input: {
     // within milliseconds and bring nothing, and that tick's answer keeps their tint beside its own rows.
     let kept: { for: string; rows: Set<string> } | null = null;
     const poll = (returned = false) => {
-      const { address: polled, cannotPlace, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start, standIn: standing } = latest.current;
+      const { address: polled, compare: order, fixedEnd, identity: identify, list, mark: landedAfter, read: reader, shown: start, standIn: standing } = latest.current;
       // Every page of one poll reads from the same stamp and is handed the same instant, so a reader that bounds its
       // range by it walks one fixed range. A reader under a watermark may read to the router's clock instead, and the
       // instant still dates the poll's overrun and stand-in.
@@ -101,15 +95,8 @@ export function useFollow<R>(input: {
       // A stand-in is the list while it stands, so its page's cursor says whether the range holds rows past those
       // shown. A stale list hands none, since its cursor is another query's.
       const tail = standing === null ? list?.nextCursor : standing.cursor;
-      // The list answered no next cursor, so every polled row is the list's whatever the range's end. Where `compare`
-      // cannot place a row against the row the cursor stands on, a row it files below may stand above the cursor, and
-      // a row drawn twice is a smaller harm than one hidden. The list's cursor stands on its last row in the route's
-      // order, which a poll's re-sort may no longer show last. A stand-in's page is merged into the rows shown, so the
-      // hook can no longer tell which row its cursor stands on, and there the poll lands every row while `compare`
-      // cannot place a row against any row shown. With no cursor in force the guard reads nothing.
-      const atCursor = standing === null ? list?.rows.at(-1) : undefined;
-      const unplaced = cannotPlace !== undefined && typeof tail === 'string' && (standing === null ? atCursor !== undefined && cannotPlace(atCursor) : (start ?? []).some(cannotPlace));
-      const lands = tail === null || unplaced;
+      // The list answered no next cursor, so every polled row is the list's whatever the range's end.
+      const lands = tail === null;
       // On a custom range each page the poll reads notes a row it withholds below the rows shown while the ref holds no
       // list (a stale or a failed read) and no stand-in, since such a poll lands nothing below and the stamp must not
       // pass the row.

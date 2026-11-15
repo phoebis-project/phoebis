@@ -857,11 +857,13 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     // The Sunday night's draws hold no agent with probes alone, so that half reads at the smoke's instant alone.
     assert.ok(read.twoModels > 0 && (at !== '2026-09-16T14:30:00Z' || read.probesAlone > 0), `the story holds the agents both reads need: ${JSON.stringify(read)}`);
-    // Story 0's desktop row under the live key, whose plan-funded client rows with tokens primary and secondary serve
-    // at both instants. `req_9b6275a3-96b` is a plan-funded request on nightly with no token, which prices nothing, so
-    // the fold keys no share for nightly.
+    // Story 0's desktop row under the live key, whose plan-funded client rows with tokens secondary serves at both
+    // instants and primary on the Sunday night. At the smoke's instant primary serves the row's token count, which
+    // stores no usage, and a 502 alone, and `req_9b6275a3-96b` is a plan-funded request on nightly with no token. Each
+    // prices nothing, so the fold keys no share for either account there.
     const story0 = seeded.find((row) => row.keyId === 'desktop' && row.keyGeneration === desktop && row.sessionId === s.lib.SESSION_IDS[0]);
-    assert.deepEqual(Object.keys(story0.spend.shares).sort(), ['primary', 'secondary'], "story 0's desktop row keys the accounts that priced its plan rows");
+    const priced = at === '2026-09-16T14:30:00Z' ? ['secondary'] : ['primary', 'secondary'];
+    assert.deepEqual(Object.keys(story0.spend.shares).sort(), priced, "story 0's desktop row keys the accounts that priced its plan rows");
   });
 
   test(`a switched-off key was last used before its last write, and a pool's one member holds what its keys sent, at ${at}`, async () => {

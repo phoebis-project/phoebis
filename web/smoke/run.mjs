@@ -13741,15 +13741,15 @@ await forView('/requests', async () => {
   });
 });
 
-// The two token keys on the ci key's inference requests at ten rows a page, each picked with its column on and read
-// across the three pages its cursors reach. The Kind filter leaves out the day's three token counts: the route stores
-// no usage for a count and files it without the figure, while the wire answers its counts, so the two orders part
-// there. Sixteen of the 21 rows carry the serving attempt's counts. The other five stand last with a dash, by id
-// descending: the drawn req_b68906d8-252, whose one attempt answered 429, then the story's four rows with no attempt
-// (req_9b4f1c62-a07, req_6c3a9e27-5b1, req_51d0e2b8-7a0 and req_2d8e5b13-f40 in `web/src/mock/requests.ts`). The
-// fourth of the five is the twentieth row, so the third page's cursor carries no figure. Uncached input reads
-// req_d6629ea6-025's 12,307 first and req_30bc648a-338's 63 last. Output tokens reads the crossing's 2,900 first
-// (BUDGET_CROSSING_ID) and req_d6629ea6-025's 140 last.
+// The two token keys on the ci key's requests at ten rows a page, each picked with its column on and read across the
+// three pages its cursors reach. Sixteen of the 24 rows carry the serving attempt's counts. The other eight stand last
+// with a dash, by id descending: the day's three drawn token counts, for which the router stores no usage
+// (req_bacc2d06-4d8, req_9de1cc62-954 and req_0739aa56-cac), the drawn req_b68906d8-252, whose one attempt answered
+// 429, and the story's four rows with no attempt (req_9b4f1c62-a07, req_6c3a9e27-5b1, req_51d0e2b8-7a0 and
+// req_2d8e5b13-f40 in `web/src/mock/requests.ts`). The fourth of the eight, req_9b4f1c62-a07, is the twentieth row,
+// so the third page's cursor carries no figure. Uncached input reads req_d6629ea6-025's 12,307 first and
+// req_30bc648a-338's 63 last. Output tokens reads the crossing's 2,900 first (BUDGET_CROSSING_ID) and
+// req_d6629ea6-025's 140 last.
 await forView('/requests', async () => {
   const read = async (label) => {
     const recorded = recordedCalls('listRequests');
@@ -13758,7 +13758,7 @@ await forView('/requests', async () => {
       return { cursor: q.cursor ?? null, dir: q.dir ?? null, order: q.order ?? null };
     };
     try {
-      const page = await mount('/requests?keys=ci&kind=inference&rows=10', { now: CLOCK_ORIGIN });
+      const page = await mount('/requests?keys=ci&rows=10', { now: CLOCK_ORIGIN });
       columnsButton(page)?.click();
       await page.settle(100);
       [...(columnsGrid()?.querySelectorAll('label') ?? [])].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
@@ -13795,18 +13795,18 @@ await forView('/requests', async () => {
       recorded.restore();
     }
   };
-  const sentUnder = (order, cursor) => [null, cursor, ':req_51d0e2b8-7a0'].map((c) => ({ cursor: c, dir: 'desc', order }));
-  const without = ['req_b68906d8-252', 'req_2d8e5b13-f40', 5];
+  const sentUnder = (order, cursor) => [null, cursor, ':req_9b4f1c62-a07'].map((c) => ({ cursor: c, dir: 'desc', order }));
+  const without = ['req_bacc2d06-4d8', 'req_0739aa56-cac', 8];
   const input = await read('Uncached input');
   results.push({
     name: '/requests a pick of Uncached input with its column on pages by the serving count descending, the rows without one last with a dash, and the read sends input_tokens',
-    ok: JSON.stringify(input) === JSON.stringify({ figured: ['req_d6629ea6-025', '12.3K', 'req_30bc648a-338', '63'], rest: without, search: '?keys=ci&kind=inference&sort=input&rows=10', sent: sentUnder('input_tokens', '1484:req_3546fede-0e5') }),
+    ok: JSON.stringify(input) === JSON.stringify({ figured: ['req_d6629ea6-025', '12.3K', 'req_30bc648a-338', '63'], rest: without, search: '?keys=ci&sort=input&rows=10', sent: sentUnder('input_tokens', '1484:req_3546fede-0e5') }),
     missing: [JSON.stringify(input)],
   });
   const output = await read('Output tokens');
   results.push({
     name: '/requests a pick of Output tokens with its column on pages by the serving count descending, the rows without one last with a dash, and the read sends output_tokens',
-    ok: JSON.stringify(output) === JSON.stringify({ figured: ['req_7c19e4a0-2f3', '2.9K', 'req_d6629ea6-025', '140'], rest: without, search: '?keys=ci&kind=inference&sort=output&rows=10', sent: sentUnder('output_tokens', '1033:req_52f62e67-839') }),
+    ok: JSON.stringify(output) === JSON.stringify({ figured: ['req_7c19e4a0-2f3', '2.9K', 'req_d6629ea6-025', '140'], rest: without, search: '?keys=ci&sort=output&rows=10', sent: sentUnder('output_tokens', '1033:req_52f62e67-839') }),
     missing: [JSON.stringify(output)],
   });
 });
@@ -25675,8 +25675,8 @@ await forView('/sessions', async () => {
     // requests put them first under Requests ascending. `0d588de5`, with its classifier call of 14:02:40, and
     // `fa23a6da` tie at eight requests and read by session id under both directions.
     const ORDERS = {
-      cost: ['bcc805b6', '89cd1c92', '0d588de5', 'fa23a6da', '4ef130f1', '7bea4514', '4a7c2e9b', '229bf72c', '5f8a3c1e', 'd7167642', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '5eeed6ce', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
-      costAsc: ['7d3e1c20', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '5eeed6ce', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', 'd7167642', '5f8a3c1e', '229bf72c', '4a7c2e9b', '7bea4514', '4ef130f1', 'fa23a6da', '0d588de5', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      cost: ['bcc805b6', '89cd1c92', '0d588de5', '4ef130f1', '7bea4514', 'fa23a6da', '4a7c2e9b', '5f8a3c1e', 'd7167642', '229bf72c', '76ddb35b', 'c8f4a2e7', 'c64358b5', '9c2d7e4a', '1c0f9727', 'e7a4b2d9', '8b1f4c2e', '5eeed6ce', '7d3e1c20', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
+      costAsc: ['7d3e1c20', '5eeed6ce', '8b1f4c2e', 'e7a4b2d9', '1c0f9727', '9c2d7e4a', 'c64358b5', 'c8f4a2e7', '76ddb35b', '229bf72c', 'd7167642', '5f8a3c1e', '4a7c2e9b', 'fa23a6da', '7bea4514', '4ef130f1', '0d588de5', '89cd1c92', 'bcc805b6', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
       requests: ['bcc805b6', '0d588de5', 'fa23a6da', 'd7167642', '229bf72c', '4ef130f1', '7bea4514', '76ddb35b', '89cd1c92', '5eeed6ce', '5f8a3c1e', '8b1f4c2e', 'c64358b5', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', 'e7a4b2d9', '0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904'],
       requestsAsc: ['0f1d7c64', '3e9b7c21', '6d2f8b40', 'b7e2d5a9', 'cd9a5904', 'e7a4b2d9', '1c0f9727', '4a7c2e9b', '7d3e1c20', '9c2d7e4a', 'c8f4a2e7', '8b1f4c2e', 'c64358b5', '5eeed6ce', '5f8a3c1e', '76ddb35b', '89cd1c92', '229bf72c', '4ef130f1', '7bea4514', 'd7167642', '0d588de5', 'fa23a6da', 'bcc805b6'],
     };
@@ -26744,9 +26744,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     // its own pin (claude-fable-5-1 at high effort, 16,228 tokens), main's two seed rows summed into its Requests, then
     // the busy subagent 4d1a on its own pin (22,000 tokens), whose one seed row ledgered no request. The table closes
     // on the agent's menu, labeled with the agent. An agent's "+N" counts the accounts other than its line's: on the
-    // story's first session, a primary one, e4b7's line sits on nightly and its seed rows spent $1.31 on primary and
-    // secondary, $0.77 of it billed on overflow's API key, so its Cost cell reads the plan rows' $0.54 over equivalent
-    // with +$ and +2, where the session's account would leave +1.
+    // story's first session, a primary one, e4b7's line sits on nightly and its seed rows spent $0.97, $0.77 of it
+    // billed on overflow's API key and $0.20 on secondary's plan, while its token count on primary stores no usage and
+    // prices nothing. So its Cost cell reads the plan rows' $0.20 over equivalent with +$ and +1.
     const page = await mount('/sessions', { now: CLOCK_ORIGIN });
     const { heads, rows } = agentsOf(await openRow(page, written));
     const elsewhere = agentsOf(await openRow(page, story)).rows.find((r) => r.agent === 'e4b7');
@@ -26800,7 +26800,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         JSON.stringify(heads) === JSON.stringify(['Agent', 'Type', 'Model', 'Account', 'Context', 'Burn', 'Requests', 'Cost', 'Status', 'Cache', '']) &&
         rows[0]?.agent === 'main' &&
         JSON.stringify(read) === JSON.stringify({ busy: want.busy, main: want.main }) &&
-        JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+2'], figure: '$0.54', sub: 'equivalent' }),
+        JSON.stringify(elsewhereRead) === JSON.stringify({ badges: ['+$', '+1'], figure: '$0.20', sub: 'equivalent' }),
       missing: [JSON.stringify(heads), JSON.stringify(read), `want ${JSON.stringify(want)}`, `e4b7 ${JSON.stringify(elsewhereRead)}`],
     });
   }
