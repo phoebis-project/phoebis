@@ -2045,6 +2045,101 @@ async fn a_second_window_restart_inside_the_interval_after_a_restart_read_sends_
 }
 
 #[tokio::test]
+async fn a_window_restart_while_a_poll_reads_the_profile_waits_for_it_and_its_read_serves_the_restart(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_gated()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    // The 900 s slot is the third scheduled poll, so it reads the usage and then the profile, which the gate holds.
+    step_to(&h, &up, &paused, secs(897)).await;
+    assert_eq!((usage_asked(&up, A), profile_asked(&up, A)), (2, 0));
+    paused.idle.set(paused.idle.get() + 1);
+    step_to(&h, &up, &paused, secs(901)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (3, 1),
+        "the slot's profile read is out, held at the gate"
+    );
+    report_head(&h, "a", SEVEN_DAY, 0.10).await;
+    step_to(&h, &up, &paused, secs(902)).await;
+    assert_eq!(
+        profile_asked(&up, A),
+        1,
+        "the restart waits for the attempt that is out"
+    );
+
+    // The held read answers inside the control client's timeout, and its attempt's end serves the restart.
+    up.release();
+    paused.idle.set(paused.idle.get() - 1);
+    resumed(wait_for(Duration::from_secs(30), || {
+        (up.open_connections() <= paused.idle.get()).then_some(())
+    }))
+    .await;
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    step_to(&h, &up, &paused, secs(1_199)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (3, 1),
+        "the poll's profile read served the restart"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_restart_read_s_hold_that_ends_ahead_of_the_next_slot_leaves_the_slot_s_poll_at_its_time()
+{
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", profile_rule().respond);
+    up.push_credential_rule(A, "/api/oauth/profile", rate_limited_for("60"));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    // The restart read's 429 holds the account for a minute, until about 362 s.
+    report_head(&h, "a", SEVEN_DAY, 0.10).await;
+    step_to(&h, &up, &paused, secs(599)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (1, 1),
+        "no usage read before the 600 s slot"
+    );
+    step_to(&h, &up, &paused, secs(602)).await;
+    assert_eq!(usage_asked(&up, A), 2, "the slot's poll at its time");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_restart_read_s_hold_that_ends_past_the_next_slot_moves_the_slot_s_poll_to_the_hold_s_end(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/profile", profile_rule().respond);
+    up.push_credential_rule(A, "/api/oauth/profile", rate_limited_for("447"));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    // The restart read's 429 holds the account until about 749 s, past the 600 s slot.
+    report_head(&h, "a", SEVEN_DAY, 0.10).await;
+    step_to(&h, &up, &paused, secs(748)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (1, 1),
+        "no usage read inside the hold"
+    );
+    // The poll at the hold's end is the second scheduled one, so it reads no profile.
+    step_to(&h, &up, &paused, secs(752)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (2, 1),
+        "the slot's poll at the hold's end"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_re_pair_sends_the_next_slot_a_limit_resets_read() {
     let up = FakeUpstream::start(vec![limit_resets_rule(), usage_rule(), profile_rule()]).await;
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;

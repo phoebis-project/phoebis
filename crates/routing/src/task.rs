@@ -70,8 +70,8 @@ pub struct WriterStatus {
 
 const EVENTS: usize = 1_024;
 
-/// The scheduler takes each restart as it arrives, so the channel holds what lands during one pass over the slots,
-/// and a restart a receiver loses waits for the cadence.
+/// The quota poll's scheduler takes each restart as it arrives, so the channel holds what lands during one pass over
+/// the slots, and a restart a receiver loses waits for the cadence.
 const RESTARTS: usize = 64;
 
 /// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
@@ -1502,7 +1502,8 @@ pub struct PinSlowDown {
 }
 
 /// A plan window of the account started again out of turn: a later reset ahead of the stored one's turn with a fallen
-/// figure, or a weekly window's fall under its standing reset. Sent once per restart.
+/// figure, or a weekly window's fall under its standing reset. The task sends it once per sample report that is the
+/// first to show a window's restart.
 #[derive(Clone, Debug)]
 pub struct WindowRestart {
     pub account_id: String,

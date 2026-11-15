@@ -254,15 +254,15 @@ struct Slot {
     account: AccountRow,
     /// The attempt out on this slot, by its task id; `None` between attempts.
     in_flight: Option<tokio::task::Id>,
-    /// The next attempt's instant, or the slot the attempt in flight was drawn at.
+    /// The next poll's instant, or the slot the poll in flight was drawn at.
     at: Instant,
     /// Reads counted on this slot's incarnation, the startup step's among them for a slot the first pass
-    /// drew. An attempt made while the count is a multiple of `PROFILE_EVERY_POLLS` reads the profile, so a
-    /// new account's first attempt reads it and a first-pass slot's first attempt does not. A restart read that
+    /// drew. A poll made while the count is a multiple of `PROFILE_EVERY_POLLS` reads the profile, so a
+    /// new account's first poll reads it and a first-pass slot's first poll does not. A restart read that
     /// answered sets the count to 1, as the startup step's read counts as the first.
     polls: u32,
-    /// When the account was last read: the last attempt's dispatch, or the scheduler's start for a slot the
-    /// first pass drew, standing in for the startup step's read. `None` until a new account's first attempt.
+    /// When the account was last read: the last poll's dispatch, or the scheduler's start for a slot the
+    /// first pass drew, standing in for the startup step's read. `None` until a new account's first poll.
     last_read: Option<Instant>,
     /// A plan window's restart asked for the profile, and no read has served it yet.
     restart_due: bool,
@@ -398,8 +398,8 @@ impl QuotaPoll {
     /// A plan window's restart the router signals reads the account's profile at once and alone, after the attempt
     /// out on the slot where one is, and once per account in an interval at most. A poll that tried the profile
     /// serves a restart that is due. A restart read that answered counts the next third poll from it, one that did
-    /// not leaves the cadence as it stands, and neither moves the slot's time unless the service holds the account
-    /// after it.
+    /// not leaves the cadence as it stands, and neither moves the slot's time unless a hold the service reports
+    /// after it ends past that time.
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         self.usage.set_on_backoff(Arc::new({
             let ledger = self.ledger.clone();
@@ -548,8 +548,11 @@ impl QuotaPoll {
                                             if answered {
                                                 slot.polls = 1;
                                             }
+                                            // The usage reading is seconds old, so a hold that ends ahead of the
+                                            // slot's time brings no poll forward. One that ends past it moves the
+                                            // slot, since the service refuses a read under the hold.
                                             if let Some(wait) = done.held {
-                                                slot.at = Instant::now() + wait;
+                                                slot.at = slot.at.max(Instant::now() + wait);
                                             }
                                         }
                                     }
@@ -867,7 +870,8 @@ impl QuotaPoll {
     }
 
     /// One warning line and one `poll_failed` row for a poll that faulted, as often as polls fault: a fault arms no
-    /// hold, so the poll interval spaces the rows.
+    /// hold, so the poll interval spaces the rows. A restart read that faults writes its row too, and the bound of
+    /// one restart read per interval spaces those.
     fn record_fault(usage: &UsageService, ledger: &Ledger, account_id: &str, fault: &PollFault) {
         tracing::warn!(
             account = %account_id,
