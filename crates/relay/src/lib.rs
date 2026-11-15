@@ -43,7 +43,7 @@ pub use catalog::{
     MAX_BODY, REFRESH_TICK,
 };
 pub use chains::Chains;
-pub use classify::{next_month_start, Cooldown, Verdict, SPEND_CAP_REASON};
+pub use classify::{Cooldown, Verdict, SPEND_CAP_REASON};
 pub use drift::DriftKind;
 pub use errors::{
     anthropic_error, no_store, no_store_answer, ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED,

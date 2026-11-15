@@ -9,8 +9,8 @@ use phoebis_bus::Kind;
 use phoebis_oauth::ClaimOutcome;
 use phoebis_relay::EFFORT_LEVELS;
 use phoebis_routing::{
-    model_week, BurnUnit, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS, MAIN_AGENT,
-    REFRESHING_CLASSES, SEVEN_DAY, SEVEN_DAY_FABLE,
+    model_week, spend_reset_estimate, BurnUnit, MemberSpend, PinUsage, DAY_MS, FIVE_HOUR, HOUR_MS,
+    MAIN_AGENT, REFRESHING_CLASSES, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{canonical_id, AccountKind, AttachmentSubject, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
@@ -4488,10 +4488,7 @@ pub(crate) fn period_bounds(period: BudgetPeriod, now: i64) -> (i64, i64) {
                     .expect("a day past any date stays in jiff's date range"),
             ),
         ),
-        BudgetPeriod::Month => (
-            midnight(date.first_of_month()),
-            phoebis_relay::next_month_start(now),
-        ),
+        BudgetPeriod::Month => (midnight(date.first_of_month()), spend_reset_estimate(now)),
     }
 }
 

@@ -4,8 +4,8 @@
 use std::cell::OnceCell;
 
 use phoebis_routing::{
-    SharedWindows, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, HOUR_MS, MODEL_REJECTED_REASON,
-    RATE_LIMIT_REASON, RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
+    spend_reset_estimate, SharedWindows, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, HOUR_MS,
+    MODEL_REJECTED_REASON, RATE_LIMIT_REASON, RETRY_AFTER_WINDOW, SEVEN_DAY_OVERAGE_INCLUDED,
 };
 use phoebis_store::{AccountKind, AccountState, StateCause};
 use phoebis_transport::response::ResponseHead;
@@ -25,22 +25,6 @@ pub const MODEL_REJECTION_WINDOW: &str = "model_rejection";
 
 /// The reason row an api_key account's monthly spend cap cools under.
 pub const SPEND_CAP_REASON: &str = "spend_cap";
-
-/// 00:00 UTC on the first day of the month after the one `now` falls in.
-pub fn next_month_start(now: i64) -> i64 {
-    let date = jiff::Timestamp::from_millisecond(now)
-        .expect("a routed clock value stays in jiff's timestamp range")
-        .to_zoned(jiff::tz::TimeZone::UTC)
-        .date();
-    let next = date
-        .first_of_month()
-        .checked_add(jiff::Span::new().months(1))
-        .expect("one month past any first-of-month date stays in jiff's date range");
-    next.to_zoned(jiff::tz::TimeZone::UTC)
-        .expect("every civil midnight exists in UTC")
-        .timestamp()
-        .as_millisecond()
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -186,7 +170,7 @@ pub fn classify(head: &ResponseHead, ctx: &HeadContext<'_>) -> Verdict {
             return Verdict::FailOver {
                 cooldown: Some(Cooldown::new(
                     Scope::Account,
-                    next_month_start(ctx.now),
+                    spend_reset_estimate(ctx.now),
                     SPEND_CAP_REASON,
                     "overage",
                 )),
@@ -309,7 +293,7 @@ fn fast_cooldown(
         // The spend cap lifts with the month; any other refusal holds until the reset the head names, else an
         // hour, and the poll's next enabled reading lifts it earlier.
         let until = if reason == "org_spend_cap_reached" {
-            next_month_start(ctx.now)
+            spend_reset_estimate(ctx.now)
         } else {
             unified
                 .and_then(|u| u.overage_reset)
