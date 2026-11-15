@@ -3119,6 +3119,206 @@ async fn a_key_created_again_under_its_id_before_one_reload_inherits_no_pin() {
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinExpired { pin: PinKey { session_id, .. }, reasons, .. } if session_id == "s" && reasons == vec!["deleted"])
     );
+    handle
+        .select(request(&handle, Some("s"), 2_000))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_created", None)],
+        "the session's next request under the new key is placed afresh, with no move off the old key's pin"
+    );
+}
+
+/// The pin events among `seen`, in order: the kind, the account the event names first (the one a move left) and the
+/// list it carries.
+fn pin_events_seen(
+    seen: &[phoebis_routing::RouterEvent],
+) -> Vec<(&'static str, &str, Vec<&'static str>)> {
+    use phoebis_routing::RouterEvent;
+    seen.iter()
+        .filter_map(|event| match event {
+            RouterEvent::PinCreated { account_id, .. } => {
+                Some(("pin_created", account_id.as_str(), Vec::new()))
+            }
+            RouterEvent::PinExpired {
+                account_id,
+                reasons,
+                ..
+            } => Some(("pin_expired", account_id.as_str(), reasons.clone())),
+            RouterEvent::PinMigrated {
+                from_account,
+                reasons,
+                ..
+            } => Some(("pin_migrated", from_account.as_str(), reasons.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_session_whose_account_was_deleted_lands_its_next_request_inside_the_ttl_as_a_move_under_deleted(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let to = if from == "a" { "b" } else { "a" };
+    let mut events = handle.subscribe_events();
+    store.delete_account(&from, "test").unwrap();
+    handle.reload().await.unwrap();
+    // Two minutes on: past a failover's one-minute window and inside the pool's hour-long affinity TTL.
+    let later = 1_000 + 120_000;
+    now.store(later, Ordering::SeqCst);
+    let answer = handle
+        .select(request(&handle, Some("s1"), later))
+        .await
+        .unwrap();
+    let moved = match &answer.result {
+        SelectResult::Selected(s) => s.trace.moved,
+        other => panic!("{other:?}"),
+    };
+    let seen = drained(&mut events).await;
+    let (summary, record) = seen
+        .iter()
+        .find_map(|event| match event {
+            RouterEvent::Decision {
+                summary, record, ..
+            } => Some((summary.clone(), record.clone())),
+            _ => None,
+        })
+        .expect("the landing's decision");
+    assert_eq!(
+        (
+            summary.rule,
+            moved,
+            record.outcome.rule,
+            record.outcome.from_account_id.as_deref(),
+            pin_events_of(&record)
+        ),
+        (
+            Some("deleted"),
+            Some("deleted"),
+            Some("deleted"),
+            Some(from.as_str()),
+            vec![("pin_migrated", Some("deleted"))]
+        ),
+        "the landing moves the session off the deleted account"
+    );
+    assert_eq!(
+        pin_events_seen(&seen),
+        [("pin_migrated", from.as_str(), vec!["deleted"])],
+        "neither the purge nor the landing writes an expiry or a fresh pin, and the move carries the purge's list"
+    );
+    assert_eq!(
+        handle
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .map(|pin| (
+                pin.session_id.as_str(),
+                pin.account_id.as_str(),
+                pin.shed.as_ref().map(|stamp| stamp.from.as_str())
+            ))
+            .collect::<Vec<_>>(),
+        [("s1", to, None)],
+        "the landed pin stamps no source, since the account the stamp would name is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_of_a_holder_created_again_under_its_id_before_one_reload_expires_and_its_session_is_placed_afresh(
+) {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(request(&handle, Some("s"), 1_000))
+        .await
+        .unwrap();
+    let mut events = handle.subscribe_events();
+    store.delete_account("a", "test").unwrap();
+    insert_account_a(&store);
+    handle.reload().await.unwrap();
+    handle
+        .select(request(&handle, Some("s"), 2_000))
+        .await
+        .unwrap();
+    assert_eq!(
+        pin_events_seen(&drained(&mut events).await),
+        [
+            ("pin_expired", "a", vec!["deleted"]),
+            ("pin_created", "a", Vec::new())
+        ],
+        "the id names another account now, so the previous holder's pin expires and the session starts afresh"
+    );
+}
+
+#[tokio::test]
+async fn a_deleted_accounts_session_idle_past_the_ttl_expires_under_deleted_at_that_purge_and_is_placed_afresh(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut events = handle.subscribe_events();
+    store.delete_account(&from, "test").unwrap();
+    handle.reload().await.unwrap();
+    // One millisecond past the pool's hour-long affinity TTL from the pin's last use, with no request between.
+    let lapsed = 1_000 + HOUR + 1;
+    now.store(lapsed, Ordering::SeqCst);
+    handle.reload().await.unwrap();
+    let expiries: Vec<_> = drained(&mut events)
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            RouterEvent::PinExpired {
+                account_id,
+                reasons,
+                pool_id,
+                at,
+                ..
+            } => Some((account_id, reasons, pool_id, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        expiries,
+        [(from.clone(), vec!["deleted"], Some("p".to_string()), lapsed)],
+        "the one expiry lands at the purge past the TTL, with the list and the pool the purge's own expiry carries"
+    );
+    handle
+        .select(request(&handle, Some("s1"), lapsed))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (
+            record.outcome.from_account_id.as_deref(),
+            record.outcome.rule,
+            pin_events_of(&record)
+        ),
+        (None, None, vec![("pin_created", None)]),
+        "the session's next request is a fresh placement that names no source"
+    );
 }
 
 #[tokio::test]

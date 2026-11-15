@@ -113,7 +113,8 @@ pub struct SelectRequest {
     /// The holds this request already waited through, oldest first: the relay carries each `Held` answer's
     /// facts into the next selection, so the attempt that follows a hold names it.
     pub holds: Vec<HoldFacts>,
-    /// The pin a failover took off its account inside the migration window, which the routing task hands to the
+    /// The pin a failover took off its account inside the migration window, or the pin of an account the registry no
+    /// longer holds while the pool's affinity TTL still holds its last use, which the routing task hands to the
     /// selection that lands the session again, `None` for every other request.
     pub failed_over: Option<FailedOver>,
     /// Whether a leg of this request was already dispatched, as the relay reads it: true once a selection placed a
@@ -164,12 +165,14 @@ pub struct CreditAccount {
     pub incarnation: u64,
 }
 
-/// The pin a failover took off its account, handed to the selection that lands the session again.
+/// The pin a failover took off its account, or the reload's purge off a deleted account, handed to the selection that
+/// lands the session again.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FailedOver {
     pub from_account_id: String,
-    /// `cooldown`, `fast_lane` or `mark`, mirroring the word of the invalidated entry the landing reads. The selection
-    /// names it as the landing's move and rule, and the event takes its own from that entry.
+    /// `cooldown`, `fast_lane` or `mark` for a failover, `deleted` for a deleted account's pin, mirroring the word of
+    /// the invalidated entry the landing reads. The selection names it as the landing's move and rule, and the event
+    /// takes its own from that entry.
     pub reason: &'static str,
     /// The row the invalidation took, whose burn the landing prices and the new pin carries.
     pub row: PinRow,
@@ -1378,9 +1381,9 @@ pub fn release_reasons(
 
 /// The order that picks the one word a replaced pin's move carries out of what stood against its account: what the
 /// account is first, then what its pool and its limits say, so a deleted account's pin, whose list also holds
-/// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, as
-/// `pin_expired` with `deleted`, and the word stands here so the order covers every word `release_reasons` answers but
-/// `expired`, which the selection never reads as a move.
+/// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, and its
+/// landing takes `deleted` from the purge's entry as a failover's takes its word. The word stands here so the order
+/// covers every word `release_reasons` answers but `expired`, which the selection never reads as a move.
 const MOVE_CAUSE_ORDER: [&str; 17] = [
     "deleted",
     "paused",
@@ -2697,7 +2700,8 @@ fn run(
     // on an account at its cap would carry the agent's next message past the cap, since a renewal never reads it.
     let handed = session.filter(|_| !request.count).map(|session| {
         let epoch = state.fresh_epoch();
-        // A failover's landing carries the row its source lost and remembers the source as a shed move does.
+        // A failover's landing carries the row its source lost and remembers the source as a shed move does, and a
+        // deleted account's landing carries the row alone.
         let failed_over = request.failed_over.as_ref();
         let moving = moving.as_ref().or(failed_over.map(|f| &f.row));
         // A live row released off its account, or one idle past the TTL or left behind by its pool, is the session's
@@ -2727,7 +2731,12 @@ fn run(
             shed_from
                 .clone()
                 .map(|from| (from, SHED_ROUND.to_string()))
-                .or_else(|| failed_over.map(|f| (f.from_account_id.clone(), f.reason.to_string()))),
+                .or_else(|| {
+                    failed_over
+                        // The account the stamp would name is gone.
+                        .filter(|f| f.reason != "deleted")
+                        .map(|f| (f.from_account_id.clone(), f.reason.to_string()))
+                }),
             moving,
             replaced,
         );
@@ -2829,11 +2838,12 @@ fn replace_expired(
 }
 
 /// A pin under `session` on `chosen`, created by this request with the request's hashes stamped. `shed` is the source
-/// and the word a shed move or a failover's landing stamps. `moving` is the row a move takes off its source or a
-/// failover took off its account, whose burn averages, the classifier copy's model and the last prompt the new row
-/// carries, so the destination's projection counts the pin from the moment it lands, the copy keeps its price and a
-/// later move prices its rewrite from a figure. `replaced` is any row of the pin the placement replaces, `moving`
-/// among them, whose thinking sums the new row carries.
+/// and the word a shed move or a failover's landing stamps, `None` on a deleted account's landing. `moving` is the row
+/// a move takes off its source, or a failover or the purge of a deleted account took off its account, whose burn
+/// averages, the classifier copy's model and the last prompt the new row carries, so the destination's projection
+/// counts the pin from the moment it lands, the copy keeps its price and a later move prices its rewrite from a figure.
+/// `replaced` is any row of the pin the placement replaces, `moving` among them, whose thinking sums the new row
+/// carries.
 fn fresh_pin(
     request: &SelectRequest,
     session: &str,
@@ -2869,7 +2879,8 @@ fn fresh_pin(
         last_refresh_at: request.now,
         cache_ttl_ms: FIVE_MINUTES_MS,
         // A shed move and a failover's landing remember the source for the dwell, so no round sends the session
-        // straight back, and the word the status page and the record name the stamp by. Every other move clears it.
+        // straight back, and the word the status page and the record name the stamp by. Every other move clears it, a
+        // deleted account's landing among them.
         shed: shed.map(|(from, reason)| ShedStamp {
             from,
             at: request.now,

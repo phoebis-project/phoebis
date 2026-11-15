@@ -74,24 +74,42 @@ const EVENTS: usize = 1_024;
 /// the slots, and a restart a receiver loses waits for the cadence.
 const RESTARTS: usize = 64;
 
-/// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
+/// How long after a failover's invalidation the next pin for the same triple counts as a migration rather than a new
 /// session. A failover re-selects within one request, well inside this.
 const MIGRATION_WINDOW_MS: i64 = 60_000;
 
-/// The pin a failover invalidated, kept for `MIGRATION_WINDOW_MS` so the landing reads its figures and names its cause.
+/// The pin a failover invalidated, or one the purge took off an account the registry no longer holds, kept for its
+/// `life` so the landing reads its figures and names its cause.
 struct Invalidated {
     account_id: String,
-    /// `cooldown`, `fast_lane` or `mark`.
+    /// `cooldown`, `fast_lane` or `mark` for a failover, `deleted` for a deleted account's pin.
     reason: &'static str,
     at: i64,
     row: PinRow,
     cause: Option<MoveCause>,
+    /// The list of the release that made the entry, which the landing's `pin_migrated` carries: empty for a failover,
+    /// `deleted` for a deleted account's pin.
+    released: Vec<&'static str>,
+    life: Life,
+}
+
+/// How long an entry stands.
+enum Life {
+    /// `MIGRATION_WINDOW_MS` from the invalidation.
+    Failover,
+    /// As long as the pin would have stood (`pin_would_stand`): the session of a deleted account keeps its move until
+    /// its pool's affinity TTL has passed since its last use, and the purge that sees it lapse writes the expiry it
+    /// held back.
+    Pin,
 }
 
 impl Invalidated {
-    /// Whether the entry still stands at `now`, inside `MIGRATION_WINDOW_MS` of its invalidation.
-    fn within(&self, now: i64) -> bool {
-        now - self.at <= MIGRATION_WINDOW_MS
+    /// Whether the entry still stands at `now` under `snapshot`, by its `life`.
+    fn within(&self, now: i64, snapshot: &RegistrySnapshot) -> bool {
+        match self.life {
+            Life::Failover => now - self.at <= MIGRATION_WINDOW_MS,
+            Life::Pin => crate::state::pin_would_stand(snapshot, &self.row, now),
+        }
     }
 }
 
@@ -256,8 +274,9 @@ pub enum RouterEvent {
         epoch: u64,
         reason: String,
         /// What the selection found against the account a replaced pin left, the whole list in the order `pin_expired`
-        /// writes it. Empty on a rule's move and on a failover's landing, so a reader tells a replaced pin's
-        /// `cooldown`, `overage` or `spent` from the rule or the failover of the same word.
+        /// writes it, and `deleted` alone on the landing of a session whose account the purge found deleted. Empty on
+        /// a rule's move and on a failover's landing, so a reader tells a replaced pin's `cooldown`, `overage` or
+        /// `spent` from the rule or the failover of the same word.
         reasons: Vec<&'static str>,
         /// The destination's fit as the move read it: the verdict (`fits`, `rewrite_only`, `least_bad`), the runway
         /// on the binding window (`None` for an unbounded one) and that window. Where the placement's ladder read the
@@ -2053,9 +2072,9 @@ struct Task {
     /// The loop's own way back into its mailbox, weak so it never keeps its receiver alive: upgraded for the one
     /// load a task runs, and dropped with that task.
     handle_tx: mpsc::WeakSender<Command>,
-    /// The pin a failover invalidated, under its key. The next select for that same key within
-    /// `MIGRATION_WINDOW_MS` lands on the row's figures and reports a migration rather than a fresh pin, and the purge
-    /// drops older entries.
+    /// The pin a failover invalidated or the purge took off a deleted account, under its key. The next select for that
+    /// same key while the entry stands lands on the row's figures and reports a migration rather than a fresh pin, and
+    /// the purge drops an entry that lapsed. Memory only, so a restart drops every entry.
     invalidated: HashMap<PinKey, Invalidated>,
     /// The reloads the running load answers, those that were waiting when it started, and `None` while no registry
     /// load runs. At most one does.
@@ -3324,16 +3343,16 @@ impl Task {
                 let cleared =
                     !(request.probe || request.classifier) && self.state.clear_ended(&pin_key);
                 let before = self.state.pin(&pin_key).cloned();
-                // A failover inside the window lands on the row its source lost: the selection prices the session's
-                // own burn and names the cause on the record. A key that holds a pin again is no landing, and neither
-                // is the client's classifier call, which holds no pin and lands no session though its key can be the
-                // conversation's. The entry stays until a selection lands the session, so a held one leaves it for
-                // the next.
+                // A failover inside its window, or a deleted account's pin that would still stand, lands on the row its
+                // source lost: the selection prices the session's own burn and names the cause on the record. A key
+                // that holds a pin again is no landing, and neither is the client's classifier call, which holds no
+                // pin and lands no session though its key can be the conversation's. The entry stays until a selection
+                // lands the session, so a held one leaves it for the next.
                 request.failed_over = self
                     .invalidated
                     .get(&pin_key)
                     .filter(|_| before.is_none() && !request.classifier)
-                    .filter(|entry| entry.within(request.now))
+                    .filter(|entry| entry.within(request.now, &snapshot))
                     .map(|entry| FailedOver {
                         from_account_id: entry.account_id.clone(),
                         reason: entry.reason,
@@ -3391,11 +3410,12 @@ impl Task {
                         match self
                             .invalidated
                             .remove(&pin_key)
-                            .filter(|entry| entry.within(now))
+                            .filter(|entry| entry.within(now, &snapshot))
                         {
                             Some(Invalidated {
                                 account_id: from,
                                 reason,
+                                released: reasons,
                                 ..
                             }) => {
                                 pin_events.push(RouterEvent::pin_migrated(
@@ -3403,7 +3423,7 @@ impl Task {
                                     from,
                                     new,
                                     reason,
-                                    Vec::new(),
+                                    reasons,
                                     &record,
                                     record.outcome.cause.clone(),
                                     now,
@@ -3993,6 +4013,8 @@ impl Task {
                                     at: now,
                                     row,
                                     cause: Some(cause),
+                                    released: Vec::new(),
+                                    life: Life::Failover,
                                 },
                             );
                             writes.push(StateWrite::DeletePin(key));
@@ -4199,6 +4221,8 @@ impl Task {
                                 state: state.as_str(),
                                 cause: cause.as_str(),
                             }),
+                            released: Vec::new(),
+                            life: Life::Failover,
                         },
                     );
                     self.write(vec![StateWrite::DeletePin(key)]);
@@ -4978,7 +5002,22 @@ impl Task {
                 .pin(key)
                 .is_some_and(|row| row.epoch == observation.epoch)
         });
-        self.invalidated.retain(|_, entry| entry.within(now));
+        let lapsed: Vec<_> = self
+            .invalidated
+            .extract_if(|_, entry| !entry.within(now, &snapshot))
+            .collect();
+        // A failover's entry leaves in silence, while a deleted account's trace writes the expiry its purge held back.
+        for (key, entry) in lapsed {
+            if matches!(entry.life, Life::Pin) {
+                self.emit(RouterEvent::pin_expired(
+                    &key,
+                    &entry.account_id,
+                    entry.released,
+                    key_pool_id(&snapshot, &entry.row.key_id),
+                    now,
+                ));
+            }
+        }
         for (account_id, scope) in &purged.cooldowns {
             self.emit(RouterEvent::CooldownCleared {
                 account_id: account_id.clone(),
@@ -5002,6 +5041,28 @@ impl Task {
                 self.emit(event);
             }
             pin_ends.push(StateWrite::DeletePin(key));
+        }
+        // A deleted account's pin that would still stand writes no expiry: the session's next request that takes a
+        // pin lands on it as a move off the account.
+        for row in purged.traced {
+            let key = row.key();
+            let pool_id = key_pool_id(&snapshot, &row.key_id);
+            if let Some(event) = cleared_mark(&row, "released", pool_id, now) {
+                self.emit(event);
+            }
+            pin_ends.push(StateWrite::DeletePin(key.clone()));
+            self.invalidated.insert(
+                key,
+                Invalidated {
+                    account_id: row.account_id.clone(),
+                    reason: "deleted",
+                    at: now,
+                    row,
+                    cause: None,
+                    released: vec!["deleted"],
+                    life: Life::Pin,
+                },
+            );
         }
         let restored = !std::mem::replace(&mut self.purged, true);
         self.clock_resets(now, restored);

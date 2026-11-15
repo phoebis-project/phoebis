@@ -465,6 +465,10 @@ pub struct Purged {
     pub pins: Vec<(PinRow, &'static str)>,
     /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
     pub slow_downs: Vec<((String, String), SlowDownState)>,
+    /// Each dropped pin of an account the registry no longer holds that would still stand otherwise
+    /// (`pin_would_stand`): the session's trace, which the next request that takes a pin lands as a move off the
+    /// account.
+    pub traced: Vec<PinRow>,
 }
 
 /// A member's spend in one budgeted period, as the ledger last answered it; memory only. The period it was summed
@@ -1481,6 +1485,18 @@ pub(crate) fn mark_holds(pin: &PinRow) -> bool {
 /// The pin's mark while it stands, as `mark_holds` reads it.
 pub(crate) fn standing_mark(pin: &PinRow) -> Option<&PinMark> {
     pin.mark.as_ref().filter(|mark| mark.on == pin.account_id)
+}
+
+/// Whether a pin would stand at `now` were its account still held, by the purge's own tests: its key stands under the
+/// generation the pin names, and the affinity TTL of the key's pool holds the row's last use, a zero TTL holding none.
+pub(crate) fn pin_would_stand(snapshot: &RegistrySnapshot, pin: &PinRow, now: i64) -> bool {
+    snapshot
+        .key(&pin.key_id)
+        .is_some_and(|key| key.created_at == pin.key_generation)
+        && snapshot
+            .key_pool(&pin.key_id)
+            .map(affinity_ttl_ms)
+            .is_some_and(|ttl| ttl > 0 && now - pin.last_used_at <= ttl)
 }
 
 /// The loaded rounds by pool and account: each row's time, what the dwell between rounds reads.
@@ -4144,7 +4160,9 @@ impl RoutingState {
     /// under that id next: a two-day cooldown would keep a brand new account out of every pool it joins. A delete
     /// and a create under one id can both land before one reload, so a row is held against the account only while
     /// the snapshot's holder carries the incarnation it names. A pin names its key's creation time too, and one
-    /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id.
+    /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id. A pin whose
+    /// account the registry no longer holds under any holder, and that would still stand otherwise, leaves as a
+    /// trace in `traced` in place of `pins`.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
         let gone =
             |account_id: &str, incarnation: u64| snapshot.holder(account_id, incarnation).is_none();
@@ -4180,13 +4198,21 @@ impl RoutingState {
                 }
             })
             .collect();
-        let pins = doomed
+        // A holder created again under the id is another account, so a move naming the id would book the previous
+        // holder's move on it: such a pin expires.
+        let (traced, pins): (Vec<_>, Vec<_>) = doomed
             .into_iter()
             .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
-            .collect();
+            .partition(|(row, reason)| {
+                *reason == "deleted"
+                    && snapshot.account(&row.account_id).is_none()
+                    && pin_would_stand(snapshot, row, now)
+            });
+        let traced = traced.into_iter().map(|(row, _)| row).collect();
         // A move writes the key again within the selection that took the row, so a key no pin holds at the tick
-        // belongs to a session that ended, or to a failover: the task's report handling takes that row and the landing
-        // comes on a later selection, so a tick between the two drops the pace and the landed pin starts a new one.
+        // belongs to a session that ended, to a failover or to a deleted account's trace: the task takes that row and
+        // the landing comes on a later selection, so a tick between the two drops the pace and the landed pin starts a
+        // new one.
         let held = &self.pins;
         self.pin_paces.retain(|key, _| held.contains_key(key));
         self.turn_ends.retain(|_, end| held.contains_key(&end.key));
@@ -4252,6 +4278,7 @@ impl RoutingState {
             cooldowns,
             pins,
             slow_downs,
+            traced,
         }
     }
 
