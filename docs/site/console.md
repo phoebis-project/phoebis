@@ -275,26 +275,26 @@ speed chip, `0.5x` in the warning tone (the speed the holds realized, to two dec
 `0.35x`), whose hover reads `slowed since 17:40: the sessions on this account would pass the ceiling 42 min before the
 reset, over the 30 min threshold` (`under` while no round can fire) followed by the factor the pool computed, how far
 the span has ramped toward it where the entry is inside a span, and the speed the holds realized, one sentence each,
-such as `The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`. The chip draws while the realized speed is
-under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account cards, the Accounts
-view, the Pools cards and the Sessions view draw the same chip with the same hover ([Slow-down](routing.md#slow-down)).
-The window bars of the Dashboard's account cards and of the Accounts list draw the projection alone in the reset's
-place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between the share and the horizon where
-the bar is narrow, with the reset's instant on hover, and keep the reset where the window has no projection. An account
-whose plan ended reads `No window since the plan ended {ago}` in the bars' place on both views, where any other
-subscription account without a window reads "Not read yet" and an API-key account "No quota windows". A window the
-account's poll does not carry keeps its slot, so the bars line up across the cards, with "none" muted in the share's
-place, since the slot is too narrow for the words beside its label, and the words on hover: "no 5-hour window" on an
-approved Ultra account, "no 7-day window", and "no Fable window" on a Pro account. The Accounts detail's bars read the
-whole label and a missing window's words, split between its two parts where the bar is narrow, and the 5-hour bar's
-label carries the chip on a slowed account. The Pools dialog's Preview, the Sessions Runway column and the routing log
-keep the used share, the figure that each window's ceiling in a pool is measured against. A window whose reset has
-passed with no reading since reads `expired {ago}` instead, with "no reading since the reset, {time}" on hover, and
-draws no share and an empty meter until the next reading, and a window the account does not report keeps its row with
-its words muted in the reset label's place and on the chip's hover ("no 5-hour window", "no 7-day window", "no Fable
-window"). A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows the error
-with `, next attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads the share
-of its monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the reading's
+such as `The pool computed 0.5x. Ramped to 0.5x. The holds realized 0.5x`. The chip draws inside a slow-down span, while
+the realized speed is under 1 and the 5-hour window the read came from has not reset since, and the Dashboard's account
+cards, the Accounts view, the Pools cards and the Sessions view draw the same chip with the same hover
+([Slow-down](routing.md#slow-down)). The window bars of the Dashboard's account cards and of the Accounts list draw the
+projection alone in the reset's place, in a compact form (`19% left at reset`, `56% left in 5 h`) that splits between
+the share and the horizon where the bar is narrow, with the reset's instant on hover, and keep the reset where the
+window has no projection. An account whose plan ended reads `No window since the plan ended {ago}` in the bars' place on
+both views, where any other subscription account without a window reads "Not read yet" and an API-key account "No quota
+windows". A window the account's poll does not carry keeps its slot, so the bars line up across the cards, with "none"
+muted in the share's place, since the slot is too narrow for the words beside its label, and the words on hover: "no
+5-hour window" on an approved Ultra account, "no 7-day window", and "no Fable window" on a Pro account. The Accounts
+detail's bars read the whole label and a missing window's words, split between its two parts where the bar is narrow,
+and the 5-hour bar's label carries the chip on a slowed account. The Pools dialog's Preview, the Sessions Runway column
+and the routing log keep the used share, the figure that each window's ceiling in a pool is measured against. A window
+whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset, {time}" on
+hover, and draws no share and an empty meter until the next reading, and a window the account does not report keeps its
+row with its words muted in the reset label's place and on the chip's hover ("no 5-hour window", "no 7-day window", "no
+Fable window"). A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows the
+error with `, next attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads the
+share of its monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the reading's
 currency on hover and `resets {ago}` under it, and no pace, since the router projects no burn on the seat. With no limit
 set its chip reads the amount spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No
 spend reading yet." in the windows' place. Until a reset header names the spend window's reset, the router estimates it

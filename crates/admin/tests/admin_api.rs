@@ -8007,6 +8007,113 @@ async fn a_slowed_account_answers_its_slow_down_on_the_account_route_and_its_fac
 }
 
 #[tokio::test]
+async fn an_entry_in_force_that_opened_no_span_answers_its_factor_and_a_null_speed_on_its_member_and_session(
+) {
+    use common::{get, json, login, NOW};
+    const HOUR: i64 = 3_600_000;
+    let parts = slow_down_harness(true).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Ten points with four hours left at five points an hour reach 0.30 by the reset, under the ceiling of 0.95, so the
+    // pinned read writes an entry at a factor of 1 and opens no span.
+    read_windows(
+        &parts,
+        "business",
+        &[(phoebis_routing::FIVE_HOUR, 0.10, Some(NOW + 4 * HOUR))],
+    )
+    .await;
+    assert!(matches!(
+        main_turn(&parts, "s1", "r-1", NOW).await,
+        phoebis_routing::SelectResult::Selected(_)
+    ));
+    let null = serde_json::Value::Null;
+    let business = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let slow_down = &business["slow_down"];
+    assert_eq!(
+        (
+            slow_down["factor"].as_f64(),
+            slow_down.get("since"),
+            slow_down["speed"].as_f64()
+        ),
+        (Some(1.0), Some(&null), Some(1.0)),
+        "the entry is in force and holds no span: {business}"
+    );
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    let member = pool_member(&pools, "business");
+    assert_eq!(
+        (member["factor"].as_f64(), member.get("speed")),
+        (Some(1.0), Some(&null)),
+        "the member names its account's factor and no speed outside a span: {member}"
+    );
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let s1 = session_row(&sessions, "s1");
+    assert_eq!(
+        (s1["factor"].as_f64(), s1.get("speed")),
+        (Some(1.0), Some(&null)),
+        "the pin reads its account's factor and no speed outside a span: {s1}"
+    );
+}
+
+#[tokio::test]
+async fn a_span_inside_its_wait_after_the_factor_reads_1_again_answers_its_speed_on_its_member_and_session(
+) {
+    use common::{get, json, login, NOW};
+    use std::sync::atomic::Ordering;
+    const HOUR: i64 = 3_600_000;
+    let parts = slow_down_harness(true).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // Two points under the ceiling with four hours left: the turn reads a factor under 1 and opens a span.
+    read_windows(
+        &parts,
+        "business",
+        &[(phoebis_routing::FIVE_HOUR, 0.93, Some(NOW + 4 * HOUR))],
+    )
+    .await;
+    assert!(matches!(
+        main_turn(&parts, "s1", "r-1", NOW).await,
+        phoebis_routing::SelectResult::Selected(_)
+    ));
+    // A minute on, a head reads ten points on the same reset, which the pin's burn no longer carries to the ceiling by
+    // the reset: the next turn reads a factor of 1, and the span stands through the two-minute wait that follows.
+    parts.clock_cell.store(NOW + 60_000, Ordering::SeqCst);
+    read_windows_at(
+        &parts,
+        "business",
+        &[(phoebis_routing::FIVE_HOUR, 0.10, Some(NOW + 4 * HOUR))],
+        NOW + 30_000,
+    )
+    .await;
+    assert!(matches!(
+        main_turn(&parts, "s1", "r-2", NOW + 60_000).await,
+        phoebis_routing::SelectResult::Selected(_)
+    ));
+    let business = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let slow_down = &business["slow_down"];
+    assert_eq!(
+        (
+            slow_down["factor"].as_f64(),
+            slow_down["since"].as_i64(),
+            slow_down["speed"].as_f64()
+        ),
+        (Some(1.0), Some(NOW), Some(1.0)),
+        "the factor reads 1 again inside the wait, so the span opened at the first turn stands: {business}"
+    );
+    let pools = json(get(&parts.app, "/admin/pools", Some(&cookie)).await).await;
+    let member = pool_member(&pools, "business");
+    assert_eq!(
+        (member["factor"].as_f64(), member["speed"].as_f64()),
+        (Some(1.0), Some(1.0)),
+        "the member names its account's speed while the span stands: {member}"
+    );
+    let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let s1 = session_row(&sessions, "s1");
+    assert_eq!(
+        (s1["factor"].as_f64(), s1["speed"].as_f64()),
+        (Some(1.0), Some(1.0)),
+        "the pin reads its account's speed while the span stands: {s1}"
+    );
+}
+
+#[tokio::test]
 async fn a_session_row_with_no_pin_reads_no_slow_down_speed_and_no_cycle() {
     use common::{login, wait_json, NOW};
     let parts = slow_down_harness(true).await;

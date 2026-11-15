@@ -95,7 +95,7 @@ pub(crate) struct Session {
     /// The pin's account's factor under the slow-down, from the entry in force, null on a row with no pin and where no
     /// entry is in force.
     pub factor: Option<f64>,
-    /// The speed the holds realized, from 0 to 1, beside `factor`, null where `factor` is.
+    /// The speed the holds realized inside a slow-down span, from 0 to 1, null where `factor` is and outside a span.
     pub speed: Option<f64>,
     /// The pin's cycle in milliseconds, null until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average, and on a row with no pin.
@@ -507,7 +507,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 runway_ms: standing.runway_ms,
                 runway_bounded: standing.runway_bounded,
                 factor: standing.slow_down.map(|s| s.factor),
-                speed: standing.slow_down.map(|s| s.speed),
+                speed: standing.slow_down.filter(|s| s.slowed).map(|s| s.speed),
                 cycle_ms: standing.cycle_ms,
                 cache_ttl_ms: Some(p.cache_ttl_ms),
                 warm: Some(phoebis_routing::pin_warm(p, now)),

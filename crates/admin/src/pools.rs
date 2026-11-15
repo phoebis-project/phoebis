@@ -1211,7 +1211,7 @@ pub(crate) struct PoolMemberView {
     pub burn: Option<f64>,
     /// The account's factor under the slow-down, the projection's `slow_down.factor`, null where `slow_down` is.
     pub factor: Option<f64>,
-    /// The speed the holds realized, from 0 to 1, beside `factor`, null where `factor` is.
+    /// The speed the holds realized inside a slow-down span, from 0 to 1, null where `factor` is and outside a span.
     pub speed: Option<f64>,
 }
 
@@ -1289,7 +1289,7 @@ fn member_json(
             .and_then(|p| p.windows.get(phoebis_routing::SEVEN_DAY))
             .map(|w| w.burn),
         factor: slow_down.map(|s| s.factor),
-        speed: slow_down.map(|s| s.speed),
+        speed: slow_down.filter(|s| s.span.is_some()).map(|s| s.speed),
     }
 }
 

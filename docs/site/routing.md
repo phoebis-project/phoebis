@@ -964,7 +964,8 @@ with both switches off alone. The account's factor, its stretch against the thre
 bracket a slowed span, `slow_down_started` and `slow_down_ended`, are on the console's [Pools](console.md#pools),
 [Quota](console.md#quota) and [Routing log](console.md#routing-log) views. The account's `slow_down` on
 `GET /admin/accounts/{id}` names the factor, the realized speed, the span's start and the ramp, `GET /admin/sessions`
-names the factor and the realized speed of each pin's account, and `GET /admin/pools` those of each member.
+names the factor and, inside a span, the realized speed of each pin's account, and `GET /admin/pools` those of each
+member.
 
 ## Cooldowns and failover
 

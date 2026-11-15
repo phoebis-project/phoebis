@@ -1493,6 +1493,8 @@ pub struct PinSlowDown {
     pub factor: f64,
     /// The speed the account's holds realized.
     pub speed: f64,
+    /// Whether the entry holds an open slow-down span, the test the account's `span` reads.
+    pub slowed: bool,
 }
 
 #[derive(Clone)]
@@ -3016,6 +3018,7 @@ fn pins_standing(
                                 .map(|entry| PinSlowDown {
                                     factor: entry.factor,
                                     speed: entry.speed,
+                                    slowed: entry.slowed_since.is_some(),
                                 }),
                         )
                     })
