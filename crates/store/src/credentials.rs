@@ -98,6 +98,13 @@ pub struct NewBundle {
     pub scopes: String,
 }
 
+/// The commit that writes a bundle, which decides whether the stored end of the refresh token outlives a bundle
+/// that names none.
+pub(crate) enum CommitKind {
+    Pairing,
+    Refresh,
+}
+
 /// How a refresh attempt settles. A failure's `cause` is its class (the token endpoint's code or status, or the step
 /// that failed), recorded where the class is known so the ledger's refresh rows never derive it from the `detail` text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -327,6 +334,9 @@ fn last_refresh_attempt_in(
 // (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
 type CredentialRow = (i64, Vec<u8>, Vec<u8>, i64, i64, Option<i64>, String, i64);
 
+// (generation, sealed, nonce, refresh_expires_at) of the row a commit replaces
+type ReplacedRow = (i64, Vec<u8>, Vec<u8>, Option<i64>);
+
 pub(crate) fn credential_aad(account_id: &str, generation: i64) -> String {
     format!("{account_id}:{generation}")
 }
@@ -542,7 +552,8 @@ impl Store {
     /// are checked against the account's current state (`Disconnected` on mismatch, since either one moving
     /// means the slot was disconnected or replaced), the credential generation likewise (`Stale` on mismatch,
     /// a race with another write to the same bundle), a missing refresh token is folded forward from the
-    /// previous plaintext, and `attempt_id`, if given, is resolved as `Committed` here too, so a crash between
+    /// previous plaintext, a missing end of the refresh token from the stored row, also where the bundle names a
+    /// new refresh token, and `attempt_id`, if given, is resolved as `Committed` here too, so a crash between
     /// the two writes cannot leave a committed bundle behind a pending attempt.
     ///
     /// The incarnation is what the lifecycle generation cannot answer for: deleting a slot and recreating it
@@ -568,6 +579,7 @@ impl Store {
             expected_generation,
             attempt_id,
             bundle,
+            CommitKind::Refresh,
             self.now_ms(),
         )?;
         tx.commit()?;
@@ -578,7 +590,8 @@ impl Store {
     /// rows and the pairing's own resolved `committed` attempt (`detail = 'pairing'`) in one transaction, so a
     /// commit refused by its fences or its write records no success. The attempt is what ends a run of failed
     /// refreshes for the attention reader when nothing was pending to supersede. The transaction also clears the
-    /// limit reset block and advances its epoch.
+    /// limit reset block and advances its epoch. The end of the refresh token is the bundle's as it comes, so a
+    /// pairing whose answer names no end stores none.
     pub fn commit_pairing(
         &self,
         account_id: &str,
@@ -601,6 +614,7 @@ impl Store {
             expected_generation,
             None,
             bundle,
+            CommitKind::Pairing,
             now,
         )?;
         // The block was read under the pairing before this one, and the poll's next slots read it again. A
@@ -644,6 +658,7 @@ impl Store {
         expected_generation: Option<u64>,
         attempt_id: Option<u64>,
         bundle: &NewBundle,
+        kind: CommitKind,
         now: i64,
     ) -> Result<u64, StoreError> {
         let account: Option<(i64, i64)> = tx
@@ -661,33 +676,41 @@ impl Store {
             return Err(StoreError::Disconnected);
         }
 
-        let existing: Option<(i64, Vec<u8>, Vec<u8>)> = tx
+        let existing: Option<ReplacedRow> = tx
             .query_row(
-                "SELECT generation, sealed, nonce FROM credentials WHERE account_id = ?1",
+                "SELECT generation, sealed, nonce, refresh_expires_at FROM credentials WHERE account_id = ?1",
                 params![account_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
 
         let current_generation = existing
             .as_ref()
-            .map(|(generation, _, _)| *generation as u64);
+            .map(|(generation, _, _, _)| *generation as u64);
         if current_generation != expected_generation {
             return Err(StoreError::Stale);
         }
 
+        // A response that omits the refresh token means "unchanged", not "cleared", so the row being replaced is
+        // opened to carry its token forward, under a pairing too. A refresh carries the token's stored end the same
+        // way, whatever its answer says of the token. A pairing writes its own answer's end as it comes, also where
+        // the answer names none, since an old pairing's end must not outlive a new pairing.
         let refresh_token = match &bundle.refresh_token {
             Some(secret) => Some(secret.expose().to_owned()),
-            // A refresh response that omits the refresh token means "unchanged", not "cleared";
-            // decrypt the row being replaced to carry its refresh token forward.
             None => match &existing {
-                Some((generation, sealed, nonce)) => {
+                Some((generation, sealed, nonce, _)) => {
                     open_tokens(&self.key, account_id, *generation, nonce, sealed)?
                         .refresh_token
                         .take()
                 }
                 None => None,
             },
+        };
+        let refresh_expires_at = match kind {
+            CommitKind::Pairing => bundle.refresh_expires_at,
+            CommitKind::Refresh => bundle
+                .refresh_expires_at
+                .or(existing.as_ref().and_then(|(_, _, _, end)| *end)),
         };
 
         let new_generation = current_generation.map_or(1, |generation| generation + 1);
@@ -718,7 +741,7 @@ impl Store {
                 nonce,
                 bundle.issued_at,
                 bundle.expires_at,
-                bundle.refresh_expires_at,
+                refresh_expires_at,
                 bundle.scopes,
                 now,
             ],

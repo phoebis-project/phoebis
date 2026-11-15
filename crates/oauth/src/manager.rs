@@ -1048,7 +1048,8 @@ impl Inner {
         ) {
             Ok(generation) => {
                 // The one write that moves the generation without a reload, so the entry moves with it. A response
-                // without a refresh token keeps the stored one, as the commit does.
+                // without a refresh token keeps the stored one, and one without the token's end keeps the stored
+                // end, as the commit does.
                 let committed = Arc::new(CredentialBundle {
                     access_token: Secret::new(fresh.access_token.expose()),
                     refresh_token: fresh
@@ -1058,7 +1059,7 @@ impl Inner {
                         .map(|token| Secret::new(token.expose())),
                     issued_at: fresh.issued_at,
                     expires_at: fresh.expires_at,
-                    refresh_expires_at: fresh.refresh_expires_at,
+                    refresh_expires_at: fresh.refresh_expires_at.or(bundle.refresh_expires_at),
                     scopes: fresh.scopes.clone(),
                     generation,
                     lifecycle_generation: account.lifecycle_generation,

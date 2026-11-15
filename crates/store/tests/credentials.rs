@@ -445,6 +445,49 @@ fn a_missing_refresh_token_keeps_the_previous_one() {
 }
 
 #[test]
+fn a_refresh_keeps_the_stored_refresh_end_it_leaves_out_and_a_pairing_stores_its_own() {
+    let (first_end, second_end) = (Some(1_802_588_400_000), Some(1_805_180_400_000));
+    let ending = |token: &str, end: Option<i64>| NewBundle {
+        refresh_expires_at: end,
+        ..bundle(token)
+    };
+    let stored_end = |store: &Store| {
+        store
+            .credential_metadata("a")
+            .unwrap()
+            .unwrap()
+            .refresh_expires_at
+    };
+
+    // `bundle` names a refresh token, so a body that carries the end only with the token fails the first read.
+    let refreshed = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    refreshed.insert_account(&account("a")).unwrap();
+    let g1 = refreshed
+        .commit_credentials("a", 1, 1, None, None, &ending("at-1", first_end))
+        .unwrap();
+    let g2 = refreshed
+        .commit_credentials("a", 1, 1, Some(g1), None, &ending("at-2", None))
+        .unwrap();
+    let kept = stored_end(&refreshed);
+    refreshed
+        .commit_credentials("a", 1, 1, Some(g2), None, &ending("at-3", second_end))
+        .unwrap();
+    let replaced = stored_end(&refreshed);
+
+    let paired = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    paired.insert_account(&account("a")).unwrap();
+    let g1 = paired
+        .commit_pairing("a", 1, 1, None, &ending("at-1", first_end))
+        .unwrap();
+    paired
+        .commit_pairing("a", 1, 1, Some(g1), &ending("at-2", None))
+        .unwrap();
+    let cleared = stored_end(&paired);
+
+    assert_eq!([kept, replaced, cleared], [first_end, second_end, None]);
+}
+
+#[test]
 fn only_one_refresh_attempt_can_be_pending() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store.insert_account(&account("a")).unwrap();

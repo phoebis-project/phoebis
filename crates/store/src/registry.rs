@@ -1534,6 +1534,7 @@ impl Store {
             None,
             None,
             bundle,
+            crate::credentials::CommitKind::Pairing,
             at,
         )?;
         crate::credentials::record_pairing_attempt(
