@@ -2114,6 +2114,7 @@ impl Inner {
         if agent.paused {
             tracing::info!(
                 key = %key.0,
+                session = %key.1,
                 agent = %agent_id,
                 expires = %phoebis_store::utc_stamp(expires),
                 late_ms = now - expires,
@@ -2124,6 +2125,7 @@ impl Inner {
         }
         tracing::info!(
             key = %key.0,
+            session = %key.1,
             agent = %agent_id,
             expires = %phoebis_store::utc_stamp(expires),
             late_ms = now - expires,
@@ -3749,6 +3751,7 @@ pub(crate) fn note_ttl_change(
     }
     tracing::debug!(
         key = %key.0,
+        session = %key.1,
         agent = %agent_id,
         previous_ms,
         ttl_ms,
