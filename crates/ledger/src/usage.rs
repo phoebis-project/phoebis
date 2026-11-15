@@ -17,7 +17,7 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::price::price_usd;
-use crate::query::hour_ceil;
+use crate::query::{hour_ceil, row_parts, Sides};
 use crate::rollup::{hour_of, read_rollups_for_key, RollupRow};
 use crate::{LedgerDb, LedgerError, PriceRevisions, Pricing};
 
@@ -76,9 +76,10 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 /// The generation is the presenting key's own `created_at`, so an id an earlier key used answers only what
 /// this key spent, whole hours included: nothing is left out and each window starts where its name says.
 ///
-/// Each row's dollars price from its counts at the revision in force at the end of its hour, once for both windows, a
-/// client classifier call the plan paid adding zero, and probe rows are left out as the key list's totals leave them
-/// out.
+/// Each row's dollars price from its parts as `row_parts` answers them, once for both windows: a row of an hour no
+/// price entry splits at the revision in force at the end of its hour, and a request of a boundary hour at the
+/// revision in force when it arrived, from the sides loaded ahead of the rows. A client classifier call the plan paid
+/// adds zero, and probe rows are left out as the key list's totals leave them out.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,
@@ -88,14 +89,18 @@ pub fn key_usage_windows(
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
     let day_hour = hour_of(now - DAY_MS);
     let week_hour = hour_of(now - WEEK_MS);
+    let sides = Sides::on(conn, prices, None, week_hour, hour_ceil(now))?;
     let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
     let (mut day, mut week) = (
         WindowSum::new(day_hour, now),
         WindowSum::new(week_hour, now),
     );
     for row in &rows {
-        let usd =
-            price_usd(prices, &row.price_key(now), row.usage()).map_or(0.0, |usd| usd.total());
+        let mut usd = 0.0;
+        for part in row_parts(row, &sides) {
+            usd += price_usd(prices, &row.price_key(part.at, now), part.usage)
+                .map_or(0.0, |usd| usd.total());
+        }
         week.add(row, usd);
         if row.hour >= day_hour {
             day.add(row, usd);

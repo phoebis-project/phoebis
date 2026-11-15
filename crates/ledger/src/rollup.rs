@@ -161,6 +161,12 @@ pub fn hour_end(hour: i64) -> i64 {
     hour + 3_600
 }
 
+/// The last millisecond of the hour that starts at `hour`, the instant at which `in_force` answers the entries a
+/// stored row's counts price at whole.
+pub(crate) fn last_millisecond(hour: i64) -> i64 {
+    hour_end(hour) * 1_000 - 1
+}
+
 /// The hours `[from, to)` of the day up to the current hour, one span so the keepalive overview and the attention
 /// item's expired count read the same hours, the item counting some of their rows.
 pub fn trailing_day_hours(now: i64) -> (i64, i64) {
@@ -421,11 +427,12 @@ impl RollupRow {
     }
 
     /// The price key of the row: its own model, speed, band and funding, its tier (`None` under `UNATTRIBUTED`) and the
-    /// entrypoint its `client` names, read at `now`. Its instant is the last millisecond of its hour, so the entries in
-    /// force at the end of the hour price it whole: a row cannot hold a boundary inside its hour, and this way the hour
-    /// an entry starts in prices at that entry, so a model the entry adds reads its dollars from its first request on.
-    /// The rollup keeps no completion, so the peak band reads at the hour's start.
-    pub(crate) fn price_key(&self, now: i64) -> RowKey<'_> {
+    /// entrypoint its `client` names, priced at `at` and read at `now`. The rollup keeps no instant of its own
+    /// requests, so a caller hands the instant of a part as `row_parts` answers it: the last millisecond of the hour
+    /// for the counts of a row with no earlier side and for the remainder of one with sides, and the last millisecond
+    /// before the instant of each earlier side. The rollup keeps no completion either, so the peak band reads at the
+    /// hour's start whatever `at` names.
+    pub(crate) fn price_key(&self, at: i64, now: i64) -> RowKey<'_> {
         RowKey {
             model: &self.canonical_model,
             speed: Speed::of(Some(self.speed.as_str())),
@@ -434,7 +441,7 @@ impl RollupRow {
             tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
             entrypoint: entrypoint_of_client(&self.client),
             classifier: is_free_classifier(Some(self.classifier.as_str())),
-            at: hour_end(self.hour) * 1_000 - 1,
+            at,
             band_at: Some(self.hour * 1_000),
             now,
         }
@@ -2183,7 +2190,7 @@ pub fn open_cooldown_remainders(
     Ok(remainders)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json, uncacheable";
+pub(crate) const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, band, tier, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, kept_warm_requests, kept_warm_5m_tokens, probe_migrated, wasted_probes, wasted_probe_reasons_json, probes_skipped, wasted_input_tokens, wasted_cache_read_tokens, wasted_cache_write_5m_tokens, wasted_cache_write_1h_tokens, wasted_output_tokens, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held, slow_down_held_ms, slow_down_held, kept_warm_1h_tokens, classifier, refusals_json, client_canceled, input_transformations_json, uncacheable";
 const ACCOUNT_COLUMNS: &str = "hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json, wall_early_ms";
 
 /// The rollup key, the table's primary key in its order: the upsert's conflict target, the order a read answers in and
@@ -2357,7 +2364,10 @@ fn row_to_rollup(r: &rusqlite::Row<'_>) -> rusqlite::Result<RollupRow> {
 
 /// The row's columns read from `offset`, so a select that puts something of its own in front of `COLUMNS`
 /// needs no second mapper.
-fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<RollupRow> {
+pub(crate) fn row_to_rollup_at(
+    r: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<RollupRow> {
     let u = |i: usize| -> rusqlite::Result<u64> { Ok(r.get::<_, i64>(offset + i)? as u64) };
     let counts = |i: usize| counts_at(r, offset + i);
     let hist = |i: usize| -> rusqlite::Result<Histogram> {
@@ -4062,7 +4072,8 @@ mod tests {
         );
         let row = &rows[0];
         let costs = crate::test_tables::subscription_costs();
-        let usd = crate::query::priced(row, &prices(), &costs, row.hour * 1_000)
+        let part = crate::query::Part::whole(row);
+        let usd = crate::query::priced(row, part, &prices(), &costs, row.hour * 1_000)
             .usd
             .expect("the test list carries the model")
             .total();
@@ -4133,7 +4144,8 @@ mod tests {
         let priced: f64 = deltas
             .iter()
             .map(|d| {
-                crate::query::priced(d, &prices(), &costs, d.hour * 1_000)
+                let part = crate::query::Part::whole(d);
+                crate::query::priced(d, part, &prices(), &costs, d.hour * 1_000)
                     .usd
                     .expect("the test list carries the model")
                     .total()

@@ -31,10 +31,11 @@ use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
 use crate::rollup::{
-    add_counts, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of, migration_reason,
-    read_account_rollups, read_rollups_paged, trailing_day_hours, visit_rollups, CostSplit,
-    KeySelector, RollupRow, RollupSelect, RoutingKind, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS,
-    HIT_SUFFIX, NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
+    add_counts, deltas_of, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of,
+    last_millisecond, migration_reason, read_account_rollups, read_rollups_paged, row_to_rollup_at,
+    trailing_day_hours, visit_rollups, CostSplit, FoldRules, KeySelector, RollupRow, RollupSelect,
+    RoutingKind, COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, HIT_SUFFIX,
+    NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
     TRANSFORMATIONS_NONE, UNATTRIBUTED,
 };
 use crate::LedgerError;
@@ -2072,17 +2073,18 @@ pub fn add_figures(sum: Option<f64>, figure: Option<f64>) -> Option<f64> {
     sum.zip(figure).map(|(sum, figure)| sum + figure)
 }
 
-/// One row priced for a reader that sums across models, its figures as `shared_of` reads them.
+/// One part of a row priced for a reader that sums across models, its figures as `shared_of` reads them.
 fn shared_figures(
     row: &RollupRow,
+    part: Part,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
 ) -> (f64, f64, Option<f64>) {
     shared_of(
-        &priced(row, prices, costs, now),
+        &priced(row, part, prices, costs, now),
         row.funding_kind(),
-        row.usage(),
+        part.usage,
     )
 }
 
@@ -2458,21 +2460,22 @@ pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
 }
 
-/// One rollup row priced through `price_row` at its own key with no tier, a plain call that fills nothing in after it.
-/// Its reader, `shared_figures`, reads its `usd` and `equivalent` and not its `shares`, since the shares a route
-/// answers come from `ShareSums::add` where the read's groups each hold one account's rows. So the key carries no
-/// tier, as `price_group`'s does, and `price_row` prices no share window.
+/// One part of a rollup row priced through `price_row` at the row's own key with no tier and the part's instant, a
+/// plain call that fills nothing in after it. Its reader, `shared_figures`, reads its `usd` and `equivalent` and not
+/// its `shares`, since the shares a route answers come from `ShareSums::add` where the read's groups each hold one
+/// account's rows. So the key carries no tier, as `price_group`'s does, and `price_row` prices no share window.
 pub(crate) fn priced(
     row: &RollupRow,
+    part: Part,
     prices: &PriceRevisions,
     costs: &PlanTables,
     now: i64,
 ) -> Priced {
     let key = RowKey {
         tier: None,
-        ..row.price_key(now)
+        ..row.price_key(part.at, now)
     };
-    price_row(prices, costs, &key, row.usage())
+    price_row(prices, costs, &key, part.usage)
 }
 
 fn cost_split_json(usd: &CostSplit) -> CostSplitJson {
@@ -2645,25 +2648,16 @@ struct EquivalentSums {
 }
 
 impl EquivalentSums {
-    /// Folds one plan row in, its own usage at `whole`, the figure `price_row` answered on its counts, so only the
-    /// cache halves, the wasted counts and the kept-warm counts are priced again, through `price`. Answers the cache
-    /// halves' figures where it priced them, for a counted row with tokens.
-    fn add_priced(
-        &mut self,
-        row: &RollupRow,
-        counted: bool,
-        whole: Option<f64>,
-        price: impl Fn(PinUsage) -> Option<f64>,
-    ) -> Option<CacheHalves> {
-        let usage = row.usage();
+    /// Folds the figures of one plan row that no request row splits, its wasted counts and its kept-warm counts, each
+    /// priced through `price` at the row's hour's end. A credit's row carries no request token, since it keys the
+    /// reserved agent, class and effort apart from its request's own row, so its saving joins whatever the row's parts.
+    fn add_row(&mut self, row: &RollupRow, price: impl Fn(PinUsage) -> Option<f64>) {
         if row.kind == Kind::Probe.as_str() {
             let wasted = row.wasted_usage();
             if tokens_of(wasted) > 0 {
                 self.wasted.add(price(wasted), tokens_of(wasted));
             }
         }
-        // Priced ahead of the return below: a credit's row carries no request token, since it keys the reserved agent,
-        // class and effort apart from its request's own row.
         let kept = row.kept_warm_usage();
         if tokens_of(kept) > 0 {
             let (read, write) = cache_parts(kept);
@@ -2673,6 +2667,19 @@ impl EquivalentSums {
                 tokens_of(kept),
             );
         }
+    }
+
+    /// Folds one part of a plan row in, its `usage` at `whole`, the figure `price_row` answered on the part's counts,
+    /// so only the part's cache halves are priced again, through `price`. Answers the cache halves' figures where it
+    /// priced them, for a counted part with tokens.
+    fn add_priced(
+        &mut self,
+        row: &RollupRow,
+        usage: PinUsage,
+        counted: bool,
+        whole: Option<f64>,
+        price: impl Fn(PinUsage) -> Option<f64>,
+    ) -> Option<CacheHalves> {
         // A failed request books a row with no token and an accounting row carries the wasted counts alone: such a row
         // charged nothing and leaves the sums as they stand.
         let tokens = tokens_of(usage);
@@ -2788,30 +2795,39 @@ struct PlanSums {
 }
 
 impl PlanSums {
-    /// Folds one plan-funded row in: its counts and its split when `counted`, as the request dollars take the row, and
-    /// its figure as `EquivalentSums` folds it from the one `price_row` answered on its counts, against the anchor row
-    /// in force at the key's `now`.
+    /// Folds what one plan-funded row adds once, whatever its parts: its counts when `counted`, as the request dollars
+    /// take the row, and the wasted and kept-warm figures `EquivalentSums::add_row` prices at `key`, its hour's end.
+    fn add_row(&mut self, row: &RollupRow, key: &RowKey<'_>, costs: &PlanTables, counted: bool) {
+        if counted {
+            self.requests += row.requests;
+            self.output_tokens += row.output_tokens;
+        }
+        self.equivalent.add_row(row, |usage| {
+            price_equivalent_at(costs, key, SEVEN_DAY, usage)
+        });
+    }
+
+    /// Folds one part of a plan-funded row in: its split when `counted`, and its figure as `EquivalentSums` folds it
+    /// from the one `price_row` answered on the part's `usage` at `key`, against the anchor row in force at the key's
+    /// `now`.
     fn add(
         &mut self,
         row: &RollupRow,
+        usage: PinUsage,
         key: &RowKey<'_>,
         priced: Priced,
         costs: &PlanTables,
         counted: bool,
     ) {
-        if counted {
-            self.requests += row.requests;
-            self.output_tokens += row.output_tokens;
-        }
         // Each part prices through `price_equivalent_at` at the row's key, whose classifier rule reads a free call's
         // every part at zero, so a model the cost model cannot price marks nothing unpriced for a charge of nothing.
         let price = |usage: PinUsage| price_equivalent_at(costs, key, SEVEN_DAY, usage);
         let halves = self
             .equivalent
-            .add_priced(row, counted, priced.equivalent, price);
-        // The halves are priced for a counted row with tokens alone, the rows the split takes.
+            .add_priced(row, usage, counted, priced.equivalent, price);
+        // The halves are priced for a counted part with tokens alone, the parts the split takes.
         if let Some(halves) = halves {
-            self.split.add(row.usage(), halves, price);
+            self.split.add(usage, halves, price);
         }
     }
 }
@@ -2865,7 +2881,8 @@ struct GroupSum {
 }
 
 /// What one read folds every row under: the grouping, whether probes count as requests, whether the groups answer
-/// their shares and the tables and instant every row prices at. Built once per read.
+/// their shares, the tables and instant every row prices at and the sides its boundary hours split their rows by.
+/// Built once per read.
 struct GroupRead<'a> {
     costs: &'a PlanTables,
     grouping: Grouping<'a>,
@@ -2874,6 +2891,7 @@ struct GroupRead<'a> {
     probes_counted: bool,
     /// Whether each group holds one account's rows, the one place a read answers the shares.
     shares: bool,
+    sides: &'a Sides,
 }
 
 impl<'a> GroupRead<'a> {
@@ -2885,6 +2903,7 @@ impl<'a> GroupRead<'a> {
         prices: &'a PriceRevisions,
         costs: &'a PlanTables,
         now: i64,
+        sides: &'a Sides,
     ) -> GroupRead<'a> {
         GroupRead {
             costs,
@@ -2897,6 +2916,7 @@ impl<'a> GroupRead<'a> {
             prices,
             probes_counted: filter.probes_counted(),
             shares: holds_one_account(by, &filter.accounts),
+            sides,
         }
     }
 }
@@ -2905,6 +2925,9 @@ impl<'a> GroupRead<'a> {
 struct GroupSums(BTreeMap<String, GroupSum>);
 
 impl GroupSums {
+    /// Folds one stored row in: its counts, its histograms, its maps and the figures of its wasted and kept-warm counts
+    /// once, at its hour's end, and its dollars, its shares and its Pro-week figure once per part, as `row_parts`
+    /// answers them.
     fn add(&mut self, read: &GroupRead<'_>, row: &RollupRow) {
         let GroupRead {
             costs,
@@ -2913,38 +2936,20 @@ impl GroupSums {
             prices,
             probes_counted,
             shares,
+            sides,
         } = *read;
         let key = grouping.group_of(row);
         let entry = self.0.entry(key).or_default();
-        let own_key = row.price_key(now);
-        // The parts `PlanSums::add` prices take no tier, since a tier would price share windows nothing reads.
-        let price_key = RowKey {
+        // The parts `PlanSums` prices take no tier, since a tier would price share windows nothing reads.
+        let end_key = RowKey {
             tier: None,
-            ..own_key
+            ..row.price_key(last_millisecond(row.hour), now)
         };
-        let plan = own_key.funding == Funding::Plan;
+        let plan = end_key.funding == Funding::Plan;
         let counted = probes_counted || row.kind != Kind::Probe.as_str();
-        // A failed request books a row with no token and an accounting row carries the wasted counts alone, while the
-        // cost model refuses a model it has no weight for before it reads the usage: such a row would null a priced
-        // window for a charge of nothing.
-        let share_row =
-            shares && plan && own_key.tier.is_some() && counted && tokens_of(row.usage()) > 0;
-        // The dollars read no tier and the figure is the same under every tier, so a share row prices once, at its own
-        // key.
-        let row_priced = price_row(
-            prices,
-            costs,
-            if share_row { &own_key } else { &price_key },
-            row.usage(),
-        );
-        let row_shares = share_row
-            .then(|| row_priced.plan_shares(&own_key))
-            .flatten();
-        let usd = row_priced.usd.clone().unwrap_or_default();
         if row.kind == Kind::Probe.as_str() {
             entry.probes.add(row);
             entry.probe_counts.add_row(row.probe_view());
-            entry.dollars.probe_usd += usd.total();
         } else {
             entry.saw_non_probe = true;
         }
@@ -2956,20 +2961,12 @@ impl GroupSums {
                 entry.sum.uncacheable += row.uncached_requests;
             }
         }
-        // A billed probe draws real dollars, so they join the group whatever the flag says, while its request and its
-        // tokens follow the flag.
-        if counted || !plan {
-            entry.dollars.usd.add(&usd);
-            if !plan {
-                entry.dollars.billed.add(&usd);
-            }
-        }
         if tokens_of(row.wasted_usage()) > 0 {
-            let wasted = price_usd(prices, &price_key, row.wasted_usage());
+            let wasted = price_usd(prices, &end_key, row.wasted_usage());
             entry.dollars.wasted_usd += wasted.map_or(0.0, |usd| usd.total());
         }
         if tokens_of(row.kept_warm_usage()) > 0 {
-            let kept = price_usd(prices, &price_key, row.kept_warm_usage());
+            let kept = price_usd(prices, &end_key, row.kept_warm_usage());
             entry.dollars.saving_usd +=
                 kept.map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
         }
@@ -2981,16 +2978,55 @@ impl GroupSums {
                 entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
                 entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
             }
-            entry.plan.add(row, &price_key, row_priced, costs, counted);
+            entry.plan.add_row(row, &end_key, costs, counted);
         }
         // Each row prices under the account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row
         // folded before the tier was recorded, an api_key account's row) answers no share.
-        if !shares || own_key.tier.is_none() {
-            return;
+        if shares && row.tier != UNATTRIBUTED {
+            entry.shares.get_or_insert_with(ShareSums::default);
         }
-        let sums = entry.shares.get_or_insert_with(ShareSums::default);
-        if let Some(row_shares) = row_shares {
-            sums.add(row_shares);
+        for part in row_parts(row, sides) {
+            let own_key = row.price_key(part.at, now);
+            let price_key = RowKey {
+                tier: None,
+                ..own_key
+            };
+            // A failed request books a row with no token and an accounting row carries the wasted counts alone, while
+            // the cost model refuses a model it has no weight for before it reads the usage: such a row would null a
+            // priced window for a charge of nothing.
+            let share_row =
+                shares && plan && own_key.tier.is_some() && counted && tokens_of(part.usage) > 0;
+            // The dollars read no tier and the figure is the same under every tier, so a share row prices once, at its
+            // own key.
+            let row_priced = price_row(
+                prices,
+                costs,
+                if share_row { &own_key } else { &price_key },
+                part.usage,
+            );
+            let row_shares = share_row
+                .then(|| row_priced.plan_shares(&own_key))
+                .flatten();
+            let usd = row_priced.usd.clone().unwrap_or_default();
+            if row.kind == Kind::Probe.as_str() {
+                entry.dollars.probe_usd += usd.total();
+            }
+            // A billed probe draws real dollars, so they join the group whatever the flag says, while its request and
+            // its tokens follow the flag.
+            if counted || !plan {
+                entry.dollars.usd.add(&usd);
+                if !plan {
+                    entry.dollars.billed.add(&usd);
+                }
+            }
+            if plan {
+                entry
+                    .plan
+                    .add(row, part.usage, &price_key, row_priced, costs, counted);
+            }
+            if let (Some(sums), Some(row_shares)) = (entry.shares.as_mut(), row_shares) {
+                sums.add(row_shares);
+            }
         }
     }
 
@@ -3027,6 +3063,8 @@ fn sum_groups(rows: &[&RollupRow], read: &GroupRead<'_>) -> Vec<GroupRow> {
     sums.finish(read)
 }
 
+/// `series_paged` over rows held in memory. With no connection it reads no request row, so it hands `row_parts` no
+/// side and prices each row whole at the end of its hour.
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub fn series(
@@ -3042,6 +3080,7 @@ pub fn series(
     costs: &PlanTables,
     now: i64,
 ) -> Result<Vec<SeriesPoint>, LedgerError> {
+    let sides = Sides::default();
     let read = GroupRead {
         costs,
         grouping: Grouping {
@@ -3054,6 +3093,7 @@ pub fn series(
         probes_counted,
         // The rows come with no filter, so only the account grouping holds one account's rows per group.
         shares: holds_one_account(group_by, &[]),
+        sides: &sides,
     };
     let (first, last) = series_edges(from, to, bucket_seconds)?;
     Ok(bucket_starts(first, last, bucket_seconds)
@@ -3070,6 +3110,8 @@ pub fn series(
         .collect())
 }
 
+/// `breakdown_paged` over rows held in memory. With no connection it reads no request row, so it hands `row_parts` no
+/// side and prices each row whole at the end of its hour.
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub fn breakdown(
@@ -3082,6 +3124,7 @@ pub fn breakdown(
     costs: &PlanTables,
     now: i64,
 ) -> Vec<GroupRow> {
+    let sides = Sides::default();
     let read = GroupRead {
         costs,
         grouping: Grouping {
@@ -3094,6 +3137,7 @@ pub fn breakdown(
         probes_counted,
         // The rows come with no filter, so only the account grouping holds one account's rows per group.
         shares: holds_one_account(group_by, &[]),
+        sides: &sides,
     };
     sum_groups(&rows.iter().collect::<Vec<_>>(), &read)
 }
@@ -3101,7 +3145,9 @@ pub fn breakdown(
 /// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
 /// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time. The groups' shares are
 /// answered where each group holds one account's rows, and every row's shares, dollars and Pro-week figure price from
-/// its counts on `prices` and `costs`, the figure against the anchor row in force at `now`, the read's instant.
+/// its parts on `prices` and `costs`, the figure against the anchor row in force at `now`, the read's instant. The
+/// sides of the range's boundary hours load in one read ahead of the pages, so each request of such an hour prices at
+/// the entries in force when it arrived.
 #[allow(clippy::too_many_arguments)]
 pub async fn series_paged(
     db: &Arc<LedgerDb>,
@@ -3118,7 +3164,8 @@ pub async fn series_paged(
     let (first, last) = series_edges(from, to, bucket_seconds)?;
     let starts: Vec<i64> = bucket_starts(first, last, bucket_seconds).collect();
     let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
-    let read = GroupRead::paged(filter, live, group_by, prices, costs, now);
+    let sides = Sides::paged(db, prices, Some(&costs.revisions), hour_of(from), last).await?;
+    let read = GroupRead::paged(filter, live, group_by, prices, costs, now, &sides);
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), last, |row| {
             if !passes_funding(row, filter) {
@@ -3142,8 +3189,9 @@ pub async fn series_paged(
 
 /// `breakdown` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into the
 /// group sums as the pages arrive. The groups' shares are answered where each group holds one account's rows, and
-/// every row's shares, dollars and Pro-week figure price from its counts on `prices` and `costs`, the figure against
-/// the anchor row in force at `now`, the read's instant.
+/// every row's shares, dollars and Pro-week figure price from its parts on `prices` and `costs`, the figure against
+/// the anchor row in force at `now`, the read's instant. The sides of the range's boundary hours load in one read
+/// ahead of the pages, so each request of such an hour prices at the entries in force when it arrived.
 #[allow(clippy::too_many_arguments)]
 pub async fn breakdown_paged(
     db: &Arc<LedgerDb>,
@@ -3157,7 +3205,15 @@ pub async fn breakdown_paged(
     now: i64,
 ) -> Result<Vec<GroupRow>, LedgerError> {
     let mut sums = GroupSums::default();
-    let read = GroupRead::paged(filter, live, group_by, prices, costs, now);
+    let sides = Sides::paged(
+        db,
+        prices,
+        Some(&costs.revisions),
+        hour_of(from),
+        hour_ceil(to),
+    )
+    .await?;
+    let read = GroupRead::paged(filter, live, group_by, prices, costs, now, &sides);
     if let Some(select) = filter.rollup_select(live) {
         read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
             if passes_funding(row, filter) {
@@ -3207,8 +3263,8 @@ pub struct Dashboard {
 
 /// The dashboard's day on `conn`, the rollups of the hours `trailing_day_hours` spans (the 24 whole hours before the
 /// current hour and the current hour so far) folded hour by hour, each row's dollars and Pro-week figure priced from
-/// its counts, the figure against the anchor row in force at `now`. One read holds the whole day, so the dashboard's
-/// poll holds the reader once.
+/// its parts, the figure against the anchor row in force at `now`. One read holds the whole day, so the dashboard's
+/// poll holds the reader once, and the sides of the day's boundary hours load in it ahead of the rows.
 pub fn dashboard_on(
     conn: &Connection,
     now: i64,
@@ -3216,7 +3272,8 @@ pub fn dashboard_on(
     costs: &PlanTables,
 ) -> Result<Dashboard, LedgerError> {
     let (from_hour, to_hour) = trailing_day_hours(now);
-    let fold = TrafficFold::new(from_hour, to_hour, 3_600, prices, costs, now)?;
+    let sides = Sides::on(conn, prices, Some(&costs.revisions), from_hour, to_hour)?;
+    let fold = TrafficFold::new(from_hour, to_hour, 3_600, prices, costs, now, sides)?;
     let mut buckets = fold.zero.clone();
     let mut refused = vec![0_u64; buckets.len()];
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
@@ -3500,16 +3557,19 @@ pub struct Span {
     pub from_hour: i64,
     pub to_hour: i64,
     /// The last millisecond of the span's first hour, an instant at which `in_force` answers the revision every hour
-    /// of the span reads at its end, since a row cannot hold a boundary inside its hour. Raised to the earliest
-    /// instant of either list when it lies below it, and a lifetime read's `i64::MIN` as `from_hour` reads that
-    /// earliest instant, so the sentinel is not multiplied.
+    /// of the span that no entry splits reads at its end. A boundary hour of the span (`boundary_instants`) prices from
+    /// its request rows instead, so a sum's reader binds it out of its statement. Raised to the earliest instant of
+    /// either list when it lies below it, and a lifetime read's `i64::MIN` as `from_hour` reads that earliest instant,
+    /// so the sentinel is not multiplied.
     pub at: i64,
 }
 
 /// The spans between `from_hour` and `to_hour` split at the start of the hour each revision of `prices` and, when
 /// given, of `costs` takes effect in, so a SQL sum runs once per span and is priced at that span's revisions, and one
-/// span when no revision starts inside the range. A row cannot hold a boundary inside its hour, so it is priced whole
-/// by the revisions in force at the end of its hour, and the hour a revision starts in falls in that revision's span.
+/// span when no revision starts inside the range. A row of an hour no entry splits is priced whole by the revisions in
+/// force at the end of its hour, and the hour a revision starts in falls in that revision's span. A reader of the
+/// spans binds each boundary hour out of its statement and prices that hour's stored rows by their parts
+/// (`row_parts`), so a request of the hour prices at the revision in force when it arrived while its row is kept.
 /// `costs` is `None` for a dollar sum. The first span's `from_hour` is the caller's (so the rows before the first
 /// revision's instant, which `in_force` reads at the first entry, stay in the sum) and its `at` is clamped as `Span`
 /// says.
@@ -3548,6 +3608,325 @@ pub fn revision_spans(
                 .map_or(earliest, |ms| (ms - 1).max(earliest)),
         })
         .collect()
+}
+
+/// The instants of the later entries of `prices` and, when given, of `costs` that lie after the first millisecond of
+/// the hour that starts at `hour` (seconds) and before its end, in milliseconds, ascending and each once. An hour is a
+/// boundary hour where the answer holds an instant. An entry on the hour's start and a list's first entry split
+/// nothing, since `in_force` reads the same entry over the whole hour then. `costs` is `None` for a reader that prices
+/// dollars alone.
+pub(crate) fn boundary_instants(
+    prices: &PriceRevisions,
+    costs: Option<&CostRevisions>,
+    hour: i64,
+) -> Vec<i64> {
+    let (start, end) = (hour * 1_000, hour_end(hour) * 1_000);
+    let mut instants: Vec<i64> = later_instants(prices, costs)
+        .filter(|at| *at > start && *at < end)
+        .collect();
+    instants.sort_unstable();
+    instants.dedup();
+    instants
+}
+
+/// The instants of every entry of both lists but each list's first, the ones that move a revision.
+fn later_instants<'a>(
+    prices: &'a PriceRevisions,
+    costs: Option<&'a CostRevisions>,
+) -> impl Iterator<Item = i64> + 'a {
+    let cost_instants = costs.map_or(&[][..], |costs| costs.instants());
+    [prices.instants(), cost_instants]
+        .into_iter()
+        .flat_map(|instants| instants.iter().skip(1))
+        .copied()
+}
+
+/// The boundary hours of `[from_hour, to_hour)`, ascending, each with the instants `boundary_instants` answers for it.
+/// Only the hours the lists' later entries fall in can answer one, so a long range costs no walk of its hours.
+fn boundary_hours(
+    prices: &PriceRevisions,
+    costs: Option<&CostRevisions>,
+    from_hour: i64,
+    to_hour: i64,
+) -> Vec<(i64, Vec<i64>)> {
+    let mut hours: Vec<i64> = later_instants(prices, costs)
+        .map(hour_of)
+        .filter(|hour| *hour >= from_hour && *hour < to_hour)
+        .collect();
+    hours.sort_unstable();
+    hours.dedup();
+    hours
+        .into_iter()
+        .map(|hour| (hour, boundary_instants(prices, costs, hour)))
+        .filter(|(_, instants)| !instants.is_empty())
+        .collect()
+}
+
+/// A rollup row's key less its hour: an earlier side files its counts under it, and a stored row of the same hour
+/// finds them by it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SideKey(i64, [String; 14]);
+
+impl SideKey {
+    fn of(row: &RollupRow) -> SideKey {
+        SideKey(
+            row.key_generation,
+            [
+                &row.key_id,
+                &row.pool_id,
+                &row.account_id,
+                &row.canonical_model,
+                &row.kind,
+                &row.user_agent,
+                &row.client,
+                &row.effort,
+                &row.request_class,
+                &row.speed,
+                &row.funding,
+                &row.band,
+                &row.tier,
+                &row.classifier,
+            ]
+            .map(String::clone),
+        )
+    }
+}
+
+/// One earlier side of a boundary hour: the requests received under `at` and at or after the instant before it (the
+/// hour's first millisecond for the first side), as the five token counts `deltas_of` files under each rollup row key.
+#[derive(Clone, Debug)]
+pub(crate) struct Side {
+    /// The instant of the entry that ends the side, in milliseconds.
+    pub(crate) at: i64,
+    pub(crate) counts: BTreeMap<SideKey, PinUsage>,
+}
+
+/// The requests one statement of attempts binds, well under SQLite's limit on bound parameters.
+const SIDE_CHUNK: usize = 500;
+
+/// The earlier sides of the hour that starts at `hour` (seconds), one per instant of `instants` (milliseconds,
+/// ascending, as `boundary_instants` answers them), folded from the hour's request rows and their attempts as
+/// `refold_bands` folds a request: through `deltas_of` on `prices` under `FoldRules::ALL`, since the rules move no key
+/// and no token count. The read takes the requests received from the hour's first millisecond up to its last instant,
+/// since each later request belongs to the stored row's remainder. A request that arrives on an entry's own
+/// millisecond joins the side after it, as `in_force` reads that entry from its instant on. An hour whose request rows
+/// the purge took answers sides that hold no count.
+pub(crate) fn earlier_sides(
+    conn: &Connection,
+    hour: i64,
+    instants: &[i64],
+    prices: &PriceRevisions,
+) -> Result<Vec<Side>, LedgerError> {
+    let mut sides: Vec<Side> = instants
+        .iter()
+        .map(|at| Side {
+            at: *at,
+            counts: BTreeMap::new(),
+        })
+        .collect();
+    let Some(last) = instants.last() else {
+        return Ok(sides);
+    };
+    let mut fold = |requests: Vec<RequestRecord>| -> Result<(), LedgerError> {
+        for (request, attempts) in with_attempts(conn, requests)? {
+            let side = &mut sides[instants.partition_point(|at| *at <= request.received_at)];
+            for delta in deltas_of(&request, &attempts, prices, FoldRules::ALL) {
+                let counts = side.counts.entry(SideKey::of(&delta)).or_default();
+                *counts = usage_sum(*counts, delta.usage());
+            }
+        }
+        Ok(())
+    };
+    let mut stmt = conn.prepare_cached(&format!(
+        "{REQUEST_SELECT} WHERE received_at >= ?1 AND received_at < ?2"
+    ))?;
+    let mut chunk = Vec::with_capacity(SIDE_CHUNK);
+    for request in stmt.query_map(params![hour * 1_000, last], row_to_request)? {
+        chunk.push(request?);
+        if chunk.len() == SIDE_CHUNK {
+            fold(std::mem::take(&mut chunk))?;
+        }
+    }
+    fold(chunk)?;
+    Ok(sides)
+}
+
+/// The five counts of `a` and `b` added.
+fn usage_sum(a: PinUsage, b: PinUsage) -> PinUsage {
+    PinUsage {
+        input: a.input + b.input,
+        cache_read: a.cache_read + b.cache_read,
+        write_5m: a.write_5m + b.write_5m,
+        write_1h: a.write_1h + b.write_1h,
+        output: a.output + b.output,
+    }
+}
+
+/// `a` less `b`, `None` where a count of `b` stands above `a`'s.
+fn usage_less(a: PinUsage, b: PinUsage) -> Option<PinUsage> {
+    Some(PinUsage {
+        input: a.input.checked_sub(b.input)?,
+        cache_read: a.cache_read.checked_sub(b.cache_read)?,
+        write_5m: a.write_5m.checked_sub(b.write_5m)?,
+        write_1h: a.write_1h.checked_sub(b.write_1h)?,
+        output: a.output.checked_sub(b.output)?,
+    })
+}
+
+/// The earlier sides one read loaded for each boundary hour of its range, keyed by the hour in seconds. A read whose
+/// range holds no boundary hour holds none, and so does a reader that takes rows with no connection.
+#[derive(Debug, Default)]
+pub(crate) struct Sides(BTreeMap<i64, Vec<Side>>);
+
+impl Sides {
+    /// The sides of each of `hours` on `conn`, as `boundary_hours` answers them. A reader loads them ahead of its
+    /// stored rows: a request that lands between the two reads then joins a row and no side, and prices with the
+    /// row's remainder.
+    fn load(
+        conn: &Connection,
+        prices: &PriceRevisions,
+        hours: &[(i64, Vec<i64>)],
+    ) -> Result<Sides, LedgerError> {
+        let mut sides = BTreeMap::new();
+        for (hour, instants) in hours {
+            sides.insert(*hour, earlier_sides(conn, *hour, instants, prices)?);
+        }
+        Ok(Sides(sides))
+    }
+
+    /// The sides of the boundary hours of `[from_hour, to_hour)` on `conn`. `costs` is `None` for a reader that prices
+    /// dollars alone.
+    pub(crate) fn on(
+        conn: &Connection,
+        prices: &PriceRevisions,
+        costs: Option<&CostRevisions>,
+        from_hour: i64,
+        to_hour: i64,
+    ) -> Result<Sides, LedgerError> {
+        Sides::load(
+            conn,
+            prices,
+            &boundary_hours(prices, costs, from_hour, to_hour),
+        )
+    }
+
+    /// `on` for a paged reader, through one read of `db`, and through none where the range holds no boundary hour.
+    async fn paged(
+        db: &Arc<LedgerDb>,
+        prices: &PriceRevisions,
+        costs: Option<&CostRevisions>,
+        from_hour: i64,
+        to_hour: i64,
+    ) -> Result<Sides, LedgerError> {
+        let hours = boundary_hours(prices, costs, from_hour, to_hour);
+        if hours.is_empty() {
+            return Ok(Sides::default());
+        }
+        let prices = prices.clone();
+        db.read(move |c| Sides::load(c, &prices, &hours)).await
+    }
+
+    /// The boundary hours the read loaded, ascending: the hours a SQL sum binds out of its statement.
+    fn hours(&self) -> Vec<i64> {
+        self.0.keys().copied().collect()
+    }
+}
+
+/// The runs of `[from_hour, to_hour)` that hold none of `hours` (ascending), so a SQL sum keeps its statement for every
+/// hour no entry splits. With no hour inside the range the one run is the range itself.
+fn unsplit_ranges(from_hour: i64, to_hour: i64, hours: &[i64]) -> Vec<(i64, i64)> {
+    let mut ranges = Vec::new();
+    let mut start = from_hour;
+    for hour in hours
+        .iter()
+        .copied()
+        .filter(|hour| *hour >= from_hour && *hour < to_hour)
+    {
+        if hour > start {
+            ranges.push((start, hour));
+        }
+        start = hour_end(hour);
+    }
+    if to_hour > start {
+        ranges.push((start, to_hour));
+    }
+    ranges
+}
+
+/// One part of a stored row: the instant it prices at and its five token counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Part {
+    /// In milliseconds.
+    pub(crate) at: i64,
+    pub(crate) usage: PinUsage,
+}
+
+impl Part {
+    /// The row's own counts at the last millisecond of its hour.
+    pub(crate) fn whole(row: &RollupRow) -> Part {
+        Part {
+            at: last_millisecond(row.hour),
+            usage: row.usage(),
+        }
+    }
+}
+
+/// The parts `row_parts` answers, one for a row it prices whole.
+pub(crate) enum Parts {
+    Whole(std::iter::Once<Part>),
+    Split(std::vec::IntoIter<Part>),
+}
+
+impl Iterator for Parts {
+    type Item = Part;
+
+    fn next(&mut self) -> Option<Part> {
+        match self {
+            Parts::Whole(part) => part.next(),
+            Parts::Split(parts) => parts.next(),
+        }
+    }
+}
+
+/// The parts a stored row prices in, the one path every reader of the hourly sums takes from a row to its price: each
+/// earlier side of the row's own key at the last millisecond before its instant, then the row less those counts at the
+/// last millisecond of its hour. A row with no side of its key answers one part, its own counts at its hour's end,
+/// whatever they hold, so a row the sides leave alone prices as one with no boundary. In a row with a side, a part with
+/// no token is left out, since it would charge nothing and could null a figure. Where a count of the row's summed sides
+/// stands above the row's own, the request rows are no split of the row, so it prices whole at its hour's end, as an
+/// hour does whose request rows the purge took. A side that no stored row of the read carries prices nothing, since
+/// the pairing starts from the rows.
+pub(crate) fn row_parts(row: &RollupRow, sides: &Sides) -> Parts {
+    let whole = Part::whole(row);
+    let Some(hour) = sides.0.get(&row.hour) else {
+        return Parts::Whole(std::iter::once(whole));
+    };
+    let key = SideKey::of(row);
+    let earlier: Vec<Part> = hour
+        .iter()
+        .filter_map(|side| {
+            side.counts.get(&key).map(|usage| Part {
+                at: side.at - 1,
+                usage: *usage,
+            })
+        })
+        .collect();
+    let summed = earlier
+        .iter()
+        .fold(PinUsage::default(), |sum, part| usage_sum(sum, part.usage));
+    let rest = match usage_less(whole.usage, summed) {
+        Some(rest) if !earlier.is_empty() => rest,
+        _ => return Parts::Whole(std::iter::once(whole)),
+    };
+    let parts: Vec<Part> = earlier
+        .into_iter()
+        .chain(std::iter::once(Part {
+            usage: rest,
+            ..whole
+        }))
+        .filter(|part| tokens_of(part.usage) > 0)
+        .collect();
+    Parts::Split(parts.into_iter())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -3601,9 +3980,11 @@ fn summed_usage(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<PinUsage> 
 }
 
 /// One group of a priced SQL sum read from `offset`: its hour, and its requests, its five counts and its dollars,
-/// priced through `price_row` at the group's own hour as an inference row, so the revision is the span's and the peak
-/// factor the hour's, the Pro-week figure against the anchor row at `now`. The sums' `NO_PLAN_PROBES` clause admits the
-/// probe rows the plan did not fund, and a group of them answers its dollars alone, with no request and no token.
+/// priced through `price_row` at the last millisecond of the group's own hour as an inference row, so the revision is
+/// the span's and the peak factor the hour's, the Pro-week figure against the anchor row at `now`. The group's hour is
+/// one no entry splits, since each reader binds the boundary hours out of its sum. The sums' `NO_PLAN_PROBES` clause
+/// admits the probe rows the plan did not fund, and a group of them answers its dollars alone, with no request and no
+/// token.
 fn price_group(
     r: &rusqlite::Row<'_>,
     offset: usize,
@@ -3626,7 +4007,7 @@ fn price_group(
     };
     let probes: bool = r.get(offset + 7)?;
     let usage = summed_usage(r, offset + 9)?;
-    let key = group.price_key(now);
+    let key = group.price_key(last_millisecond(group.hour), now);
     let (cost_usd, billed_usd, equivalent) =
         shared_of(&price_row(prices, costs, &key, usage), key.funding, usage);
     let totals = if probes {
@@ -3645,6 +4026,39 @@ fn price_group(
         }
     };
     Ok((group.hour, totals))
+}
+
+/// A stored row's totals as a group of a priced SQL sum answers them, the dollars and the Pro-week figure of each of
+/// its parts priced through `priced` and added up: a probe row's dollars alone, and every other row's requests and
+/// tokens once, from the row.
+fn row_totals(
+    row: &RollupRow,
+    sides: &Sides,
+    prices: &PriceRevisions,
+    costs: &PlanTables,
+    now: i64,
+) -> Totals {
+    let (mut cost_usd, mut billed_usd, mut equivalent) = (0.0, 0.0, Some(0.0));
+    for part in row_parts(row, sides) {
+        let (usd, billed, figure) = shared_figures(row, part, prices, costs, now);
+        cost_usd += usd;
+        billed_usd += billed;
+        equivalent = add_figures(equivalent, figure);
+    }
+    if row.kind == Kind::Probe.as_str() {
+        return Totals {
+            cost_usd,
+            billed_usd,
+            ..Totals::default()
+        };
+    }
+    Totals {
+        cost_usd,
+        requests: row.requests,
+        tokens: tokens_of(row.usage()),
+        billed_usd,
+        equivalent,
+    }
 }
 
 impl Totals {
@@ -3724,7 +4138,9 @@ pub fn key_request_totals_by_generation(
 /// The priced SQL sum of both totals reads over the hour range: grouped by `group_columns`, the price columns, the hour
 /// and the probe rows apart, one query per span of `revision_spans`, each group's price columns read after the group
 /// columns and its key by `key_of`, a group whose key is `None` left out unpriced. The statement orders the groups as
-/// it groups them, so a key adds its groups' figures in one order whichever plan SQLite picks.
+/// it groups them, so a key adds its groups' figures in one order whichever plan SQLite picks. A boundary hour of the
+/// range is bound out of the statement: its stored rows are read under the statement's own filter, each priced by its
+/// parts as `row_totals` prices it and added to its key's totals.
 fn grouped_totals<K: Ord>(
     conn: &Connection,
     group_columns: &[&str],
@@ -3736,19 +4152,41 @@ fn grouped_totals<K: Ord>(
 ) -> Result<BTreeMap<K, Totals>, LedgerError> {
     let offset = group_columns.len();
     let group_columns = group_columns.join(", ");
+    let sides = Sides::on(conn, prices, Some(&costs.revisions), since_hour, to_hour)?;
+    let bound_out = sides.hours();
     let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
     let mut out: BTreeMap<K, Totals> = BTreeMap::new();
     for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
-        let rows = stmt.query_map(params![span.from_hour, span.to_hour], |r| {
-            let Some(key) = key_of(r)? else {
-                return Ok(None);
-            };
-            let (_, totals) = price_group(r, offset, prices, costs, now)?;
-            Ok(Some((key, totals)))
-        })?;
-        for row in rows {
-            if let Some((key, totals)) = row? {
-                out.entry(key).or_default().add(&totals);
+        for (from, to) in unsplit_ranges(span.from_hour, span.to_hour, &bound_out) {
+            let rows = stmt.query_map(params![from, to], |r| {
+                let Some(key) = key_of(r)? else {
+                    return Ok(None);
+                };
+                let (_, totals) = price_group(r, offset, prices, costs, now)?;
+                Ok(Some((key, totals)))
+            })?;
+            for row in rows {
+                if let Some((key, totals)) = row? {
+                    out.entry(key).or_default().add(&totals);
+                }
+            }
+        }
+    }
+    if !bound_out.is_empty() {
+        let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2"))?;
+        for hour in bound_out {
+            let rows = stmt.query_map(params![hour, hour_end(hour)], |r| {
+                let Some(key) = key_of(r)? else {
+                    return Ok(None);
+                };
+                Ok(Some((key, row_to_rollup_at(r, offset)?)))
+            })?;
+            for row in rows {
+                if let Some((key, row)) = row? {
+                    out.entry(key)
+                        .or_default()
+                        .add(&row_totals(&row, &sides, prices, costs, now));
+                }
             }
         }
     }
@@ -4062,6 +4500,11 @@ pub struct BudgetedMember {
     pub metered_only: bool,
 }
 
+/// The rows a member's spend sums: the member's own over the hours `?3` to `?4`, and its metered rows alone where `?5`
+/// holds. The sum's statement and its read of a boundary hour's stored rows share it.
+const MEMBER_SPEND_FILTER: &str = "pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
+     AND (?5 = 0 OR funding IN ('overage', 'fast', 'usage_based'))";
+
 /// One budgeted period's spend of one member in its current period, summed from the hourly rollups and priced at
 /// read time, a keepalive probe's cost included since it draws real money from an API-key member's budget the same
 /// as any other request's. With `metered_only`, a subscription member's metered rows alone count, those filed under
@@ -4069,7 +4512,10 @@ pub struct BudgetedMember {
 /// in ms (`period_end` is the next day or month boundary). Grouped by `canonical_model`, `speed` and `band`, one query
 /// per span of `revision_spans(prices, None, ..)`, each group priced through `estimate_banded` at its band on
 /// `prices.in_force(span.at)`, so a band row prices exactly at the cells its attempts selected and a budget moves with
-/// the revision in force. A model the revision lacks adds nothing.
+/// the revision in force. A boundary hour of the price list is bound out of the sum: its stored rows are read under the
+/// sum's own filter and each part of a row as `row_parts` answers it prices through `estimate_banded` on the entry in
+/// force at the part's instant, from sides loaded once per call for every member. A model the revision lacks adds
+/// nothing.
 pub fn member_spends(
     conn: &Connection,
     members: &[BudgetedMember],
@@ -4077,54 +4523,89 @@ pub fn member_spends(
     prices: &PriceRevisions,
 ) -> Result<Vec<MemberSpend>, LedgerError> {
     let mut out = Vec::with_capacity(members.len());
+    let periods: Vec<(i64, i64)> = members
+        .iter()
+        .map(|member| period_bounds(member.period, now))
+        .collect();
+    let sides = match (
+        periods.iter().map(|(start, _)| *start).min(),
+        periods.iter().map(|(_, end)| *end).max(),
+    ) {
+        (Some(start), Some(end)) => Sides::on(conn, prices, None, start / 1_000, end / 1_000)?,
+        _ => Sides::default(),
+    };
+    let bound_out = sides.hours();
     // Prepared once outside the per-member loop: a monthly member's period scans up to a month of rows, and
     // re-parsing the same statement text for every member in a pool would add nothing but overhead.
-    let mut stmt = conn.prepare(
+    let mut stmt = conn.prepare(&format!(
         "SELECT canonical_model, speed, band, SUM(input_tokens), SUM(cache_read_tokens), \
          SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
-         WHERE pool_id = ?1 AND account_id = ?2 AND hour >= ?3 AND hour < ?4 \
-         AND (?5 = 0 OR funding IN ('overage', 'fast', 'usage_based')) \
-         GROUP BY canonical_model, speed, band",
-    )?;
-    for BudgetedMember {
-        pool_id,
-        account_id,
-        period,
-        metered_only,
-    } in members
+         WHERE {MEMBER_SPEND_FILTER} GROUP BY canonical_model, speed, band"
+    ))?;
+    let mut rows_stmt = (!bound_out.is_empty())
+        .then(|| {
+            conn.prepare(&format!(
+                "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {MEMBER_SPEND_FILTER}"
+            ))
+        })
+        .transpose()?;
+    for (
+        BudgetedMember {
+            pool_id,
+            account_id,
+            period,
+            metered_only,
+        },
+        (period_start, period_end),
+    ) in members.iter().zip(periods)
     {
-        let (period_start, period_end) = period_bounds(*period, now);
         let mut spent_usd = 0.0;
         for span in revision_spans(prices, None, period_start / 1_000, period_end / 1_000) {
             let table = prices.in_force(span.at);
-            let rows = stmt.query_map(
-                params![
-                    pool_id,
-                    account_id,
-                    span.from_hour,
-                    span.to_hour,
-                    metered_only
-                ],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        summed_usage(r, 3)?,
-                    ))
-                },
-            )?;
-            for row in rows {
-                let (model, speed, band, usage) = row?;
-                // A model the revision cannot price contributes nothing: the analytics already read such a row as
-                // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
-                if let Some(split) = table.estimate_banded(
-                    &model,
-                    Speed::of(Some(&speed)),
-                    Band::of_rollup(&band),
-                    usage,
-                ) {
-                    spent_usd += split.total();
+            for (from, to) in unsplit_ranges(span.from_hour, span.to_hour, &bound_out) {
+                let rows =
+                    stmt.query_map(params![pool_id, account_id, from, to, metered_only], |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, String>(1)?,
+                            r.get::<_, String>(2)?,
+                            summed_usage(r, 3)?,
+                        ))
+                    })?;
+                for row in rows {
+                    let (model, speed, band, usage) = row?;
+                    // A model the revision cannot price contributes nothing: the analytics already read such a row as
+                    // unpriced, and a budget must not be tripped by a sum it cannot itself account for.
+                    if let Some(split) = table.estimate_banded(
+                        &model,
+                        Speed::of(Some(&speed)),
+                        Band::of_rollup(&band),
+                        usage,
+                    ) {
+                        spent_usd += split.total();
+                    }
+                }
+            }
+        }
+        let period_hours = (period_start / 1_000)..(period_end / 1_000);
+        if let Some(rows_stmt) = rows_stmt.as_mut() {
+            for hour in bound_out.iter().filter(|hour| period_hours.contains(hour)) {
+                let rows = rows_stmt.query_map(
+                    params![pool_id, account_id, hour, hour_end(*hour), metered_only],
+                    |r| row_to_rollup_at(r, 0),
+                )?;
+                for row in rows {
+                    let row = row?;
+                    for part in row_parts(&row, &sides) {
+                        if let Some(split) = prices.in_force(part.at).estimate_banded(
+                            &row.canonical_model,
+                            Speed::of(Some(&row.speed)),
+                            Band::of_rollup(&row.band),
+                            part.usage,
+                        ) {
+                            spent_usd += split.total();
+                        }
+                    }
                 }
             }
         }
@@ -4324,8 +4805,9 @@ pub async fn pool_traffic(
 /// pools read the table once and no row is decoded. Each group's dollars and Pro-week figure are priced from its summed
 /// counts through `price_group`, the figure against the anchor row in force at `now`, and a group of probes counts no
 /// failed request. The statement orders the groups as it groups them, so a bucket adds its groups' figures in one order
-/// whichever plan SQLite picks. A pool without a row answers its zero buckets, and an empty `pool_ids` answers an empty
-/// map and runs no statement.
+/// whichever plan SQLite picks. A boundary hour of the range is bound out of the statement: its stored rows are read
+/// under the statement's own filter and each folds in as `TrafficFold::add` folds a row, priced by its parts. A pool
+/// without a row answers its zero buckets, and an empty `pool_ids` answers an empty map and runs no statement.
 #[allow(clippy::too_many_arguments)]
 pub fn pools_traffic(
     conn: &Connection,
@@ -4340,7 +4822,17 @@ pub fn pools_traffic(
     if pool_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let fold = TrafficFold::new(from_hour, to_hour, bucket_seconds, prices, costs, now)?;
+    let sides = Sides::on(conn, prices, Some(&costs.revisions), from_hour, to_hour)?;
+    let bound_out = sides.hours();
+    let fold = TrafficFold::new(
+        from_hour,
+        to_hour,
+        bucket_seconds,
+        prices,
+        costs,
+        now,
+        sides,
+    )?;
     let mut out: BTreeMap<String, Vec<TrafficBucket>> = pool_ids
         .iter()
         .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
@@ -4348,33 +4840,51 @@ pub fn pools_traffic(
     let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
     let mut clauses = vec![format!("{NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2")];
     pool_term(pool_ids, &[], &mut args, &mut clauses);
+    let filter = clauses.join(" AND ");
     let mut stmt = conn.prepare(&format!(
         "SELECT pool_id, \
          SUM(CASE WHEN kind = 'probe' THEN 0 ELSE MAX(MAX(requests - succeeded, 0) - client_canceled, 0) END), \
          {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} \
-         FROM rollups_hourly WHERE {} GROUP BY pool_id, {PRICE_GROUP_COLUMNS} \
-         ORDER BY pool_id, {PRICE_GROUP_COLUMNS}",
-        clauses.join(" AND ")
+         FROM rollups_hourly WHERE {filter} GROUP BY pool_id, {PRICE_GROUP_COLUMNS} \
+         ORDER BY pool_id, {PRICE_GROUP_COLUMNS}"
     ))?;
-    let groups = stmt.query_map(params_from_iter(args), |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            clamped_count(r, 1)?,
-            price_group(r, 2, prices, costs, now)?,
-        ))
-    })?;
-    for group in groups {
-        let (pool_id, failed, (hour, totals)) = group?;
-        if let Some(buckets) = out.get_mut(&pool_id) {
-            fold.add_sums(buckets, hour, failed, &totals);
+    for (from, to) in unsplit_ranges(from_hour, to_hour, &bound_out) {
+        (args[0], args[1]) = (from.into(), to.into());
+        let groups = stmt.query_map(params_from_iter(&args), |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                clamped_count(r, 1)?,
+                price_group(r, 2, prices, costs, now)?,
+            ))
+        })?;
+        for group in groups {
+            let (pool_id, failed, (hour, totals)) = group?;
+            if let Some(buckets) = out.get_mut(&pool_id) {
+                fold.add_sums(buckets, hour, failed, &totals);
+            }
+        }
+    }
+    if !bound_out.is_empty() {
+        let mut rows = conn.prepare(&format!(
+            "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {filter}"
+        ))?;
+        for hour in bound_out {
+            (args[0], args[1]) = (hour.into(), hour_end(hour).into());
+            for row in rows.query_map(params_from_iter(&args), |r| row_to_rollup_at(r, 0))? {
+                let row = row?;
+                if let Some(buckets) = out.get_mut(&row.pool_id) {
+                    fold.add(buckets, &row);
+                }
+            }
         }
     }
     Ok(out)
 }
 
 /// The zero buckets of a traffic range and the fold that adds figures to the bucket of their hour, nothing before the
-/// first bucket or past the last. The pool readers add each priced group of their sum, and the dashboard's day each
-/// rollup row of its read, which leaves the plan's probe rows out and adds a billed probe's dollars alone.
+/// first bucket or past the last. The pool readers add each priced group of their sum and each stored row of a
+/// boundary hour, and the dashboard's day each rollup row of its read, which leaves the plan's probe rows out and adds
+/// a billed probe's dollars alone. A row prices by its parts against the sides the read loaded.
 struct TrafficFold<'a> {
     first: i64,
     bucket_seconds: i64,
@@ -4382,6 +4892,7 @@ struct TrafficFold<'a> {
     prices: &'a PriceRevisions,
     costs: &'a PlanTables,
     now: i64,
+    sides: Sides,
 }
 
 impl<'a> TrafficFold<'a> {
@@ -4392,6 +4903,7 @@ impl<'a> TrafficFold<'a> {
         prices: &'a PriceRevisions,
         costs: &'a PlanTables,
         now: i64,
+        sides: Sides,
     ) -> Result<Self, LedgerError> {
         let first = first_edge(from_hour, to_hour, bucket_seconds)?;
         let zero = bucket_starts(first, to_hour, bucket_seconds)
@@ -4407,31 +4919,19 @@ impl<'a> TrafficFold<'a> {
             prices,
             costs,
             now,
+            sides,
         })
     }
 
     fn add(&self, out: &mut [TrafficBucket], r: &RollupRow) {
-        let (usd, billed, equivalent) = shared_figures(r, self.prices, self.costs, self.now);
-        if r.kind == Kind::Probe.as_str() {
-            let totals = Totals {
-                cost_usd: usd,
-                billed_usd: billed,
-                ..Totals::default()
-            };
-            self.add_sums(out, r.hour, 0, &totals);
-            return;
-        }
-        let totals = Totals {
-            cost_usd: usd,
-            requests: r.requests,
-            tokens: tokens_of(r.usage()),
-            billed_usd: billed,
-            equivalent,
+        let totals = row_totals(r, &self.sides, self.prices, self.costs, self.now);
+        let failed = if r.kind == Kind::Probe.as_str() {
+            0
+        } else {
+            r.requests
+                .saturating_sub(r.succeeded)
+                .saturating_sub(r.client_canceled)
         };
-        let failed = r
-            .requests
-            .saturating_sub(r.succeeded)
-            .saturating_sub(r.client_canceled);
         self.add_sums(out, r.hour, failed, &totals);
     }
 
@@ -4790,7 +5290,8 @@ pub fn burn_series(
 /// hour the rollup folded the request under, since the rollup keeps no completion. The band reads per row rather than
 /// per bucket, since a six-hour or daily bucket can straddle a band edge and only the row's own hour says which side of
 /// it the row fell on. The figure divides by the anchor row in force at `now`, the read's instant. One pass: each row
-/// lands in its bucket by index.
+/// lands in its bucket by index. With no connection it reads no request row, so it hands `row_parts` no side and
+/// prices each row whole at the end of its hour.
 pub fn burn_series_over(
     rows: &[RollupRow],
     tables: &PlanTables,
@@ -4803,6 +5304,7 @@ pub fn burn_series_over(
     let mut sums = empty_burn_sums(first, last, filter.bucket_seconds);
     let shares = names_one_account(&filter.accounts);
     let keys = key_selectors(&filter.keys, live);
+    let sides = Sides::default();
     for row in rows.iter().filter(|r| burn_scope_holds(filter, &keys, r)) {
         price_burn_row(
             &mut sums,
@@ -4813,6 +5315,7 @@ pub fn burn_series_over(
             prices,
             shares,
             now,
+            &sides,
         );
     }
     Ok(sums.into_iter().map(BurnSums::point).collect())
@@ -4842,7 +5345,8 @@ fn burn_scope_holds(filter: &SeriesFilter, keys: &[KeySelector], r: &RollupRow) 
         && (filter.request_classes.is_empty() || filter.request_classes.contains(&r.request_class))
 }
 
-/// One rollup row priced into the bucket it falls in, nothing for a row before the first bucket's edge.
+/// One rollup row priced into the bucket it falls in, part by part as `row_parts` answers it against `sides`, nothing
+/// for a row before the first bucket's edge.
 #[allow(clippy::too_many_arguments)]
 fn price_burn_row(
     points: &mut [BurnSums],
@@ -4853,19 +5357,22 @@ fn price_burn_row(
     prices: &PriceRevisions,
     shares: bool,
     now: i64,
+    sides: &Sides,
 ) {
     let Some(point) = bucket_slot(points, first, bucket_seconds, row.hour) else {
         return;
     };
     // The rollup keeps no completion, so the key reads the band at the row's hour.
-    price_usage(
-        point,
-        prices,
-        tables,
-        row.price_key(now),
-        row.usage(),
-        shares,
-    );
+    for part in row_parts(row, sides) {
+        price_usage(
+            point,
+            prices,
+            tables,
+            row.price_key(part.at, now),
+            part.usage,
+            shares,
+        );
+    }
 }
 
 /// The burn series of every group under `group_by`, any dimension `GroupBy` names, within `filter`'s scopes, read
@@ -4873,7 +5380,9 @@ fn price_burn_row(
 /// ones `burn_series_over` answers for that group's rows alone, the shares answered where each group holds one
 /// account's rows. A group is answered where a row of the range itself holds a token, and the read reaches back to the
 /// first bucket's edge, which may start before it. Each group carries the unit its rows' recorded funding names, as
-/// `recorded_unit` reads it. A filter whose keys name no lifetime answers no group.
+/// `recorded_unit` reads it. The sides of the read's boundary hours load in one read ahead of the pages, so each
+/// request of such an hour prices at the entries in force when it arrived. A filter whose keys name no lifetime answers
+/// no group.
 #[allow(clippy::too_many_arguments)]
 pub async fn burn_groups_paged(
     db: &Arc<LedgerDb>,
@@ -4902,6 +5411,7 @@ pub async fn burn_groups_paged(
         keys,
         ..RollupSelect::default()
     };
+    let sides = Sides::paged(db, prices, Some(&tables.revisions), first, last).await?;
     // Each group's points, whether a row of the range itself holds a token, and whether a row with a token is
     // plan-funded.
     let mut groups: BTreeMap<String, (Vec<BurnSums>, bool, bool)> = BTreeMap::new();
@@ -4932,6 +5442,7 @@ pub async fn burn_groups_paged(
             prices,
             shares,
             now,
+            &sides,
         );
     })
     .await?;
@@ -6157,7 +6668,7 @@ mod tests {
         let entrypoint = entrypoint_of_client(&row.client);
         // A figure no pricing of the row's usage answers, so a sum that priced it again reads another one.
         let mut sums = EquivalentSums::default();
-        sums.add_priced(&row, true, Some(0.0625), |priced| {
+        sums.add_priced(&row, row.usage(), true, Some(0.0625), |priced| {
             tables.equivalent_at(SEVEN_DAY, entrypoint, model, priced, at, at, at)
         });
         assert_eq!(
@@ -6195,12 +6706,17 @@ mod tests {
         row.requests = 1;
         row.input_tokens = 1_000;
         row.output_tokens = 100;
-        let own_key = price_row(&prices, &costs, &row.price_key(HOUR * 1_000), row.usage());
+        let own_key = price_row(
+            &prices,
+            &costs,
+            &row.price_key(last_millisecond(row.hour), HOUR * 1_000),
+            row.usage(),
+        );
         assert!(
             own_key.shares.is_some(),
             "the tier is sized, so the row's own key prices its windows: {own_key:?}"
         );
-        let read = priced(&row, &prices, &costs, HOUR * 1_000);
+        let read = priced(&row, Part::whole(&row), &prices, &costs, HOUR * 1_000);
         assert_eq!(read.shares, None, "{read:?}");
         assert_eq!(
             (&read.usd, &read.equivalent),
@@ -6256,7 +6772,8 @@ mod tests {
         let mut plan = PlanSums::default();
         plan.add(
             &row,
-            &row.price_key(at),
+            row.usage(),
+            &row.price_key(last_millisecond(row.hour), at),
             Priced {
                 equivalent: Some(sentinel),
                 ..Priced::default()
@@ -6396,6 +6913,54 @@ mod tests {
             HOUR * 1_000,
         );
         assert_eq!(serde_json::to_string(&groups[0].cost_usd).unwrap(), "0.0");
+    }
+
+    /// Request rows whose counts stand above the stored row's are no split of it: a row of 100 input tokens with a side
+    /// of 150 prices its 100 whole at its hour's end, where a subtraction with a floor at zero would price 150 at the
+    /// side's instant and tokens the rollups do not hold.
+    #[test]
+    fn a_row_whose_sides_hold_more_than_its_own_counts_prices_whole_at_its_hours_end() {
+        let mut row = RollupRow::key(
+            HOUR,
+            "k",
+            0,
+            "p",
+            "a",
+            "claude-opus-5-5",
+            "inference",
+            "-",
+            "-",
+            "-",
+            "-",
+            "standard",
+            "billed",
+            "standard",
+            "-",
+            "-",
+        );
+        row.requests = 1;
+        row.input_tokens = 100;
+        let side = Side {
+            at: HOUR * 1_000 + 1_800_000,
+            counts: BTreeMap::from([(
+                SideKey::of(&row),
+                PinUsage {
+                    input: 150,
+                    ..PinUsage::default()
+                },
+            )]),
+        };
+        let sides = Sides(BTreeMap::from([(HOUR, vec![side])]));
+        assert_eq!(
+            row_parts(&row, &sides).collect::<Vec<_>>(),
+            [Part {
+                at: HOUR * 1_000 + 3_599_999,
+                usage: PinUsage {
+                    input: 100,
+                    ..PinUsage::default()
+                },
+            }]
+        );
     }
 
     #[test]

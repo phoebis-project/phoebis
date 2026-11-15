@@ -28,8 +28,9 @@ pub(crate) fn is_free_classifier(classifier: Option<&str>) -> bool {
 /// What prices a row: its model, the cells its speed and band select, who paid, the account tier the row carries
 /// (`None` for an api_key account, a profile not yet read, or the rollup's `-`), the entrypoint whose regime prices
 /// its shares and the instant that picks the revision and the threshold. `band_at` is the instant the peak band is
-/// read at, an attempt's completion or a rollup row's hour start (whose `at` is the hour's last millisecond), else
-/// `at`.
+/// read at, an attempt's completion or a rollup row's hour start (whose `at` is the instant of the part of the row it
+/// prices: the hour's last millisecond, or for an earlier side of a boundary hour the last millisecond before the
+/// side's entry), else `at`.
 #[derive(Clone, Copy, Debug)]
 pub struct RowKey<'a> {
     pub model: &'a str,

@@ -9672,9 +9672,9 @@ async fn dollars_of_hour(
     .collect()
 }
 
-/// A row holds its whole hour and is priced by the entry in force at the hour's end: the row of 18:00 reads the entry
-/// of 18:30 that adds Opus 5.5, a million input tokens at $10, while the row of 17:00 ends before the entry and reads
-/// no dollars on a model the entry before it lacks.
+/// A row whose hour holds no request before the entry's instant has no earlier side and prices whole at the entry in
+/// force at the hour's end: the row of 18:00 reads the entry of 18:30 that adds Opus 5.5, a million input tokens at
+/// $10, while the row of 17:00 ends before the entry and reads no dollars on a model the entry before it lacks.
 #[tokio::test]
 async fn the_breakdown_prices_the_hour_an_entry_starts_in_at_that_entry() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -9688,9 +9688,9 @@ async fn the_breakdown_prices_the_hour_an_entry_starts_in_at_that_entry() {
     );
 }
 
-/// A member's spend splits its period at the start of the hour an entry takes effect in, so the row of 18:00 prices at
-/// the entry of 18:30 that adds Opus 5.5 and the row of 17:00 at the entry before it: the day counts the $10 of the
-/// 18:45 request alone.
+/// A member's spend splits its period at the start of the hour an entry takes effect in, and the hour of 18:00 holds no
+/// request before the entry's instant, so its row prices whole at the entry of 18:30 that adds Opus 5.5 and the row of
+/// 17:00 at the entry before it: the day counts the $10 of the 18:45 request alone.
 #[test]
 fn a_members_spend_prices_the_hour_an_entry_starts_in_at_that_entry() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -9707,6 +9707,409 @@ fn a_members_spend_prices_the_hour_an_entry_starts_in_at_that_entry() {
         .unwrap()[0]
         .spent_usd;
     assert_eq!(spent, 10.0);
+}
+
+/// Opus 5.5 at $5 per million input tokens, and at $10 from 18:30 UTC on 2026-01-15, an instant inside the 18:00 hour.
+const TWO_RATES_IN_ONE_HOUR: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-opus-5-5: {input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, output: 25}
+  - effective: 2026-01-15T18:30:00Z
+    models:
+      claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+";
+
+/// The key, the pool and the API-key account one request of a split hour runs under.
+type Scope<'a> = (&'a str, &'a str, &'a str);
+
+/// The first scope of `plant_a_split_hour`, whose hour reads $15 once each request prices at its own entry.
+const FIRST_SCOPE: Scope<'static> = ("desktop", "p1", "a1");
+
+/// One request of `input` Opus 5.5 input tokens under `scope`, received at `at` and folded on `prices`.
+fn plant_billed(
+    db: &LedgerDb,
+    id: &str,
+    (key, pool, account): Scope<'_>,
+    at: i64,
+    input: u64,
+    prices: &PriceRevisions,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: at,
+        key_id: Some(key.into()),
+        pool_id: Some(pool.into()),
+        canonical_model: "claude-opus-5-5".into(),
+        model: "claude-opus-5-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: account.into(),
+        account_kind: AccountKind::ApiKey,
+        outcome: "succeeded".into(),
+        input_tokens: Some(input),
+        ..Default::default()
+    };
+    db.insert_request_at(&request, &[attempt], None, prices)
+        .unwrap();
+}
+
+/// The 18:00 hour of 2026-01-15, which `TWO_RATES_IN_ONE_HOUR` splits at 18:30.
+fn split_hour() -> i64 {
+    ms(2026, 1, 15, 18, 0)
+}
+
+/// `FIRST_SCOPE` takes a million input tokens on the last millisecond before the entry of 18:30 and a million on its
+/// first, so its hour reads $5 and $10. A second scope (key `laptop`, pool `p2`, account `a2`) takes two million at
+/// 18:10, $10. Priced whole at the hour's end, the two read $20 each. Answers the list the rows were folded on.
+fn plant_a_split_hour(db: &LedgerDb) -> PriceRevisions {
+    let prices = PriceRevisions::from_yaml(TWO_RATES_IN_ONE_HOUR, "test").unwrap();
+    let entry = ms(2026, 1, 15, 18, 30);
+    plant_billed(db, "before", FIRST_SCOPE, entry - 1, 1_000_000, &prices);
+    plant_billed(db, "on", FIRST_SCOPE, entry, 1_000_000, &prices);
+    let second = ("laptop", "p2", "a2");
+    plant_billed(
+        db,
+        "other",
+        second,
+        ms(2026, 1, 15, 18, 10),
+        2_000_000,
+        &prices,
+    );
+    prices
+}
+
+/// The first scope's pool alone.
+fn first_pool() -> RollupFilter {
+    RollupFilter {
+        pools: vec![FIRST_SCOPE.1.into()],
+        ..RollupFilter::default()
+    }
+}
+
+/// Each request of a split hour prices at the entry in force when it arrived, and the stored row's request count stays
+/// the row's own: the side of the request before 18:30 carries its tokens alone.
+#[tokio::test]
+async fn the_breakdown_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = plant_a_split_hour(&db);
+    let groups = breakdown_paged(
+        &db,
+        &first_pool(),
+        &LiveKeys::default(),
+        split_hour(),
+        split_hour() + 3_600_000,
+        GroupBy::All,
+        &prices,
+        &phoebis_ledger::test_tables::subscription_costs(),
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        groups
+            .iter()
+            .map(|g| (g.cost_usd, g.requests))
+            .collect::<Vec<_>>(),
+        [(15.0, 2)]
+    );
+}
+
+/// The series loads the sides of its own range, so its point of the split hour reads the first scope's $15.
+#[tokio::test]
+async fn the_series_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = plant_a_split_hour(&db);
+    let points = series_paged(
+        &db,
+        &first_pool(),
+        &LiveKeys::default(),
+        split_hour(),
+        split_hour() + 3_600_000,
+        3_600,
+        GroupBy::All,
+        &prices,
+        &phoebis_ledger::test_tables::subscription_costs(),
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        points
+            .iter()
+            .map(|p| (
+                p.at,
+                p.groups.iter().map(|g| g.cost_usd).collect::<Vec<_>>()
+            ))
+            .collect::<Vec<_>>(),
+        [(split_hour(), vec![15.0])]
+    );
+}
+
+/// The Dashboard's hour of the split reads $25: the first scope's $15 and the second scope's two million at the $5 of
+/// 18:10.
+#[test]
+fn the_dashboards_day_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_a_split_hour(&db);
+    let costs = phoebis_ledger::test_tables::subscription_costs();
+    let day = db
+        .read_blocking(|c| phoebis_ledger::dashboard_on(c, ms(2026, 1, 15, 19, 0), &prices, &costs))
+        .unwrap();
+    let hour = day
+        .hourly
+        .iter()
+        .find(|h| h.at == split_hour())
+        .expect("the trailing day holds the split hour");
+    assert_eq!(hour.cost, 25.0);
+}
+
+/// The burn route's read loads the sides ahead of its pages, so the first pool's point of the split hour reads $15.
+#[tokio::test]
+async fn the_burn_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = plant_a_split_hour(&db);
+    let filter = SeriesFilter {
+        from: split_hour(),
+        to: split_hour() + 3_600_000,
+        bucket_seconds: 3_600,
+        pools: vec![FIRST_SCOPE.1.into()],
+        ..SeriesFilter::default()
+    };
+    let groups = burn_groups_paged(
+        &db,
+        &phoebis_ledger::test_tables::subscription_costs(),
+        &prices,
+        &filter,
+        GroupBy::All,
+        &LiveKeys::default(),
+        &[],
+        NOW,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        groups
+            .iter()
+            .flat_map(|(_, _, points)| points.iter().map(|p| (p.at, p.usd)))
+            .collect::<Vec<_>>(),
+        [(split_hour(), 15.0)]
+    );
+}
+
+/// A key's own usage prices the split hour by request, so the first scope's key reads $15 over the day.
+#[test]
+fn a_keys_usage_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_a_split_hour(&db);
+    let (day, _) = db
+        .read_blocking(|c| {
+            phoebis_ledger::key_usage_windows(c, FIRST_SCOPE.0, 0, ms(2026, 1, 15, 19, 0), &prices)
+        })
+        .unwrap();
+    assert_eq!(day.cost_usd, 15.0);
+}
+
+/// The keys' totals price the split hour from its stored rows, each priced by request, while the hour's request count
+/// stays the rows' own.
+#[test]
+fn the_key_totals_price_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_a_split_hour(&db);
+    let live = LiveKeys(BTreeMap::from([
+        ("desktop".to_string(), 0),
+        ("laptop".to_string(), 0),
+    ]));
+    let hour = split_hour() / 1_000;
+    let keys = db
+        .read_blocking(|c| {
+            key_request_totals(
+                c,
+                hour,
+                hour + 3_600,
+                &live,
+                &prices,
+                &phoebis_ledger::test_tables::subscription_costs(),
+                NOW,
+            )
+        })
+        .unwrap();
+    let first = &keys[FIRST_SCOPE.0];
+    assert_eq!((first.cost_usd, first.requests), (15.0, 2));
+}
+
+/// A pool's traffic prices the split hour from its stored rows, so the first pool's bucket reads $15.
+#[test]
+fn a_pools_traffic_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_a_split_hour(&db);
+    let hour = split_hour() / 1_000;
+    let traffic = db
+        .read_blocking(|c| {
+            pools_traffic(
+                c,
+                &[FIRST_SCOPE.1.to_string()],
+                hour,
+                hour + 3_600,
+                3_600,
+                &prices,
+                &phoebis_ledger::test_tables::subscription_costs(),
+                NOW,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        traffic[FIRST_SCOPE.1]
+            .iter()
+            .map(|b| b.cost_usd)
+            .collect::<Vec<_>>(),
+        [15.0]
+    );
+}
+
+/// A member's spend prices the split hour from its stored rows, so the first scope's member reads $15 for the day.
+#[test]
+fn a_members_spend_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let prices = plant_a_split_hour(&db);
+    let spent = db
+        .read_blocking(|c| {
+            member_spends(
+                c,
+                &[budgeted(FIRST_SCOPE.1, FIRST_SCOPE.2, BudgetPeriod::Day)],
+                ms(2026, 1, 15, 23, 0),
+                &prices,
+            )
+        })
+        .unwrap()[0]
+        .spent_usd;
+    assert_eq!(spent, 15.0);
+}
+
+/// Opus 5.5 at $5 per million input tokens, at $10 from 18:20 UTC on 2026-01-15 and at $20 from 18:40, two instants
+/// inside one hour.
+const THREE_RATES_IN_ONE_HOUR: &str = "\
+revisions:
+  - effective: 2026-01-01
+    models:
+      claude-opus-5-5: {input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, output: 25}
+  - effective: 2026-01-15T18:20:00Z
+    models:
+      claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+  - effective: 2026-01-15T18:40:00Z
+    models:
+      claude-opus-5-5: {input: 20, cache_write_5m: 25, cache_write_1h: 40, cache_read: 2, output: 100}
+";
+
+/// A side holds the requests since the instant before its own, so the side of 18:40 leaves out the request of 18:10
+/// that the side of 18:20 priced: a million input tokens at 18:10, 18:30 and 18:50 read $5, $10 and $20.
+#[tokio::test]
+async fn each_side_of_an_hour_split_twice_prices_only_the_requests_since_the_instant_before_it() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let prices = PriceRevisions::from_yaml(THREE_RATES_IN_ONE_HOUR, "test").unwrap();
+    for (id, minute) in [("first", 10), ("second", 30), ("third", 50)] {
+        plant_billed(
+            &db,
+            id,
+            FIRST_SCOPE,
+            ms(2026, 1, 15, 18, minute),
+            1_000_000,
+            &prices,
+        );
+    }
+    assert_eq!(dollars_of_hour(&db, &prices, 18).await, vec![35.0]);
+}
+
+/// A cost model whose second entry doubles Sonnet 5.5's weight from 18:30 UTC on 2026-01-15, an instant inside the
+/// 18:00 hour. `test_tier` anchors the figure at 1,000 units of the 7-day window in both entries.
+const DOUBLED_WEIGHT_IN_ONE_HOUR: &str = "\
+unit: {tier: test_tier, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      test_tier: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5-5: sonnet
+  - effective: 2026-01-15T18:30:00Z
+    capacity:
+      test_tier: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5-5: 2
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5-5: sonnet
+";
+
+/// Two equal plan requests of 50 input and 5 output tokens, 100 units, at 18:10 and at 18:45 read a Pro-week figure of
+/// 0.1 and 0.2 on either side of the cost entry of 18:30, where the price list splits nothing, and the plan's counts
+/// stay the two requests'.
+#[tokio::test]
+async fn a_cost_entry_inside_an_hour_weighs_each_plan_request_at_the_entry_in_force_when_it_arrived(
+) {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    for (id, minute) in [("early", 10), ("late", 45)] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                model: "claude-sonnet-5-5",
+                at: ms(2026, 1, 15, 18, minute),
+                usage: usage(50, 5),
+                ..ShareRow::default()
+            },
+        );
+    }
+    let tables = phoebis_ledger::test_tables::tables(
+        CostRevisions::from_yaml(DOUBLED_WEIGHT_IN_ONE_HOUR).unwrap(),
+    );
+    let groups = breakdown_paged(
+        &db,
+        &RollupFilter::default(),
+        &LiveKeys::default(),
+        split_hour(),
+        split_hour() + 3_600_000,
+        GroupBy::All,
+        &priced_table("claude-sonnet-5-5", 1.0),
+        &tables,
+        NOW,
+    )
+    .await
+    .unwrap();
+    let all = &groups[0];
+    assert!(close(all.cost_equivalent.as_ref(), 0.3), "{all:?}");
+    assert_eq!(
+        (all.plan_requests, all.plan_output_tokens),
+        (2, 10),
+        "{all:?}"
+    );
 }
 
 #[test]

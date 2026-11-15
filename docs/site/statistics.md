@@ -79,7 +79,8 @@ reason reads `not_requested` where the attempt's body carried no diagnostics mem
 one. The attempt also carries the prompt size of the session's previous request, the size the expiry count halves,
 where the selection landed on that request's account in a turn the router read as none of `compacted`, `lane_changed`
 and `static_restart`. No dollar is stored: every price is computed when it is read, from these counts, at the price
-revision in force when the request arrived.
+revision in force when the request arrived, in the hourly sums too while the request's row is kept. An hour whose
+request rows the purge took prices whole at the revision in force at the end of the hour.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A
@@ -94,7 +95,9 @@ dollars too: the analytics breakdown and series, the Dashboard's day, a key's to
 dollars of a probe the plan did not fund to their cost and billed dollars, even where they count no probe as a request.
 There its request, its tokens and its failure stay out, and a probe the plan funded adds nothing. A member's spend is
 the period's hourly sums priced at the revision in force at each hour, so a revision that lands moves the spend at the
-next refresh, and a model priced by prompt length sums its hours by the band each attempt fell in. The rollups file each
+next refresh, and a model priced by prompt length sums its hours by the band each attempt fell in. In the hour a
+revision takes effect inside, each request prices at the revision in force when it arrived while its row is kept, and
+the hour prices whole at the revision in force at its end once the purge took its request rows. The rollups file each
 hour's traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it,
 or a usage-based seat's dollars at the API rates. They key it by five words, `plan`, `overage`, `fast`, an API-key
 account's `billed` and a usage-based seat's `usage_based`, the last priced in dollars with no window share and kept by
@@ -270,13 +273,15 @@ The file is a list of revisions under its one key, `revisions`: each entry carri
 force from it, `models`. An `effective` is a date in `YYYY-MM-DD` form, in force from 00:00 UTC of that day, or an
 instant in UTC written `YYYY-MM-DDTHH:MM:SSZ`, in force from that second, and two entries on one instant are refused,
 whichever form each wrote. An entry is in force to the next entry's instant, and an instant before the first entry reads
-the first. A request is priced at the entry in force when it arrived, so all its attempts price under one entry. An
-hourly sum is priced whole by the entry in force at the end of its hour, so the hour an entry starts in prices at that
-entry. An entry added late re-prices the ledger's rows from its instant on at their next read. An entry that takes
-effect after the one in force is held: every read takes it from its instant on, and the burn rates the router builds at
-start for the shedding round take it at the first start after that instant. A correction of a figure the file had wrong
-edits every entry that carries the row and adds no entry, since the correction says what was always true, while a
-provider's price change, a new model or a moved threshold adds one.
+the first. A request is priced at the entry in force when it arrived, so all its attempts price under one entry. The
+hourly sums price each request at the entry in force when it arrived too, while its request row is kept, so the hour an
+entry starts in prices its requests before the entry's instant at the entry before it. An hour whose request rows the
+purge took is priced whole by the entry in force at the end of the hour. An entry added late re-prices the ledger's rows
+from its instant on at their next read. An entry that takes effect after the one in force is held: every read takes it
+from its instant on, and the burn rates the router builds at start for the shedding round take it at the first start
+after that instant. A correction of a figure the file had wrong edits every entry that carries the row and adds no
+entry, since the correction says what was always true, while a provider's price change, a new model or a moved threshold
+adds one.
 
 The twelve rows of the shipped revision in force, in USD per million tokens, in the file's order (the fast cells of
 Fable 5.2 and the three Opus models are twice each figure):
