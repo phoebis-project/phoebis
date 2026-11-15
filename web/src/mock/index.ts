@@ -18,7 +18,7 @@ import { modelRulesRefusal, poolWarnings, type NumericKeepaliveKey } from '@/lib
 import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
-import { compareOrderKeys, compareRequests, type OrderKey } from '@/lib/requests';
+import { compareOrderKeys, compareRequests, orderKeyOf, type OrderKey } from '@/lib/requests';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION, pairingExpiringOf } from './attention';
@@ -489,29 +489,8 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   return true;
 }
 
-/**
- * The route's order keys, each read off the row, null where the row carries no figure. The token keys are the serving
- * attempt's counts as the route stored them, so a count it never stored carries none.
- */
-const figureOf = (r: RequestLog, order: RequestOrder): number | null => {
-  switch (order) {
-    case 'attempts':
-      return r.attempts.length;
-    case 'duration_ms':
-      return r.durationMs;
-    case 'input_tokens':
-      return r.storedTokens.input;
-    case 'output_tokens':
-      return r.storedTokens.output;
-    case 'received_at':
-      return Date.parse(r.at);
-    case 'ttfb_ms':
-      return r.ttfbMs;
-  }
-};
-const keyOf = (r: RequestLog, order: RequestOrder): OrderKey => ({ figure: figureOf(r, order), id: r.id });
 /** The route's cursor under a key: `<figure>:<id>`, the figure empty where the row carries none. */
-const cursorOf = (r: RequestLog, order: RequestOrder): string => `${figureOf(r, order) ?? ''}:${r.id}`;
+const cursorOf = (r: RequestLog, order: RequestOrder): string => `${orderKeyOf(r, order).figure ?? ''}:${r.id}`;
 /**
  * The keys a cursor names, or null for a cursor the route refuses: no separator, a figure its integer parse does not
  * read, or an empty figure under `received_at` or `attempts`, whose rows all carry one.
@@ -528,7 +507,7 @@ const cursorKeyOf = (cursor: string, order: RequestOrder): OrderKey | null => {
 
 const requestOrderOf = (order: RequestOrder, dir: 'asc' | 'desc') => {
   const compare = compareOrderKeys(dir);
-  return (a: RequestLog, b: RequestLog): number => compare(keyOf(a, order), keyOf(b, order));
+  return (a: RequestLog, b: RequestLog): number => compare(orderKeyOf(a, order), orderKeyOf(b, order));
 };
 
 /** A window as the poll after a reset reads it: `by` taken off its use, and its lead and projection with it. */
@@ -1365,7 +1344,7 @@ export class MockApi implements Api {
     // The route resumes strictly past the cursor's row in the list's order, so rows sharing a figure are neither
     // repeated nor skipped.
     const compare = compareOrderKeys(dir);
-    const after = cursor === undefined ? matched : matched.filter((r) => compare(keyOf(r, order), cursor) > 0);
+    const after = cursor === undefined ? matched : matched.filter((r) => compare(orderKeyOf(r, order), cursor) > 0);
     const limit = query.limit ?? 50;
     const page = after.slice(0, limit);
     const last = page[page.length - 1];

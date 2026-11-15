@@ -40,6 +40,10 @@ function figureOf(r: RequestLog, order: RequestOrderWord): number | null {
 /** A row's place in the route's order: its figure under the order's key, null where it carries none, and its id. */
 export type OrderKey = { figure: number | null; id: string };
 
+/** A row's key in the route's order under `order`: its figure, null where it carries none, and its id. The mock
+ *  pages by the same key, so its pages and a poll's merge cannot part. */
+export const orderKeyOf = (r: RequestLog, order: RequestOrderWord): OrderKey => ({ figure: figureOf(r, order), id: r.id });
+
 /**
  * The route's order over two keys: the figure in `dir`, a row without one last under either direction, and on a tie
  * the id in `dir`, as the route orders `id {dir}`.
@@ -52,7 +56,7 @@ export function compareOrderKeys(dir: SortDir): (x: OrderKey, y: OrderKey) => nu
 /** The read's cursor pair as a comparator, so a poll's rows merge where the route would page them. */
 export function requestOrder(order: RequestOrderWord, dir: SortDir): (a: RequestLog, b: RequestLog) => number {
   const compare = compareOrderKeys(dir);
-  return (a, b) => compare({ figure: figureOf(a, order), id: a.id }, { figure: figureOf(b, order), id: b.id });
+  return (a, b) => compare(orderKeyOf(a, order), orderKeyOf(b, order));
 }
 
 /** The words under a dollar figure for who paid: the funding of a request billed in dollars. */
