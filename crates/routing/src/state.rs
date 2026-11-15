@@ -465,9 +465,8 @@ pub struct Purged {
     pub pins: Vec<(PinRow, &'static str)>,
     /// The slow-down entries dropped, by pool id and account id, whole: an open span ends with its entry.
     pub slow_downs: Vec<((String, String), SlowDownState)>,
-    /// Each dropped pin of an account the registry no longer holds that would still stand otherwise
-    /// (`pin_would_stand`): the session's trace, which the next request that takes a pin lands as a move off the
-    /// account.
+    /// Each dropped pin of a deleted account that `trace_stands` holds: the session's trace, which the next request
+    /// that takes a pin lands as a move off the account.
     pub traced: Vec<PinRow>,
 }
 
@@ -1487,12 +1486,15 @@ pub(crate) fn standing_mark(pin: &PinRow) -> Option<&PinMark> {
     pin.mark.as_ref().filter(|mark| mark.on == pin.account_id)
 }
 
-/// Whether a pin would stand at `now` were its account still held, by the purge's own tests: its key stands under the
-/// generation the pin names, and the affinity TTL of the key's pool holds the row's last use, a zero TTL holding none.
-pub(crate) fn pin_would_stand(snapshot: &RegistrySnapshot, pin: &PinRow, now: i64) -> bool {
-    snapshot
-        .key(&pin.key_id)
-        .is_some_and(|key| key.created_at == pin.key_generation)
+/// Whether a deleted account's pin stands at `now` as its session's trace: the registry holds no account under the
+/// pin's account id, its key stands under the generation the pin names, and the affinity TTL of the key's pool
+/// holds the row's last use by the purge's own comparison, a zero TTL holding none. A holder created again under the
+/// id is another account, so a move naming the id would book the previous holder's move on it.
+pub(crate) fn trace_stands(snapshot: &RegistrySnapshot, pin: &PinRow, now: i64) -> bool {
+    snapshot.account(&pin.account_id).is_none()
+        && snapshot
+            .key(&pin.key_id)
+            .is_some_and(|key| key.created_at == pin.key_generation)
         && snapshot
             .key_pool(&pin.key_id)
             .map(affinity_ttl_ms)
@@ -4160,9 +4162,8 @@ impl RoutingState {
     /// under that id next: a two-day cooldown would keep a brand new account out of every pool it joins. A delete
     /// and a create under one id can both land before one reload, so a row is held against the account only while
     /// the snapshot's holder carries the incarnation it names. A pin names its key's creation time too, and one
-    /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id. A pin whose
-    /// account the registry no longer holds under any holder, and that would still stand otherwise, leaves as a
-    /// trace in `traced` in place of `pins`.
+    /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id. A `deleted` pin
+    /// that `trace_stands` holds leaves as a trace in `traced` in place of `pins`.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
         let gone =
             |account_id: &str, incarnation: u64| snapshot.holder(account_id, incarnation).is_none();
@@ -4198,16 +4199,10 @@ impl RoutingState {
                 }
             })
             .collect();
-        // A holder created again under the id is another account, so a move naming the id would book the previous
-        // holder's move on it: such a pin expires.
         let (traced, pins): (Vec<_>, Vec<_>) = doomed
             .into_iter()
             .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
-            .partition(|(row, reason)| {
-                *reason == "deleted"
-                    && snapshot.account(&row.account_id).is_none()
-                    && pin_would_stand(snapshot, row, now)
-            });
+            .partition(|(row, reason)| *reason == "deleted" && trace_stands(snapshot, row, now));
         let traced = traced.into_iter().map(|(row, _)| row).collect();
         // A move writes the key again within the selection that took the row, so a key no pin holds at the tick
         // belongs to a session that ended, to a failover or to a deleted account's trace: the task takes that row and

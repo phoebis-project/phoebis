@@ -848,12 +848,13 @@ left (`from_account_id`). The pin of a session idle past its TTL stays an expiry
 pin replaced on its own account: each records `pin_expired` with `reasons` and `pin_created`, and its placement names no
 source. A deleted account's pins leave when the router reloads, and the session's next request that takes a pin moves
 the session as a failover's landing does: `pin_migrated` with the reason `deleted` and `reasons` `["deleted"]`, the
-request's `moved` and the decision's rule `deleted`, and the deleted account as `from_account_id`. Where no such request
-comes before the pool's affinity TTL has passed since the pin's last use, the purge tick records `pin_expired` with
-`deleted`, and the session's next request is a fresh placement. The router keeps that pin in memory only, so after a
-restart the session's next request is a fresh placement too. A pin whose key was replaced, or whose account was deleted
-and created again under its id, records `pin_expired` with `deleted` at the reload, and its session's next placement
-names no source.
+request's `moved` and the decision's rule `deleted`, and the deleted account as `from_account_id`. That move stays open
+until the pool's affinity TTL has passed since the pin's last use, or until the key is replaced or an account is created
+again under the deleted account's id. Then the router records `pin_expired` with `deleted` at the next purge tick or
+reload, or at the session's next request where that comes first, and the session is placed afresh. The router keeps that
+pin in memory only, so after a restart the session's next request is a fresh placement too. A pin whose key was
+replaced, or whose account was deleted and created again under its id, before the reload records `pin_expired` with
+`deleted` at the reload, and its session's next placement names no source.
 
 #### What a move drops
 

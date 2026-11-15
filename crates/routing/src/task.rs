@@ -35,7 +35,7 @@ use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
     is_plan_window, is_weekly_window, latest_full_reset, mark_holds, oldest_kept_hour,
     plan_windows, round_in_dwell, shed_dwell_ms, slow_down_hold_ms, spend_reset_estimate,
-    standing_mark, wait_until, AccountTicket, BurnUnit, CreditsState, DroppedBlocks,
+    standing_mark, trace_stands, wait_until, AccountTicket, BurnUnit, CreditsState, DroppedBlocks,
     EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded,
     RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
     WindowReading, WindowSource, FIVE_HOUR, HEAD_PERCENT, SEVEN_DAY, SEVEN_DAY_FABLE,
@@ -87,19 +87,20 @@ struct Invalidated {
     at: i64,
     row: PinRow,
     cause: Option<MoveCause>,
-    /// The list of the release that made the entry, which the landing's `pin_migrated` carries: empty for a failover,
-    /// `deleted` for a deleted account's pin.
+    /// The list of the release that made the entry, which the landing's `pin_migrated` carries, and so does the
+    /// `pin_expired` of a deleted account's lapse: empty for a failover, `deleted` for a deleted account's pin.
     released: Vec<&'static str>,
     life: Life,
 }
 
 /// How long an entry stands.
 enum Life {
-    /// `MIGRATION_WINDOW_MS` from the invalidation.
+    /// `MIGRATION_WINDOW_MS` from the invalidation, and a lapse writes nothing.
     Failover,
-    /// As long as the pin would have stood (`pin_would_stand`): the session of a deleted account keeps its move until
-    /// its pool's affinity TTL has passed since its last use, and the purge that sees it lapse writes the expiry it
-    /// held back.
+    /// As long as `trace_stands` holds: the session of a deleted account keeps its move until its pool's affinity TTL
+    /// has passed since its last use, its key is replaced or gone, its pool is gone, or an account is created again
+    /// under the id. The purge's sweep or the session's next selection, whichever meets the lapse first, writes the
+    /// expiry the purge held back.
     Pin,
 }
 
@@ -108,7 +109,7 @@ impl Invalidated {
     fn within(&self, now: i64, snapshot: &RegistrySnapshot) -> bool {
         match self.life {
             Life::Failover => now - self.at <= MIGRATION_WINDOW_MS,
-            Life::Pin => crate::state::pin_would_stand(snapshot, &self.row, now),
+            Life::Pin => trace_stands(snapshot, &self.row, now),
         }
     }
 }
@@ -2079,7 +2080,8 @@ struct Task {
     handle_tx: mpsc::WeakSender<Command>,
     /// The pin a failover invalidated or the purge took off a deleted account, under its key. The next select for that
     /// same key while the entry stands lands on the row's figures and reports a migration rather than a fresh pin, and
-    /// the purge drops an entry that lapsed. Memory only, so a restart drops every entry.
+    /// the purge or that select, whichever meets it first, drops an entry that lapsed. Memory only, so a restart drops
+    /// every entry.
     invalidated: HashMap<PinKey, Invalidated>,
     /// The reloads the running load answers, those that were waiting when it started, and `None` while no registry
     /// load runs. At most one does.
@@ -3421,38 +3423,42 @@ impl Task {
                 let selected = matches!(result, SelectResult::Selected(_));
                 let mut left: Option<&'static str> = None;
                 match (before.as_ref(), after) {
-                    (None, Some(new)) if selected => {
-                        match self
-                            .invalidated
-                            .remove(&pin_key)
-                            .filter(|entry| entry.within(now, &snapshot))
-                        {
-                            Some(Invalidated {
-                                account_id: from,
-                                reason,
-                                released: reasons,
-                                ..
-                            }) => {
-                                pin_events.push(RouterEvent::pin_migrated(
+                    (None, Some(new)) if selected => match self.invalidated.remove(&pin_key) {
+                        Some(entry) if entry.within(now, &snapshot) => {
+                            pin_events.push(RouterEvent::pin_migrated(
+                                &pin_key,
+                                entry.account_id,
+                                new,
+                                entry.reason,
+                                entry.released,
+                                &record,
+                                record.outcome.cause.clone(),
+                                now,
+                            ));
+                        }
+                        lapsed => {
+                            // A deleted account's trace that lapsed before the purge's sweep met it ends at this
+                            // request, with the expiry the sweep would write.
+                            if let Some(entry) =
+                                lapsed.filter(|entry| matches!(entry.life, Life::Pin))
+                            {
+                                pin_events.push(RouterEvent::pin_expired(
                                     &pin_key,
-                                    from,
-                                    new,
-                                    reason,
-                                    reasons,
-                                    &record,
-                                    record.outcome.cause.clone(),
+                                    &entry.account_id,
+                                    entry.released,
+                                    key_pool_id(&snapshot, &entry.row.key_id),
                                     now,
                                 ));
                             }
-                            None => pin_events.push(RouterEvent::pin_created(
+                            pin_events.push(RouterEvent::pin_created(
                                 &pin_key,
                                 &new.account_id,
                                 new.epoch,
                                 pool_id.clone(),
                                 now,
-                            )),
+                            ));
                         }
-                    }
+                    },
                     (Some(old), Some(new)) if old.epoch != new.epoch => {
                         if let SelectResult::Selected(selection) = &result {
                             // With no migration, the record's word tells a live pin replaced onto another account,

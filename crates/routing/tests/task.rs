@@ -3176,8 +3176,8 @@ async fn a_session_whose_account_was_deleted_lands_its_next_request_inside_the_t
     let mut events = handle.subscribe_events();
     store.delete_account(&from, "test").unwrap();
     handle.reload().await.unwrap();
-    // Two minutes on: past a failover's one-minute window and inside the pool's hour-long affinity TTL.
-    let later = 1_000 + 120_000;
+    // The last instant of the pool's hour-long affinity TTL from the pin's last use, far past a failover's minute.
+    let later = 1_000 + HOUR;
     now.store(later, Ordering::SeqCst);
     let answer = handle
         .select(request(&handle, Some("s1"), later))
@@ -3319,6 +3319,261 @@ async fn a_deleted_accounts_session_idle_past_the_ttl_expires_under_deleted_at_t
         (None, None, vec![("pin_created", None)]),
         "the session's next request is a fresh placement that names no source"
     );
+}
+
+#[tokio::test]
+async fn a_request_past_the_ttl_ahead_of_any_purge_ends_a_deleted_accounts_trace_with_its_expiry_and_places_afresh(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // No purge tick runs, so the reload's purge is the one sweep ahead of the request.
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut events = handle.subscribe_events();
+    store.delete_account(&from, "test").unwrap();
+    handle.reload().await.unwrap();
+    // One millisecond past the pool's hour-long affinity TTL from the pin's last use, with no purge since the reload.
+    let lapsed = 1_000 + HOUR + 1;
+    now.store(lapsed, Ordering::SeqCst);
+    handle
+        .select(request(&handle, Some("s1"), lapsed))
+        .await
+        .unwrap();
+    let seen = drained(&mut events).await;
+    let record = seen
+        .iter()
+        .find_map(|event| match event {
+            RouterEvent::Decision { record, .. } => Some(record.clone()),
+            _ => None,
+        })
+        .expect("the request's decision");
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("deleted")), ("pin_created", None)],
+        "the request that meets the lapsed trace writes its expiry ahead of the fresh pin"
+    );
+    let expiries: Vec<_> = seen
+        .into_iter()
+        .filter_map(|event| match event {
+            RouterEvent::PinExpired {
+                account_id,
+                reasons,
+                pool_id,
+                ..
+            } => Some((account_id, reasons, pool_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        expiries,
+        [(from, vec!["deleted"], Some("p".to_string()))],
+        "the one expiry carries the purge's list and the key's pool"
+    );
+}
+
+#[tokio::test]
+async fn an_account_created_again_under_a_deleted_accounts_id_ends_its_trace_with_an_expiry_and_a_fresh_placement(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(request(&handle, Some("s"), 1_000))
+        .await
+        .unwrap();
+    let mut events = handle.subscribe_events();
+    store.delete_account("a", "test").unwrap();
+    handle.reload().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    insert_account_a(&store);
+    handle.reload().await.unwrap();
+    let expiries: Vec<_> = drained(&mut events)
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            RouterEvent::PinExpired {
+                account_id,
+                reasons,
+                at,
+                ..
+            } => Some((account_id, reasons, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        expiries,
+        [("a".to_string(), vec!["deleted"], 2_000)],
+        "the reload that finds the id held again ends the trace with one expiry"
+    );
+    handle
+        .select(request(&handle, Some("s"), 3_000))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_created", None)],
+        "the new holder's session starts afresh, with no move off the id it holds"
+    );
+}
+
+#[tokio::test]
+async fn a_key_created_again_under_its_id_ends_a_deleted_accounts_trace_with_an_expiry_and_a_fresh_placement(
+) {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut events = handle.subscribe_events();
+    store.delete_account(&from, "test").unwrap();
+    handle.reload().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    store.delete_api_key("k", "test").unwrap();
+    insert_key_k(&store);
+    handle.reload().await.unwrap();
+    let expiries: Vec<_> = drained(&mut events)
+        .await
+        .into_iter()
+        .filter_map(|event| match event {
+            RouterEvent::PinExpired {
+                account_id,
+                reasons,
+                pool_id,
+                at,
+                ..
+            } => Some((account_id, reasons, pool_id, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        expiries,
+        [(from, vec!["deleted"], Some("p".to_string()), 2_000)],
+        "the reload that finds the key replaced ends the trace with one expiry"
+    );
+    handle
+        .select(request(&handle, Some("s1"), 3_000))
+        .await
+        .unwrap();
+    let (_, record) = next_decision(&mut events).await;
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_created", None)],
+        "the session under the new key is placed afresh, with no move off the deleted account"
+    );
+}
+
+#[tokio::test]
+async fn a_failovers_entry_past_its_minute_hands_nothing_on_inside_the_pools_ttl_and_leaves_in_silence(
+) {
+    use phoebis_routing::RouterEvent;
+    // One row per site that builds a failover's entry, each row's report built from the account and the pin it names.
+    type Failover = fn(String, PinRef) -> Report;
+    let failovers: [(&str, Failover); 2] = [
+        ("a cooldown that names the pin", |from, pin| {
+            Report::Cooldown {
+                account_id: from.clone(),
+                row: CooldownRow {
+                    account_id: from,
+                    scope: CooldownScope::Account,
+                    until: 1_000 + HOUR,
+                    set_at: 0,
+                    reason: "rate_limit".into(),
+                    window: "five_hour".into(),
+                    source_request_id: None,
+                    incarnation: 1,
+                },
+                pin: Some(pin),
+                lifecycle_generation: 1,
+                credential_generation: 1,
+                incarnation: 1,
+            }
+        }),
+        ("an invalidation of the pin", |from, pin| {
+            Report::PinInvalidated {
+                account_id: from,
+                pin,
+                mark: None,
+                incarnation: 1,
+                lifecycle_generation: 1,
+                credential_generation: 1,
+            }
+        }),
+    ];
+    for (row, failover) in failovers {
+        let store = seeded(&["a", "b"]);
+        let now = Arc::new(AtomicI64::new(1_000));
+        // No purge tick runs, so the request is the one reader that meets the entry.
+        let handle = spawn(
+            store,
+            clock(&now),
+            RouterConfig {
+                hold_first_purge: true,
+                ..RouterConfig::default()
+            },
+        )
+        .unwrap();
+        let first = handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap();
+        let SelectResult::Selected(selection) = first.result else {
+            panic!("{row}: {:?}", first.result)
+        };
+        handle
+            .report(failover(
+                selection.account.id,
+                selection.pin.expect("a session pin"),
+            ))
+            .await;
+        // The ask queues behind the report, so the entry takes its instant before the clock moves.
+        handle.pins().await.unwrap();
+        // One millisecond past a failover's one-minute window, inside the pool's hour-long affinity TTL.
+        let later = 1_000 + 60_000 + 1;
+        now.store(later, Ordering::SeqCst);
+        let mut events = handle.subscribe_events();
+        handle
+            .select(request(&handle, Some("s1"), later))
+            .await
+            .unwrap();
+        let record = drained(&mut events)
+            .await
+            .into_iter()
+            .find_map(|event| match event {
+                RouterEvent::Decision { record, .. } => Some(record),
+                _ => None,
+            })
+            .expect("the request's decision");
+        assert_eq!(
+            pin_events_of(&record),
+            [("pin_created", None)],
+            "{row}: the entry past its minute hands nothing on and leaves with no expiry"
+        );
+    }
 }
 
 #[tokio::test]
