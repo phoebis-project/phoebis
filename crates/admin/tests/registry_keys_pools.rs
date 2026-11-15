@@ -4233,6 +4233,48 @@ async fn a_key_edit_onto_a_missing_pool_answers_404_ahead_of_a_stale_expected_re
     assert_eq!(json(refused).await["error"], "pool not found");
 }
 
+#[tokio::test]
+async fn a_key_create_onto_a_missing_pool_answers_404_ahead_of_a_label_past_256_bytes() {
+    let (app, _up, _store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let long = "x".repeat(257);
+    let refused = post(
+        &app,
+        "/admin/keys",
+        &format!(r#"{{"id":"desktop","label":"{long}","pool_id":"gone"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            json(refused).await["error"].clone()
+        ),
+        (404, serde_json::json!("pool not found"))
+    );
+}
+
+#[tokio::test]
+async fn a_key_create_with_a_taken_id_answers_409_ahead_of_a_missing_pool() {
+    let (app, _up, _store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    pool_and_key(&app, &cookie).await;
+    let refused = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"gone"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            json(refused).await["error"].clone()
+        ),
+        (409, serde_json::json!("a key with this id exists"))
+    );
+}
+
 // Multi-threaded: the parked edit blocks the worker it runs on until the hold is released.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_stale_key_edit_answers_404_when_the_key_is_deleted_while_it_is_saved() {

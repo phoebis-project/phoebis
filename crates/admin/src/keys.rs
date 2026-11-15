@@ -235,10 +235,6 @@ fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<()
     if let Some(notes) = &input.notes {
         row.notes = notes.clone();
     }
-    if let Some(pool_id) = &input.pool_id {
-        pool(state, pool_id)?;
-        row.pool_id = pool_id.clone();
-    }
     if let Some(enabled) = input.enabled {
         if enabled && row.revoked_at.is_some() {
             return Err(failure(
@@ -471,7 +467,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if input.guardrails.is_some() {
         return failure(StatusCode::BAD_REQUEST, "guardrails applies on edit");
     }
-    let (Some(id), Some(_), Some(_)) = (&input.id, &input.label, &input.pool_id) else {
+    let (Some(id), Some(_), Some(pool_id)) = (&input.id, &input.label, &input.pool_id) else {
         return failure(
             StatusCode::BAD_REQUEST,
             "id, label, and pool_id are required",
@@ -483,13 +479,17 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     if let Ok(Some(_)) = state.store.api_key(id) {
         return failure(StatusCode::CONFLICT, DUPLICATE_ID);
     }
+    // Read ahead of `apply`, so a missing pool answers its 404 ahead of a text bound's 400, as on the edit.
+    if let Err(refusal) = pool(&state, pool_id) {
+        return refusal;
+    }
     let secret = new_secret();
     let now = (state.clock)();
     let mut row = ApiKeyRow {
         id: id.clone(),
         label: String::new(),
         notes: None,
-        pool_id: String::new(),
+        pool_id: pool_id.clone(),
         enabled: true,
         revoked_at: None,
         expires_at: None,
@@ -575,6 +575,7 @@ pub(crate) async fn patch(
         if let Err(refusal) = pool(&state, pool_id) {
             return refusal;
         }
+        row.pool_id = pool_id.clone();
     }
     let read_at = match fence_token(
         input.expected_revision.as_ref(),
