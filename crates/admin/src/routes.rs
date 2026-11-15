@@ -23,7 +23,7 @@ use phoebis_oauth::{
     loopback_redirect_uri, parse_profile, parse_token_response, resets_left, CallbackInput, Claim,
     ClaimOutcome, ClaimRefusal, ClaimReply, ControlKind, LimitResets, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollOutcome, PollStatus,
-    ProfileResponse, Started, UsageError, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
+    ProfileResponse, Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::{is_json, DiscoveryError};
 use phoebis_routing::{
@@ -855,33 +855,12 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
         Ok(snapshot) => {
             // After the usage reading and under its hold, so the list the console loads next carries the block. The
             // service logs a failed read, and this answer is the usage reading's either way.
-            let _ = read_limit_resets_after_poll(&state, &id).await;
+            let _ = state.quota_poll().read_limit_resets(&row).await;
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
         }
         Err(error) => failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     }
-}
-
-/// Reads the account's limit resets after a call of the poll's path and answers whether the read landed. That poll
-/// can be the one that found the plan ended, and an account under that pause is sent no usage request, so the flag
-/// is read again first.
-async fn read_limit_resets_after_poll(state: &AdminState, id: &str) -> bool {
-    if QuotaPoll::plan_paused(&state.store, id) {
-        return false;
-    }
-    read_limit_resets(state, id).await.is_ok()
-}
-
-/// The account's limit resets read through the service, with the reauth mark the read's acquisition landed reported
-/// to the routing as the poll reports its own.
-async fn read_limit_resets(
-    state: &AdminState,
-    id: &str,
-) -> Result<Option<LimitResets>, UsageError> {
-    let answer = state.usage.limit_resets(id).await;
-    state.quota_poll().report_landed_mark(id).await;
-    answer
 }
 
 const ACCOUNT_CHANGED: &str = "the account changed while its reset was being used";
@@ -894,7 +873,7 @@ const NOT_USABLE: &str = "this reset is not usable now";
 /// Sends the usage read in the client's shape now, under the account's hold and the usage reads' permits, and two
 /// callers at once share one request. The Quota view's dialog calls it before it opens. The answer is the account's
 /// `limit_resets` member as it stands after the read: where the read failed or the hold refused it, the stored member
-/// with the read's error beside it.
+/// with the read's error beside it, and where the account's plan ended, null with the poll's sentence beside it.
 #[utoipa::path(
     post,
     path = "/admin/accounts/{id}/limit-resets/read",
@@ -922,7 +901,9 @@ async fn limit_resets_read(
         Err(refusal) => return refusal,
     };
     // A read that fails or that the hold refuses still opens the dialog, on the stored block and its age.
-    let error = read_limit_resets(&state, &id)
+    let error = state
+        .quota_poll()
+        .read_limit_resets(&row)
         .await
         .err()
         .map(|error| error.to_string());
@@ -1130,7 +1111,7 @@ async fn claim_and_record(
     // Only this read shows whether an open claim spent the reset, so one that failed, or that the plan's pause kept
     // back, stays due for the next slot that reads the account.
     if claim.outcome == ClaimOutcome::Unsettled
-        && !read_limit_resets_after_claim(&state, &row.id, claim.at).await
+        && !read_limit_resets_after_claim(&state, &row, claim.at).await
     {
         state.usage.mark_limit_resets_due(&row);
     }
@@ -1140,13 +1121,14 @@ async fn claim_and_record(
 /// Reads the account's limit resets after a claim answered at `claimed_at`, and answers whether a read landed.
 async fn read_limit_resets_after_claim(
     state: &AdminState,
-    account_id: &str,
+    row: &AccountRow,
     claimed_at: i64,
 ) -> bool {
-    if !read_limit_resets_after_poll(state, account_id).await {
+    let poll = state.quota_poll();
+    if poll.read_limit_resets(row).await.is_err() {
         return false;
     }
-    match state.store.account_extras_of(account_id) {
+    match state.store.account_extras_of(&row.id) {
         // A joined read can carry a block from before the attempt, which an open outcome leaves on the card as
         // usable, so a block read before the claim's answer is read once more.
         Ok(extras)
@@ -1155,12 +1137,12 @@ async fn read_limit_resets_after_claim(
                 .and_then(|extras| extras.limit_resets_read_at)
                 .is_none_or(|at| at < claimed_at) =>
         {
-            read_limit_resets_after_poll(state, account_id).await
+            poll.read_limit_resets(row).await.is_ok()
         }
         Ok(_) => true,
         Err(error) => {
             tracing::warn!(
-                account = %account_id,
+                account = %row.id,
                 %error,
                 "the instant of the limit resets read after a claim could not be read"
             );
@@ -2868,8 +2850,8 @@ pub(crate) struct AccountLimitResetGrant {
 #[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LimitResetsRead {
-    /// Null where the read landed, else the usage service's sentence for a read the hold refused or that failed, in
-    /// which case `limit_resets` is the stored member.
+    /// Null where the read landed, else the poll's sentence for a plan that ended, or the usage service's sentence for
+    /// a read the hold refused or that failed, in which case `limit_resets` is the stored member.
     pub error: Option<String>,
     /// The member as it stands after the call.
     pub limit_resets: Option<AccountLimitResets>,

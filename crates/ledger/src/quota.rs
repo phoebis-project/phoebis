@@ -504,7 +504,7 @@ impl QuotaPoll {
                             && !profile_read
                             && poll.limit_resets_due(&account, reading.as_ref())
                         {
-                            poll.read_limit_resets(&account).await;
+                            let _ = poll.read_limit_resets(&account).await;
                         }
                         Completion {
                             held: poll.usage.held_for(&account.id),
@@ -935,15 +935,26 @@ impl QuotaPoll {
         holds_reset && reading.windows_at_limit() != memory.at_limit
     }
 
-    /// The account's limit resets, read and stored through the service. A refusal, a hold's among them, leaves the
-    /// read due for the next slot, and nothing of the read reaches the ledger.
-    async fn read_limit_resets(&self, account: &AccountRow) {
-        let answer = self.usage.limit_resets(&account.id).await;
-        self.report_landed_mark(&account.id).await;
+    /// Reads the account's limit resets unless its plan is paused, and reports the landed mark after each call of the
+    /// service. An account under the pause is sent nothing and answers an `Unavailable` refusal.
+    pub async fn read_limit_resets(
+        &self,
+        account: &AccountRow,
+    ) -> Result<Option<LimitResets>, UsageError> {
+        let answer = if Self::plan_paused(&self.store, &account.id) {
+            Err(UsageError::Unavailable(
+                "the account's plan ended, so its limit resets are not read".into(),
+            ))
+        } else {
+            let answer = self.usage.limit_resets(&account.id).await;
+            self.report_landed_mark(&account.id).await;
+            answer
+        };
         // A fault logged its warning in the service.
-        if let Err(UsageError::Unavailable(reason)) = answer {
+        if let Err(UsageError::Unavailable(reason)) = &answer {
             tracing::debug!(account = %account.id, %reason, "the quota poll read no limit resets");
         }
+        answer
     }
 
     /// `poll_account`, then `refresh_profile` where the poll did not read the profile, for every
