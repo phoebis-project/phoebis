@@ -16,7 +16,10 @@ use phoebis_ledger::{
     LedgerDb, PlanTables, QuotaPoll, QuotaSampleRecord, SampleSource, Sampled, POLL_INTERVAL,
 };
 use phoebis_oauth::{ClaimOutcome, PollOutcome};
-use phoebis_routing::{EvidenceSource, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{
+    EvidenceSource, Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
+};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, StorageKey,
     Store, SubscriptionRow,
@@ -1921,6 +1924,123 @@ async fn a_profile_slot_leaves_the_limit_resets_to_the_next() {
     );
     step_to(&h, &up, &paused, secs(1_202)).await;
     assert_eq!(resets_asked(&up, A), 1, "the next slot sends it");
+    up.shutdown().await;
+}
+
+/// Reports a response head of the account's `window` at `utilization` through the router's handle, as the relay
+/// reports one, at the harness's clock and under the reset the router's stored reading of the window names.
+async fn report_head(h: &Harness, id: &str, window: &str, utilization: f64) {
+    let samples = resumed(h.router.samples()).await.unwrap();
+    let reset = samples
+        .iter()
+        .find(|(account, _)| account == id)
+        .and_then(|(_, sample)| sample.reading(window))
+        .and_then(|reading| reading.reset)
+        .expect("a slot's poll stored the window under its reset");
+    let at = h.clock.load(Ordering::SeqCst);
+    let sample = UtilizationSample {
+        observed_at: at,
+        ..UtilizationSample::default()
+    }
+    .with(
+        window,
+        WindowReading {
+            utilization,
+            reset: Some(reset),
+            observed_at: at,
+            source: WindowSource::Head,
+            plan: None,
+            tier: None,
+        },
+    );
+    h.router
+        .report(Report::Sample {
+            account_id: id.into(),
+            sample,
+            incarnation: h.store.account(id).unwrap().unwrap().incarnation,
+            source_request_id: None,
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn a_window_restart_between_two_slots_reads_the_profile_alone_and_the_third_slot_after_it_reads_it_again(
+) {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    // The startup step's read counts as the first, so the 300 s slot reads no profile.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!((usage_asked(&up, A), profile_asked(&up, A)), (1, 0));
+    // The week falls from the poll's 0.40 under its reset, as a plan change or a used limit reset leaves it.
+    report_head(&h, "a", SEVEN_DAY, 0.10).await;
+    step_to(&h, &up, &paused, secs(599)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (1, 1),
+        "the restart reads the profile alone before the next slot"
+    );
+    step_to(&h, &up, &paused, secs(902)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (3, 1),
+        "the 600 s and 900 s slots read no profile"
+    );
+    step_to(&h, &up, &paused, secs(1_202)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (4, 2),
+        "the third slot after the restart read reads it"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_restart_read_that_finds_no_profile_leaves_the_cadence_as_it_stood() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    // A failure that arms no hold.
+    up.add_credential_rule(A, "/api/oauth/profile", answering(500));
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    report_head(&h, "a", SEVEN_DAY, 0.10).await;
+    step_to(&h, &up, &paused, secs(599)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (1, 1),
+        "the restart read leaves once"
+    );
+    step_to(&h, &up, &paused, secs(899)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (2, 1),
+        "the 600 s slot reads no profile"
+    );
+    step_to(&h, &up, &paused, secs(902)).await;
+    assert_eq!(
+        (usage_asked(&up, A), profile_asked(&up, A)),
+        (3, 2),
+        "the 900 s slot reads the profile, where the cadence stood before the restart"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_second_window_restart_inside_the_interval_after_a_restart_read_sends_no_second_read() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let paused = start_polling(&h, &up).await;
+
+    step_to(&h, &up, &paused, secs(302)).await;
+    report_head(&h, "a", SEVEN_DAY, 0.10).await;
+    step_to(&h, &up, &paused, secs(362)).await;
+    assert_eq!(profile_asked(&up, A), 1, "the first restart's read");
+    // The Fable week falls from the poll's 0.42 a minute on.
+    report_head(&h, "a", SEVEN_DAY_FABLE, 0.10).await;
+    step_to(&h, &up, &paused, secs(599)).await;
+    assert_eq!(profile_asked(&up, A), 1, "one read for both restarts");
     up.shutdown().await;
 }
 

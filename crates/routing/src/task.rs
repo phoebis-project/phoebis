@@ -70,6 +70,10 @@ pub struct WriterStatus {
 
 const EVENTS: usize = 1_024;
 
+/// The scheduler takes each restart as it arrives, so the channel holds what lands during one pass over the slots,
+/// and a restart a receiver loses waits for the cadence.
+const RESTARTS: usize = 64;
+
 /// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
 /// session. A failover re-selects within one request, well inside this.
 const MIGRATION_WINDOW_MS: i64 = 60_000;
@@ -1497,6 +1501,14 @@ pub struct PinSlowDown {
     pub slowed: bool,
 }
 
+/// A plan window of the account started again out of turn: a later reset ahead of the stored one's turn with a fallen
+/// figure, or a weekly window's fall under its standing reset. Sent once per restart.
+#[derive(Clone, Debug)]
+pub struct WindowRestart {
+    pub account_id: String,
+    pub incarnation: u64,
+}
+
 #[derive(Clone)]
 pub struct RouterHandle {
     affinity: Arc<RwLock<AffinityMap>>,
@@ -1511,6 +1523,7 @@ pub struct RouterHandle {
     /// The replacing readings the loop has not drained yet, shared with the task.
     pending: Pending,
     reports: Arc<ReportSequence>,
+    restarts: broadcast::Sender<WindowRestart>,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     tx: mpsc::Sender<Command>,
     /// The state writer's figures, kept by the loop and the writer.
@@ -1547,6 +1560,12 @@ impl RouterHandle {
     /// events and is told so; the task never waits on a receiver.
     pub fn subscribe_events(&self) -> broadcast::Receiver<RouterEvent> {
         self.events.subscribe()
+    }
+
+    /// The restarts as the task reads them. A receiver that falls behind loses the oldest and is told so, and the task
+    /// never waits on a receiver.
+    pub fn subscribe_restarts(&self) -> broadcast::Receiver<WindowRestart> {
+        self.restarts.subscribe()
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
@@ -2065,6 +2084,9 @@ struct Task {
     /// The reset last announced per account and window, by a sample or by the clock, so one passing reset is
     /// announced once whichever saw it first.
     reset_announced: HashMap<(String, String), i64>,
+    /// A channel of its own rather than an event, since a restart writes no event row and no frame of the events
+    /// stream.
+    restarts: broadcast::Sender<WindowRestart>,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     /// The reset each account and window's wall was announced for, `None` where the reading named no reset, as a
     /// 5-hour window open past its reset does, beside the instant of the announcement, or of the reset's passing for a
@@ -2140,6 +2162,7 @@ pub fn spawn(
     let (writer, mut writes) = mpsc::channel::<Vec<StateWrite>>(WRITER_DEPTH);
     let (done_tx, done_rx) = oneshot::channel();
     let (events, _) = broadcast::channel(EVENTS);
+    let (restarts, _) = broadcast::channel(RESTARTS);
     let reports = Arc::new(ReportSequence::default());
     let pending = Pending::default();
     let writer_status = Arc::new(WriterShared::default());
@@ -2152,6 +2175,7 @@ pub fn spawn(
         load_counts,
         pending: pending.clone(),
         reports: reports.clone(),
+        restarts: restarts.clone(),
         snapshot: snapshot.clone(),
         tx: tx.clone(),
         writer: writer_status.clone(),
@@ -2226,6 +2250,7 @@ pub fn spawn(
         reload_waiters: Vec::new(),
         reports,
         reset_announced: HashMap::new(),
+        restarts,
         snapshot,
         spent_announced,
         state,
@@ -4454,10 +4479,14 @@ impl Task {
                     // An api_key bucket refills within a minute, so only the plan windows are worth a restart.
                     let windows: Vec<String> =
                         moved.into_iter().filter(|w| is_plan_window(w)).collect();
+                    let mut restarted = false;
                     for window in &windows {
                         let Some(reading) = sample.reading(window) else {
                             continue;
                         };
+                        restarted |= stored
+                            .get(window)
+                            .is_some_and(|stored| Self::restarted_ahead_of_turn(stored, &reading));
                         self.window_edges(
                             &account_id,
                             window,
@@ -4467,7 +4496,7 @@ impl Task {
                             source_request_id.as_deref(),
                             now,
                         );
-                        self.window_drop(
+                        restarted |= self.window_drop(
                             &account_id,
                             window,
                             stored.get(window),
@@ -4475,6 +4504,14 @@ impl Task {
                             sample.poll,
                             now,
                         );
+                    }
+                    // One signal per report, however many of its windows show the restart, and a send that no receiver
+                    // takes is no error.
+                    if restarted {
+                        let _ = self.restarts.send(WindowRestart {
+                            account_id: account_id.clone(),
+                            incarnation,
+                        });
                     }
                     let rows = self.state.window_rows(&account_id, &windows, incarnation);
                     writes.extend(rows.into_iter().map(StateWrite::UpsertWindow));
@@ -5036,6 +5073,20 @@ impl Task {
         self.write(writes);
     }
 
+    /// Whether a plan window's new reading shows the window started again ahead of the stored reset's turn: the stored
+    /// reset lies more than `RESET_SLACK_MS` past the reading's own instant, the reading names a reset more than
+    /// `RESET_SLACK_MS` after it, and the figure fell by a whole point or more. `window_edges` reads such a reading as
+    /// a slide with no reset event, and the fall tells a plan change or a used limit reset from an idle 5-hour window's
+    /// slide at 0.
+    fn restarted_ahead_of_turn(stored: &WindowReading, reading: &WindowReading) -> bool {
+        let (Some(reset_at), Some(next)) = (stored.reset, reading.reset) else {
+            return false;
+        };
+        next > reset_at.saturating_add(RESET_SLACK_MS)
+            && reset_at > reading.observed_at.saturating_add(RESET_SLACK_MS)
+            && whole_points(stored.utilization) - whole_points(reading.utilization) >= 1
+    }
+
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a reading
     /// names with no reset where taken past it, or with a later reset where taken within `RESET_SLACK_MS` of it or
     /// past it, then the window cleared, which a reading under 1.0 names over one at 1.0 or above with no reset
@@ -5185,7 +5236,9 @@ impl Task {
     /// emits nothing, since a head after a use reads 0.00 before the upstream's own figure settles: it keeps the
     /// stored figure, its reset and its pair as the window's pending drop, which a later head leaves as it is. The next
     /// poll under that reset reads the pending figure in place of the stored one and clears it whether it emits or
-    /// not, and a reading past the pending reset, or under another, clears it too.
+    /// not, and a reading past the pending reset, or under another, clears it too. Answers whether the reading is the
+    /// first to show the fall, built from the stored reading with no pending drop standing: the head that opens the
+    /// pending drop, or a poll that finds none.
     fn window_drop(
         &mut self,
         account_id: &str,
@@ -5194,44 +5247,45 @@ impl Task {
         reading: &WindowReading,
         poll: bool,
         now: i64,
-    ) {
+    ) -> bool {
         if !is_weekly_window(window) {
-            return;
+            return false;
         }
         let key = (account_id.to_string(), window.to_string());
         let pending = self
             .pending_drops
             .remove(&key)
             .filter(|pending| stands_under(pending.reset, reading));
-        let before = match pending {
+        let (before, first) = match pending {
             Some(pending) if !poll => {
                 self.pending_drops.insert(key, pending);
-                return;
+                return false;
             }
-            Some(pending) => pending,
+            Some(pending) => (pending, false),
             None => {
                 let Some((stored, reset)) = stored.and_then(|stored| {
                     let reset = stored.reset.filter(|reset| stands_under(*reset, reading))?;
                     Some((stored, reset))
                 }) else {
-                    return;
+                    return false;
                 };
-                PendingDrop {
+                let before = PendingDrop {
                     utilization_before: stored.utilization,
                     reset,
                     plan: stored.plan.clone(),
                     tier: stored.tier.clone(),
-                }
+                };
+                (before, true)
             }
         };
         if whole_points(before.utilization_before) - whole_points(reading.utilization)
             <= whole_points(WINDOW_DROP_MARGIN)
         {
-            return;
+            return false;
         }
         if !poll {
             self.pending_drops.insert(key, before);
-            return;
+            return first;
         }
         self.emit(RouterEvent::WindowDropped {
             account_id: account_id.to_string(),
@@ -5243,6 +5297,7 @@ impl Task {
             tier: before.tier,
             at: now,
         });
+        first
     }
 
     /// The sample as the routing reads it. A plan window's reading that names no reset, taken before the stored
@@ -5940,6 +5995,7 @@ mod tests {
             load_counts: LoadCounts::default(),
             pending: Pending::default(),
             reports: Arc::default(),
+            restarts: broadcast::channel(1).0,
             snapshot: Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(
                 RegistryLoad::default(),
                 [0; 32],

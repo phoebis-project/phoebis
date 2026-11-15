@@ -461,16 +461,17 @@ no reset, taken before the reset of the reading it replaces, stands under that r
 or past that reset opens the next window and stands until the next reading, as does one where the reading it replaces
 names no reset to stand under. An API-key account's rate-limit buckets stand until their reset or, without one, for a
 minute. The share is priced through the account's stored tier: a tier change is read at the next profile refresh, within
-a quarter hour, and applied when the router reloads, and a tier changed while the router was down is read at start. The
-newest reading per account and window is kept in the registry and loaded at startup, a window a clean poll dropped
-leaving the registry with its reading, so a restart, and an account whose first poll the endpoint refuses, route from
-the last known windows. A reading carries the plan and the tier the account held when it was taken, which the
-`window_reset` event names when its reset passes. The router never fetches usage at a selection: use of an account
-outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any backoff, and
-by up to one more interval after a failed poll or a restart. The [Quota view](console.md#quota) shows when the poll last
-asked the endpoint for each OAuth account and how it answered, and while an account backs off, since when and when its
-next attempt comes. The `poll_backoff` condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges)
-holds once an account has backed off for thirty minutes.
+a quarter hour or at once where a plan window's restart shows it, and applied when the router reloads, and a tier
+changed while the router was down is read at start. The newest reading per account and window is kept in the registry
+and loaded at startup, a window a clean poll dropped leaving the registry with its reading, so a restart, and an account
+whose first poll the endpoint refuses, route from the last known windows. A reading carries the plan and the tier the
+account held when it was taken, which the `window_reset` event names when its reset passes. The router never fetches
+usage at a selection: use of an account outside the router shows in the next head or poll, so a decision can lag it by
+up to five minutes plus any backoff, and by up to one more interval after a failed poll or a restart. The
+[Quota view](console.md#quota) shows when the poll last asked the endpoint for each OAuth account and how it answered,
+and while an account backs off, since when and when its next attempt comes. The `poll_backoff` condition of the
+[`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty
+minutes.
 
 **The window set** An OAuth account's shared windows are its window set: both shared windows before its first clean
 poll, and from then on the shared windows the newest clean poll's body carried, so an approved Ultra account, whose poll

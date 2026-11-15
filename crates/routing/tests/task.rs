@@ -12,9 +12,9 @@ use phoebis_routing::{
     RateTable, Rates, Refusal, RefusalFacts, RefusedKey, RefusedRequest, RegimeRates, ReloadError,
     RenewalEnd, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer,
     SelectRequest, SelectResult, SharePricer, SpendResetSource, SpendWindow, UtilizationSample,
-    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE,
-    WRITER_DEPTH,
+    WindowReading, WindowRestart, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, RESET_SLACK_MS, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
@@ -11548,6 +11548,172 @@ async fn a_head_that_shows_a_weekly_fall_leaves_window_dropped_to_the_next_poll_
         "the figure before is the one the head found stored, and the figure after is the poll's: {event:?}"
     );
     no_further_event(&mut events).await;
+}
+
+/// The restarts the task sent since the last read, as `(account, incarnation)`. Read once the task answered a command
+/// behind the report, since the task sends a report's restart in that report's turn.
+fn restarts_of(
+    restarts: &mut tokio::sync::broadcast::Receiver<WindowRestart>,
+) -> Vec<(String, u64)> {
+    std::iter::from_fn(|| restarts.try_recv().ok())
+        .map(|restart| (restart.account_id, restart.incarnation))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_later_reset_ahead_of_the_stored_one_s_turn_signals_a_restart_where_the_figure_fell() {
+    let head_at = 2_000;
+    let later = head_at + 5 * HOUR;
+    let one = || vec![("a".to_string(), 1)];
+    // The stored reset, the stored figure and the head's, whether the head reads the reset in turn, and the restarts:
+    // a fall of one point over a reset two hours ahead, the same fall over a reset at the last instant the head reads
+    // in turn, and an idle 5-hour window's slide at 0.
+    for (row, stored_reset, before, after, in_turn, restarts_expected) in [
+        (
+            "two hours ahead",
+            head_at + 2 * HOUR,
+            0.40,
+            0.39,
+            false,
+            one(),
+        ),
+        (
+            "in turn",
+            head_at + RESET_SLACK_MS,
+            0.40,
+            0.39,
+            true,
+            vec![],
+        ),
+        ("idle", head_at + 2 * HOUR, 0.0, 0.0, false, vec![]),
+    ] {
+        let store = seeded_oauth(&["a"]);
+        let now = Arc::new(AtomicI64::new(4_000));
+        let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+        let mut events = handle.subscribe_events();
+        let mut restarts = handle.subscribe_restarts();
+        handle
+            .report(observed(
+                "a",
+                as_poll(sample_with(1_000, FIVE_HOUR, before, Some(stored_reset))),
+            ))
+            .await;
+        handle.samples().await.unwrap();
+        handle
+            .report(observed(
+                "a",
+                sample_with(head_at, FIVE_HOUR, after, Some(later)),
+            ))
+            .await;
+        handle.samples().await.unwrap();
+        let reset = std::iter::from_fn(|| events.try_recv().ok())
+            .any(|event| matches!(event, phoebis_routing::RouterEvent::WindowReset { .. }));
+        assert_eq!(reset, in_turn, "{row}: the reset's event");
+        assert_eq!(restarts_of(&mut restarts), restarts_expected, "{row}");
+    }
+}
+
+#[tokio::test]
+async fn a_weekly_fall_under_its_standing_reset_signals_a_restart_at_its_first_reading_alone() {
+    let store = seeded_oauth(&["a", "b", "c"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let mut restarts = handle.subscribe_restarts();
+    let none = Vec::<(String, u64)>::new;
+    let reset = 7 * 24 * HOUR;
+    for (account, stored) in [
+        ("a", weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.60)])),
+        ("b", weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.60)])),
+        (
+            "c",
+            weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.60), (SEVEN_DAY_FABLE, 0.60)]),
+        ),
+    ] {
+        handle.report(observed(account, stored)).await;
+        handle.samples().await.unwrap();
+    }
+    assert_eq!(
+        restarts_of(&mut restarts),
+        none(),
+        "a first reading shows no fall"
+    );
+
+    // The head that opens the pending drop shows the restart, and the later head and the poll read the same one.
+    handle
+        .report(observed("a", seven_day_head(2_000, reset, 0.10)))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        restarts_of(&mut restarts),
+        vec![("a".to_string(), 1)],
+        "the first head"
+    );
+    handle
+        .report(observed("a", seven_day_head(2_500, reset, 0.10)))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        restarts_of(&mut restarts),
+        none(),
+        "a later head under the pending drop"
+    );
+    handle
+        .report(observed(
+            "a",
+            weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.10)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    let event = next_event(&mut events).await;
+    assert_eq!(
+        dropped_of(&event),
+        Some(("a", SEVEN_DAY, 0.60, 0.10, reset)),
+        "{event:?}"
+    );
+    assert_eq!(
+        restarts_of(&mut restarts),
+        none(),
+        "the poll that dates the drop"
+    );
+
+    // With no head before it, the poll is the first reading to show the fall.
+    handle
+        .report(observed(
+            "b",
+            weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.10)]),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        restarts_of(&mut restarts),
+        vec![("b".to_string(), 1)],
+        "the poll's own fall"
+    );
+
+    // Two weekly windows of one head fall together, and the report signals once.
+    handle
+        .report(observed(
+            "c",
+            seven_day_head(2_000, reset, 0.10).with(
+                SEVEN_DAY_FABLE,
+                WindowReading {
+                    utilization: 0.10,
+                    reset: Some(reset),
+                    observed_at: 2_000,
+                    source: WindowSource::Head,
+                    plan: None,
+                    tier: None,
+                },
+            ),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        restarts_of(&mut restarts),
+        vec![("c".to_string(), 1)],
+        "one report with two falls"
+    );
 }
 
 /// A head's sample of the 7-day window under `reset`.

@@ -413,7 +413,9 @@ alone never reaches the endpoint's per-account limit. No key or field turns the 
 **The profile.** On every third poll of an account, a quarter hour apart, the router reads the account's profile again.
 The reads are that far apart because the profile endpoint shares the usage endpoint's per-account limit and a profile
 429 pauses the account's usage poll for up to fifteen minutes. The profile read rides on the poll and has no switch of
-its own.
+its own. A reading that shows a plan window started again out of turn, as a plan change or a used limit reset starts it,
+brings the read forward. The router reads the profile once at that reading, at most once per account in a poll interval,
+and a read that answers counts the next third poll from it.
 
 **The limit resets.** The router reads the usage endpoint a second time per account for the account's one-time limit
 resets, with the query Claude Code sends for them. The read leaves in the poll's own slot, after the usage reading: once

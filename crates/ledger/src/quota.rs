@@ -15,6 +15,7 @@ use phoebis_routing::{
     credits_from_usage, elapsed_share_at, sample_from_usage, Report, RouterHandle, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountExtras, AccountKind, AccountRow, AccountState, Store};
+use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -53,7 +54,8 @@ const WARNED_TIERS_POISONED: &str = "the warned tiers set poisoned by a prior pa
 /// the reads that consult it run on the poll's tasks and on the admin's refresh, and a restart clears it.
 static WARNED_TIERS: Mutex<BTreeSet<(String, String)>> = Mutex::new(BTreeSet::new());
 
-/// The `source` of a plan event a profile read wrote, the third poll's, the startup's or the Refresh button's.
+/// The `source` of a plan event a profile read wrote, the Refresh button's, the startup's, the third poll's or a window
+/// restart's.
 const PROFILE_SOURCE: &str = "profile";
 
 /// The `source` of a `plan_ended` row whose profile read a usage 403 made due.
@@ -255,20 +257,41 @@ struct Slot {
     /// The next attempt's instant, or the slot the attempt in flight was drawn at.
     at: Instant,
     /// Reads counted on this slot's incarnation, the startup step's among them for a slot the first pass
-    /// drew; an attempt made while the count is a multiple of `PROFILE_EVERY_POLLS` reads the profile, so a
-    /// new account's first attempt reads it and a first-pass slot's first attempt does not.
+    /// drew. An attempt made while the count is a multiple of `PROFILE_EVERY_POLLS` reads the profile, so a
+    /// new account's first attempt reads it and a first-pass slot's first attempt does not. A restart read that
+    /// answered sets the count to 1, as the startup step's read counts as the first.
     polls: u32,
     /// When the account was last read: the last attempt's dispatch, or the scheduler's start for a slot the
     /// first pass drew, standing in for the startup step's read. `None` until a new account's first attempt.
     last_read: Option<Instant>,
+    /// A plan window's restart asked for the profile, and no read has served it yet.
+    restart_due: bool,
+    /// When the slot's last restart read left, which bounds the next one an interval on.
+    restart_read: Option<Instant>,
 }
 
-/// What an attempt answers the scheduler with: whose slot, drawn for which incarnation, and the wait the
-/// service asks for after it, if any.
+/// What an attempt answers the scheduler with: whose slot, drawn for which incarnation, the wait the
+/// service asks for after it, if any, and what the attempt was.
 struct Completion {
     account_id: String,
     incarnation: u64,
     held: Option<Duration>,
+    attempt: Attempt,
+}
+
+/// What an attempt was, which decides what its completion moves on the slot.
+enum Attempt {
+    /// The slot's own poll on its cadence.
+    Poll {
+        /// The attempt tried a profile read, the third poll's or the one a usage 403 makes due, which serves a
+        /// restart read that is due whether the read answered or not.
+        profile_tried: bool,
+    },
+    /// A restart's profile read, sent alone.
+    Restart {
+        /// The read found the profile, with a plan or with none, so the cadence counts its next third poll from it.
+        answered: bool,
+    },
 }
 
 /// The first slot on the account's phase, `at` plus whole intervals, that comes no sooner than an interval after
@@ -318,6 +341,8 @@ fn spread(
             at: now,
             polls: u32::from(first_pass),
             last_read: first_pass.then_some(now),
+            restart_due: false,
+            restart_read: None,
         });
         slot.account = account.clone();
         if slot.in_flight.is_none() {
@@ -369,6 +394,12 @@ impl QuotaPoll {
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
     /// pass finds is next read an interval after the start, on its phase, or when its hold ends after a 429, and
     /// its profile a quarter hour on.
+    ///
+    /// A plan window's restart the router signals reads the account's profile at once and alone, after the attempt
+    /// out on the slot where one is, and once per account in an interval at most. A poll that tried the profile
+    /// serves a restart that is due. A restart read that answered counts the next third poll from it, one that did
+    /// not leaves the cadence as it stands, and neither moves the slot's time unless the service holds the account
+    /// after it.
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
         self.usage.set_on_backoff(Arc::new({
             let ledger = self.ledger.clone();
@@ -391,6 +422,7 @@ impl QuotaPoll {
                 }
             }
         }));
+        let mut restarts = self.router.subscribe_restarts();
         tokio::spawn(async move {
             let mut slots: BTreeMap<String, Slot> = BTreeMap::new();
             // The scheduler owns its attempts: a completion is reaped here, and dropping the set when the
@@ -398,6 +430,7 @@ impl QuotaPoll {
             let mut attempts: JoinSet<Completion> = JoinSet::new();
             let mut first_pass = true;
             let mut registry_failing = false;
+            let mut restarts_open = true;
             loop {
                 let now = Instant::now();
                 match self.store.accounts() {
@@ -417,7 +450,31 @@ impl QuotaPoll {
                     }
                 }
                 for slot in slots.values_mut() {
-                    if slot.in_flight.is_some() || slot.at > now {
+                    if slot.in_flight.is_some() {
+                        continue;
+                    }
+                    // Alone, with no usage and no limit resets read, so a restart adds one request against the
+                    // endpoint's limit.
+                    if slot.restart_due {
+                        slot.restart_due = false;
+                        slot.restart_read = Some(now);
+                        let account = slot.account.clone();
+                        let poll = self.clone();
+                        let handle = attempts.spawn(async move {
+                            let read = poll.read_profile(&account, PROFILE_SOURCE).await;
+                            Completion {
+                                held: poll.usage.held_for(&account.id),
+                                account_id: account.id,
+                                incarnation: account.incarnation,
+                                attempt: Attempt::Restart {
+                                    answered: read != ProfileRead::Unread,
+                                },
+                            }
+                        });
+                        slot.in_flight = Some(handle.id());
+                        continue;
+                    }
+                    if slot.at > now {
                         continue;
                     }
                     let profile_due = slot.polls % PROFILE_EVERY_POLLS == 0;
@@ -453,6 +510,9 @@ impl QuotaPoll {
                             held: poll.usage.held_for(&account.id),
                             account_id: account.id,
                             incarnation: account.incarnation,
+                            attempt: Attempt::Poll {
+                                profile_tried: profile_due || profile_read,
+                            },
                         }
                     });
                     slot.in_flight = Some(handle.id());
@@ -474,8 +534,25 @@ impl QuotaPoll {
                             if let Some(slot) = slots.get_mut(&done.account_id) {
                                 if slot.in_flight == Some(id) && slot.account.incarnation == done.incarnation {
                                     slot.in_flight = None;
-                                    let next = next_slot(slot.at, slot.last_read.unwrap_or(slot.at));
-                                    slot.at = done.held.map_or(next, |wait| Instant::now() + wait);
+                                    match done.attempt {
+                                        Attempt::Poll { profile_tried } => {
+                                            // A profile read that failed serves the restart too: one sent again
+                                            // seconds after it is what the bound holds back.
+                                            if profile_tried {
+                                                slot.restart_due = false;
+                                            }
+                                            let next = next_slot(slot.at, slot.last_read.unwrap_or(slot.at));
+                                            slot.at = done.held.map_or(next, |wait| Instant::now() + wait);
+                                        }
+                                        Attempt::Restart { answered } => {
+                                            if answered {
+                                                slot.polls = 1;
+                                            }
+                                            if let Some(wait) = done.held {
+                                                slot.at = Instant::now() + wait;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -488,6 +565,24 @@ impl QuotaPoll {
                                 slot.at = Instant::now() + POLL_INTERVAL;
                             }
                         }
+                    },
+                    restart = restarts.recv(), if restarts_open => match restart {
+                        Ok(restart) => {
+                            let now = Instant::now();
+                            // A restart of a holder the slot no longer belongs to reads nothing. One inside the
+                            // interval after the slot's last restart read waits for the cadence, since the profile
+                            // endpoint shares the usage endpoint's limit and a profile 429 pauses the poll.
+                            if let Some(slot) = slots.get_mut(&restart.account_id).filter(|slot| {
+                                slot.account.incarnation == restart.incarnation
+                                    && slot.restart_read.is_none_or(|read| now >= read + POLL_INTERVAL)
+                            }) {
+                                slot.restart_due = true;
+                            }
+                        }
+                        Err(RecvError::Lagged(missed)) => {
+                            tracing::debug!(missed, "the poll lost window restarts, which wait for the cadence");
+                        }
+                        Err(RecvError::Closed) => restarts_open = false,
                     },
                 }
             }
