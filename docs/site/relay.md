@@ -481,11 +481,11 @@ id is `main`.
 The router accepts five states. `busy` is an agent at work. `idle` is an agent between requests: a prompt that sent no
 request, such as a local command, lets the idle window go on, and a park that ended restarts it. `parked` is an agent
 waiting on a background command or a scheduled wakeup, and carries `park_kind` (`background`, `scheduled` or `both`),
-`wake_at`, the earliest scheduled wakeup, required unless the kind is `background`, and `deadline`, the latest deadline
-across the background commands the park waits on. `released` ends the agent's run and discards its recipe, and a
-released main ends its session's idle window. `unknown` discards the recipe too, under its own reason. The mod sends the
-first four. The lease a `session_start` or a `heartbeat` renews runs 90 seconds, and the pool's idle limits take over
-when it lapses.
+`wake_at`, the earliest scheduled wakeup, required under `scheduled` and `both` and refused under `background`, and
+`deadline`, the latest deadline across the background commands the park waits on, taken under `background` and `both`
+and refused under `scheduled`. `released` ends the agent's run and discards its recipe, and a released main ends its
+session's idle window. `unknown` discards the recipe too, under its own reason. The mod sends the first four. The lease
+a `session_start` or a `heartbeat` renews runs 90 seconds, and the pool's idle limits take over when it lapses.
 
 A `200` carries an acknowledgment with `session_id`, `instance_id`, `sequence`, `lease_expires_ms` and
 `request_generation`: for an agent event the named agent's generation beside its `agent_id`, and for a session-level
@@ -520,7 +520,7 @@ without a registration. The eighteen codes, by status:
 
 | Code | Status | When |
 | --- | --- | --- |
-| `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take or lacks one it requires, carries a park field on a state other than `parked`, or reports `parked` without `park_kind` or, outside `background`, without `wake_at` |
+| `invalid_event` | 400 | The body is not typed `application/json`, is not this protocol's JSON, names no `protocol`, carries a field its event does not take or lacks one it requires, carries a park field on a state other than `parked`, reports `parked` without `park_kind` or, outside `background`, without `wake_at`, or carries a `wake_at` on a `background` park or a `deadline` on a `scheduled` park |
 | `invalid_identity` | 400 | `session_id`, `instance_id`, `agent_id`, `owner_id` or `previous_instance_id` is not a valid id, or `sequence` is 0 |
 | `invalid_state` | 400 | `kind` is neither `prompt` nor `presence`, `state` is none of the five, or `park_kind` is none of the three |
 | `unknown_event` | 400 | `event` is none of the six |

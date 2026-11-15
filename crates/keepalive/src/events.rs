@@ -261,6 +261,11 @@ impl TryFrom<Event> for EventReport {
                     if kind.scheduled() && event.wake_at.is_none() {
                         return Err(err("invalid_event", 400));
                     }
+                    if (!kind.scheduled() && event.wake_at.is_some())
+                        || (!kind.background() && event.deadline.is_some())
+                    {
+                        return Err(err("invalid_event", 400));
+                    }
                     Some(Park {
                         deadline: event.deadline,
                         kind,

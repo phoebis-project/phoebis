@@ -2504,6 +2504,98 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
     );
 }
 
+/// A row an earlier build saved can hold a wake on a background park or a deadline on a scheduled one, and the load
+/// keeps each part only where the park's kind takes it, so the registration's answer carries no stray part.
+#[tokio::test]
+async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
+    let mut r = rig(on_disk()).await;
+    let worker = r
+        .event(Event {
+            event: "agent_start".into(),
+            agent_id: Some("worker".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .request_generation;
+    let main = r.event(heartbeat()).unwrap().request_generation;
+    let wake = r.now() + 10 * MINUTE;
+    let deadline = r.now() + 60 * MINUTE;
+    r.event(Event {
+        event: "state".into(),
+        agent_id: Some("main".into()),
+        state: Some("parked".into()),
+        park_kind: Some("background".into()),
+        deadline: Some(deadline),
+        request_generation: Some(main),
+        ..Default::default()
+    })
+    .unwrap();
+    r.event(Event {
+        event: "state".into(),
+        agent_id: Some("worker".into()),
+        state: Some("parked".into()),
+        park_kind: Some("scheduled".into()),
+        wake_at: Some(wake),
+        request_generation: Some(worker),
+        ..Default::default()
+    })
+    .unwrap();
+    r.engine.flush_persisted().await;
+    let saved = saved_agents(&r);
+    let with_stray = |agent: &str, member: &str, at: i64| {
+        let mut row = saved
+            .iter()
+            .find(|row| row.agent_id == agent)
+            .unwrap_or_else(|| panic!("no saved row for {agent}"))
+            .clone();
+        let mut payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+        payload[member] = at.into();
+        row.payload = payload.to_string();
+        row
+    };
+    r.h.store
+        .save_keepalive(&KeepaliveBatch {
+            agents: vec![
+                with_stray("main", "wake_at", wake),
+                with_stray("worker", "deadline", deadline),
+            ],
+            ..KeepaliveBatch::default()
+        })
+        .unwrap();
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+
+    let parks: Vec<(String, Option<Park>)> = r
+        .reregister()
+        .agents
+        .expect("a registration answers the session's agents")
+        .into_iter()
+        .map(|agent| (agent.agent_id, agent.park))
+        .collect();
+    assert_eq!(
+        parks,
+        vec![
+            (
+                "main".to_string(),
+                Some(Park {
+                    deadline: Some(deadline),
+                    kind: ParkKind::Background,
+                    wake_at: None
+                })
+            ),
+            (
+                "worker".to_string(),
+                Some(Park {
+                    deadline: None,
+                    kind: ParkKind::Scheduled,
+                    wake_at: Some(wake)
+                })
+            ),
+        ],
+        "each restored park keeps the parts its kind takes"
+    );
+}
+
 // The test's body runs apart from the workers and waits on the flush counts, as `on_own_thread` explains.
 /// The settlements of the recipes a load ends reach the registry before the ledger: the cleared agent is saved first,
 /// so a crash between the two leaves the probe's wasted row unwritten rather than written twice by the next load.

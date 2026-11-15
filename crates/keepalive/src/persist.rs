@@ -598,10 +598,11 @@ impl PersistedAgent {
             .zip(self.park_began)
             .map(|(kind, began)| HeldPark {
                 began,
+                // A row that an earlier build saved can hold a part that the parser now refuses.
                 park: Park {
-                    deadline: self.deadline,
+                    deadline: self.deadline.filter(|_| kind.background()),
                     kind,
-                    wake_at: self.wake_at,
+                    wake_at: self.wake_at.filter(|_| kind.scheduled()),
                 },
             });
         agent.park_ended_at = self.park_ended_at;

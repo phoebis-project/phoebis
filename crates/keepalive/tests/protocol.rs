@@ -1446,14 +1446,13 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
 }
 
 #[tokio::test]
-async fn a_scheduled_park_with_a_deadline_drops_the_deadline_when_its_wake_passes() {
+async fn a_scheduled_park_ends_whole_when_its_wake_passes_and_the_answer_carries_no_park() {
     let mut r = rig(RigSpec::default()).await;
     agent_start(&mut r, "worker", None).unwrap();
     r.observe("worker").await;
     let base = r.sequence;
     let app = keepalive_router(r.engine.clone());
     let wake = r.now() + 10 * MINUTE;
-    let deadline = r.now() + 60 * MINUTE;
     let park = report(
         "state",
         "session",
@@ -1464,7 +1463,6 @@ async fn a_scheduled_park_with_a_deadline_drops_the_deadline_when_its_wake_passe
             "state": "parked",
             "park_kind": "scheduled",
             "wake_at": wake,
-            "deadline": deadline,
             "request_generation": r.status("worker").request_generation
         }),
     );
@@ -1616,6 +1614,57 @@ async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its
             })
         ),
         "the registration answer carries the narrowed park without its wake"
+    );
+}
+
+#[tokio::test]
+async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event() {
+    let mut r = rig(RigSpec::default()).await;
+    agent_start(&mut r, "worker", None).unwrap();
+    r.observe("worker").await;
+    let base = r.sequence;
+    let generation = r.status("worker").request_generation;
+    let app = keepalive_router(r.engine.clone());
+    let wake = r.now() + 10 * MINUTE;
+    let deadline = r.now() + 60 * MINUTE;
+    let background = report(
+        "state",
+        "session",
+        "instance",
+        base + 1,
+        json!({
+            "agent_id": "worker",
+            "state": "parked",
+            "park_kind": "background",
+            "wake_at": wake,
+            "request_generation": generation
+        }),
+    );
+    let answer = post(&app, background, Some(KEY)).await;
+    assert_eq!(
+        (answer.status, answer.body),
+        (400, json!({"code": "invalid_event"})),
+        "a background park takes no wake"
+    );
+    let scheduled = report(
+        "state",
+        "session",
+        "instance",
+        base + 2,
+        json!({
+            "agent_id": "worker",
+            "state": "parked",
+            "park_kind": "scheduled",
+            "wake_at": wake,
+            "deadline": deadline,
+            "request_generation": generation
+        }),
+    );
+    let answer = post(&app, scheduled, Some(KEY)).await;
+    assert_eq!(
+        (answer.status, answer.body),
+        (400, json!({"code": "invalid_event"})),
+        "a scheduled park takes no deadline"
     );
 }
 
