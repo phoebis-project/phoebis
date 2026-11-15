@@ -14213,8 +14213,8 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
             sel.trace.moved,
             sel.trace.renewed
         ),
-        ("b", None, None, false),
-        "the cooled account's pin is released and the session placed afresh, not shed"
+        ("b", None, Some("cooldown"), false),
+        "the cooled account's pin moves under its cooldown and the session is placed afresh, not shed"
     );
     assert!(
         reasons.contains(&"cooldown"),
@@ -19190,7 +19190,10 @@ use phoebis_routing::JudgedCharge;
 /// The account a selection landed on and its answer on the classifier call's charge.
 fn judged_on(result: &SelectResult) -> (&str, Option<JudgedCharge>) {
     match result {
-        SelectResult::Selected(sel) => (sel.account.id.as_str(), sel.judged),
+        SelectResult::Selected(sel) => (
+            sel.account.id.as_str(),
+            sel.judged.as_ref().map(|judged| judged.charge),
+        ),
         other => panic!("expected a selection, got {other:?}"),
     }
 }

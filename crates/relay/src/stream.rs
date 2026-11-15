@@ -14,7 +14,7 @@ use phoebis_bus::{
 };
 use phoebis_oauth::Clock;
 use phoebis_routing::{
-    AffinityReport, DroppedBlocks, PinRef, PinUsage, RenewalEnd, Report, RouterHandle,
+    AffinityReport, DroppedBlocks, Judged, PinRef, PinUsage, RenewalEnd, Report, RouterHandle,
 };
 use phoebis_transport::decode::Decoder;
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
@@ -289,12 +289,11 @@ pub(crate) struct AffinityFacts {
     /// The request's entrypoint as the identity read it, what the usage report's charge prices under: `None` for a
     /// client that is not Claude Code.
     pub entrypoint: Option<String>,
-    /// The request is the client's own classifier call on the account its judged turn ended on, so its usage report
-    /// charges no plan window. False for a classifier call the router answered off, which charges as any call.
-    pub classifier: bool,
-    /// The pin the client's classifier call judged (`Selection::judged_pin`), whose classifier copy the usage report
-    /// folds into where the call ran on that pin's account. `None` for every other request.
-    pub judged_pin: Option<PinRef>,
+    /// The client's classifier call's charge and judged pin (`Selection::judged`), `None` for every other request.
+    /// Under `On`, the call on the account its judged turn ended on, its usage report charges no plan window, and under
+    /// `Off` it charges as any call. The usage folds into the judged pin's classifier copy where the call ran on that
+    /// pin's account.
+    pub judged: Option<Judged>,
     pub lane: String,
     /// The identity's session id, which the contract guarantees.
     pub root: String,
@@ -346,11 +345,10 @@ impl AffinityFacts {
                     incarnation: self.incarnation,
                     usage: pin_usage(counted),
                     fast: response.speed.as_deref() == Some("fast"),
-                    classifier: self.classifier,
+                    judged: self.judged,
                     request_id: self.request_id.clone(),
                     attempt: self.attempt,
                     entrypoint: self.entrypoint,
-                    judged_pin: self.judged_pin,
                 },
             );
             usage_sent = true;

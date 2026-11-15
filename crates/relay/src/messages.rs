@@ -229,7 +229,7 @@ pub struct RelayOutcome {
     pub obstacle: Option<ProbeObstacle>,
     /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
     pub held: Option<CohortHold>,
-    /// The router's answer on a classifier call's charge for the leg that answered (`Selection::judged`), which the
+    /// The router's answer on a classifier call's charge for the leg that answered (`Judged::charge`), which the
     /// completion names `client_off` where it reads `Off`. `None` for every other request and for an answer the
     /// relay built before any leg.
     pub judged: Option<JudgedCharge>,
@@ -3018,7 +3018,7 @@ impl Relay {
         outcome.thinking_diagnostics = ctx.thinking_diagnostics;
         // The drop guard takes the word only at `Responding::answers`, since the leg may still retry or fail over past
         // this head.
-        outcome.judged = ctx.selection.judged;
+        outcome.judged = ctx.selection.judged.as_ref().map(|judged| judged.charge);
         self.report_overage(ctx.account, reading.unified.as_ref(), observed_at)
             .await;
         self.report_head_sample(
@@ -3687,8 +3687,7 @@ impl Relay {
             key_generation: ctx.admitted.key.created_at,
             canonical_model: ctx.admitted.identity.canonical_model.clone(),
             entrypoint: ctx.admitted.identity.entrypoint.clone(),
-            classifier: ctx.free_of_plan(),
-            judged_pin: ctx.selection.judged_pin.clone(),
+            judged: ctx.selection.judged.clone(),
             lane: ctx.admitted.lane.clone(),
             root,
             static_boundaries: ctx
@@ -4240,7 +4239,7 @@ impl Relay {
         outcome.diagnostics = ctx.diagnostics;
         outcome.diagnostics_named = ctx.diagnostics_named;
         outcome.thinking_diagnostics = ctx.thinking_diagnostics;
-        outcome.judged = ctx.selection.judged;
+        outcome.judged = ctx.selection.judged.as_ref().map(|judged| judged.charge);
         self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, outcome)
             .await
     }
@@ -4645,8 +4644,8 @@ struct Responding<'a> {
     memory_key: Option<&'a MemoryKey>,
     pin_epoch: Option<u64>,
     replayed: bool,
-    /// The selection that chose this leg's account, whose pin, classifier charge answer, judged pin and shared
-    /// windows the response half reads.
+    /// The selection that chose this leg's account, whose pin, judged value and shared windows the response half
+    /// reads.
     selection: &'a Selection,
     /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
     /// leg answers under it.
@@ -4658,18 +4657,13 @@ struct Responding<'a> {
 }
 
 impl Responding<'_> {
-    /// Whether the request is the client's classifier call on the account and incarnation its judged turn ended on,
-    /// the one call the upstream keeps free of a plan window. A call the router answered off reports as any call, so
-    /// its usage charges the window.
-    fn free_of_plan(&self) -> bool {
-        self.selection.judged == Some(JudgedCharge::On)
-    }
-
     /// Called where this pass's head becomes the client's answer, never for one the leg strips, replays, retries in
     /// place or fails over, so a client that leaves from here on completes on the charge answer the relay's own
     /// completion of that answer carries.
     fn answers(&self) {
-        self.admitted.trace.on_head(self.selection.judged);
+        self.admitted
+            .trace
+            .on_head(self.selection.judged.as_ref().map(|judged| judged.charge));
     }
 
     /// Both counts and the end report for a body that outlives the response half, so they are released when it
@@ -4996,8 +4990,8 @@ struct Admitted<'a> {
     /// chain.
     chains: Option<&'a Chains>,
     /// The request is the client's own auto-mode classifier call (`ClientFacts.classifier`), read once at admission
-    /// and shared by every leg: its selection carries the flag, and its usage reports carry it where the leg's
-    /// account is the judged turn's (`Responding::free_of_plan`).
+    /// and shared by every leg: its selection carries the flag, and its usage reports carry the selection's judged
+    /// value, whose charge reads `On` where the leg's account is the judged turn's.
     classifier: bool,
     /// The client's body carries its own top-level `diagnostics` member, which the edit never rewrites.
     client_diagnostics: bool,

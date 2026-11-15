@@ -26,10 +26,10 @@ use crate::record::{
 };
 use crate::select::{
     budget_facts, burn_unit, decide, fresh_fit, fresh_prior, handed_sums, lane_is_fast,
-    mark_cleared_of, move_read, move_word, obstacle, pace_of, passes_reset, projection_of,
-    projections_of, release_reasons, slow_down_ramp, standing_move_read, standing_request,
-    zeroes_sums, BurnRead, Decided, FailedOver, FitRead, MoveRead, Obstacle, Refusal,
-    SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    mark_cleared_of, move_read, obstacle, pace_of, passes_reset, projection_of, projections_of,
+    slow_down_ramp, standing_move_read, standing_request, zeroes_sums, BurnRead, Decided,
+    FailedOver, FitRead, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest,
+    SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -38,7 +38,7 @@ use crate::state::{
     standing_mark, wait_until, AccountTicket, BurnUnit, CreditsState, DroppedBlocks,
     EvidenceSource, InFlight, MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, Recorded,
     RoutingState, SharePricer, SlowDownEdge, SpendWindow, StateWrite, UtilizationSample,
-    WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    WindowReading, WindowSource, FIVE_HOUR, HEAD_PERCENT, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::windows::MODEL_WINDOWS;
 use crate::{model_week, resolve, term, window_length_ms, Candidate, Presented, RegistrySnapshot};
@@ -887,20 +887,18 @@ pub enum Report {
         usage: PinUsage,
         /// The answer reported `usage.speed` `fast`.
         fast: bool,
-        /// The request is the client's own classifier call on the account and incarnation its judged turn ended on,
-        /// which charges no plan window, so the report only releases its booking. False for a classifier call the
-        /// router answered off, which the upstream charges as any call.
-        classifier: bool,
+        /// The client's classifier call's charge and judged pin (`Selection::judged`), `None` for every other request.
+        /// A charge of `On`, the call on the account and incarnation its judged turn ended on, charges no plan window,
+        /// so the report only releases its booking, and the upstream charges a call answered `Off` as any call. The
+        /// call's tokens fold into the pin's classifier copy where the pin still stands under its epoch on the account
+        /// and incarnation the call ran on.
+        judged: Option<Judged>,
         /// The request whose booking the usage releases before it charges, and the wire attempt that answered.
         request_id: String,
         attempt: u32,
         /// The request's entrypoint as the identity read it, what the charge prices under: `None` for a client that
         /// is not Claude Code, which prices at the base regime.
         entrypoint: Option<String>,
-        /// The pin the client's classifier call judged (`Selection::judged_pin`), `None` for every other request. The
-        /// call's tokens fold into that pin's classifier copy where the pin still stands under its epoch on the account
-        /// and incarnation the call ran on.
-        judged_pin: Option<PinRef>,
     },
 }
 
@@ -1882,8 +1880,8 @@ impl RouterHandle {
         self.ask(|reply| Command::Samples { reply }).await
     }
     /// One ask for every account's stored sample, each window as the router stores it, after the hold at the wall and
-    /// the fold's refinement, with no charge since added and no passed reset rolled, for a view that shows the reading
-    /// itself.
+    /// its refinement of a head, with no charge since added and no passed reset rolled, for a view that shows the
+    /// reading itself.
     pub async fn reported_samples(&self) -> Result<Vec<(String, UtilizationSample)>, RouterGone> {
         self.ask(|reply| Command::ReportedSamples { reply }).await
     }
@@ -3342,16 +3340,11 @@ impl Task {
                         row: entry.row.clone(),
                         cause: entry.cause.clone(),
                     });
-                // The facts are read against the state the selection runs on, before it moves anything.
-                let released = before
-                    .as_ref()
-                    .map(|old| release_reasons(&self.state, &snapshot, old, &request))
-                    .unwrap_or_default();
                 let Decided {
-                    mut result,
+                    result,
                     mut writes,
                     mut record,
-                    mut summary,
+                    summary,
                     shed_round,
                 } = decide(&mut self.state, &snapshot, &request, &mut rand::rng());
                 // A round that marked the request's own pin wrote that row ahead of the write that replaced it, so a
@@ -3379,9 +3372,12 @@ impl Task {
                     }
                 }
                 self.write(writes);
-                if let Some(pin) = record.pin.as_mut() {
-                    pin.released = released.clone();
-                }
+                // The selection read the list off the pin the request found, and each pin event of that pin carries it.
+                let released = record
+                    .pin
+                    .as_ref()
+                    .map(|pin| pin.released.clone())
+                    .unwrap_or_default();
                 // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
                 // its row and its pin events in one tick.
                 let mut pin_events = Vec::new();
@@ -3402,16 +3398,6 @@ impl Task {
                                 reason,
                                 ..
                             }) => {
-                                // A hard fail-over's move is named on the attempt row the same way a
-                                // selector's move is.
-                                if let SelectResult::Selected(selection) = &mut result {
-                                    selection.trace.moved = Some(reason);
-                                }
-                                record.outcome.rule = Some(reason);
-                                // The invalidation removed the pin `finish` reads a move's source from, so the
-                                // entry it left behind names the account the request left.
-                                record.outcome.from_account_id = Some(from.clone());
-                                summary.rule = Some(reason);
                                 pin_events.push(RouterEvent::pin_migrated(
                                     &pin_key,
                                     from,
@@ -3433,19 +3419,11 @@ impl Task {
                         }
                     }
                     (Some(old), Some(new)) if old.epoch != new.epoch => {
-                        if let SelectResult::Selected(selection) = &mut result {
-                            match selection.migrated {
-                                None if old.account_id != new.account_id
-                                    && !released.contains(&"expired") =>
-                                {
-                                    // A live pin replaced onto another account moved, whatever stood against the
-                                    // account it left: the word is the first of `MOVE_CAUSE_ORDER` its list holds,
-                                    // and the event keeps the whole list.
-                                    let word = move_word(&released);
-                                    selection.trace.moved = Some(word);
-                                    record.outcome.rule = Some(word);
-                                    record.outcome.from_account_id = Some(old.account_id.clone());
-                                    summary.rule = Some(word);
+                        if let SelectResult::Selected(selection) = &result {
+                            // With no migration, the record's word tells a live pin replaced onto another account,
+                            // whose event keeps the whole list, from an expiry.
+                            match (selection.migrated, record.outcome.rule) {
+                                (None, Some(word)) => {
                                     pin_events.push(RouterEvent::pin_migrated(
                                         &pin_key,
                                         old.account_id.clone(),
@@ -3458,7 +3436,7 @@ impl Task {
                                     ));
                                     left = Some("moved");
                                 }
-                                None => {
+                                (None, None) => {
                                     // An expiry: the list holds `expired`, or the pin was replaced on its own
                                     // account. It names no source.
                                     left = Some("released");
@@ -3477,7 +3455,7 @@ impl Task {
                                         now,
                                     ));
                                 }
-                                Some(reason) => pin_events.push(RouterEvent::pin_migrated(
+                                (Some(reason), _) => pin_events.push(RouterEvent::pin_migrated(
                                     &pin_key,
                                     old.account_id.clone(),
                                     new,
@@ -4460,18 +4438,6 @@ impl Task {
                 // the window has already moved past.
                 let Recorded { moved, dropped } =
                     self.state.record_sample(&account_id, sample.clone(), now);
-                // The fold refines a head's figure as it stores it, so the recovery and the edges read the stored
-                // figure: the head's cut would release a cooldown and clear a wall that the stored figure still holds.
-                let mut sample = sample;
-                if let Some(stored) = self.state.sample(&account_id).filter(|_| !sample.poll) {
-                    for window in moved.iter().filter(|window| is_plan_window(window)) {
-                        if let (Some(slot), Some(reading)) =
-                            (sample.windows.get_mut(window), stored.windows.get(window))
-                        {
-                            slot.utilization = reading.utilization;
-                        }
-                    }
-                }
                 let mut writes = Vec::new();
                 if !moved.is_empty() {
                     for row in self.state.recovered_cooldowns(&account_id, &sample, now) {
@@ -4594,11 +4560,10 @@ impl Task {
                 incarnation,
                 usage,
                 fast,
-                classifier,
+                judged,
                 request_id,
                 attempt: _,
                 entrypoint,
-                judged_pin,
             } => {
                 // The usage replaces the booking, on every path below: a request that holds none (a renewal, a
                 // request from before a restart, one whose booking the purge expired) still charges its account.
@@ -4611,10 +4576,10 @@ impl Task {
                 // selection judged, where that pin still stands on the account the call ran on. The pin is the
                 // selection's, since another agent's turn can end while the call is upstream. A call that ran
                 // elsewhere folds nothing, and the ledger holds its dollars.
-                if let Some(judged) = &judged_pin {
-                    let window_ms = burn_window_ms(&snapshot, &judged.key_id);
+                if let Some(pin) = judged.as_ref().and_then(|judged| judged.pin.as_ref()) {
+                    let window_ms = burn_window_ms(&snapshot, &pin.key_id);
                     if let Some(row) = self.state.fold_classifier_copy(
-                        judged,
+                        pin,
                         (&account_id, incarnation),
                         &canonical_model,
                         &usage,
@@ -4626,7 +4591,11 @@ impl Task {
                 }
                 // A fast completion draws usage credits, and the client's classifier call on its judged turn's
                 // account takes no share of a plan window, so neither charges one.
-                if fast || classifier {
+                if fast
+                    || judged
+                        .as_ref()
+                        .is_some_and(|judged| judged.charge == JudgedCharge::On)
+                {
                     return;
                 }
                 // An api_key account bills its tokens and a usage-based seat its spend window, so neither has a plan
@@ -5312,6 +5281,10 @@ impl Task {
     /// lands at its own utilization, so `window_edges` reads the window cleared and forgets the announcement, and the
     /// next crossing announces anew. A reading of another cycle lands as read. Only a reading newer than the stored one
     /// counts, since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as read.
+    /// Then a head truncates the percent a poll rounds, so a head's reading under the stored reading's reset takes the
+    /// stored figure plus the charges booked since where that figure lies inside the head's percent, else the nearer
+    /// edge of that percent, and the fold stores it as it comes. A head that reads a stored figure at the wall, or
+    /// more, a raised one among them, keeps its figure, and so does a poll.
     fn held_at_the_wall(
         &self,
         account_id: &str,
@@ -5319,6 +5292,7 @@ impl Task {
         stored: &HashMap<String, WindowReading>,
         now: i64,
     ) -> UtilizationSample {
+        let poll = sample.poll;
         for (window, reading) in sample.windows.iter_mut() {
             let Some(stored) = stored.get(window) else {
                 continue;
@@ -5328,17 +5302,40 @@ impl Task {
             }
             let reset = reset_under(Some(stored), reading);
             reading.reset = reset;
-            if stored.utilization < 1.0 || reading.utilization >= 1.0 {
+            if stored.utilization >= 1.0 && reading.utilization < 1.0 {
+                let anchor = self
+                    .spent_announced
+                    .get(&(account_id.to_string(), window.to_string()))
+                    .copied()
+                    .unwrap_or((stored.reset, stored.observed_at));
+                if reading.utilization >= 1.0 - SPENT_MARGIN
+                    && same_cycle(anchor, reset, now, window)
+                {
+                    reading.utilization = stored.utilization;
+                }
+            }
+            let one_reset = matches!(
+                (stored.reset, reading.reset),
+                (Some(held), Some(named)) if same_reset(held, named)
+            );
+            // A head inside the margin was just raised to a stored figure at the wall, which its own percent reaches at
+            // most, so the raised figure stands as the stored one. A real head that reads that figure or more stands
+            // as read too, which leaves out at most a point of charges on a figure past the wall.
+            if poll
+                || !one_reset
+                || (stored.utilization >= 1.0 && reading.utilization >= stored.utilization)
+            {
                 continue;
             }
-            let anchor = self
-                .spent_announced
-                .get(&(account_id.to_string(), window.to_string()))
-                .copied()
-                .unwrap_or((stored.reset, stored.observed_at));
-            if reading.utilization >= 1.0 - SPENT_MARGIN && same_cycle(anchor, reset, now, window) {
-                reading.utilization = stored.utilization;
-            }
+            let own = stored.utilization
+                + self.state.charged_between(
+                    account_id,
+                    window,
+                    stored.observed_at,
+                    reading.observed_at,
+                );
+            reading.utilization =
+                own.clamp(reading.utilization, reading.utilization + HEAD_PERCENT);
         }
         sample
     }

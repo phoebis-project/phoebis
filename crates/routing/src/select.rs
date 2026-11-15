@@ -168,8 +168,8 @@ pub struct CreditAccount {
 #[derive(Clone, Debug, PartialEq)]
 pub struct FailedOver {
     pub from_account_id: String,
-    /// `cooldown`, `fast_lane` or `mark`, mirroring the word of the invalidated entry the landing reads. The record and
-    /// the event take theirs from that entry.
+    /// `cooldown`, `fast_lane` or `mark`, mirroring the word of the invalidated entry the landing reads. The selection
+    /// names it as the landing's move and rule, and the event takes its own from that entry.
     pub reason: &'static str,
     /// The row the invalidation took, whose burn the landing prices and the new pin carries.
     pub row: PinRow,
@@ -601,13 +601,8 @@ pub struct Selection {
     /// another account. `None` on a count's bound and a placement the routing holds no previous landing for. The relay
     /// names no previous message on a request that carries it, since the account cannot find one.
     pub left: Option<String>,
-    /// `Some` for the client's classifier call alone: `On` where the selected account and incarnation are the ones
-    /// the judged turn's stream ended on, `Off` elsewhere and in a session with no turn to judge.
-    pub judged: Option<JudgedCharge>,
-    /// The pin of the turn the client's classifier call judges, as `decide` read it ahead of the run, `None` for every
-    /// other request and in a session with no turn to judge. The relay hands it back on the call's usage report, so the
-    /// call's tokens fold into the pin it judged and never into the pin of a turn that ended while it was upstream.
-    pub judged_pin: Option<PinRef>,
+    /// `Some` for the client's classifier call alone: its charge and the pin of the turn it judges.
+    pub judged: Option<Judged>,
     /// The `last_input_tokens` of the pin row step 1 read, where the selection lands on that row's account and the
     /// turn is none of `compacted`, `lane_changed` and `static_restart`. `None` in every other case: no pin row at
     /// step 1, a row that has seen no usage report, a landing on another account and the three turns.
@@ -620,6 +615,18 @@ pub struct Selection {
 pub enum JudgedCharge {
     On,
     Off,
+}
+
+/// What a selection read for the client's classifier call about the turn it judges, the one value the relay hands
+/// back on the call's usage report.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Judged {
+    /// `On` where the selected account and incarnation are the ones the judged turn's stream ended on, `Off` elsewhere
+    /// and in a session with no turn to judge.
+    pub charge: JudgedCharge,
+    /// The pin of the judged turn, as `decide` read it ahead of the run, `None` in a session with no turn to judge. The
+    /// call's tokens fold into it, never into the pin of a turn that ended while the call was upstream.
+    pub pin: Option<PinRef>,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -1373,7 +1380,7 @@ pub fn release_reasons(
 /// account is first, then what its pool and its limits say, so a deleted account's pin, whose list also holds
 /// `unserved`, reads `deleted`. The reload's purge takes a deleted account's pin before any selection reads it, as
 /// `pin_expired` with `deleted`, and the word stands here so the order covers every word `release_reasons` answers but
-/// `expired`, which the arm never reads as a move.
+/// `expired`, which the selection never reads as a move.
 const MOVE_CAUSE_ORDER: [&str; 17] = [
     "deleted",
     "paused",
@@ -1434,6 +1441,11 @@ pub fn decide(
     // Sized once for the longest walk, so a decision appends its steps without growing the vector.
     let mut rec = Recorder {
         walk: Vec::with_capacity(WALK_STEPS.len()),
+        // Read against the state the request found, ahead of the run's writes, which move or replace the pin.
+        released: state
+            .pin(&request.pin_key())
+            .map(|pin| release_reasons(state, snapshot, pin, request))
+            .unwrap_or_default(),
         ..Recorder::default()
     };
     let key = snapshot.key(&request.key_id);
@@ -1474,12 +1486,14 @@ pub fn decide(
             let on = turn.is_some_and(|(account_id, incarnation)| {
                 account_id == selection.account.id && incarnation == selection.account.incarnation
             });
-            selection.judged = Some(if on {
-                JudgedCharge::On
-            } else {
-                JudgedCharge::Off
+            selection.judged = Some(Judged {
+                charge: if on {
+                    JudgedCharge::On
+                } else {
+                    JudgedCharge::Off
+                },
+                pin: judged_pin,
             });
-            selection.judged_pin = judged_pin;
         }
     }
     // The reserve station draws on every walk. A placement and a move record it where they book, and an answer that
@@ -1555,8 +1569,15 @@ struct Recorder {
     candidates: Vec<CandidateFacts>,
     pin: Option<PinFacts>,
     pin_reason: Option<&'static str>,
+    /// What stood against the account of the pin the request found, as `release_reasons` read it before the run moved
+    /// anything, for the pin block. Empty where the request found no pin.
+    released: Vec<&'static str>,
     rule: Option<MigrateReason>,
     source: Option<String>,
+    /// A move no rule made, a failover's landing or a live pin replaced on another account: its word and the account
+    /// it left, which the outcome names as its rule and its source. The members' verdicts read `source` alone, so the
+    /// account keeps the verdict its own standing gave it.
+    moved: Option<(&'static str, String)>,
     destinations: Vec<String>,
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
@@ -2684,6 +2705,20 @@ fn run(
         let replaced = moving
             .or(pin.as_ref().map(|(row, _)| row))
             .or(expired.as_ref().and_then(|key| state.pin(key)));
+        // A placement no rule made still moves the session where it lands a failover on the row its source lost, under
+        // the failover's word, or where it replaces a live pin on another account, under the first word of
+        // `MOVE_CAUSE_ORDER` the pin's list holds. A pin idle past the TTL expired, and so did one replaced on its own
+        // account.
+        rec.moved = match failed_over {
+            Some(failed) => Some((failed.reason, failed.from_account_id.clone())),
+            None => replaced
+                .filter(|row| {
+                    migrated.is_none()
+                        && row.account_id != chosen.account_id
+                        && !rec.released.contains(&"expired")
+                })
+                .map(|row| (move_word(&rec.released), row.account_id.clone())),
+        };
         let row = fresh_pin(
             request,
             session,
@@ -2748,7 +2783,9 @@ fn run(
                 strategy: pool.strategy.as_str(),
                 tier,
                 renewed: false,
-                moved: migrated.map(MigrateReason::as_str),
+                moved: migrated
+                    .map(MigrateReason::as_str)
+                    .or(rec.moved.as_ref().map(|(word, _)| *word)),
                 skipped: trace_skipped,
                 placement,
                 cohort_hold,
@@ -2756,7 +2793,6 @@ fn run(
             pool_id: pool.id.clone(),
             left,
             judged: None,
-            judged_pin: None,
             previous_input_tokens: row_size
                 .filter(|(account, _)| *account == chosen.account_id)
                 .map(|(_, size)| size),
@@ -6585,7 +6621,6 @@ fn renew(
             .filter(|account| *account != current.account_id)
             .map(String::from),
         judged: None,
-        judged_pin: None,
         previous_input_tokens: handed_size(current.last_input_tokens, cause),
     }
 }
@@ -8184,8 +8219,10 @@ fn finish(
         mut candidates,
         pin,
         pin_reason,
+        released,
         rule,
         source,
+        moved,
         destinations,
         pin_written,
         hold_place,
@@ -8202,6 +8239,8 @@ fn finish(
         directed,
     } = rec;
     let settings = pool.map(settings_of);
+    let pin = pin.map(|pin| PinFacts { released, ..pin });
+    let (moved_word, moved_from) = moved.unzip();
     let mut outcome = Outcome {
         kind: "placed",
         account_id: None,
@@ -8209,7 +8248,7 @@ fn finish(
         upstream_model: None,
         tier: None,
         strategy: pool.map_or("", |p| p.strategy.as_str()),
-        rule: rule.map(MigrateReason::as_str),
+        rule: rule.map(MigrateReason::as_str).or(moved_word),
         rung: None,
         in_overage: false,
         pin_written,
@@ -8234,7 +8273,7 @@ fn finish(
                 "placed"
             };
             outcome.account_id = Some(selection.account.id.clone());
-            outcome.from_account_id = source.clone();
+            outcome.from_account_id = source.clone().or(moved_from);
             outcome.upstream_model = Some(selection.upstream_model.clone());
             outcome.tier = selection.trace.tier;
             outcome.strategy = selection.trace.strategy;

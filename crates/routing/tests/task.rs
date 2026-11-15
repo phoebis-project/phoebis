@@ -7,14 +7,14 @@ use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, decide, lane_key, resolve, sample_from_usage, shed_dwell_ms, spawn,
     AffinityReport, BandWeight, BurnRates, BurnUnit, ClientClass, ConversationLookup, CreditsState,
-    DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, HoldReason, KeyRefusal,
-    LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery, Presented,
-    RateTable, Rates, Refusal, RefusalFacts, RefusedKey, RefusedRequest, RegimeRates, ReloadError,
-    RenewalEnd, Report, ResolveError, RouterConfig, RouterHandle, RoutingState, SelectAnswer,
-    SelectRequest, SelectResult, SharePricer, SpendResetSource, SpendWindow, UtilizationSample,
-    WindowReading, WindowRestart, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, RESET_SLACK_MS, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WRITER_DEPTH,
+    DecisionRecord, DecisionSummary, Exhaustion, HoldFacts, HoldReason, Judged, JudgedCharge,
+    KeyRefusal, LongContextRates, MemberSpend, MoveCause, PinRef, PinUsage, PredecessorQuery,
+    Presented, RateTable, Rates, Refusal, RefusalFacts, RefusedKey, RefusedRequest, RegimeRates,
+    ReloadError, RenewalEnd, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
+    SelectAnswer, SelectRequest, SelectResult, SharePricer, SpendResetSource, SpendWindow,
+    UtilizationSample, WindowReading, WindowRestart, WindowSource, WriterStatus, COMMANDS,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, IN_FLIGHT_RECLAIM_MS, RESET_SLACK_MS,
+    SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
@@ -3218,11 +3218,10 @@ fn a_million_input_served(account: &str, at: i64, fast: bool) -> Report {
             ..PinUsage::default()
         },
         fast,
-        classifier: false,
+        judged: None,
         request_id: "r-1".into(),
         attempt: 1,
         entrypoint: None,
-        judged_pin: None,
     }
 }
 
@@ -3316,11 +3315,10 @@ async fn a_fable_completions_hour_reaches_the_reservation_of_the_next_starts_non
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-0".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     first.shutdown().await.unwrap();
@@ -3380,6 +3378,94 @@ async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_readi
         close(read(&handle, "a", FIVE_HOUR).await, 0.56),
         "a reading observed after the request carries it, so the share is dropped, and a head's percent from 0.55 \
          bounds the router's 0.6 at 0.56"
+    );
+}
+
+#[tokio::test]
+async fn inside_one_reset_a_head_keeps_the_routers_own_figure_within_its_percent_and_a_poll_lands_as_read(
+) {
+    let store = seeded_oauth(&["a"]);
+    with_tier(&store, "a");
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            share: a_tenth_per_million(),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let reset = Some(10 * HOUR);
+    // Each ask lands the reports ahead of it, since a pending head and a pending poll fold in no order of their own.
+    handle
+        .report(observed(
+            "a",
+            as_poll(sample_with(1_000, FIVE_HOUR, 0.50, reset)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.49, reset)))
+        .await;
+    let figure = read(&handle, "a", FIVE_HOUR).await;
+    assert!(
+        close(figure, 0.50),
+        "the poll's 0.50 lies inside the head's percent from 0.49, so it stands, not {figure:?}"
+    );
+
+    // 40,000 input tokens at a tenth of the window per million.
+    now.store(2_500, Ordering::SeqCst);
+    handle
+        .report(Report::Usage {
+            account_id: "a".into(),
+            at: 2_500,
+            canonical_model: "claude-sonnet-5".into(),
+            incarnation: 1,
+            usage: PinUsage {
+                input: 40_000,
+                ..PinUsage::default()
+            },
+            fast: false,
+            judged: None,
+            request_id: "r-1".into(),
+            attempt: 1,
+            entrypoint: None,
+        })
+        .await;
+    handle.samples().await.unwrap();
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(3_000, FIVE_HOUR, 0.50, reset)))
+        .await;
+    let figure = read(&handle, "a", FIVE_HOUR).await;
+    assert!(
+        close(figure, 0.504),
+        "the stored 0.50 plus the charge since lies inside the head's percent from 0.50, not {figure:?}"
+    );
+
+    now.store(4_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(4_000, FIVE_HOUR, 0.47, reset)))
+        .await;
+    let figure = read(&handle, "a", FIVE_HOUR).await;
+    assert!(
+        close(figure, 0.48),
+        "the router's 0.504 lies over the head's percent from 0.47, so its nearer edge stands, not {figure:?}"
+    );
+
+    now.store(5_000, Ordering::SeqCst);
+    handle
+        .report(observed(
+            "a",
+            as_poll(sample_with(5_000, FIVE_HOUR, 0.40, reset)),
+        ))
+        .await;
+    let figure = read(&handle, "a", FIVE_HOUR).await;
+    assert!(
+        close(figure, 0.40),
+        "a poll under the same reset lands as read, not {figure:?}"
     );
 }
 
@@ -3444,11 +3530,13 @@ async fn a_classifier_completion_charges_no_window_and_releases_its_booking() {
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: true,
+            judged: Some(Judged {
+                charge: JudgedCharge::On,
+                pin: None,
+            }),
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     let reading = read(&handle, "a", FIVE_HOUR).await;
@@ -3514,11 +3602,10 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             ..PinUsage::default()
         },
         fast: false,
-        classifier: false,
+        judged: None,
         request_id: "r-1".into(),
         attempt: 1,
         entrypoint: None,
-        judged_pin: None,
     };
     let windows = || async {
         let mut read_all = Vec::new();
@@ -3637,11 +3724,10 @@ async fn a_usage_report_charges_no_five_hour_share_on_an_account_whose_set_lacks
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     // Read before the next poll is reported, since a pending poll drains ahead of a control fact queued before it.
@@ -4119,6 +4205,15 @@ async fn a_pin_on_a_paused_account_moves_to_the_sibling_under_paused_and_a_repla
         record.outcome.from_account_id.as_deref(),
         Some(from.as_str()),
         "the move names the paused account the pin left"
+    );
+    assert_eq!(
+        record
+            .candidates
+            .iter()
+            .find(|member| member.account_id == from)
+            .map(|member| member.verdict),
+        Some("out"),
+        "the paused account the pin left stands outside the set, since no rule moved the pin off it"
     );
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, reasons, cause: None, .. } if from_account == from && to_account == to && reason == "paused" && reasons == vec!["paused"]),
@@ -7651,20 +7746,21 @@ fn classifier_call(handle: &RouterHandle, now: i64) -> SelectRequest {
 fn judged_pin(answer: phoebis_routing::SelectAnswer) -> PinRef {
     match answer.result {
         SelectResult::Selected(s) => s
-            .judged_pin
+            .judged
+            .and_then(|judged| judged.pin)
             .expect("a classifier call in a session with a turn judges its pin"),
         other => panic!("{other:?}"),
     }
 }
 
 /// A Sonnet 5 classifier call's usage on `account_id` at `at`, `input` uncached tokens as its whole prompt, free of a
-/// plan window where `free` is set, with the pin its selection judged.
+/// plan window under `On`, with the pin its selection judged.
 fn classifier_usage(
     account_id: &str,
     at: i64,
     input: u64,
-    free: bool,
-    judged_pin: Option<PinRef>,
+    charge: JudgedCharge,
+    pin: Option<PinRef>,
 ) -> Report {
     Report::Usage {
         account_id: account_id.into(),
@@ -7676,11 +7772,10 @@ fn classifier_usage(
             ..PinUsage::default()
         },
         fast: false,
-        classifier: free,
+        judged: Some(Judged { charge, pin }),
         request_id: "r-classifier".into(),
         attempt: 1,
         entrypoint: None,
-        judged_pin,
     }
 }
 
@@ -7718,7 +7813,7 @@ async fn a_classifier_call_on_its_judged_pins_account_folds_into_the_pins_classi
             "a",
             62_000,
             1_000,
-            true,
+            JudgedCharge::On,
             Some(judged.clone()),
         ))
         .await;
@@ -7763,7 +7858,13 @@ async fn a_classifier_call_on_its_judged_pins_account_folds_into_the_pins_classi
     );
     // The same judged pin's call ran on b, off the pin's account: the copy stays as the call on a left it.
     handle
-        .report(classifier_usage("b", 62_000, 1_000, false, Some(judged)))
+        .report(classifier_usage(
+            "b",
+            62_000,
+            1_000,
+            JudgedCharge::Off,
+            Some(judged),
+        ))
         .await;
     let (held, _) = pin_and_fast_usage(&handle).await;
     assert_eq!(
@@ -7847,7 +7948,10 @@ async fn a_classifier_calls_usage_folds_into_the_pin_its_selection_judged_though
     assert_eq!(
         (
             sel.account.id.as_str(),
-            sel.judged_pin.as_ref().map(|p| p.agent_id.as_str())
+            sel.judged
+                .as_ref()
+                .and_then(|judged| judged.pin.as_ref())
+                .map(|p| p.agent_id.as_str())
         ),
         ("b", Some("x"))
     );
@@ -7856,7 +7960,13 @@ async fn a_classifier_calls_usage_folds_into_the_pin_its_selection_judged_though
         .report(renewal(y, 3_200, usage, false, 300_000))
         .await;
     handle
-        .report(classifier_usage("b", 3_300, 600, true, sel.judged_pin))
+        .report(classifier_usage(
+            "b",
+            3_300,
+            600,
+            JudgedCharge::On,
+            sel.judged.and_then(|judged| judged.pin),
+        ))
         .await;
     let pins = handle.pins().await.unwrap();
     let copy = |agent: &str| {
@@ -7899,7 +8009,13 @@ async fn a_classifier_calls_fold_is_written_with_the_pin_and_a_restart_reads_its
                 .unwrap(),
         );
         handle
-            .report(classifier_usage("a", 2_000, 600, true, Some(judged)))
+            .report(classifier_usage(
+                "a",
+                2_000,
+                600,
+                JudgedCharge::On,
+                Some(judged),
+            ))
             .await;
         // The fold's `burn_at` reaches the store in the same row as its copy and the copy's model, so the wait keys
         // on it.
@@ -12168,11 +12284,10 @@ async fn a_head_whose_percent_holds_the_predicted_wall_clears_neither_the_wall_n
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -12242,11 +12357,10 @@ async fn a_head_the_hold_raises_keeps_the_walls_figure_over_the_charges_since() 
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     now.store(3_000, Ordering::SeqCst);
@@ -12825,11 +12939,10 @@ fn usage_of(request_id: &str, attempt: u32, at: i64) -> Report {
             ..PinUsage::default()
         },
         fast: false,
-        classifier: false,
+        judged: None,
         request_id: request_id.into(),
         attempt,
         entrypoint: None,
-        judged_pin: None,
     }
 }
 
@@ -12846,11 +12959,10 @@ fn usage_under(request_id: &str, at: i64, entrypoint: Option<&str>) -> Report {
             ..PinUsage::default()
         },
         fast: false,
-        classifier: false,
+        judged: None,
         request_id: request_id.into(),
         attempt: 1,
         entrypoint: entrypoint.map(String::from),
-        judged_pin: None,
     }
 }
 
@@ -13323,11 +13435,10 @@ async fn a_charge_or_a_reservation_that_predicts_a_spent_window_emits_window_spe
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-3".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     match next_spent(&mut events).await {
@@ -13544,11 +13655,10 @@ async fn a_predicted_wall_with_no_reset_holds_back_a_sample_whose_reset_lands_wi
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -13618,11 +13728,10 @@ async fn a_predicted_wall_with_no_reset_holds_back_the_samples_of_its_own_window
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -14540,11 +14649,10 @@ async fn a_predicted_wall_is_not_announced_again_by_a_head_that_names_no_reset_b
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -14965,11 +15073,10 @@ async fn a_poll_at_the_next_cycles_wall_past_a_predicted_walls_reset_announces_t
                 ..PinUsage::default()
             },
             fast: false,
-            classifier: false,
+            judged: None,
             request_id: "r-1".into(),
             attempt: 1,
             entrypoint: None,
-            judged_pin: None,
         })
         .await;
     assert!(matches!(
@@ -16404,8 +16511,8 @@ async fn a_classifier_call_holds_no_pin_and_its_completion_leaves_the_judged_pin
             &sel.account.id,
             3_500,
             600,
-            true,
-            sel.judged_pin.clone(),
+            JudgedCharge::On,
+            sel.judged.as_ref().and_then(|judged| judged.pin.clone()),
         ))
         .await;
     assert_eq!(
@@ -16508,7 +16615,10 @@ async fn a_classifier_call_goes_to_the_account_its_judged_turn_ended_on_past_a_m
         panic!("{:?}", answer.result);
     };
     assert_eq!(
-        (sel.account.id.as_str(), sel.judged),
+        (
+            sel.account.id.as_str(),
+            sel.judged.map(|judged| judged.charge)
+        ),
         ("a", Some(JudgedCharge::On)),
         "the call goes to a, where the judged turn's stream ended, past the pin's move to b"
     );
@@ -16533,7 +16643,10 @@ async fn a_classifier_call_goes_to_the_account_its_judged_turn_ended_on_past_a_m
         panic!("{:?}", answer.result);
     };
     assert_eq!(
-        (sel.account.id.as_str(), sel.judged),
+        (
+            sel.account.id.as_str(),
+            sel.judged.map(|judged| judged.charge)
+        ),
         ("b", Some(JudgedCharge::Off))
     );
     assert_eq!(
