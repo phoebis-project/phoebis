@@ -942,11 +942,17 @@ impl BurnUnit {
     }
 }
 
-/// A burn average decayed from its last fold to `now` with time constant `window_ms`. An average never folded
-/// has nothing to decay and reads as stored.
+/// The burn averages after which a decayed burn reads zero.
+pub const BURN_DECAY_CUTOFF_AVERAGES: i64 = 30;
+
+/// A burn average decayed from its last fold to `now` with time constant `window_ms`, and zero once that fold lies
+/// more than `BURN_DECAY_CUTOFF_AVERAGES` time constants back, since the factor alone reaches zero only after about
+/// 745 and an idle pin would hold for days a burn that no reader can act on. An average never folded has nothing to
+/// decay and reads as stored.
 pub fn burn_decayed(burn: f64, burn_at: Option<i64>, now: i64, window_ms: i64) -> f64 {
     match burn_at {
         None => burn,
+        Some(at) if now - at > BURN_DECAY_CUTOFF_AVERAGES.saturating_mul(window_ms.max(1)) => 0.0,
         // A report dated before the last fold (two relays' clocks) decays nothing rather than growing it.
         Some(at) => burn * (-((now - at).max(0) as f64) / window_ms.max(1) as f64).exp(),
     }
@@ -6124,6 +6130,21 @@ mod tests {
         assert!(
             close(fresh[FIVE_HOUR], 0.01),
             "no time passed, no decay: {fresh:?}"
+        );
+    }
+
+    #[test]
+    fn a_burn_decays_up_to_thirty_averages_back_and_reads_zero_one_millisecond_later() {
+        // Folded at 1 s on an average of 30 min, so 54,001,000 ms is exactly 30 averages after the fold.
+        assert_eq!(
+            burn_decayed(1.0, Some(1_000), 54_001_000, 1_800_000),
+            9.357622968840175e-14,
+            "at the cutoff the burn reads e to the minus 30"
+        );
+        assert_eq!(
+            burn_decayed(1.0, Some(1_000), 54_001_001, 1_800_000),
+            0.0,
+            "past the cutoff the burn reads zero"
         );
     }
 

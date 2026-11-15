@@ -812,7 +812,9 @@ meter](statistics.md#plan-meter)), on every window the pin's model draws that th
 Ultra pin burns no 5-hour share, the spare rate at the band in force when it reads, and the projection and the walk
 weighing the band's hours inside the horizon as the band weighs them, the walk over the span its excess covers. A
 keepalive probe's usage never counts. A burn the model cannot price, for a model it has no weight for or a tier it has
-no capacity for, reads as none.
+no capacity for, reads as none. Once the last usage a pin's average counted lies more than 30 times
+`burn_average_seconds` back (15 hours at the default), the pin reads a burn of exactly zero wherever the router reads
+one, so a shedding round leaves it out as `no_burn`.
 
 Any move records a `pin_migrated` event, a rule's or a failover's with reason `cooldown`, `drain`, `fast_lane`, `mark`,
 `overage`, `return_to_plan`, `shed` or `spent`, and a replaced live pin's with a reason of its own (below): `cooldown`

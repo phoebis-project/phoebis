@@ -5060,7 +5060,8 @@ fn hold_facts(
 /// and runs at full speed, and a pin that wants more than the cap waits the cap and runs at `c / (c + cap)`, both above
 /// the factor, so the rest share what is left of the reduction at one speed, the step repeated until no pin crosses the
 /// cap, and one speed per account holds as far as the cap lets it. A pin whose hold reads under the floor is not held
-/// and counts at full speed. Weights that all read zero (nothing priced) weigh the pins equally.
+/// and counts at full speed. Weights that all read zero (nothing priced, or each burn decayed past its cutoff) weigh
+/// the pins equally.
 fn water_fill(
     pins: &[(PinKey, Option<f64>, f64)],
     factor: f64,
