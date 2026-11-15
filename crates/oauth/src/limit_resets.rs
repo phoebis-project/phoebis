@@ -1,7 +1,6 @@
 //! The usage body's limit reset block in a typed form, and the state of each of its grants at an instant.
 
 use phoebis_store::AccountExtras;
-use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::exchange::{instant_ms, json_object, OauthError};
@@ -31,7 +30,12 @@ pub struct LimitResets {
 impl LimitResets {
     /// The block stored on an account's row. A block that does not parse reads as none.
     pub fn stored(extras: &AccountExtras) -> Option<LimitResets> {
-        LimitResets::deserialize(extras.limit_resets.as_ref()?).ok()
+        LimitResets::from_stored(extras.limit_resets.as_deref()?)
+    }
+
+    /// The block a stored text holds, `None` for a text that does not parse.
+    pub(crate) fn from_stored(text: &str) -> Option<LimitResets> {
+        serde_json::from_str(text).ok()
     }
 
     pub(crate) fn to_stored(&self) -> String {
@@ -99,45 +103,53 @@ pub fn parse_limit_resets(body: &[u8]) -> Result<Option<LimitResets>, OauthError
     let block = match map.get("cedar_ember") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Object(block)) => block,
-        Some(_) => return Err(malformed("cedar_ember")),
+        Some(_) => return Err(malformed(LIMIT_RESET_BLOCK, "cedar_ember")),
     };
-    let grants = required(block, "grants", Value::as_array)?
+    let grants = required(LIMIT_RESET_BLOCK, block, "grants", Value::as_array)?
         .iter()
         .map(parse_grant)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(LimitResets {
-        cooldown_until: optional(block, "cooldown_until", instant_ms)?,
-        eligible: required(block, "eligible", Value::as_bool)?,
+        cooldown_until: optional(LIMIT_RESET_BLOCK, block, "cooldown_until", instant_ms)?,
+        eligible: required(LIMIT_RESET_BLOCK, block, "eligible", Value::as_bool)?,
         grants,
-        ineligible_reason: optional(block, "ineligible_reason", as_string)?,
+        ineligible_reason: optional(LIMIT_RESET_BLOCK, block, "ineligible_reason", as_string)?,
     }))
 }
 
 /// Older grants carry no `type`, `gives_back_weekly` or `unavailable_reason`, so a grant without them still parses,
 /// each read as its default.
 fn parse_grant(value: &Value) -> Result<Grant, OauthError> {
-    let grant = value.as_object().ok_or_else(|| malformed("grants"))?;
-    let clears = required(grant, "clears", window_names)?;
-    let gives_back_weekly = optional(grant, "gives_back_weekly", Value::as_bool)?.unwrap_or(false);
+    let grant = value
+        .as_object()
+        .ok_or_else(|| malformed(LIMIT_RESET_BLOCK, "grants"))?;
+    let clears = required(LIMIT_RESET_BLOCK, grant, "clears", window_names)?;
+    let gives_back_weekly = optional(
+        LIMIT_RESET_BLOCK,
+        grant,
+        "gives_back_weekly",
+        Value::as_bool,
+    )?
+    .unwrap_or(false);
     let kind = kind_of(
         gives_back_weekly,
-        optional(grant, "type", Value::as_str)?,
+        optional(LIMIT_RESET_BLOCK, grant, "type", Value::as_str)?,
         &clears,
     );
     Ok(Grant {
-        blocking: optional(grant, "blocking", window_names)?.unwrap_or_default(),
+        blocking: optional(LIMIT_RESET_BLOCK, grant, "blocking", window_names)?.unwrap_or_default(),
         clears,
-        ends_at: required(grant, "ends_at", instant_ms)?,
+        ends_at: required(LIMIT_RESET_BLOCK, grant, "ends_at", instant_ms)?,
         gives_back_weekly,
-        id: required(grant, "id", as_string)?,
+        id: required(LIMIT_RESET_BLOCK, grant, "id", as_string)?,
         kind,
-        label: required(grant, "label", as_string)?,
-        paused: optional(grant, "paused", Value::as_bool)?.unwrap_or(false),
-        resets_left: required(grant, "resets_left", count)?,
-        resets_total: required(grant, "resets_total", count)?,
-        starts_at: required(grant, "starts_at", instant_ms)?,
-        unavailable_reason: optional(grant, "unavailable_reason", as_string)?,
-        usable_now: required(grant, "usable_now", Value::as_bool)?,
+        label: required(LIMIT_RESET_BLOCK, grant, "label", as_string)?,
+        paused: optional(LIMIT_RESET_BLOCK, grant, "paused", Value::as_bool)?.unwrap_or(false),
+        resets_left: required(LIMIT_RESET_BLOCK, grant, "resets_left", count)?,
+        resets_total: required(LIMIT_RESET_BLOCK, grant, "resets_total", count)?,
+        starts_at: required(LIMIT_RESET_BLOCK, grant, "starts_at", instant_ms)?,
+        unavailable_reason: optional(LIMIT_RESET_BLOCK, grant, "unavailable_reason", as_string)?,
+        usable_now: required(LIMIT_RESET_BLOCK, grant, "usable_now", Value::as_bool)?,
     })
 }
 
@@ -159,7 +171,11 @@ fn kind_of(gives_back_weekly: bool, sent: Option<&str>, clears: &[String]) -> St
     .to_string()
 }
 
+const LIMIT_RESET_BLOCK: &str = "limit reset block";
+const CLAIM_ANSWER: &str = "claim answer";
+
 fn required<'a, T>(
+    document: &str,
     object: &'a Map<String, Value>,
     member: &str,
     read: impl FnOnce(&'a Value) -> Option<T>,
@@ -167,36 +183,27 @@ fn required<'a, T>(
     object
         .get(member)
         .and_then(read)
-        .ok_or_else(|| malformed(member))
+        .ok_or_else(|| malformed(document, member))
 }
 
-/// A null member reads as an absent one, and any other value has to read as the member's type.
+/// A null member reads as an absent one, and any other value has to read as the member's type. An absent member is
+/// accepted, so the refusal names the type alone.
 fn optional<'a, T>(
+    document: &str,
     object: &'a Map<String, Value>,
     member: &str,
     read: impl FnOnce(&'a Value) -> Option<T>,
 ) -> Result<Option<T>, OauthError> {
     match object.get(member) {
         None | Some(Value::Null) => Ok(None),
-        Some(value) => read(value).map(Some).ok_or_else(|| malformed(member)),
+        Some(value) => read(value).map(Some).ok_or_else(|| {
+            OauthError::Malformed(format!("{document}: {member} is of another type"))
+        }),
     }
 }
 
-/// `required` and `optional` refuse in the block's words, so a claim answer's refusal is written here. An absent
-/// optional member reads as none, so only its type can refuse it.
-fn answer_member<'a, T>(
-    answer: &'a Map<String, Value>,
-    member: &str,
-    read: impl FnOnce(&'a Value) -> Option<T>,
-) -> Result<Option<T>, OauthError> {
-    optional(answer, member, read)
-        .map_err(|_| OauthError::Malformed(format!("claim answer: {member} is of another type")))
-}
-
-fn malformed(member: &str) -> OauthError {
-    OauthError::Malformed(format!(
-        "limit reset block: {member} is absent or of another type"
-    ))
+fn malformed(document: &str, member: &str) -> OauthError {
+    OauthError::Malformed(format!("{document}: {member} is absent or of another type"))
 }
 
 fn as_string(value: &Value) -> Option<String> {
@@ -290,16 +297,14 @@ pub struct ClaimAnswer {
 /// Reads a claim's answer. A member present with another type than its own fails the whole answer, as a member of the
 /// block does, so no count or instant is folded from an answer read in part.
 pub(crate) fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError> {
-    let answer = json_object(body, "claim answer")?;
+    let answer = json_object(body, CLAIM_ANSWER)?;
     Ok(ClaimAnswer {
-        cleared: answer_member(&answer, "cleared", window_names)?.unwrap_or_default(),
-        cooldown_until: answer_member(&answer, "cooldown_until", instant_ms)?,
-        reason: answer_member(&answer, "reason", as_string)?,
-        resets_left: answer_member(&answer, "resets_left", count)?,
-        result: required(&answer, "result", as_string).map_err(|_| {
-            OauthError::Malformed("claim answer: result is absent or of another type".into())
-        })?,
-        weekly_resets_at: answer_member(&answer, "weekly_resets_at", instant_ms)?,
+        cleared: optional(CLAIM_ANSWER, &answer, "cleared", window_names)?.unwrap_or_default(),
+        cooldown_until: optional(CLAIM_ANSWER, &answer, "cooldown_until", instant_ms)?,
+        reason: optional(CLAIM_ANSWER, &answer, "reason", as_string)?,
+        resets_left: optional(CLAIM_ANSWER, &answer, "resets_left", count)?,
+        result: required(CLAIM_ANSWER, &answer, "result", as_string)?,
+        weekly_resets_at: optional(CLAIM_ANSWER, &answer, "weekly_resets_at", instant_ms)?,
     })
 }
 
@@ -509,6 +514,25 @@ mod tests {
             ),
             (false, Some("seat"), 0),
             "a seat's block lists no grant and says why"
+        );
+    }
+
+    #[test]
+    fn an_absent_optional_member_reads_none_and_one_of_another_type_fails_the_block() {
+        let absent = parsed(r#"{"cedar_ember":{"eligible":true,"grants":[]}}"#);
+        let refusal = match parse_limit_resets(
+            br#"{"cedar_ember":{"cooldown_until":86400000,"eligible":true,"grants":[]}}"#,
+        ) {
+            Err(OauthError::Malformed(text)) => Some(text),
+            _ => None,
+        };
+        assert_eq!(
+            (absent.cooldown_until, refusal.as_deref()),
+            (
+                None,
+                Some("limit reset block: cooldown_until is of another type")
+            ),
+            "the cooldown is an RFC 3339 text, so a number fails the whole block, and the refusal names the type alone"
         );
     }
 }

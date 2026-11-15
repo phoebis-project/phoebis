@@ -113,7 +113,10 @@ const BLOCK: &str = r#"{"eligible":true,"grants":[]}"#;
 /// Account `a`'s stored limit reset block and the instant of the read that wrote it.
 fn stored_block(store: &Store) -> (Option<serde_json::Value>, Option<i64>) {
     let extras = store.account_extras_of("a").unwrap().unwrap();
-    (extras.limit_resets, extras.limit_resets_read_at)
+    let block = extras
+        .limit_resets
+        .map(|text| serde_json::from_str(&text).unwrap());
+    (block, extras.limit_resets_read_at)
 }
 
 #[test]

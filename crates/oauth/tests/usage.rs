@@ -1784,12 +1784,15 @@ mod service {
             (block.grants[0].id.as_str(), block.grants[0].clears.clone()),
             ("rg-a-1", vec!["seven_day_fable".to_string()])
         );
-        let stored = store
-            .account_extras_of("a")
-            .unwrap()
-            .unwrap()
-            .limit_resets
-            .expect("the row holds the block");
+        let stored: serde_json::Value = serde_json::from_str(
+            &store
+                .account_extras_of("a")
+                .unwrap()
+                .unwrap()
+                .limit_resets
+                .expect("the row holds the block"),
+        )
+        .unwrap();
         assert_eq!(stored["grants"][0]["id"], "rg-a-1");
         up.shutdown().await;
     }
@@ -2079,7 +2082,7 @@ mod service {
             .unwrap()
             .limit_resets
             .expect("the row holds a block");
-        serde_json::from_value(stored).unwrap()
+        serde_json::from_str(&stored).unwrap()
     }
 
     /// Each grant's state at the service's clock and its count, in the block `a`'s row holds.
@@ -2460,6 +2463,32 @@ mod service {
         assert_eq!(claims.len(), 1);
         let body: serde_json::Value = serde_json::from_slice(&claims[0].body).unwrap();
         assert_eq!(body["grant_id"], "rg-a-1");
+        up.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_stored_block_that_does_not_parse_holds_no_usable_grant() {
+        let now = Arc::new(AtomicI64::new(1_000_000));
+        let up = FakeUpstream::start(vec![claim_rule(answering_with(
+            200,
+            br#"{"result":"reset"}"#,
+        ))])
+        .await;
+        let store = store_for_claims(ORGANIZATION, &block_with(1, 1));
+        // The rig's block holds `rg-a-1` usable, so a text in its place that cuts off inside the grants is all the
+        // claim can read.
+        let cut_off = r#"{"eligible":true,"grants":["#;
+        assert!(store
+            .set_limit_resets("a", 1, 1, 0, Some(cut_off), 1_000_000)
+            .unwrap());
+        let service = service_for(&up, store.clone(), &now);
+        let row = store.account("a").unwrap().unwrap();
+
+        let refused = service.claim_limit_reset(&row, "rg-a-1", None).await;
+        assert!(
+            matches!(refused, Err(ClaimRefusal::NotUsable)),
+            "{refused:?}"
+        );
         up.shutdown().await;
     }
 

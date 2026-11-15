@@ -2024,7 +2024,8 @@ async fn a_stop_waits_for_a_claims_record() {
         .store
         .account_extras_of("business")
         .unwrap()
-        .and_then(|extras| extras.limit_resets);
+        .and_then(|extras| extras.limit_resets)
+        .map(|text| serde_json::from_str::<serde_json::Value>(&text).unwrap());
     assert_eq!(
         (
             uses.iter()

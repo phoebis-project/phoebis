@@ -650,6 +650,30 @@ impl Store {
         Ok(extras.map(|(_, extras)| extras))
     }
 
+    /// One account's `LimitResetsRow`, `None` for an unknown id. One statement reads it, so a block read never takes
+    /// its holder and its epoch from two row states.
+    pub fn limit_resets_row_of(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<LimitResetsRow>, StoreError> {
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        let row = conn
+            .prepare_cached(
+                "SELECT incarnation, lifecycle_generation, limit_resets_epoch, limit_resets_json \
+                 FROM accounts WHERE id = ?1",
+            )?
+            .query_row(params![account_id], |row| {
+                Ok(LimitResetsRow {
+                    epoch: row.get::<_, i64>(2)? as u64,
+                    incarnation: row.get::<_, i64>(0)? as u64,
+                    lifecycle_generation: row.get::<_, i64>(1)? as u64,
+                    text: row.get(3)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
     /// Flags the account's plan as ended at `at` unless a flag already stands, and answers whether this write set it.
     /// Bumps `revision` so the next reload publishes it, as the operator's end does.
     pub fn set_plan_ended(&self, id: &str, at: i64) -> Result<bool, StoreError> {
@@ -726,7 +750,7 @@ fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
     let term = term_of(row, profile.as_ref())?;
     let extras = AccountExtras {
         created_at: row.get(12)?,
-        limit_resets: document_of(row, 9)?,
+        limit_resets: row.get(9)?,
         limit_resets_epoch: row.get::<_, i64>(11)? as u64,
         limit_resets_read_at: row.get(10)?,
         profile,
@@ -785,8 +809,8 @@ impl SubscriptionTerm {
 pub struct AccountExtras {
     /// When the row was created, in epoch milliseconds: a new account under a deleted id starts over here.
     pub created_at: i64,
-    /// The stored limit reset block, `None` without one and for a document that does not parse.
-    pub limit_resets: Option<serde_json::Value>,
+    /// The limit reset block's text as stored, `None` without one.
+    pub limit_resets: Option<String>,
     /// Advanced by a claim's fold and by a pairing's clear. A block read writes only under the epoch it started
     /// under, so an answer that lands after either cannot bring the older block back.
     pub limit_resets_epoch: u64,
@@ -798,6 +822,18 @@ pub struct AccountExtras {
     /// holds. A write that keeps the state leaves it. A row stored before the column reads its `updated_at`.
     pub state_changed_at: i64,
     pub term: SubscriptionTerm,
+}
+
+/// What `Store::limit_resets_row_of` answers for one account: the holder and the epoch that a block write fences on,
+/// and the block's text, all of one row state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LimitResetsRow {
+    /// The row's `limit_resets_epoch`, which `AccountExtras::limit_resets_epoch` describes.
+    pub epoch: u64,
+    pub incarnation: u64,
+    pub lifecycle_generation: u64,
+    /// The limit reset block's text as stored, `None` without one.
+    pub text: Option<String>,
 }
 
 /// What the profile document says about the subscription, stored beside the raw document; each field `None`

@@ -9,7 +9,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
-use phoebis_store::{limit_resets_token, AccountRow, Store};
+use phoebis_store::{limit_resets_token, AccountRow, LimitResetsRow, Store};
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
 use phoebis_transport::TransportError;
@@ -497,6 +497,13 @@ impl Identity {
         Identity {
             incarnation: account.incarnation,
             lifecycle_generation: account.lifecycle_generation,
+        }
+    }
+
+    fn of_limit_resets(row: &LimitResetsRow) -> Identity {
+        Identity {
+            incarnation: row.incarnation,
+            lifecycle_generation: row.lifecycle_generation,
         }
     }
 
@@ -1446,11 +1453,8 @@ impl Inner {
         // Taken together before anything is sent, and before the token, so a token acquired before a pairing never
         // writes its answer under the pairing's epoch: the store refuses the write of an answer that lands for
         // another holder, or after a claim's fold or a pairing moved the epoch.
-        let holder = self
-            .identity(account_id)
-            .ok_or_else(|| UsageError::Unavailable("account not found".into()))?;
-        let epoch = match self.store.account_extras_of(account_id) {
-            Ok(Some(extras)) => extras.limit_resets_epoch,
+        let (holder, epoch) = match self.store.limit_resets_row_of(account_id) {
+            Ok(Some(row)) => (Identity::of_limit_resets(&row), row.epoch),
             Ok(None) => return Err(UsageError::Unavailable("account not found".into())),
             Err(error) => return Err(UsageError::Unavailable(format!("store: {error}"))),
         };
@@ -1496,18 +1500,22 @@ impl Inner {
             // and the instant remembered at its send would hold the next read back for an hour, so the read stays
             // due under the holder the row has now. The row holds what the caller should read.
             Ok(false) => {
-                if let Some(stored) = self.identity(account_id) {
-                    self.mark_resets_due(account_id, stored);
-                }
-                Ok(self.stored_limit_resets(account_id))
+                let Some((stored, block)) = self.stored_limit_resets(account_id) else {
+                    return Ok(None);
+                };
+                self.mark_resets_due(account_id, stored);
+                Ok(block)
             }
             Err(error) => Err(UsageError::Unavailable(format!("store: {error}"))),
         }
     }
 
-    /// The block on the account's row, `None` without one and for a row that is gone.
-    fn stored_limit_resets(&self, account_id: &str) -> Option<LimitResets> {
-        LimitResets::stored(&self.store.account_extras_of(account_id).ok().flatten()?)
+    /// The holder of the account's row and the block it stores, `None` for a row that is gone. The block reads `None`
+    /// without one and for a text that does not parse.
+    fn stored_limit_resets(&self, account_id: &str) -> Option<(Identity, Option<LimitResets>)> {
+        let row = self.store.limit_resets_row_of(account_id).ok().flatten()?;
+        let block = row.text.as_deref().and_then(LimitResets::from_stored);
+        Some((Identity::of_limit_resets(&row), block))
     }
 
     /// The windows the holder's cached snapshot reads at their limit, `None` where the cache holds none for it.
@@ -1562,17 +1570,13 @@ impl Inner {
     /// The grant's label, the stored block's epoch and the grant's count where the block reads the grant usable at
     /// the service's clock, `None` for another state, for a grant the block does not list and for a row with no block.
     fn usable_grant(&self, account_id: &str, grant_id: &str) -> Option<(String, u64, u32)> {
-        let extras = self.store.account_extras_of(account_id).ok().flatten()?;
-        let block = LimitResets::stored(&extras)?;
+        let row = self.store.limit_resets_row_of(account_id).ok().flatten()?;
+        let block = LimitResets::from_stored(row.text.as_deref()?)?;
         let at = block.grants.iter().position(|grant| grant.id == grant_id)?;
         let usable = grant_states(&block, (self.clock)())[at].state == GrantStatus::Usable;
         usable.then(|| {
             let grant = &block.grants[at];
-            (
-                grant.label.clone(),
-                extras.limit_resets_epoch,
-                grant.resets_left,
-            )
+            (grant.label.clone(), row.epoch, grant.resets_left)
         })
     }
 
