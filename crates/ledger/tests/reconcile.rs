@@ -1053,7 +1053,8 @@ fn a_head_one_percent_under_the_poll_before_it_opens_no_dip() {
 }
 
 #[test]
-fn a_run_whose_first_reading_predates_the_requests_retention_cutoff_is_skipped() {
+fn a_run_whose_first_reading_stands_within_the_longest_attempt_after_the_requests_cutoff_is_skipped(
+) {
     let five_reset = SATURDAY + HOUR;
     let seven_reset = SATURDAY + 2 * HOUR;
     let now = seven_reset + HOUR;
@@ -1080,15 +1081,15 @@ fn a_run_whose_first_reading_predates_the_requests_retention_cutoff_is_skipped()
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        windows_under(SATURDAY - 10 * MINUTE),
+        windows_under(SATURDAY - 10 * MINUTE - HOUR),
         [SEVEN_DAY, FIVE_HOUR],
-        "the purge keeps the requests received from the cutoff on, so a run whose first reading stands there \
-         writes its row"
+        "the purge keeps the requests received from the cutoff on, so a run whose first reading stands a whole \
+         hour after the cutoff writes its row"
     );
     assert_eq!(
-        windows_under(SATURDAY - 10 * MINUTE + 1),
+        windows_under(SATURDAY - 10 * MINUTE - HOUR + 1),
         [SEVEN_DAY],
-        "the 5-hour run began before the cutoff, so its rise would meet part of what the router sent"
+        "the 5-hour run began less than an hour after the cutoff, so its rise would meet part of what the router sent"
     );
 }
 

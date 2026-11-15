@@ -881,12 +881,13 @@ poll before it, since the head truncates the percent the poll rounds, and the pa
 the window's one row. A dip the next readings reverse past what the attempts between its ends predict, a climb that
 reaches 5% and exceeds 1.25 times their priced share, leaves the run as a fault of the readings, while a dip that never
 closes or whose climb the attempts predict is a free reset and keeps its split. A window whose reset slid, a later
-reading naming a later reset while its own still lay ahead, writes no row. A window whose first reading is older than
-the requests' retention cutoff writes no row, since the purge removes the requests before the cutoff. The subject is the
-account, and the item dates from the oldest off window's end. The detail names the off windows with their ratios, the
-cost model's source and the revision in force, since the fix is the cost model file. The dashboard's line reads it under
-the label "Meter drift against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, and it opens the
-Meter view on the account.
+reading naming a later reset while its own still lay ahead, writes no row. A window whose first reading lies before the
+requests' retention cutoff, or within the hour after it, writes no row, since the read prices attempts that started up
+to an hour before that reading and the purge removes the requests before the cutoff. The subject is the account, and the
+item dates from the oldest off window's end. The detail names the off windows with their ratios, the cost model's source
+and the revision in force, since the fix is the cost model file. The dashboard's line reads it under the label "Meter
+drift against the table" as `acct-a: 5h charged 2.0x the table, 7d 1.3x, since 14:20`, and it opens the Meter view on
+the account.
 
 **`wall_reached`** holds while a window of the account read spent in the last 24 hours: a `window_spent` event of any
 source, the prediction's among them, so a wall the router predicted counts before a head or the poll reads it. A wall is

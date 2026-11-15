@@ -293,8 +293,9 @@ fn drop_faulty_dips(
 /// own lay ahead by more than the reset slack slid rather than ended, so it writes no row. A run splits into parts
 /// at each fall except a reversed dip the attempts between its ends cannot explain, which leaves the run, and the row
 /// is the parts' `run_sum`. The row is skipped where `run_sum` answers none. `request_cutoff` is the instant before
-/// which the purge removes the requests, `None` where nothing is purged: a run whose first end lies before it writes no
-/// row, since the router's own requests would explain its rise only in part. The ledger reads no registry: every
+/// which the purge removes the requests, `None` where nothing is purged: a run whose first end lies before it, or
+/// within the hour after it, writes no row, since the read prices attempts that started up to an hour before the first
+/// end and the router's own requests would then explain its rise only in part. The ledger reads no registry: every
 /// account with a reading is read, and an account whose attempts draw no plan window writes no row.
 pub fn reconcile_read(
     conn: &Connection,
@@ -340,7 +341,9 @@ pub fn reconcile_read(
                 let Some(sum) = run_sum(conn, prices, tables, account, window, &run)? else {
                     continue;
                 };
-                if request_cutoff.is_some_and(|request_cutoff| sum.first_at < request_cutoff) {
+                if request_cutoff.is_some_and(|request_cutoff| {
+                    sum.first_at - LONGEST_ATTEMPT_MS < request_cutoff
+                }) {
                     continue;
                 }
                 rows.push(ReconciliationRow {
