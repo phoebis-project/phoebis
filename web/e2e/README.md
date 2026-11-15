@@ -377,8 +377,8 @@ height, margin and place), the catalog popup and its columns (Model and Name the
 Models and Status the fills) and the badges of its fill cells (each ending inside its cell and cutting its own label
 with the ellipsis), the key dialog's Access selects, the Keys bar's pool chip against its status chip (26 px, on an
 address that holds both), the lifetime cost card on the story (mock pass, on a load of its own: each key whose requests
-priced nothing reads a dash beside its billed dollars under the unpriced title with no fill on its track, those bars
-last in the card, the first one's figure in the type and ink of a neighbor's that reads a number and its track as wide),
+priced nothing reads a dash beside its billed dollars under the unpriced title, the first one's figure in the type and
+ink of a neighbor's that reads a number and its track as wide),
 the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head under the bar's bottom, its height closed
 and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the lead and
 above the card's top, Cost reference one line at the head's top right), the stripes on every view with a table (the

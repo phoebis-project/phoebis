@@ -454,11 +454,9 @@ export const sidesLine = (sides: { billed: number | undefined; equivalent: numbe
  * a session spend's billed dollars again from a map per funding.
  */
 export const dollarsUnder = (unit: DollarPosition, s: FundedSum): number => (unit === 'all' ? s.cost : unit === 'usd' ? s.billedUsd : s.cost - s.billedUsd);
-/**
- * The figure a funded sum draws in the chosen unit: under native its Pro-week figure, null where a plan row priced
- * nothing, under a dollar position its dollars.
- */
-export const fundedRankOf = (unit: UnitPosition, sum: FundedSum): number | null => (unit === 'native' ? sum.equivalent : dollarsUnder(unit, sum));
+/** The figure a funded sum ranks by in the chosen unit: under native its dollars at the API price list, the one
+ *  measure a billed-only key and a key with unpriced plan rows both have, under a dollar position its dollars. */
+export const fundedRankOf = (unit: UnitPosition, sum: FundedSum): number => dollarsUnder(dollarsOf(unit), sum);
 /**
  * A sum's two sides, each undefined where it has no rows, so a sum of one funding shows one figure and no "0%" side.
  * A null figure is a plan row priced nothing, a side with rows whatever the other rows priced, and a zero reads as no

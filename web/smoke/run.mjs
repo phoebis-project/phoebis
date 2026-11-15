@@ -10017,10 +10017,11 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   // cost tile stacks the keys' figure in that week over subscription and their billed dollars over billed, and each
   // bar's label and each row's 7-day line read the key's two sides with a side that has no rows left out: the story's
   // keys on its API key account read dollars alone, and a key no request reached reads a dash that says why. The bars
-  // rank by the figure. The story's desktop and laptop keys hold requests on Sonnet 4.5, which the cost model has no
-  // weight for, so their subscription side reads the dash titled why, their bars draw no fill and sort last, and the
-  // tile's subscription line reads the dash too, since a partial sum would read as the whole. A key spans its pool's
-  // accounts, so no figure carries a hint. The page reads the settings beside the keys, and the figures wait on them.
+  // rank by each key's dollars at the API price list. The story's desktop and laptop keys hold requests on Sonnet 4.5,
+  // which the cost model has no weight for, so their subscription side reads the dash titled why beside a bar their
+  // dollars fill, and the tile's subscription line reads the dash too, since a partial sum would read as the whole. A
+  // key spans its pool's accounts, so no figure carries a hint. The page reads the settings beside the keys, and the
+  // figures wait on them.
   const listed = await api.listKeys();
   const sidesText = (side) => {
     const parts = [...(side.equivalent === null ? ['-'] : side.equivalent > 0 ? [weekFull(side.equivalent)] : []), ...(side.billedUsd > 0 ? [`${fmtUsd(side.billedUsd)} billed`] : [])];
@@ -10054,13 +10055,13 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const requestsOf = (k) => `${fmtCompact(k.lifetime.requests)} ${k.lifetime.requests === 1 ? 'request' : 'requests'}`;
   const wrongBars = bars.filter((b) => {
     const k = keyOf(b);
-    return k === undefined || b.figure !== sidesText(k.lifetime) || b.requests !== requestsOf(k) || (b.figure.startsWith('-') ? !b.title : b.title !== null) || (k.lifetime.equivalent === null && (b.title !== UNPRICED_TITLE || b.width !== '0%'));
+    return k === undefined || b.figure !== sidesText(k.lifetime) || b.requests !== requestsOf(k) || (b.figure.startsWith('-') ? !b.title : b.title !== null) || (k.lifetime.equivalent === null && b.title !== UNPRICED_TITLE) || (k.lifetime.cost > 0 && b.width === '0%');
   });
   const planned = bars.filter((b) => keyOf(b)?.lifetime.equivalent > 0);
   const dollarsOnly = bars.filter((b) => keyOf(b)?.lifetime.equivalent === 0 && keyOf(b)?.lifetime.billedUsd > 0);
-  const ranks = bars.map((b) => keyOf(b)?.lifetime.equivalent ?? -1);
+  const ranks = bars.map((b) => keyOf(b)?.lifetime.cost ?? -1);
   results.push({
-    name: "/keys under native each key with plan rows labels its bar in the Ultra week before its requests, a key of billed rows alone its dollars, a key that priced nothing a dash titled why beside its dollars with no fill, sorted last, and the bars rank by the figure",
+    name: "/keys under native each key with plan rows labels its bar in the Ultra week before its requests, a key of billed rows alone its dollars, a key that priced nothing a dash titled why beside its dollars, each key with dollars draws a fill, and the bars rank by their dollars at the API price list",
     ok:
       bars.length === listed.length &&
       planned.length > 0 &&
@@ -10069,7 +10070,6 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
       dollarsOnly.every((b) => /^\$[\d,.]+ billed$/.test(b.figure)) &&
       wrongBars.length === 0 &&
       ranks.every((r, i) => i === 0 || r <= ranks[i - 1]) &&
-      bars.slice(-unpricedKeys.length).every((b) => unpricedKeys.includes(keyOf(b)?.id)) &&
       bars[0]?.width === '100%',
     missing: [`${bars.length} bars of ${listed.length} keys, ${planned.length} planned, ${dollarsOnly.length} dollars alone`, JSON.stringify(ranks), ...wrongBars.map((b) => JSON.stringify(b))],
   });
@@ -10106,7 +10106,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   localStorage.removeItem('phoebis.unit');
   // A priced key and a key of billed rows alone stood in for as priced nothing read the dash titled why on their
   // subscription side beside their billed dollars, the second read as unpriced rather than as no plan rows, and their
-  // bars draw no fill, since their priced rows alone would size them.
+  // bars still draw a fill, since a plan row that priced nothing leaves a key's dollars as they were.
   const keysOf = api.listKeys;
   const planKey = listed.find((k) => k.lifetime.equivalent > 0 && k.usage7d.equivalent > 0);
   const billedKey = listed.find((k) => k.lifetime.equivalent === 0 && k.lifetime.billedUsd > 0);
@@ -10120,11 +10120,11 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   delete api.listKeys;
   const dashText = (side) => ['-', ...(side.billedUsd > 0 ? [`${fmtUsd(side.billedUsd)} billed`] : [])].join(', ');
   const wrongDashed = [
-    ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.figure !== dashText(keyOf(b).lifetime) || b.title !== UNPRICED_TITLE || b.width !== '0%'),
+    ...dashedBars.filter((b) => flaggedKeys.has(keyOf(b)?.id)).filter((b) => b.figure !== dashText(keyOf(b).lifetime) || b.title !== UNPRICED_TITLE || b.width === '0%'),
     ...dashedSubs.filter((s) => flaggedKeys.has(s.id)).filter((s) => s.text !== dashText(keyById.get(s.id).usage7d) || s.title !== UNPRICED_TITLE),
   ];
   results.push({
-    name: "/keys under native a key whose request priced nothing reads a dash titled why on its subscription side beside its billed dollars, on its bar and its 7-day line, and its bar draws no fill",
+    name: "/keys under native a key whose request priced nothing reads a dash titled why on its subscription side beside its billed dollars, on its bar and its 7-day line, and its bar still draws a fill by its dollars",
     ok: planKey !== undefined && billedKey !== undefined && dashedBars.length === listed.length && wrongDashed.length === 0,
     missing: [`plan key ${planKey?.id}, billed key ${billedKey?.id}`, ...wrongDashed.map((r) => JSON.stringify(r))],
   });
@@ -24649,11 +24649,12 @@ await forView('/keys', async () => {
   // (`KEYS` in `web/src/mock/pools.ts`, each key's last use and week folded from its requests in
   // `web/src/mock/requests.ts`) beside from-pool, the key the pool dialog's create case added with no request, under
   // native, the stored default. from-pool was never used, so it files last under Last used, and the mock stamps its
-  // creation with the story's load instant, so it files first under Created. desktop's and laptop's weeks hold requests
-  // the cost model has no weight for, so they price nothing and file last under Cost, 7d in either direction. No column
-  // draws a key's creation date or its week's requests, so Created and Requests, 7d draw them under each name while
-  // picked, in UTC where the smoke runs, and no other key does.
-  const name = "/keys the sort control orders the table by name at rest, each pick orders the rows by the key's figure with an unpriced key last under either direction, the address carries the pick and a reload reads it back";
+  // creation with the story's load instant, so it files first under Created. Cost, 7d ranks a key by its week's
+  // dollars at the API price list, so desktop's and laptop's weeks, which hold requests the cost model has no weight
+  // for, rank by their dollars too, and batch and from-pool, with no request in the week, tie at zero, read by name. No
+  // column draws a key's creation date or its week's requests, so Created and Requests, 7d draw them under each name
+  // while picked, in UTC where the smoke runs, and no other key does.
+  const name = "/keys the sort control orders the table by name at rest, each pick orders the rows by the key's figure, Cost, 7d by the week's dollars at the API price list, the address carries the pick and a reload reads it back";
   const fromPool = (await api.listKeys()).find((k) => k.id === 'from-pool');
   const page = await mount('/keys', { now: CLOCK_ORIGIN });
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -24697,14 +24698,14 @@ await forView('/keys', async () => {
   const reloaded = read(again);
   again.unmount();
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
-  const ascending = shown('up', ['batch', 'ci', 'fleet', 'from-pool', 'bench', 'notebook', 'desktop', 'laptop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
+  const ascending = shown('up', ['batch', 'from-pool', 'fleet', 'bench', 'ci', 'notebook', 'laptop', 'desktop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
   const weeks = ['226 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },
     requests: { ...shown('down', ['laptop', 'desktop', 'ci', 'notebook', 'fleet', 'bench', 'batch', 'from-pool'], '?sort=requests', 'Requests, 7d', 'descending', weeks, weeks[0]), open: false },
     created: { ...shown('down', ['from-pool', 'desktop', 'notebook', 'bench', 'fleet', 'laptop', 'batch', 'ci'], '?sort=created', 'Created', 'descending', created, fmtAbsolute(fromPool?.createdAt ?? null)), open: false },
-    cost: { ...shown('down', ['notebook', 'bench', 'batch', 'ci', 'fleet', 'from-pool', 'desktop', 'laptop'], '?sort=cost', 'Cost, 7d', 'descending'), open: false },
+    cost: { ...shown('down', ['desktop', 'laptop', 'notebook', 'ci', 'bench', 'fleet', 'batch', 'from-pool'], '?sort=cost', 'Cost, 7d', 'descending'), open: false },
     costAsc: { ...ascending, open: false },
   };
   results.push({
@@ -24720,10 +24721,10 @@ await forView('/keys', async () => {
 await forView('/pools', async () => {
   // The bar's Sort control on a bare /pools, which orders the cards by name at rest. Cost, 24h reads the story's pools
   // (`web/src/mock/pools.ts`, each day folded from its requests in `web/src/mock/requests.ts`) under native, the stored
-  // default: the all pool's day holds requests the cost model has no weight for, so it prices nothing and files last
-  // in either direction, contract's and jobs' days hold billed rows alone and sidelined's none, a tie at zero read by
-  // name. A card's strip links open the dialog on the view's own address, so its close lands on the same order.
-  const name = "/pools the sort control orders the cards by name at rest, a pick orders them by the pool's figure with a pool whose day priced nothing last under either direction, the strip links carry the order, the address carries the pick and a reload reads it back";
+  // default, by each day's dollars at the API price list: the all pool's day, which holds requests the cost model has
+  // no weight for, ranks by its dollars too, contract's and jobs' days rank by their billed rows and sidelined's holds
+  // none. A card's strip links open the dialog on the view's own address, so its close lands on the same order.
+  const name = "/pools the sort control orders the cards by name at rest, a pick orders them by the day's dollars at the API price list, the strip links carry the order, the address carries the pick and a reload reads it back";
   const page = await mount('/pools', { now: CLOCK_ORIGIN });
   const button = (p) => p.container.querySelector('.filter-bar button[aria-label="Sort"]');
   const box = () => document.querySelector('.popover .sort-popover')?.closest('.popover') ?? null;
@@ -24755,9 +24756,9 @@ await forView('/pools', async () => {
   const reloaded = read(again);
   again.unmount();
   const shown = (arrow, cards, link, search, label, word) => ({ arrow, cards, link, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native' });
-  const ascending = shown('up', ['contract', 'jobs', 'sidelined', 'workshop', 'work', 'all'], '/pools?sort=cost&dir=asc&edit=contract&group=shedding', '?sort=cost&dir=asc', 'Cost, 24h', 'ascending');
+  const ascending = shown('up', ['sidelined', 'contract', 'jobs', 'workshop', 'work', 'all'], '/pools?sort=cost&dir=asc&edit=sidelined&group=shedding', '?sort=cost&dir=asc', 'Cost, 24h', 'ascending');
   const wantPicks = {
-    cost: { ...shown('down', ['work', 'workshop', 'contract', 'jobs', 'sidelined', 'all'], '/pools?sort=cost&edit=work&group=autoMode', '?sort=cost', 'Cost, 24h', 'descending'), open: false },
+    cost: { ...shown('down', ['all', 'work', 'workshop', 'jobs', 'contract', 'sidelined'], '/pools?sort=cost&edit=all&group=guardrails', '?sort=cost', 'Cost, 24h', 'descending'), open: false },
     costAsc: { ...ascending, open: false },
   };
   results.push({

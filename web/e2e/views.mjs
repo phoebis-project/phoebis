@@ -11422,11 +11422,10 @@ async function keysPoolSelect(theme) {
 
 /**
  * The lifetime cost card on the story, whose desktop and laptop keys hold requests on Sonnet 4.5, which the cost model
- * has no weight for: each such key's bar reads a dash beside its billed dollars under the unpriced title, fills none of
- * its track, and the flagged bars sort after every other, the first one's figure in the type and ink of a neighbor's
- * that reads a number and its track as wide. The neighbor's fill goes unread, since a key billed behind an API-key
- * account draws its dollars over an empty fill too. The page loads again after, so the measures after it read the
- * story's table.
+ * has no weight for: each such key's bar reads a dash beside its billed dollars under the unpriced title, the first
+ * one's figure in the type and ink of a neighbor's that reads a number and its track as wide. The bars' fills and their
+ * order go unread, since the smoke reads both. The page loads again after, so the measures after it read the story's
+ * table.
  */
 async function keysBars(theme) {
   const say = (what) => failures.push(`${theme} /keys: ${what}`);
@@ -11440,7 +11439,6 @@ async function keysBars(theme) {
         return {
           color: s?.color ?? null,
           family: s?.fontFamily ?? null,
-          fill: width(li.querySelector('.hbars__fill')),
           name: li.querySelector('.hbars__head > span')?.firstChild?.textContent?.trim() ?? '',
           size: s?.fontSize ?? null,
           text: figure?.textContent?.trim() ?? '',
@@ -11452,15 +11450,12 @@ async function keysBars(theme) {
     );
     const flagged = bars.filter((bar) => bar.title === UNPRICED_TITLE);
     const neighbor = bars.find((bar) => bar.title !== UNPRICED_TITLE && !bar.text.startsWith('-') && /\d/.test(bar.text)) ?? null;
-    measurements.push(`${theme} /keys unpriced bars ${JSON.stringify({ flagged, last: bars.slice(-flagged.length).map((b) => b.name), neighbor })}`);
+    measurements.push(`${theme} /keys unpriced bars ${JSON.stringify({ flagged, neighbor })}`);
     if (mock && flagged.length === 0) say("the story's keys hold requests on Sonnet 4.5, yet no bar reads the unpriced title");
     if (flagged.length === 0) return;
     for (const bar of flagged) {
       if (!/^-(, \$[\d,.]+ billed)?$/.test(bar.text)) say(`the flagged key ${bar.name}'s bar reads ${JSON.stringify(bar.text)}, not a dash beside its billed dollars`);
-      if (bar.fill !== 0) say(`the flagged key ${bar.name}'s bar fills ${bar.fill} px of its track, not none`);
     }
-    const tail = bars.slice(-flagged.length);
-    if (tail.some((b) => b.title !== UNPRICED_TITLE)) say(`the flagged keys do not sort last: ${JSON.stringify(bars.map((b) => [b.name, b.title === UNPRICED_TITLE]))}`);
     for (const what of compare(flagged[0], neighbor, ['color', 'family', 'size', 'track', 'weight'], "the flagged key's figure and track against a neighbor's that reads a number")) say(what);
   } finally {
     await loadAtOrigin('/keys', '.card--table tbody tr');

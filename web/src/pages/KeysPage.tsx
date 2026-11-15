@@ -161,14 +161,10 @@ export function KeysPage() {
   // the unit alone.
   const { byRank, maxRank, totals } = useMemo(() => {
     const data = keys.data;
-    // A key a plan row priced nothing on ranks null, since its priced rows alone would draw a length its traffic lacks.
     const rank = (k: ApiKey) => fundedRankOf(unit, k.lifetime);
     return {
-      // An unknown rank sorts below a zero, so a flagged key comes last.
-      byRank: data === null ? null : [...data].sort((a, b) => (rank(b) ?? -1) - (rank(a) ?? -1)),
-      // The top rank sets the full width: a fixed floor such as a dollar would dwarf the equivalent's bars, each a small
-      // fraction of a window.
-      maxRank: Math.max(0, ...(data ?? []).map(rank).filter((r) => r !== null)),
+      byRank: data === null ? null : [...data].sort((a, b) => rank(b) - rank(a)),
+      maxRank: Math.max(0, ...(data ?? []).map(rank)),
       totals:
         data === null
           ? null
@@ -222,7 +218,7 @@ export function KeysPage() {
         </div>
 
         <div className="keys-layout">
-          <Card title="Lifetime cost by key" subtitle="Relative spend across all keys">
+          <Card title="Lifetime cost by key" subtitle={unit === 'native' ? 'Relative spend across all keys, in dollars at the API price list' : 'Relative spend across all keys'}>
             {byRank ? (
               <ul className="plain-list hbars">
                 {byRank.map((k) => {
@@ -239,7 +235,7 @@ export function KeysPage() {
                         </span>
                       </div>
                       <div className="hbars__track">
-                        <span className="hbars__fill" style={{ width: `${maxRank > 0 && rank !== null ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
+                        <span className="hbars__fill" style={{ width: `${maxRank > 0 ? (rank / maxRank) * 100 : 0}%`, background: ink.series[0] }} />
                       </div>
                     </li>
                   );
