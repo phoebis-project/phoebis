@@ -306,7 +306,12 @@ carrying the pattern as `client`, and under `claude-code/sdk*` a count below the
 the bare page's), the Client filter's typed field and a picked value's chip (mock pass, on an address with the Account
 filter: the field under the list's rows in their left edge and width with its top below the last row's bottom, and the
 picked `claude-code/cli` chip against the account chip in height, top edge and its values' font family, its text
-recorded), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px at rest and 83 px with
+recorded), the Analytics bars at 375 by 800 (mock pass, on loads of its own: under a custom range of 14 days each drawn
+bar of Requests by outcome at least 2 px wide with no outline, a figure that rests on the plot of the 375 px viewport,
+where a bucket's share draws 3 px and a gap in pixels leaves the bar the floor's 1 px, under 24 hours each of its bars
+outlined, and on the Cache tab under 30 days each drawn bar of Write cost vs read cost at least 1 px wide, each read's
+count of bars, narrowest and widest width and strokes recorded beside the same read of Requests by outcome at 1280 by
+800), the tab strip docked under the filter bar at the end of the Latency tab (the bar 49 px at rest and 83 px with
 a chip line, read on an address of its own), the unit legend's lines in the top bar's popover at 1280 by 800 (one line
 per position in the select's order and the closing paragraph after them, Native's and Billed dollars' sentences naming
 the four billed fundings, each in the face, size and ink of the line after it, its label at that label's weight), the

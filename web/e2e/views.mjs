@@ -6510,6 +6510,60 @@ async function accountsRangeColumn(theme) {
 }
 
 /**
+ * The Analytics bars at 375 by 800, each read on a load of its own: under a custom range of the 14 days to the pass's
+ * origin each drawn bar of Requests by outcome at least 2 px wide with no outline, under the default 24 hours each of
+ * its bars outlined, and on the Cache tab under `?range=30d` each drawn bar of Write cost vs read cost at least 1 px
+ * wide. A bar's width is its path's `width` attribute, the width its shape drew, which a box read would round with the
+ * outline. The 2 px rest on the plot of the 375 px viewport, where a bucket's share draws 3 px and a gap in pixels
+ * leaves the shape's floor of 1 px. Each read's count of bars, narrowest and widest width and strokes are recorded
+ * beside the same read of Requests by outcome on the bare page at 1280 by 800, which loads again after with the
+ * viewport the pass's. The mock pass's alone, since only the mock's story fills a bar under 14 and 30 days for certain.
+ */
+async function narrowBars(theme) {
+  const say = (what) => failures.push(`${theme} /analytics bars at 375 by 800: ${what}`);
+  const fortnight = 14 * 24 * 3_600_000;
+  const bars = (title) =>
+    page.evaluate((t) => {
+      const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === t);
+      if (!card) return null;
+      const drawn = [...card.querySelectorAll('.recharts-bar-rectangle path')].map((p) => ({ stroke: getComputedStyle(p).stroke, width: Number(p.getAttribute('width')) }));
+      const widths = drawn.map((b) => b.width);
+      return { bars: drawn.length, narrowest: drawn.length ? Math.min(...widths) : null, outlined: drawn.filter((b) => b.stroke !== 'none').length, strokes: [...new Set(drawn.map((b) => b.stroke))], widest: drawn.length ? Math.max(...widths) : null };
+    }, title);
+  const round = (n) => (n === null ? null : Math.round(n * 100) / 100);
+  const shown = (read) => read && { ...read, narrowest: round(read.narrowest), widest: round(read.widest) };
+  let span;
+  let day;
+  let month = null;
+  try {
+    await page.setViewportSize({ height: 800, width: 375 });
+    await settle();
+    await loadAtOrigin(`/analytics?from=${new Date(clockOrigin - fortnight).toISOString()}&to=${new Date(clockOrigin).toISOString()}`, '.analytics-section#traffic');
+    span = await bars('Requests by outcome');
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    day = await bars('Requests by outcome');
+    await loadAtOrigin('/analytics?range=30d', '.analytics-section#traffic');
+    if (await tabTo(theme, 'Cache')) month = await bars('Write cost vs read cost');
+  } finally {
+    await page.setViewportSize({ height: 800, width: 1280 });
+    await settle();
+    await loadAtOrigin('/analytics', '.analytics-section#traffic');
+    await atRest();
+  }
+  const desktop = await bars('Requests by outcome');
+  measurements.push(`${theme} /analytics bars ${JSON.stringify({ '14 days at 375 by 800': shown(span), '24 hours at 375 by 800': shown(day), '24 hours at 1280 by 800': shown(desktop), '30d on Cache at 375 by 800': shown(month) })}`);
+  if (!span?.bars) say('under 14 days Requests by outcome draws no bar to measure');
+  else {
+    if (span.narrowest < 2) say(`under 14 days the narrowest of Requests by outcome's ${span.bars} bars is ${round(span.narrowest)} px, under 2 px`);
+    if (span.outlined > 0) say(`under 14 days ${span.outlined} of Requests by outcome's ${span.bars} bars draw an outline (${span.strokes.join(', ')})`);
+  }
+  if (!day?.bars) say('under 24 hours Requests by outcome draws no bar to measure');
+  else if (day.outlined < day.bars) say(`under 24 hours ${day.bars - day.outlined} of Requests by outcome's ${day.bars} bars draw no outline`);
+  if (!month?.bars) say('under 30d Write cost vs read cost draws no bar to measure');
+  else if (month.narrowest < 1) say(`under 30d the narrowest of Write cost vs read cost's ${month.bars} bars is ${round(month.narrowest)} px, under 1 px`);
+}
+
+/**
  * A log table's Time cells as the browser lays them out, run in the page: per cell its leading text (the date and the
  * time, ahead of the id or the request link beneath it), that text's width, its lines and how far it runs past the
  * cell's content box through a `Range` over it, and the cell's content height against the tallest of its row's other
@@ -13942,6 +13996,7 @@ try {
       if (view.path === '/analytics' && mock) await burnGridNamed(theme);
       if (view.path === '/analytics' && mock) await refusalCardPattern(theme);
       if (view.path === '/analytics' && mock) await analyticsTypedPicker(theme);
+      if (view.path === '/analytics' && mock) await narrowBars(theme);
       if (view.path === '/analytics') await warmingLoneCard(theme);
       if (view.path === '/analytics') await analyticsTiles(theme);
       if (view.path === '/analytics') await accountsRangeColumn(theme);

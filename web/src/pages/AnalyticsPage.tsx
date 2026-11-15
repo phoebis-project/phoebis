@@ -7,8 +7,9 @@ import { iso } from '@/api/decode';
 import { foldGroups, foldRequests, keptRows, latestGenerations, loadSessionRequests, sumGroups, type SessionRequests } from '@/api/fold';
 import { useAppSettings } from '@/app/settings';
 import type { Account, AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, GuardrailCounts, LatencyHistograms, MemberBudget, PlacementRow, RefusalCategoriesAnswer, RequestLog, RewritesAnswer, Settings, SubscriptionCosts, UnusedAllowanceAnswer } from '@/api/types';
+import { chartBar } from '@/components/charts/bars';
 import { Donut, DonutLegend } from '@/components/charts/Donut';
-import { CHART_HEIGHT, OUTCOME_SERIES, PCT_AXIS, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
+import { BAR_GAP, CHART_HEIGHT, COUNT_AXIS, OUTCOME_SERIES, PAIRED_BAR_GAPS, PCT_AXIS, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, accountSlots, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip, type TooltipRow } from '@/components/charts/Tooltip';
 import { CostReferenceLink } from '@/components/ui/CostReference';
@@ -700,13 +701,13 @@ export function AnalyticsPage() {
           <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
             <div className="grid-2 traffic-grid">
               <ChartCard title="Requests by outcome" subtitle={noted('Per bucket, stacked', partial)} loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
-                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
                   {OUTCOME_SERIES.map((s, i) => (
-                    <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                    <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === OUTCOME_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
                   ))}
                 </BarChart>
               </ChartCard>
@@ -741,7 +742,7 @@ export function AnalyticsPage() {
                 <LineChart data={buckets} margin={CHART_MARGIN}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<Bucket>((p) => [{ color: ink.series[3], label: 'failovers', value: fmtInt(p.failovers) }])} />
                   <Line type="monotone" dataKey="failovers" stroke={ink.series[3]} strokeWidth={2} dot={false} isAnimationActive={false} />
                 </LineChart>
@@ -848,13 +849,13 @@ export function AnalyticsPage() {
           <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
             <div className="grid-2">
               <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
-                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
                   <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(p.tokens[s.key]) })))} />
                   {TOKEN_SERIES.map((s, i) => (
-                    <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                    <Bar key={s.key} dataKey={`tokens.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === TOKEN_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
                   ))}
                 </BarChart>
               </ChartCard>
@@ -907,7 +908,7 @@ export function AnalyticsPage() {
               >
                 {/* The bars draw the Pro-week figure, so the axis and the tooltip read it in the chosen week. */}
                 {cacheScale !== null ? (
-                  <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
+                  <BarChart data={costBuckets} margin={CHART_MARGIN} {...PAIRED_BAR_GAPS}>
                     <CartesianGrid vertical={false} stroke={ink.grid} />
                     <XAxis {...axis} />
                     <YAxis tickFormatter={(v: number) => fmtShare(v * cacheScale)} tickLine={false} axisLine={false} width={60} />
@@ -918,11 +919,11 @@ export function AnalyticsPage() {
                         { color: ink.series[2], label: 'read cost', value: equivalentOrDash(p.cacheEquivalent?.read, week, cacheScale) },
                       ])}
                     />
-                    <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
-                    <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+                    <Bar dataKey="cacheEquivalent.write" fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
+                    <Bar dataKey="cacheEquivalent.read" fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
                   </BarChart>
                 ) : (
-                  <BarChart data={costBuckets} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
+                  <BarChart data={costBuckets} margin={CHART_MARGIN} {...PAIRED_BAR_GAPS}>
                     <CartesianGrid vertical={false} stroke={ink.grid} />
                     <XAxis {...axis} />
                     <YAxis {...usdAxis(costBuckets.flatMap((b) => [b[cacheDollars].cacheWrite ?? 0, b[cacheDollars].cacheRead ?? 0]))} tickLine={false} axisLine={false} />
@@ -933,8 +934,8 @@ export function AnalyticsPage() {
                         { color: ink.series[2], label: 'read cost', value: cacheSplit === null ? '-' : usdOrDash(p[cacheDollars].cacheRead) },
                       ])}
                     />
-                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheWrite`} fill={ink.series[3]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
+                    {cacheSplit !== null && <Bar dataKey={`${cacheDollars}.cacheRead`} fill={ink.series[2]} maxBarSize={12} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
                   </BarChart>
                 )}
               </ChartCard>
@@ -1049,14 +1050,14 @@ export function AnalyticsPage() {
             </div>
             <div className="grid-2 warming-grid">
               <ChartCard title="Probes by outcome" subtitle="Per bucket, stacked" loading={loading} legend={PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(totals.probes[s.key]) }))}>
-                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => PROBE_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, title: s.hint, value: probesUnmeasured ? '-' : fmtInt(p.probes[s.key]) })))} />
                   {!probesUnmeasured &&
                     PROBE_SERIES.map((s, i) => (
-                      <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+                      <Bar key={s.key} dataKey={`probes.${s.key}`} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === PROBE_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
                     ))}
                 </BarChart>
               </ChartCard>
@@ -1085,22 +1086,22 @@ export function AnalyticsPage() {
               />
 
               <ChartCard title="Kept-warm requests" subtitle="Requests whose cache read followed a probe" loading={loading} legend={[{ color: ink.series[0], label: 'Kept-warm requests', value: keptWarm === null ? '-' : fmtInt(keptWarm.requests) }]}>
-                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
-                  <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+                  <YAxis {...COUNT_AXIS} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[0], label: 'kept-warm requests', value: keptWarm === null || p.keptWarm === null ? '-' : fmtInt(p.keptWarm.requests) }])} />
-                  {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                  {keptWarm !== null && <Bar dataKey="keptWarm.requests" fill={ink.series[0]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
                 </BarChart>
               </ChartCard>
 
               <ChartCard title="Kept-warm tokens" subtitle="Cache-read tokens on those requests" loading={loading} legend={[{ color: ink.series[2], label: 'Kept-warm tokens', value: keptWarm === null ? '-' : fmtCompact(keptWarmTokens(keptWarm)) }]}>
-                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={2}>
+                <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
                   <CartesianGrid vertical={false} stroke={ink.grid} />
                   <XAxis {...axis} />
                   <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
                   <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>((p) => [{ color: ink.series[2], label: 'kept-warm tokens', value: keptWarm === null || p.keptWarm === null ? '-' : fmtCompact(keptWarmTokens(p.keptWarm)) }])} />
-                  {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+                  {keptWarm !== null && <Bar dataKey={(p: Bucket) => (p.keptWarm === null ? null : keptWarmTokens(p.keptWarm))} fill={ink.series[2]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
                 </BarChart>
               </ChartCard>
             </div>
@@ -1630,13 +1631,13 @@ function SavingChart({ axis, billed, failure, loading, points, reading, session,
         { color: ink.muted, hollow: true, label: 'Net saving', value: negative ? <span className="is-negative">{figures.net}</span> : figures.net },
       ]}
     >
-      <BarChart data={drawn} margin={CHART_MARGIN} barCategoryGap={4} barGap={2}>
+      <BarChart data={drawn} margin={CHART_MARGIN} {...PAIRED_BAR_GAPS}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis {...axis} />
         {equivalents ? <YAxis tickFormatter={(v: number) => fmtShare(v * factor)} tickLine={false} axisLine={false} width={60} /> : <YAxis {...usdAxis(drawn.flatMap((b) => [b.savingUsd, b.probeCostUsd]))} tickLine={false} axisLine={false} />}
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<Bucket>(tip)} />
-        {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
-        {!session && <Bar dataKey={cost} fill={ink.series[3]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />}
+        {!session && <Bar dataKey={gross} fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
+        {!session && <Bar dataKey={cost} fill={ink.series[3]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />}
       </BarChart>
     </ChartCard>
   );
@@ -2057,13 +2058,13 @@ function SpeedCard({ axis, points, error, loading, partial }: { axis: TimeAxis; 
       loading={loading}
       legend={SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(data.reduce((n, d) => n + d[s.key], 0)) }))}
     >
-      <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={2}>
+      <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis {...axis} />
-        <YAxis tickLine={false} axisLine={false} width={36} allowDecimals={false} />
+        <YAxis {...COUNT_AXIS} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<SpeedRow>((p) => SPEED_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(p[s.key]) })))} />
         {SPEED_SERIES.map((s, i) => (
-          <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === SPEED_SERIES.length - 1 ? [3, 3, 0, 0] : 0} isAnimationActive={false} />
+          <Bar key={s.key} dataKey={s.key} stackId="a" fill={ink.series[s.slot]} stroke={ink.surface} strokeWidth={1} maxBarSize={22} radius={i === SPEED_SERIES.length - 1 ? [3, 3, 0, 0] : 0} shape={chartBar} isAnimationActive={false} />
         ))}
       </BarChart>
     </ChartCard>
@@ -2138,12 +2139,12 @@ function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: Re
         </>
       }
     >
-      <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={2}>
+      <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
         <CartesianGrid vertical={false} stroke={ink.grid} />
         <XAxis {...axis} />
         <YAxis tickFormatter={(v: number) => fmtCompact(v)} tickLine={false} axisLine={false} width={44} />
         <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<{ at: number; rewriteTokens: number }>((p) => [{ color: ink.series[1], label: 'rewrite tokens', value: fmtCompact(p.rewriteTokens) }])} />
-        <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+        <Bar dataKey="rewriteTokens" fill={ink.series[1]} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
       </BarChart>
     </ChartCard>
   );
@@ -2176,12 +2177,12 @@ function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis })
       </ul>
       {held.totalRequests > 0 && (
         <ResponsiveContainer width="100%" height={120}>
-          <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={2}>
+          <BarChart data={data} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
             <XAxis {...axis} />
             <YAxis tickFormatter={(v: number) => fmtMs(v)} tickLine={false} axisLine={false} width={44} />
             <Tooltip cursor={{ fill: ink.grid, opacity: 0.6 }} content={timeTip<HeldRow>((p) => [{ color: ink.warning, label: heldHover(p), value: null }])} />
-            <Bar dataKey="heldMs" fill={ink.warning} maxBarSize={22} radius={[3, 3, 0, 0]} isAnimationActive={false} />
+            <Bar dataKey="heldMs" fill={ink.warning} maxBarSize={22} radius={[3, 3, 0, 0]} shape={chartBar} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
       )}

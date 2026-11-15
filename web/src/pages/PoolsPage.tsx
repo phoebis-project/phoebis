@@ -14,6 +14,7 @@ import { useAppSettings } from '@/app/settings';
 import { useAddressEdit } from '@/app/useAddressEdit';
 import { useHashLanding } from '@/app/useHashLanding';
 import { AttentionRows } from '@/components/AttentionRows';
+import { COUNT_AXIS } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { Legend, timeTip } from '@/components/charts/Tooltip';
 import { FilterBar } from '@/components/FilterBar';
@@ -839,7 +840,7 @@ const PoolTraffic = memo(function PoolTraffic({ requests24h, traffic }: { reques
         <ResponsiveContainer width="100%" height={170}>
           <ComposedChart data={data} margin={{ top: 6, right: 4, bottom: 0, left: 4 }} barCategoryGap={2}>
             <XAxis dataKey="at" tickFormatter={(v: number) => fmtShortTime(v)} tickLine={false} axisLine={{ stroke: ink.axis }} interval={5} minTickGap={24} />
-            <YAxis width={32} tickLine={false} axisLine={false} tick={{ fill: ink.ink2, fontSize: 11 }} allowDecimals={false} />
+            <YAxis {...COUNT_AXIS} tick={{ fill: ink.ink2, fontSize: 11 }} />
             <Tooltip
               cursor={{ fill: ink.grid, opacity: 0.6 }}
               content={timeTip<(typeof data)[number]>((p) => [
