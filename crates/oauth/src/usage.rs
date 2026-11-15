@@ -765,17 +765,19 @@ struct Inner {
     clock: Clock,
 }
 
-/// Removes an account's in-flight entry from `map` once its task ends, however it ends, so a panic never leaves
-/// every later caller joined to a future that has already resolved.
-struct InflightGuard<V: 'static> {
-    account_id: String,
-    inner: Arc<Inner>,
-    map: InflightMap<V>,
+/// Removes an account's in-flight entry from `map` once its task ends, however it ends. A task that ends by a panic
+/// leaves no entry behind, or every later caller would join a future that has already resolved and the account would
+/// stay stuck on that one result until the process restarts. A poisoned map is left alone rather than asserted on,
+/// since a panic inside `Drop` while the task already unwinds aborts the process.
+pub(crate) struct InflightGuard<O: 'static, V: 'static> {
+    pub(crate) account_id: String,
+    pub(crate) inner: Arc<O>,
+    pub(crate) map: InflightMap<O, V>,
 }
 
-type InflightMap<V> = fn(&Inner) -> &Mutex<HashMap<String, V>>;
+type InflightMap<O, V> = fn(&O) -> &Mutex<HashMap<String, V>>;
 
-impl<V: 'static> Drop for InflightGuard<V> {
+impl<O: 'static, V: 'static> Drop for InflightGuard<O, V> {
     fn drop(&mut self) {
         if let Ok(mut inflight) = (self.map)(&self.inner).lock() {
             inflight.remove(&self.account_id);
@@ -787,7 +789,7 @@ impl<V: 'static> Drop for InflightGuard<V> {
 /// spawned it.
 fn join_or_spawn<T, F>(
     inner: &Arc<Inner>,
-    map: InflightMap<Joined<T>>,
+    map: InflightMap<Inner, Joined<T>>,
     account_id: &str,
     panicked: fn() -> T,
     task: impl FnOnce(Arc<Inner>, String) -> F,
@@ -934,18 +936,7 @@ pub enum ClaimRefusal {
 fn new_request_id() -> String {
     let mut bytes = [0u8; 16];
     random::fill(&mut bytes);
-    // The version and the variant bits, as RFC 9562 sets them for a random UUID.
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
-    )
+    random::uuid_v4_of(u128::from_be_bytes(bytes))
 }
 
 /// One holder's kept request ids by grant id, each with the instant its unsettled outcome arrived and the grant's

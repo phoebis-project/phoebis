@@ -849,20 +849,10 @@ impl SessionMemory {
     }
 }
 
-/// `rand::random`'s own bits, restamped with the version and variant nibbles RFC 4122 fixes for a v4 UUID.
+/// Draws 128 bits from `rand::random` and hands them to the oauth crate's formatter, which stamps them as a version 4
+/// UUID.
 pub(crate) fn uuid_v4() -> String {
-    let v: u128 = rand::random();
-    let v = (v & !(0xF_u128 << 76)) | (4_u128 << 76);
-    let v = (v & !(0x3_u128 << 62)) | (2_u128 << 62);
-    let hex = format!("{v:032x}");
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    phoebis_oauth::random::uuid_v4_of(rand::random())
 }
 
 #[cfg(test)]

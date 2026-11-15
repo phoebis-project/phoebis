@@ -20,7 +20,7 @@ use serde_json::Value;
 use tracing::Instrument;
 
 use crate::exchange::{control_request, parse_token_response, refresh_body, ControlKind};
-use crate::usage::Refused;
+use crate::usage::{InflightGuard, Refused};
 
 // A poisoned manager mutex means a prior panic happened while the refresh map was being mutated, so the
 // in-flight bookkeeping can no longer be trusted.
@@ -318,24 +318,6 @@ struct Inner {
     panic_next_refresh: AtomicBool,
     profile: &'static Profile,
     store: Arc<Store>,
-}
-
-/// Removes an account's in-flight entry when its refresh task ends, however it ends. A panic inside the
-/// refresh must not leave the entry behind: every later caller would join a future that has already
-/// resolved, and the account would be stuck on that one result until the process restarts.
-struct InflightGuard {
-    account_id: String,
-    inner: Arc<Inner>,
-}
-
-impl Drop for InflightGuard {
-    fn drop(&mut self) {
-        // Panicking inside `Drop` while already unwinding aborts the process, so a poisoned map is left
-        // alone here rather than asserted on.
-        if let Ok(mut inflight) = self.inner.inflight.lock() {
-            inflight.remove(&self.account_id);
-        }
-    }
 }
 
 pub struct CredentialManager {
@@ -672,6 +654,7 @@ impl CredentialManager {
                         let guard = InflightGuard {
                             account_id: id,
                             inner,
+                            map: |inner| &inner.inflight,
                         };
                         guard
                             .inner
