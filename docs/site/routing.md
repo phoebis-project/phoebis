@@ -475,17 +475,18 @@ minutes.
 
 **The window set** An OAuth account's shared windows are its window set: both shared windows before its first clean
 poll, and from then on the shared windows the newest clean poll's body carried, so an approved Ultra account, whose poll
-carries no 5-hour window, has the 7-day window alone. A poll that lacks a shared window drops the account's reading of
-it: the stored reading and the charges on it leave, the registry's row with them, and the 5-hour window's slow-down
-entries end with it. A head carries some windows only and drops none, and a head's reading of a shared window the set
-lacks does not land, so the window comes back with the next clean poll that carries it. A body with no shared window at
-all is no reading of the account and settles nothing, and a poll older than the one that named the set neither drops a
-window nor rewrites it. The set persists in the registry beside the readings and is restored at startup, so a restart
-keeps the account's windows as its last clean poll named them. A model week is booked and read whatever the set holds.
-The drop logs one line at info naming the account and the window and raises no routing log event of its own, though a
-5-hour drop ends the account's open slow-down in the routing log at once ([Slow-down](#slow-down)). The account's cards
-draw the missing window's slot as "none" with the window's words on hover, "no 5-hour window" on an approved Ultra
-account ([Dashboard](console.md#dashboard), [Quota](console.md#quota)).
+carries no 5-hour window, has the 7-day window alone. The same holds for an account of any plan whose poll reports no
+5-hour window: it lists none, and a placement, a move and a shedding round fit it on the windows it holds. A poll that
+lacks a shared window drops the account's reading of it: the stored reading and the charges on it leave, the registry's
+row with them, and the 5-hour window's slow-down entries end with it. A head carries some windows only and drops none,
+and a head's reading of a shared window the set lacks does not land, so the window comes back with the next clean poll
+that carries it. A body with no shared window at all is no reading of the account and settles nothing, and a poll older
+than the one that named the set neither drops a window nor rewrites it. The set persists in the registry beside the
+readings and is restored at startup, so a restart keeps the account's windows as its last clean poll named them. A model
+week is booked and read whatever the set holds. The drop logs one line at info naming the account and the window and
+raises no routing log event of its own, though a 5-hour drop ends the account's open slow-down in the routing log at
+once ([Slow-down](#slow-down)). The account's cards draw the missing window's slot as "none" with the window's words on
+hover, "no 5-hour window" on an approved Ultra account ([Dashboard](console.md#dashboard), [Quota](console.md#quota)).
 
 **Spent and cleared** A plan window read at 1.0 or above emits `window_spent` once per reset cycle, whether a head, a
 poll or the router's own prediction took it there. A window read under its limit again in the same reset cycle emits
