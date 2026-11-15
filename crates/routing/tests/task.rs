@@ -16563,6 +16563,52 @@ async fn a_client_renewal_writes_the_effort_its_pin_names_to_the_row_and_a_probe
 }
 
 #[tokio::test]
+async fn a_token_count_behind_a_turn_keeps_the_effort_the_turn_stamped() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let placed = selected_pin(
+        handle
+            .select(SelectRequest {
+                effort: Some("xhigh".into()),
+                ..turn_of(&handle, "s1", "main", "claude-sonnet-5", 1_000)
+            })
+            .await
+            .unwrap(),
+    );
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(Report::PinRenewed {
+            pin: placed,
+            now: 2_000,
+            usage: None,
+            keepalive: false,
+            cache_ttl_ms: 300_000,
+            fast: false,
+            turn_end: RenewalEnd::Turn,
+            thinking_tokens: None,
+            input_transformations: None,
+        })
+        .await;
+    now.store(3_000, Ordering::SeqCst);
+    // The relay sends no renewal for a count's answer, so the count's selection is the last write the row takes.
+    selected_pin(
+        handle
+            .select(SelectRequest {
+                count: true,
+                ..turn_of(&handle, "s1", "main", "claude-sonnet-5", 3_000)
+            })
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        handle.pins().await.unwrap().remove(0).effort.as_deref(),
+        Some("xhigh"),
+        "a token count leaves the effort of the pin's last turn"
+    );
+}
+
+#[tokio::test]
 async fn a_rekeyed_pin_keeps_its_pace_under_the_new_key() {
     const DATED: &str = "claude-sonnet-5-20260929";
     let store = seeded_oauth(&["a"]);

@@ -6607,15 +6607,14 @@ fn renew(
     }
     if verdict != Warmth::Untouched {
         renewed.lane.clone_from(&request.lane);
+        renewed.effort.clone_from(&request.effort);
         if chained {
             stamp_hashes(renewed, request);
         }
     }
-    // A probe replays another request's headers and body, so the row keeps the entrypoint and the effort its own
-    // requests stamped.
+    // A probe replays another request's headers and body, so the row keeps the entrypoint its own requests stamped.
     if !request.probe {
         renewed.entrypoint.clone_from(&request.entrypoint);
-        renewed.effort.clone_from(&request.effort);
     }
     renewed.thinking_sums = handed_sums(renewed, request);
     let renewed = renewed.clone();

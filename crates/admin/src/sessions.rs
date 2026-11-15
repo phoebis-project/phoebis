@@ -109,8 +109,8 @@ pub(crate) struct Session {
     /// The context of the row's pin, the main agent's conversation pin where it holds one: its last turn's prompt in
     /// tokens, cache reads and writes included, 0 before its first turn.
     pub last_input_tokens: Option<u64>,
-    /// The effective effort of the request that placed or last renewed the row's pin, the word as the client sent
-    /// it, null where it named none and on a row with no pin.
+    /// The effective effort of the last turn on the row's pin, the word as the client sent it, null where it named none
+    /// and on a row with no pin. A token count and an auxiliary call leave it.
     pub effort: Option<String>,
     /// The pin's last main, subagent or compaction turn, or a keepalive probe's renewal.
     pub last_refresh_at: Option<i64>,

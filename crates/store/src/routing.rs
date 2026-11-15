@@ -117,9 +117,9 @@ pub struct PinRow {
     /// Only auxiliary requests have used the pin since its placement: written true at such a placement, cleared by
     /// the first refreshing turn that renews the pin, so a restart reads the flag rather than deriving it.
     pub auxiliary_only: bool,
-    /// The effective effort of the request that placed or last renewed the pin, the word as the client sent it,
-    /// `None` for none and on a row written before the column, which spells none as the empty text. A probe's renewal
-    /// keeps it.
+    /// The effective effort of the pin's last turn, the request that placed it or the last one that refreshed or colded
+    /// it, the word as the client sent it, `None` for none and on a row written before the column, which spells none as
+    /// the empty text. A token count, an auxiliary call and a probe keep it.
     pub effort: Option<String>,
     /// The pin's agent ended and its next request has not arrived: a subagent's turn answered with `end_turn`, or an
     /// agent the companion released. The pool's keep leaves such a pin out of every figure until that request.

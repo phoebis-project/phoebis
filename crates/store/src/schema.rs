@@ -262,7 +262,7 @@ CREATE INDEX IF NOT EXISTS guardrail_attachments_subject ON guardrail_attachment
 "#;
 
 /// The pins carry the auxiliary-only mark, so a restart reads it from the row rather than deriving it from two
-/// stamps, and the effort of the request that placed or last renewed the pin, which the Sessions route answers.
+/// stamps, and the effort of the pin's last turn, which the Sessions route answers.
 /// `session_first_seen` keeps when each agent of a session first placed a pin, a creation time a failover or a move
 /// leaves alone, until step 8 drops the table. The idle-return counters are kept per UTC day so the overview can answer
 /// a range, and the all-time rows leave with the old table, since a count with no day cannot be placed on one. The
