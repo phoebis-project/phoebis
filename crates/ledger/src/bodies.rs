@@ -300,6 +300,11 @@ fn purge_slice(
                 tx.execute(PURGE_REQUEST_GUARDRAILS, params![cutoff, slice])?;
                 let attempts = tx.execute(PURGE_ATTEMPTS, params![cutoff, slice])?;
                 let requests = tx.execute(PURGE_REQUESTS, params![cutoff, slice])?;
+                // The request rows the slice deleted can be the older requests of a session that resumed above the
+                // fill's cursor.
+                if requests > 0 {
+                    crate::session_totals::drop_cursor_under_way(&tx)?;
+                }
                 purged.attempts += attempts;
                 purged.requests += requests;
                 requests

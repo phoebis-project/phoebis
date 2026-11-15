@@ -1937,53 +1937,6 @@ async fn a_landing_on_a_session_the_fill_has_not_reached_is_counted_once_by_the_
     up.shutdown().await;
 }
 
-/// A start walks the requests from the newest again once the fill of the start before it ended: the first life's fill
-/// marks session `old` and finds no row left, and the second life's fill marks session `new`, written between the two
-/// lives and received after each row the first life walked.
-#[tokio::test]
-async fn a_start_fills_a_session_received_after_the_rows_the_fill_of_the_start_before_walked() {
-    let up = FakeUpstream::start(vec![]).await;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("ledger.sqlite");
-    drop(LedgerDb::open(&path).unwrap());
-    write_raw(
-        &path,
-        &format!(
-            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
-             key_id, session_id, agent_id) VALUES \
-             ('r-old', {at}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
-              'desktop', 'old', 'g'); \
-             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
-             VALUES ('r-old', 1, 'a', 'oauth', {at}, 'succeeded', 100);",
-            at = phoebis_ledger::test_tables::JANUARY_2026,
-        ),
-    );
-    let h = purging_often(Arc::new(LedgerDb::open(&path).unwrap()), &up).await;
-    // Two calls end this fill: the one that marks `old` and the one that finds no row left. A run of the fill makes
-    // one call at least, ahead of the first pass and behind it, so the fill has ended once the second pass is done.
-    wait_for(Duration::from_secs(5), || {
-        (h.ledger.stats().purge_passes.load(Ordering::SeqCst) >= 2).then_some(())
-    })
-    .await;
-    h.ledger.clone().shutdown().await.unwrap();
-    drop(h);
-    write_raw(
-        &path,
-        &format!(
-            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
-             key_id, session_id, agent_id) VALUES \
-             ('r-new', {later}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
-              'desktop', 'new', 'g'); \
-             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
-             VALUES ('r-new', 1, 'a', 'oauth', {later}, 'succeeded', 100);",
-            later = phoebis_ledger::test_tables::JANUARY_2026 + 1_000,
-        ),
-    );
-    let _h = on_disk(&up, fresh_store(), &path, quick()).await;
-    wait_for_session_marked(&path, "new").await;
-    up.shutdown().await;
-}
-
 /// The fill goes on past a walk whose rows hold no session without a mark: session `s`'s one request lies below 1,000
 /// requests of no session received after it, and the start's fill marks it.
 #[tokio::test]

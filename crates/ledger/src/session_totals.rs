@@ -6,9 +6,10 @@
 //! A session's own facts row is its mark: the totals of a marked session count every request the ledger holds of it.
 //! The landing keeps a marked session's totals in its own transaction and marks a session at its first request. The
 //! fill in the purge task sums each session no landing marked, a whole session at a time, newest first, so a ledger
-//! from before the tables fills behind the start. A start whose price list moved a threshold clears the sessions whose
-//! rows it re-bands for the fill to sum again, and a family of the retention purge follows the requests' cutoff. The
-//! sessions route reads the rows through `session_figures` and prices them at its own instant.
+//! from before the tables fills behind the start. The fill's cursor stays where the fill ended, so a later start walks
+//! no row unless a threshold moved. A start whose price list moved a threshold clears the sessions whose rows it
+//! re-bands for the fill to sum again, and a family of the retention purge follows the requests' cutoff. The sessions
+//! route reads the rows through `session_figures` and prices them at its own instant.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
@@ -44,8 +45,9 @@ use crate::{LedgerDb, LedgerError};
 /// letter or a digit.
 pub(crate) const RESERVED_ID: &str = "";
 
-/// The `meta` key of the fill's cursor: `{"received_at": <ms>, "rowid": <rowid>}`, the last request row a walk
-/// examined, newest first, standing while a fill is under way.
+/// The `meta` key of the fill's cursor: `{"received_at": <ms>, "rowid": <rowid>, "ended": <bool>}`, the last request
+/// row a walk examined, newest first, and whether the fill ended. It stands from a fill's first call until a reset
+/// drops it.
 const FILL_CURSOR_KEY: &str = "session_totals_fill";
 
 /// The `meta` key of the thresholds the stored sums rows were banded under: `{"revisions": [..]}`, each revision in
@@ -511,12 +513,15 @@ pub(crate) fn land(
 struct FillCursor {
     received_at: i64,
     rowid: i64,
+    /// Whether the walk that stored this cursor found no row left, so the fill ended.
+    ended: bool,
 }
 
 /// Where a walk starts with no cursor stored: above every request row.
 const FILL_TOP: FillCursor = FillCursor {
     received_at: i64::MAX,
     rowid: i64::MAX,
+    ended: false,
 };
 
 /// The next request rows below the cursor, newest first, through the received index, which holds the rowid.
@@ -542,6 +547,7 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
         let at = FillCursor {
             received_at: row.get(1)?,
             rowid: row.get(0)?,
+            ended: false,
         };
         let key_id: Option<String> = row.get(2)?;
         let session_id: Option<String> = row.get(4)?;
@@ -575,14 +581,21 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
 /// one write transaction that writes the sum with the mark and moves the cursor past the session's row. A request of
 /// the session that landed after the snapshot's newest landing makes the write leave the sum out and the cursor short
 /// of the row, so the next call sums the session again: no landing batch waits on a session's sum, and no request is
-/// counted twice or left out. The call that finds no row left deletes the cursor, so each start walks from the top
-/// and finds a session that lost its mark, or that kept only rows above a cursor once a pass took its older ones.
-/// Answers whether the walk left rows below the cursor.
+/// counted twice or left out. The call that finds no row left stores the cursor as ended, and a call that reads an
+/// ended cursor walks no row and writes nothing, so a start behind a fill that ended costs one call. A start behind a
+/// fill that a shutdown cut short goes on below the stored cursor. Two resets drop the cursor, and the fill then walks
+/// from the top: the start's step for a moved threshold, and a purge slice that deleted request rows while the fill
+/// had not ended, since those rows can be the older requests of a session that resumed above the cursor. A session
+/// with no mark above an ended cursor waits for the next walk from the top, which a moved threshold brings, and the
+/// reader sums it from its request rows until then. Answers whether the walk left rows below the cursor.
 pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, LedgerError> {
     db.purge(|conn| {
         let (walked, summed) = {
             let read = conn.transaction()?;
             let cursor = read_meta::<FillCursor>(&read, FILL_CURSOR_KEY)?.unwrap_or(FILL_TOP);
+            if cursor.ended {
+                return Ok(false);
+            }
             let walked = walk(&read, cursor)?;
             let summed = match &walked.unmarked {
                 Some((key, _)) => Some((
@@ -602,14 +615,21 @@ pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, 
             }
         }
         let left = walked.unmarked.is_some() || !walked.ended;
-        if left {
-            write_meta(&tx, FILL_CURSOR_KEY, &cursor)?;
-        } else {
-            tx.execute("DELETE FROM meta WHERE key = ?1", params![FILL_CURSOR_KEY])?;
-        }
+        cursor.ended = !left;
+        write_meta(&tx, FILL_CURSOR_KEY, &cursor)?;
         tx.commit()?;
         Ok(left)
     })
+}
+
+/// Drops the cursor of a fill that has not ended. A purge slice calls it in the transaction that deleted request rows:
+/// those rows can be the older requests of a session that resumed above the cursor, which no walk below the cursor
+/// meets again, so the fill walks from the top.
+pub(crate) fn drop_cursor_under_way(tx: &Transaction<'_>) -> Result<(), LedgerError> {
+    if read_meta::<FillCursor>(tx, FILL_CURSOR_KEY)?.is_some_and(|cursor| !cursor.ended) {
+        tx.execute("DELETE FROM meta WHERE key = ?1", params![FILL_CURSOR_KEY])?;
+    }
+    Ok(())
 }
 
 /// The thresholds `BANDS_KEY` holds.
@@ -621,8 +641,8 @@ struct Banded {
 /// The start's step for a moved threshold, behind `refold_bands` and ahead of the ledger task. A start that finds the
 /// stored thresholds differ from `prices` clears each session with a sums row at or after the first hour the two
 /// lists differ, with no `since` floor, so a request `refold_bands` leaves out of its walk moves too. The clears, the
-/// reset of the fill's cursor, which drops the cursor of a fill that a shutdown cut short, and the write of the loaded
-/// list commit together, and the fill then sums those sessions again.
+/// reset of the fill's cursor, which drops the cursor whether its fill ended or a shutdown cut it short, and the write
+/// of the loaded list commit together, and the fill then sums those sessions again.
 /// A first start finds no stored list, writes it and clears nothing. Answers the sessions cleared, and sums nothing.
 pub fn unmark_rebanded_sessions(
     db: &LedgerDb,
@@ -1762,6 +1782,84 @@ mod tests {
         assert!(
             db.read_blocking(|c| marked(c, &new)).unwrap(),
             "the fill marks the session the step cleared"
+        );
+    }
+
+    /// Writes request `id` of session `session`, received at `at`, with its one served attempt straight into the
+    /// tables, so no landing marks the session.
+    fn write_raw(db: &LedgerDb, id: &str, session: &str, at: i64) {
+        db.write(|c| {
+            c.execute_batch(&format!(
+                "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, \
+                 attempts, key_id, session_id) VALUES ('{id}', {at}, 'claude-haiku-5-5', 'claude-haiku-5-5', 0, \
+                 'inference', 'client', 'succeeded', 1, 'desktop', '{session}'); \
+                 INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, \
+                 input_tokens) VALUES ('{id}', 1, 'a', 'oauth', {at}, 'succeeded', 100);"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    /// A retention pass under a request retention of one day, run a day and 30 minutes past `JANUARY_2026`, so it
+    /// takes each request received before `JANUARY_2026` plus 30 minutes.
+    fn purge_the_first_half_hour(db: &LedgerDb, prices: &PriceRevisions) {
+        let config = crate::LedgerConfig {
+            retention_days: 1,
+            ..Default::default()
+        };
+        let now = JANUARY_2026 + phoebis_routing::DAY_MS + 30 * 60_000;
+        crate::bodies::run_retention_blocking(db, &config, now, &[], prices).unwrap();
+    }
+
+    /// A purge pass that takes the older request of a session that resumed above the cursor of a fill under way has
+    /// the fill walk from the top and sum that session: the first call marks `other` and stops with `s`'s older
+    /// request below its cursor, `s`'s new request stands above the cursor with no mark, as a landing leaves a session
+    /// that holds another request, and the pass takes the older request before the fill reaches it.
+    #[test]
+    fn a_purge_pass_drops_the_cursor_of_a_fill_under_way_and_the_fill_marks_the_session_it_cut() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        let prices = haiku_over(1_000);
+        write_raw(&db, "r-old", "s", JANUARY_2026);
+        write_raw(&db, "r-other", "other", JANUARY_2026 + HOUR_MS);
+        fill_step(&db, &prices).unwrap();
+        write_raw(&db, "r-new", "s", JANUARY_2026 + 2 * HOUR_MS);
+        purge_the_first_half_hour(&db, &prices);
+        while fill_step(&db, &prices).unwrap() {}
+        let s = SessionSpendKey {
+            key_id: "desktop".into(),
+            key_generation: 0,
+            session_id: "s".into(),
+        };
+        assert!(
+            db.read_blocking(|c| marked(c, &s)).unwrap(),
+            "the fill marks the session the pass cut"
+        );
+    }
+
+    /// A call behind a fill that ended walks no request row, across a purge pass that took a request: the fill marks
+    /// `old` and ends, the pass takes `old`'s request, and `new` stands above the cursor with no mark, a state no path
+    /// writes, since a landing marks a new session.
+    #[test]
+    fn a_call_behind_a_fill_that_ended_walks_no_row_and_a_purge_pass_keeps_its_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        let prices = haiku_over(1_000);
+        write_raw(&db, "r-old", "old", JANUARY_2026);
+        while fill_step(&db, &prices).unwrap() {}
+        purge_the_first_half_hour(&db, &prices);
+        write_raw(&db, "r-new", "new", JANUARY_2026 + 2 * HOUR_MS);
+        let new = SessionSpendKey {
+            key_id: "desktop".into(),
+            key_generation: 0,
+            session_id: "new".into(),
+        };
+        let left = fill_step(&db, &prices).unwrap();
+        assert_eq!(
+            (left, db.read_blocking(|c| marked(c, &new)).unwrap()),
+            (false, false),
+            "the call answers that no row is left and sums nothing"
         );
     }
 }
