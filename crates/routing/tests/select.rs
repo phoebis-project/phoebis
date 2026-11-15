@@ -1047,6 +1047,57 @@ fn beside_a_fable_reservation_the_pace_score_subtracts_the_burn_of_the_non_fable
 }
 
 #[test]
+fn beside_a_fable_reservation_the_pace_score_leaves_out_a_fresh_fable_sessions_booking_and_counts_a_non_fable_one(
+) {
+    let s = tiered(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    // The one warm pin burns 150 input tokens a second, 0.009 of the week an hour on the ratio pricer, and a fresh
+    // session books the same 0.009 as the median of the warm pins. No warm pin draws the Fable week, so a Fable
+    // session's booking holds no key of it, and the empty body books no rewrite. The record's hundredth an hour over
+    // the 24 hours reads 0.24, under the Fable room of 0.5, so a factor of a quarter holds back 0.06 of the 0.7 left.
+    // Each half builds its own state, since a second fresh placement would read the first session's new row in its
+    // median, and the later request takes an id of its own so the first booking stands.
+    let pace_after = |first_model: &str| {
+        let mut st = loaded_with_hours(
+            vec![fable_hour("a", 99, 0.01)],
+            vec![burning("s", "a", 150.0, true, RESERVED_AT)],
+            ratio_pricer()
+                .with_week_factor(|window, _| (window == SEVEN_DAY_FABLE).then_some(0.25)),
+            vec![("a", fable_read(0.3, 0.5, 24))],
+        );
+        let first = request(&s, None, first_model, true, &[], RESERVED_AT);
+        decide(&mut st, &s, &first, &mut rng());
+        let later = SelectRequest {
+            request_id: "r-2".into(),
+            ..request(&s, None, "claude-sonnet-5", true, &[], RESERVED_AT)
+        };
+        let d = decide(&mut st, &s, &later, &mut rng());
+        candidate(&d.record, "a")
+            .pace
+            .clone()
+            .expect("a Pace member's facts")
+    };
+    let fable = pace_after("claude-fable-5-1");
+    assert!(
+        close(fable.burn, 0.009),
+        "the reservation stands for the Fable booking: {fable:?}"
+    );
+    assert!(close(fable.score, (0.7 - 0.06) / 24.0 - 0.009), "{fable:?}");
+    let sonnet = pace_after("claude-sonnet-5");
+    assert!(
+        close(sonnet.burn, 0.018),
+        "the Sonnet booking's 7-day burn counts beside the pin's: {sonnet:?}"
+    );
+    assert!(
+        close(sonnet.score, (0.7 - 0.06) / 24.0 - 0.018),
+        "{sonnet:?}"
+    );
+}
+
+#[test]
 fn a_member_outside_the_first_tier_carries_no_fable_reservation_and_a_score_that_holds_back_none() {
     let s = snapshot(Pool {
         strategy: Strategy::Pace,
@@ -17354,6 +17405,7 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
             account_id: "b".into(),
             attempt: 1,
             pin: None,
+            model: "claude-sonnet-5".into(),
             entrypoint: None,
             booked_at: T - 1_000,
             rewrite: [(FIVE_HOUR.to_string(), 0.05)].into_iter().collect(),
@@ -23781,6 +23833,7 @@ fn the_demand_is_the_achieved_burn_over_the_speed_and_a_booking_counts_undivided
             account_id: "a".into(),
             attempt: 1,
             pin: None,
+            model: "claude-sonnet-5".into(),
             entrypoint: None,
             booked_at: T,
             rewrite: BTreeMap::new(),
@@ -29942,6 +29995,7 @@ fn a_live_interactive_reservation_on_a_base_pins_horizon_reads_one_rate_across_t
             account_id: "a".into(),
             attempt: 1,
             pin: None,
+            model: "claude-sonnet-5".into(),
             entrypoint: Some("desk".into()),
             booked_at: T,
             rewrite: BTreeMap::new(),
@@ -30019,6 +30073,7 @@ fn a_live_reservation_is_not_divided_by_the_speed_under_a_constant_band() {
             account_id: "a".into(),
             attempt: 1,
             pin: None,
+            model: "claude-sonnet-5".into(),
             entrypoint: None,
             booked_at: T,
             rewrite: BTreeMap::new(),

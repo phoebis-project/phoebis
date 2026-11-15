@@ -2674,6 +2674,7 @@ fn run(
                     account_id: chosen.account_id.clone(),
                     attempt: request.attempt,
                     pin: session.map(|_| request.pin_key()),
+                    model: request.canonical_model.clone(),
                     entrypoint: regime.map(String::from),
                     booked_at: request.now,
                     rewrite,
@@ -6233,6 +6234,7 @@ fn shed_round(
             account_id: destination,
             attempt: request.attempt,
             pin: Some(p.key()),
+            model: p.model.clone(),
             entrypoint: regime.map(String::from),
             booked_at: now,
             rewrite,
@@ -9160,19 +9162,20 @@ mod banded_tests {
             ),
             T,
         );
+        let model = "claude-sonnet-5";
         // A tenth of the window an hour each, booked at T, out of the band.
         let y = 0.1 / 3_600.0;
         let booking = |entrypoint: Option<&str>| Reservation {
             account_id: "b".into(),
             attempt: 1,
             pin: None,
+            model: model.into(),
             entrypoint: entrypoint.map(String::from),
             booked_at: T,
             rewrite: BTreeMap::new(),
             burn: BTreeMap::from([(FIVE_HOUR.to_string(), y)]),
             expires_at: T + HOUR,
         };
-        let model = "claude-sonnet-5";
         let request = SelectRequest {
             request_id: "r-1".into(),
             attempt: 1,
@@ -9276,6 +9279,7 @@ mod banded_tests {
                     account_id: "b".into(),
                     attempt: 1,
                     pin: None,
+                    model: "claude-sonnet-5".into(),
                     entrypoint: None,
                     booked_at: T,
                     rewrite: BTreeMap::new(),

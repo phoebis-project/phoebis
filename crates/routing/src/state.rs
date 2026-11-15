@@ -1071,6 +1071,9 @@ pub struct Reservation {
     pub attempt: u32,
     /// The pin the selection wrote, `None` for a request that pins nothing and still lands its body.
     pub pin: Option<PinKey>,
+    /// The canonical model `burn` was priced for: the request's at a placement and the moved pin's at a move.
+    /// `demand_shares_off_model_weeks` reads its model week to leave out the bookings a Fable reservation stands for.
+    pub model: String,
     /// The entrypoint `burn` was priced under at `booked_at` (the pin's own for a pin's move, the failed-over row's for
     /// a failover's landing, the request's for a fresh session's median), which a reader that weighs the burn over a
     /// span reads its band under. `rewrite` is a one-time share priced under the request's regime, which no reader
@@ -3474,7 +3477,7 @@ impl RoutingState {
         self.shares(account_id, keep, &|_| true, tier, now, average_ms, speed)
     }
 
-    /// `demand_shares` with every pin whose model draws a model week and every live booking whose burn names one left
+    /// `demand_shares` with every pin whose model draws a model week and every live booking whose model draws one left
     /// out: the burn Pace subtracts beside a Fable reservation, which stands for those pins and bookings alone.
     pub(crate) fn demand_shares_off_model_weeks(
         &self,
@@ -3485,11 +3488,10 @@ impl RoutingState {
         average_ms: i64,
         speed: f64,
     ) -> BTreeMap<String, f64> {
-        let is_week = |window: &String| MODEL_WINDOWS.iter().any(|(_, week)| week == window);
         self.shares(
             account_id,
             &|pin| keep(pin) && model_week(&pin.model).is_none(),
-            &|booking| !booking.burn.keys().any(is_week),
+            &|booking| model_week(&booking.model).is_none(),
             tier,
             now,
             average_ms,
@@ -3995,10 +3997,14 @@ impl RoutingState {
             }
         }
         // A booking names its pin by key, and the suppression in `burn_shares` matches that key against the live
-        // row, so the reference follows the row under the dated id or the pin would count beside its booking.
+        // row, so the reference follows the row under the dated id or the pin would count beside its booking. The
+        // booking's own model follows the same way, with or without a pin, so its test and its pin's read one id.
         for reservation in self.reservations.values_mut() {
             if let Some(pin) = reservation.pin.as_mut().filter(|pin| pin.model == spelling) {
                 pin.model = dated_id.to_string();
+            }
+            if reservation.model == spelling {
+                reservation.model = dated_id.to_string();
             }
         }
 
@@ -5939,6 +5945,7 @@ mod tests {
             account_id: account.into(),
             attempt,
             pin,
+            model: "m".into(),
             entrypoint: None,
             booked_at,
             rewrite: map(rewrite),
@@ -6162,6 +6169,7 @@ mod tests {
                 account_id: "a".into(),
                 attempt: 1,
                 pin: None,
+                model: "m".into(),
                 entrypoint: None,
                 booked_at: 1_500,
                 rewrite: BTreeMap::new(),
