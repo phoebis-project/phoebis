@@ -12,13 +12,13 @@ use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
     hour_end, hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit,
     names_one_account, open_cooldown_remainders, parse_range, read_account_rollups,
-    read_reconciliations, rewrite_series, series_paged, session_burn_series, AccountRollupRow,
-    FundingFilter, GroupBy, GroupRow, HourlyWindowSample, LedgerError, LiveKeys, Patterns,
-    RequestFilter, RollupFilter, SeriesFilter, TermEnd, TermPair,
+    read_reconciliations, rewrite_series, series_paged, session_burn_series, term_end_of,
+    AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample, LedgerError, LiveKeys,
+    Patterns, RequestFilter, RollupFilter, SeriesFilter, TermEnd,
 };
 use phoebis_routing::{
-    account_window_id, is_weekly_window, term, window_deadline, BurnUnit, UtilizationSample,
-    WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    account_window_id, term, window_deadline, BurnUnit, UtilizationSample, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
@@ -1425,11 +1425,8 @@ pub(crate) async fn unused_allowance(
     let term_ends: BTreeMap<String, TermEnd> = ended
         .into_iter()
         .map(|(id, held, end)| {
-            let pairs = reported
-                .get(id)
-                .map(|sample| weekly_pairs_before(sample, held.plan_ended_at))
-                .unwrap_or_default();
-            (id.clone(), TermEnd { end_at: end, pairs })
+            let term_end = term_end_of(end, reported.get(id), held.plan_ended_at);
+            (id.clone(), term_end)
         })
         .collect();
     let rows = match state
@@ -1476,39 +1473,6 @@ pub(crate) async fn unused_allowance(
         })
         .collect();
     Json(UnusedAllowance { from, to, accounts }).into_response()
-}
-
-/// The pair of each weekly window's stored reading, keyed as the ledger's allowance read keys its rows, where the
-/// reading was observed before `flagged`, the account's plan-ended flag, or wherever no flag stands. A reading's pair is
-/// the plan's as long as it landed while the stored profile still named the plan, which the flag's instant ends: the
-/// poll reads an account past a saved end until the flag stops it. Where two windows fold into one key, the newer
-/// reading stands.
-fn weekly_pairs_before(
-    sample: &UtilizationSample,
-    flagged: Option<i64>,
-) -> BTreeMap<String, TermPair> {
-    let mut kept: BTreeMap<String, &WindowReading> = BTreeMap::new();
-    for (window, reading) in &sample.windows {
-        if !is_weekly_window(window) || flagged.is_some_and(|at| reading.observed_at >= at) {
-            continue;
-        }
-        let key = account_window_id(window).to_string();
-        if kept
-            .get(&key)
-            .is_none_or(|stood| stood.observed_at < reading.observed_at)
-        {
-            kept.insert(key, reading);
-        }
-    }
-    kept.into_iter()
-        .map(|(window, reading)| {
-            let pair = TermPair {
-                plan: reading.plan.clone(),
-                tier: reading.tier.clone(),
-            };
-            (window, pair)
-        })
-        .collect()
 }
 
 /// The rewrite tokens per bucket, the moves over the range and the slow-down's held time per bucket.

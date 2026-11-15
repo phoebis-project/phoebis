@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use phoebis_oauth::ClaimOutcome;
-use phoebis_routing::{account_window_id, is_weekly_window, WINDOW_DROP_MARGIN};
+use phoebis_routing::{
+    account_window_id, is_weekly_window, UtilizationSample, WindowReading, WINDOW_DROP_MARGIN,
+};
 use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection};
 
@@ -62,6 +64,48 @@ pub struct TermPair {
 pub struct TermEnd {
     pub end_at: i64,
     pub pairs: BTreeMap<String, TermPair>,
+}
+
+/// The term end at `end_at` with the pair of each weekly window's reading in the router's stored `sample`, keyed as
+/// `unused_allowance` keys its rows, where the reading was observed before `plan_ended_at`, the account's plan-ended
+/// flag, or wherever no flag stands. A reading's pair is the plan's as long as it landed while the stored profile still
+/// named the plan, which the flag's instant ends: the poll reads an account past a saved end until the flag stops it.
+/// Where two windows fold into one key, the newer reading stands. With no sample the term end holds no pair.
+pub fn term_end_of(
+    end_at: i64,
+    sample: Option<&UtilizationSample>,
+    plan_ended_at: Option<i64>,
+) -> TermEnd {
+    let Some(sample) = sample else {
+        return TermEnd {
+            end_at,
+            pairs: BTreeMap::new(),
+        };
+    };
+    let mut kept: BTreeMap<String, &WindowReading> = BTreeMap::new();
+    for (window, reading) in &sample.windows {
+        if !is_weekly_window(window) || plan_ended_at.is_some_and(|at| reading.observed_at >= at) {
+            continue;
+        }
+        let key = account_window_id(window).to_string();
+        if kept
+            .get(&key)
+            .is_none_or(|stood| stood.observed_at < reading.observed_at)
+        {
+            kept.insert(key, reading);
+        }
+    }
+    let pairs = kept
+        .into_iter()
+        .map(|(window, reading)| {
+            let pair = TermPair {
+                plan: reading.plan.clone(),
+                tier: reading.tier.clone(),
+            };
+            (window, pair)
+        })
+        .collect();
+    TermEnd { end_at, pairs }
 }
 
 /// The members of a `window_reset` row's detail the read takes.
