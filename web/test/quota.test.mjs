@@ -245,14 +245,14 @@ test('the Quota page lists a subscription account that is paired, not awaiting r
   assert.equal(d.isQuotaListed({ kind: 'oauth', planEndedAt: ended, status: 'cooldown' }), false, 'a flagged account in cooldown');
 });
 
-test('the plan-ended sentence reads its age in the long form and in the compact one the account cards draw', () => {
+test("noWindowSentence reads an ended plan's age in the long form and in the compact one the account cards draw", () => {
   const now = Date.UTC(2026, 8, 16, 14, 30);
   const ended = new Date(now - 4 * 3_600_000).toISOString();
   const ago = d.fmtRelative(ended, now);
   assert.equal(ago, '4h ago');
-  assert.equal(d.planEndedSentence(ended, now), 'No quota window is read since the plan ended 4h ago.');
-  assert.equal(d.planEndedSentence(ended, now, false), `No quota window is read since the plan ended ${ago}.`);
-  assert.equal(d.planEndedSentence(ended, now, true), 'No window since the plan ended 4h ago');
+  const flagged = { kind: 'oauth', planEndedAt: ended, status: 'ready' };
+  assert.equal(d.noWindowSentence(flagged, now), 'No quota window is read since the plan ended 4h ago.');
+  assert.equal(d.noWindowSentence(flagged, now, true), 'No window since the plan ended 4h ago');
 });
 
 test("noWindowSentence reads a passed canceled end ahead of a row's state", () => {
@@ -261,6 +261,12 @@ test("noWindowSentence reads a passed canceled end ahead of a row's state", () =
   // The router reads a canceled end at or before now as an ended term, so the end on the clock has passed.
   assert.equal(d.noWindowSentence(unpaired('2026-09-16T14:30:00.000Z'), now), 'No quota window is read since the plan ended now.');
   assert.equal(d.noWindowSentence(unpaired('2026-09-16T14:30:00.001Z'), now), 'Not paired, so no quota window is read.');
+});
+
+test('noWindowSentence reads no state on an API-key row, which reports no window in any state', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const key = { canceled: false, kind: 'api_key', planEndedAt: null, status: 'reauth_required', subscription: null };
+  assert.equal(d.noWindowSentence(key, now, true), 'No quota windows');
 });
 
 test("the priced tier is the stored one under the six tiered plan words while the cost table holds its row, and none with the gate's reason otherwise", () => {

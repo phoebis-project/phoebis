@@ -225,17 +225,19 @@ export const isQuotaListed = (account: Pick<Account, 'kind' | 'planEndedAt' | 's
 
 /** The no-window sentence of an account whose plan ended: the long form, or the compact one the account cards and the
  *  Accounts list's rows draw in their window bars' place. */
-export const planEndedSentence = (planEndedAt: string, now: number, compact = false): string =>
+const planEndedSentence = (planEndedAt: string, now: number, compact = false): string =>
   compact ? `No window since the plan ended ${fmtRelative(planEndedAt, now)}` : `No quota window is read since the plan ended ${fmtRelative(planEndedAt, now)}.`;
 
 /**
- * The sentence of an account that holds no quota window, long or compact. An ended term reads first, then a canceled
- * end at or before now on a row that is not paired or needs re-auth, since no poll sets the flag on such a row, then
- * that row's state in the badge's words, then the sentence of an account that has no reading or reports no window.
+ * The sentence of an account that holds no quota window, long or compact. An ended term reads first. On a subscription
+ * account that is not paired or needs re-auth, whose windows the router withholds, a canceled end at or before now
+ * reads next, since no poll sets the flag on such a row, then that row's state in the badge's words. Every other
+ * account, an API-key account in any state among them, reads the sentence of an account that has no reading or reports
+ * no window.
  */
 export const noWindowSentence = (account: Account, now: number, compact = false): string => {
   if (account.planEndedAt !== null) return planEndedSentence(account.planEndedAt, now, compact);
-  if (account.status === 'unpaired' || account.status === 'reauth_required') {
+  if (isSubscription(account) && (account.status === 'unpaired' || account.status === 'reauth_required')) {
     const end = canceledEndOf(account);
     if (end !== null && Date.parse(end) <= now) return planEndedSentence(end, now, compact);
     return compact ? `${STATUS_LABEL[account.status]}, no window` : `${STATUS_LABEL[account.status]}, so no quota window is read.`;

@@ -19,7 +19,7 @@ import { matchesPattern } from '@/lib/pattern';
 import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patterns';
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, type OrderKey } from '@/lib/requests';
-import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, usageOf } from './accounts';
+import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, lastReadingOf, usageOf, withholdsWindows } from './accounts';
 import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
 import { ATTENTION, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
@@ -764,7 +764,8 @@ export class MockApi implements Api {
   /**
    * A list read at least `FIRST_POLL_MS` after a confirm lands that confirm's first reading on its row, where the row
    * reads no window yet. Keyed on the clock rather than a count of reads, since the confirm's reload and the refresh
-   * the closing dialog resumes read the list at once on a live clock.
+   * the closing dialog resumes read the list at once on a live clock. A row that lost its credential since the confirm
+   * takes none, since the router's poll and its token manager read no such account.
    */
   private landFirstPolls() {
     const at = mockClock.now();
@@ -772,7 +773,7 @@ export class MockApi implements Api {
       if (at - confirmedAt < FIRST_POLL_MS) continue;
       this.firstPolls.delete(id);
       const a = this.accounts.find((x) => x.id === id);
-      if (a && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w, observedAt: iso(at) })) });
+      if (a && !withholdsWindows(a) && a.windows.length === 0 && a.fableWindow === null) this.putAccount({ ...a, windows: FIRST_READING.map((w) => ({ ...w, observedAt: iso(at) })) });
     }
   }
 
@@ -1076,9 +1077,9 @@ export class MockApi implements Api {
   async disconnectAccount(accountId: string) {
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
-    // the poll's standing goes too. The usage block keeps the last reading's instant off the windows the row held,
-    // while the answer withholds them, as it does every disconnected row's.
-    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, fableWindow: null, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }), windows: [] }));
+    // the poll's standing goes too. The usage block keeps the instant of the last reading, which the answer of a row
+    // needing re-auth already withholds, and the stored row holds no window, as the answer withholds them.
+    this.putAccount(revised({ ...a, credential: NO_CREDENTIAL, fableWindow: null, status: 'unpaired', usage: usageOf({ ...a, ...lastReadingOf(a), status: 'unpaired' }), windows: [] }));
     return latency(undefined, 250);
   }
 

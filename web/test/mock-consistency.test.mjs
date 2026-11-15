@@ -404,8 +404,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
     // The ledger reads the 5-hour peak off the heads' 5-hour readings, which an account without the window never sends,
     // and the story's cooldowns come from that peak alone. The answer withholds the windows of a row that is not paired
-    // or needs re-auth, so its window set reads on neither side.
-    const has5h = new Map(s.accounts.filter((a) => a.status !== 'unpaired' && a.status !== 'reauth_required').map((a) => [a.id, a.windows.some((w) => w.id === '5h')]));
+    // or needs re-auth, so such a row's window set reads off the windows of its quota history, the reading the ledger
+    // keeps.
+    const withheld = (a) => a.status === 'unpaired' || a.status === 'reauth_required';
+    const sets = await Promise.all(s.accounts.map(async (a) => [a.id, withheld(a) ? (await s.api.getQuotaHistory(a.id)).map((h) => h.windowId) : a.windows.map((w) => w.id)]));
+    const has5h = new Map(sets.map(([id, ids]) => [id, ids.includes('5h')]));
     const without = facts.filter((r) => has5h.get(r.accountId) === false);
     const withWindow = facts.filter((r) => has5h.get(r.accountId) === true);
     assert.ok(without.length > 0 && withWindow.length > 0, 'the story holds account facts on both sides');

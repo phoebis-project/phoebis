@@ -633,8 +633,11 @@ function resolvedPlan(a: Pick<Seed, 'subscription' | 'usageBased'>): PlanWord | 
   return PLAN_OF_TYPE.get(sub.organizationType) ?? PLAN_OF_TIER.get(sub.rateLimitTier) ?? null;
 }
 
-/** Whether the route withholds a row's windows for its state: not paired, or awaiting re-authentication. */
-const withholdsWindows = (a: Pick<Account, 'status'>): boolean => a.status === 'unpaired' || a.status === 'reauth_required';
+/**
+ * Whether a row's state holds no credential the router reads: not paired, or awaiting re-authentication. The route
+ * withholds such a row's windows, and the poll reads no such account.
+ */
+export const withholdsWindows = (a: Pick<Account, 'status'>): boolean => a.status === 'unpaired' || a.status === 'reauth_required';
 
 /** Each row's last reading as the final map builds it, ahead of the state's withholding. */
 const READINGS = new Map<string, Pick<Account, 'fableWindow' | 'windows'>>();

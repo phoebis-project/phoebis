@@ -2741,9 +2741,16 @@ expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour li
   results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
 }
 {
-  // The timeline draws no lane for legacy or spare, whose windows the route withholds, and none for the sunset seed,
-  // whose plan ended.
-  const lanes = [...m.container.querySelectorAll('.lane .lane__name')].map((n) => n.textContent?.trim() ?? '');
+  // The timeline leaves out a disconnected account and one awaiting re-authentication whatever windows its row carries:
+  // the route withholds the windows of legacy and spare, so the list here hands both primary's, and neither draws a
+  // lane. The sunset seed, whose plan ended, draws none either.
+  const { listAccounts } = api;
+  const primary = (await listAccounts.call(api)).find((a) => a.id === 'primary');
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'legacy' || a.id === 'spare' ? { ...a, fableWindow: primary.fableWindow, windows: primary.windows } : a));
+  const page = await mount('/quota#quota-windows');
+  api.listAccounts = listAccounts;
+  const lanes = [...page.container.querySelectorAll('.lane .lane__name')].map((n) => n.textContent?.trim() ?? '');
+  page.unmount();
   results.push({ name: '/quota#quota-windows draws no lane for a disconnected account, one awaiting re-authentication or one whose plan ended', ok: lanes.length > 0 && !lanes.includes('legacy') && !lanes.includes('spare') && !lanes.includes('sunset'), missing: lanes });
 }
 {
@@ -4546,10 +4553,6 @@ await m.navigate('/accounts/reserve');
     ok: refusedAnswer === 404 && fresh !== refused && freshSubmitted && openAtConfirm && JSON.stringify(confirms.calls) === JSON.stringify([[fresh]]) && closed,
     missing: [`the refused pairing's confirm ${refusedAnswer}`, `fresh pairing ${fresh === refused ? 'none' : 'started'}`, `Confirm enabled ${freshSubmitted}`, `open at the confirm ${openAtConfirm}`, `confirmPairing ${confirms.calls.length} calls`, `${openDialogs(page).length} open`],
   });
-  // The route withholds the disconnected row's windows, so the fresh confirm's first reading lands on the list read
-  // two seconds on. It lands here, on the row the case puts back, and never on the story's legacy after it.
-  tick(2_000);
-  await api.listAccounts();
   delete api.startPairing;
   page.unmount();
   api.putAccount(legacy);

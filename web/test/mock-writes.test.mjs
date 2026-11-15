@@ -679,6 +679,20 @@ test("a re-pair of a held account clears the row's limit resets and moves the re
   }
 });
 
+test("a re-pair's confirm clears the held row's flag, so spare, routed with no cooldown, reads ready and legacy, whose routing is off, reads paused", async () => {
+  const api = await signedIn();
+  const repair = async (accountId) => {
+    const started = await api.startPairing({ accountId });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    return api.confirmPairing(started.id);
+  };
+  // The story seals legacy's credential under another storage key, so its re-pair confirms after a disconnect.
+  await api.disconnectAccount('legacy');
+  await repair('spare');
+  await repair('legacy');
+  assert.deepEqual([(await storyAccount(api, 'spare')).status, (await storyAccount(api, 'legacy')).status], ['ready', 'paused']);
+});
+
 test("a second re-pair of legacy after its disconnect and a confirm confirms, since the confirm stored a credential under the key in use", async () => {
   const api = await signedIn();
   const repair = async () => {
@@ -731,6 +745,34 @@ test("a disconnect keeps the row's last reading in its usage block, with no erro
   await api.disconnectAccount('reserve');
   const { usage } = await storyAccount(api, 'reserve');
   assert.deepEqual([usage.error, usage.fetchedAt, usage.poll], [null, '2026-09-14T11:30:00.000Z', null]);
+});
+
+test("a disconnect of an account that needs re-auth keeps the instant of the last reading its answer withholds", async () => {
+  const api = await signedIn();
+  const read = (await storyAccount(api, 'legacy')).usage.fetchedAt;
+  await api.disconnectAccount('legacy');
+  const { usage } = await storyAccount(api, 'legacy');
+  assert.equal(typeof read, 'string', 'legacy names the instant of its last clean read before the disconnect');
+  assert.deepEqual([usage.error, usage.fetchedAt, usage.poll], [null, read, null]);
+});
+
+test('a first reading lands on no row that a disconnect left without a credential after its confirm', async () => {
+  // The case holds the clock the mock reads and steps it past the first poll's few seconds instead of waiting.
+  const wall = Date.now;
+  let now = wall();
+  Date.now = () => now;
+  try {
+    const api = await signedIn();
+    const started = await api.startPairing({ accountId: 'spare' });
+    await api.completePairing(started.id, { code: 'code', state: started.state });
+    await api.confirmPairing(started.id);
+    await api.disconnectAccount('spare');
+    now += 2_200;
+    const spare = await storyAccount(api, 'spare');
+    assert.deepEqual([spare.windows, spare.fableWindow], [[], null]);
+  } finally {
+    Date.now = wall;
+  }
 });
 
 test('a funding clear on a paused account leaves it paused', async () => {
