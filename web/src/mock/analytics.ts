@@ -468,6 +468,13 @@ function bucketsOf(range: Range): { bucketMs: number; slotOf: (ms: number) => nu
   return { bucketMs, slotOf: (ms) => Math.floor((ms - starts[0]) / bucketMs), starts };
 }
 
+/**
+ * The whole hours a range touches, as the routes bound the request rows and the rollup hours they read: from the start
+ * of the hour that holds the range's start up to the hour ceiling of its end, which the window leaves out. A six-hour
+ * or daily bucket can start before the first of these hours and end past the last.
+ */
+const wholeHoursOf = (range: Range): { fromMs: number; toMs: number } => ({ fromMs: startOfHour(Date.parse(range.from)), toMs: hourCeil(Date.parse(range.to)) });
+
 const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
 
 /**
@@ -639,10 +646,13 @@ const FIT_TURNS = ['fits', 'fits', 'rewrite_only', 'fits', 'least_bad', 'fits', 
  * as the route answers it. The held time per bucket folds the request rows as the ledger folds the completions, since
  * no account rollup the console reads carries it: the slow-down waits of the bucket's requests summed, and the
  * requests that waited one. The moves and the rewrite tokens keep the named accounts' rows, and the held time the named
- * accounts' and pools', since the account rollups carry no pool.
+ * accounts' and pools', since the account rollups carry no pool. All three read the whole hours the range touches, as
+ * the route reads its rollup hours, and keep their points on the bucket grid.
  */
 export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], events: readonly RoutingEvent[], range: Range, filters: Pick<AnalyticsQuery, 'accountIds' | 'poolIds'> = {}): RewritesAnswer {
   const { slotOf, starts } = bucketsOf(range);
+  const hours = wholeHoursOf(range);
+  const inHours = (ms: number) => ms >= hours.fromMs && ms < hours.toMs;
   const accounts = filters.accountIds ?? [];
   const pools = filters.poolIds ?? [];
   const ofAccounts = (accountId: string) => accounts.length === 0 || accounts.includes(accountId);
@@ -650,16 +660,17 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
   // parsed hour, and the requests that waited on a slow-down, each with its summed wait.
   const moved = starts.map((): { hour: number; r: AccountRollup }[] => []);
   for (const r of rollups) {
-    if (r.pins.migratedIn === 0 || !ofAccounts(r.accountId)) continue;
     const hour = Date.parse(r.hour);
+    if (r.pins.migratedIn === 0 || !ofAccounts(r.accountId) || !inHours(hour)) continue;
     moved[slotOf(hour)]?.push({ hour, r });
   }
   const slowedMs = starts.map((): number[] => []);
   for (const r of requests) {
+    const at = Date.parse(r.at);
     // The ledger files a request no attempt served under the unattributed id, as its rollups key the row.
-    if (!ofAccounts(r.accountId ?? '-') || (pools.length > 0 && !pools.includes(r.poolId ?? '-'))) continue;
+    if (!inHours(at) || !ofAccounts(r.accountId ?? '-') || (pools.length > 0 && !pools.includes(r.poolId ?? '-'))) continue;
     const slowed = (r.held?.waits ?? []).filter((w) => w.reason === 'slow_down');
-    if (slowed.length > 0) slowedMs[slotOf(Date.parse(r.at))]?.push(sumOf(slowed, (w) => w.heldMs));
+    if (slowed.length > 0) slowedMs[slotOf(at)]?.push(sumOf(slowed, (w) => w.heldMs));
   }
   const movesByReasonAndFit: Record<string, Record<string, number>> = {};
   const addMove = (reason: string, fit: string, n: number) => {
@@ -680,8 +691,9 @@ export function rewritesOf(rollups: AccountRollup[], requests: RequestLog[], eve
   // The ledger files a move in its hour's row, so the range keeps it wherever it keeps that hour's synthetic moves. The
   // move's word stands in its serving attempt's trace, so the ledger books that attempt's cache write as rewrite tokens.
   for (const e of events) {
-    const slot = slotOf(startOfHour(Date.parse(e.at)));
-    if (forcedReasons(e) === null || starts[slot] === undefined || !ofAccounts(e.accountId ?? '-')) continue;
+    const hour = startOfHour(Date.parse(e.at));
+    if (forcedReasons(e) === null || !inHours(hour) || !ofAccounts(e.accountId ?? '-')) continue;
+    const slot = slotOf(hour);
     addMove(typeof e.detail.reason === 'string' ? e.detail.reason : 'unknown', typeof e.detail.fit === 'string' ? e.detail.fit : 'unknown', 1);
     const served = requests.find((r) => r.keyId === e.keyId && r.sessionId === e.sessionId && r.canonicalModel === e.model && r.at === e.at);
     if (served) points[slot].rewriteTokens += served.usage.cacheWrite5m + served.usage.cacheWrite1h;
@@ -707,17 +719,16 @@ function passesRequestFilters(r: RequestLog, q: Pick<AnalyticsQuery, 'accountIds
 
 /**
  * Placements by rung off the request rows' traces, as the route counts them: each attempt that placed and carried
- * usage, a hit by the rule the request drawer reads its cache line by. The route narrows by the range, the accounts,
- * the keys, the pools, the models and the client and user agent patterns here. It leaves the probes out too, and no
- * probe places in the story.
+ * usage, a hit by the rule the request drawer reads its cache line by. The route reads the request rows of the whole
+ * hours the range touches and narrows them by the accounts, the keys, the pools, the models and the client and user
+ * agent patterns here. It leaves the probes out too, and no probe places in the story.
  */
 export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'accountIds' | 'clients' | 'from' | 'keyIds' | 'models' | 'poolIds' | 'to' | 'userAgents'>): PlacementRow[] {
-  const fromMs = Date.parse(q.from);
-  const toMs = Date.parse(q.to);
+  const { fromMs, toMs } = wholeHoursOf(q);
   const byRung = new Map<string, Omit<PlacementRow, 'hitShare'>>();
   for (const r of requests) {
     const at = Date.parse(r.at);
-    if (at < fromMs || at > toMs) continue;
+    if (at < fromMs || at >= toMs) continue;
     if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
     if (q.poolIds?.length && !q.poolIds.includes(r.poolId ?? '-')) continue;
     if (!passesRequestFilters(r, q)) continue;

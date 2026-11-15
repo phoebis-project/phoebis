@@ -24,7 +24,7 @@ import { SectionBar } from '@/components/SectionBar';
 import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
-import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -209,6 +209,11 @@ const bucketsOf = (points: AnalyticsPoint[]): Bucket[] => points.map((p) => ({ a
 /** Whether a group counts a request. A group of refused requests alone counts none, and only the Traffic table's
  *  Refused column has a figure for it. */
 const countsRequest = (g: { requests: number }): boolean => g.requests > 0;
+/** A read's answer with the range's start and end it was read for and the instant it left at. */
+type Stamped<T> = { answer: T; endMs: number; fromMs: number; readAt: number };
+/** Whether a bucket chart's first and last buckets each hold only part of their width. */
+type PartialEnds = { first: boolean; last: boolean };
+const WHOLE_ENDS: PartialEnds = { first: false, last: false };
 /**
  * A read that runs while `reads` holds and answers null without a request otherwise (a hidden tab, the rollups in a
  * session view, a side the unit leaves out). It holds its refresh while it reads nothing, since each empty answer still
@@ -372,21 +377,20 @@ export function AnalyticsPage() {
     { paused: paused || sessionId === null, refreshMs: reload.refreshMs },
   );
   const accountRollups = useGatedRead(tab === 'accounts', () => api.listAccountRollups(fromIso, toIso), [fromIso, toIso, tab, generation], reload);
-  // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
-  // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
-  // the same hour has seen more of it.
+  // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant,
+  // and the range pill names its window from the range's start it was read for. The instant is the read's own: the
+  // range clock stands still while another tab is open, and a read made later in the same hour has seen more of it.
   const burn = useGatedRead(
     tab === 'burn',
     () => {
       const readAt = clock.now();
-      return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, keyIds: filters.keyId, poolIds: filters.poolId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, readAt }));
+      return readBurn(api, { from: fromIso, to: toIso }, pageBy, { accountIds: filters.accountId, keyIds: filters.keyId, poolIds: filters.poolId, userAgentGroups: agentGroups }).then((read) => ({ ...read, endMs: span.toMs, fromMs: span.fromMs, readAt }));
     },
     [fromIso, toIso, pageBy, filters.accountId, filters.keyId, filters.poolId, agentGroups, tab, generation],
     reload,
   );
-  /** A read with the range's end and the instant it left at, so its card's last-bucket note reads its own answer. */
-  const stamped = <T,>(read: Promise<T>, readAt: number): Promise<{ answer: T; endMs: number; readAt: number }> =>
-    read.then((answer) => ({ answer, endMs: span.toMs, readAt }));
+  /** A read with the range's start and end and the instant it left at, so its card's notes read its own answer. */
+  const stamped = <T,>(read: Promise<T>, readAt: number): Promise<Stamped<T>> => read.then((answer) => ({ answer, endMs: span.toMs, fromMs: span.fromMs, readAt }));
   // The registry's list, for the account slots alone: the range's option list holds the accounts with traffic and
   // differs from the Dashboard's, and one account keeps one color across the views. It reads with the window, since
   // each answer redraws every chart of the open tab for colors, hints and resets that seldom move.
@@ -531,16 +535,22 @@ export function AnalyticsPage() {
   // The route chooses the bucket width; reading it back off two points keeps the ticks honest when that
   // choice differs from what the range rule would have picked.
   const bucketMs = buckets.length > 1 ? buckets[1].at - buckets[0].at : rangeBucketMs;
-  // A route sums whole hours up to the hour ceiling of the range's end, and a session view's fold of the request log
-  // stops at the end itself.
-  const partial = lastBucketPartial(buckets, bucketMs, span.toMs, now, sessionId === null);
-  /** A stamped read's last-bucket flag, off its own buckets, their width, its own end and the instant it left at. Each
-   *  stamped read is a route's read, the rewrites read in a session view too, so the hour ceiling holds. False until
-   *  the read answers. */
-  const stampedPartial = <T,>(read: { answer: T; endMs: number; readAt: number } | null, pointsOf: (answer: T) => readonly { at: string }[]): boolean => {
-    if (read === null) return false;
+  // A route sums whole hours from the hour that holds the range's start up to the hour ceiling of its end, and a
+  // session view's fold of the request log reads the range itself.
+  const partial: PartialEnds = {
+    first: firstBucketPartial(buckets, coveredWindow(sessionId === null ? 'rollup' : 'session', span, now, null).fromMs),
+    last: lastBucketPartial(buckets, bucketMs, span.toMs, now, sessionId === null),
+  };
+  /** A stamped read's two flags, off its own buckets, their width, its own range and the instant it left at. Each
+   *  stamped read is a route's read, the rewrites read in a session view too, so the whole hours hold. False until the
+   *  read answers. */
+  const stampedPartial = <T,>(read: Stamped<T> | null, pointsOf: (answer: T) => readonly { at: string }[]): PartialEnds => {
+    if (read === null) return WHOLE_ENDS;
     const own = pointsOf(read.answer).map((p) => ({ at: Date.parse(p.at) }));
-    return lastBucketPartial(own, own.length > 1 ? own[1].at - own[0].at : rangeBucketMs, read.endMs, read.readAt, true);
+    return {
+      first: firstBucketPartial(own, coveredWindow('rollup', { fromMs: read.fromMs, toMs: read.endMs }, read.readAt, null).fromMs),
+      last: lastBucketPartial(own, own.length > 1 ? own[1].at - own[0].at : rangeBucketMs, read.endMs, read.readAt, true),
+    };
   };
   const groups = useMemo(() => (stale ? [] : sessionId === null ? (breakdown.data ?? []) : foldGroups(kept, groupBy, { agentGroups }, latest)), [stale, sessionId, breakdown.data, kept, groupBy, agentGroups, latest]);
   const byPoolAnswer = byPool.current;
@@ -692,7 +702,7 @@ export function AnalyticsPage() {
           disabled={disabled}
           filters={a}
           options={barOptions}
-          range={{ now: clock.now, window: { from: span.fromMs, to: span.toMs } }}
+          range={{ now: clock.now, sentence: rangeSentenceOf(tab, sessionId !== null, coveredWindow('rollup', span, now, null), burn.current), window: { from: span.fromMs, to: span.toMs } }}
           ref={filtersRef}
           refresh={{
             disabled: ended ? ENDED_RANGE : undefined,
@@ -753,7 +763,7 @@ export function AnalyticsPage() {
               {/* Its own error with Try again, as a card reading a route of its own draws one, and no count while the
                   answer is stale, so no figure stands under links for filters it was not read for. */}
               <Card
-                title="Refusals by category"
+                title={REFUSAL_CATEGORIES_TITLE}
                 subtitle={sentences(['Answers the upstream refused in range, by model and category, each a request that succeeded', refusalCategories.current === null ? null : `${plural(refusalCategories.current.fallbacks, 'request')} presented a fallback token`, refusalsNote(sessionId !== null)])}
               >
                 {refusalCategories.error !== null ? (
@@ -1974,7 +1984,7 @@ function stackOf(points: AnalyticsPoint[], value: (g: AnalyticsGroup) => number 
  * Native stacks the plan rows' Pro-week figure per bucket, its axis and tooltip in the chosen week, and draws the billed
  * rows' dollars on a card of their own. A group sums every account it holds, so the chart carries no hint.
  */
-function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, partial, reading, unit }: { axis: TimeAxis; failure: WeekReading['failure']; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; partial: boolean; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition }) {
+function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, partial, reading, unit }: { axis: TimeAxis; failure: WeekReading['failure']; groupBy: GroupBy; groupSlot: (key: string) => string; loading: boolean; partial: PartialEnds; points: AnalyticsPoint[]; reading: WeekReading; unit: UnitPosition }) {
   const ink = useChartInk();
   const stack = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.costEquivalent, true, (g) => g.costEquivalent === null) : stackOf(points, (g) => g.costUsd)), [points, unit]);
   const billed = useMemo(() => (unit === 'native' ? stackOf(points, (g) => g.billedUsd, true) : null), [points, unit]);
@@ -2047,9 +2057,34 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, parti
 }
 
 const UNFILTERED_NOTE = '. The filters above do not apply here';
+const FIRST_PARTIAL_NOTE = "The first bucket is partial: it holds the traffic from the window's start";
 const SUMMED_PARTIAL_NOTE = "The last bucket is partial: it holds the traffic up to the range's end";
-/** A bucket chart's subtitle, with the note where its last bucket is partial. */
-const noted = (subtitle: string, partial: boolean, note = SUMMED_PARTIAL_NOTE): string => (partial ? `${subtitle}. ${note}` : subtitle);
+/** A bucket chart's subtitle, with a note for each end bucket that is partial, the first ahead of the last as the chart
+ *  draws them. */
+const noted = (subtitle: string, partial: PartialEnds, note = SUMMED_PARTIAL_NOTE): string => sentences([subtitle, partial.first ? FIRST_PARTIAL_NOTE : null, partial.last ? note : null]);
+// Each read by its card and by the range pill's sentence, which names the three Traffic cards that read a route of
+// their own in a session view, so a renamed card renames the sentence too.
+const MIGRATION_REWRITES_TITLE = 'Migration rewrites';
+const REFUSAL_CATEGORIES_TITLE = 'Refusals by category';
+const GUARDRAILS_TITLE = 'Guardrails';
+const spanWords = (w: { fromMs: number; toMs: number }): string => `${fmtAbsolute(w.fromMs)} to ${fmtAbsolute(w.toMs)}`;
+/**
+ * The range pill's sentence: the window the open tab's cards read, by the tab first and the view second. The burn read
+ * and the account rollups send no session, so Burn and Accounts name their route's window in a session view too, where
+ * three Traffic cards read their routes beside the folded ones. Burn names the window of the answer its cards draw,
+ * whose first bucket the route chose, so it names none until that answer holds a point.
+ */
+function rangeSentenceOf(tab: SectionId, session: boolean, wholeHours: { fromMs: number; toMs: number }, burn: Stamped<{ points: BurnPoint[] }> | null): string | undefined {
+  if (tab === 'burn') {
+    const points = burn?.answer.points ?? [];
+    if (burn === null || points.length === 0) return undefined;
+    const first = points.reduce((at, p) => Math.min(at, Date.parse(p.at)), Number.POSITIVE_INFINITY);
+    return `Reads from the first bucket's start: ${spanWords(coveredWindow('burn', { fromMs: burn.fromMs, toMs: burn.endMs }, burn.readAt, first))}`;
+  }
+  if (tab === 'accounts' || !session) return `Reads whole hours: ${spanWords(wholeHours)}`;
+  if (tab === 'traffic') return `Reads the range itself. ${MIGRATION_REWRITES_TITLE}, ${REFUSAL_CATEGORIES_TITLE} and ${GUARDRAILS_TITLE} read whole hours: ${spanWords(wholeHours)}`;
+  return 'Reads the range itself';
+}
 /** The refusals card's note: the session filter, the one filter of the page the refusal route does not read, if set. */
 function refusalsNote(session: boolean): string | null {
   return session ? 'The session filter does not apply here' : null;
@@ -2077,7 +2112,7 @@ const requestsIn = (p: AnalyticsPoint, key: string) => p.groups.find((g) => g.ke
  * Requests per bucket by the speed their answers reported, else `fast` for a request that asked for it, stacked as
  * Requests by outcome stacks its outcomes.
  */
-function SpeedCard({ axis, points, error, loading, partial }: { axis: TimeAxis; error: string | null; loading: boolean; partial: boolean; points: AnalyticsPoint[] }) {
+function SpeedCard({ axis, points, error, loading, partial }: { axis: TimeAxis; error: string | null; loading: boolean; partial: PartialEnds; points: AnalyticsPoint[] }) {
   const ink = useChartInk();
   const data = useMemo(() => points.map((p): SpeedRow => ({ at: Date.parse(p.at), fast: requestsIn(p, 'fast'), standard: requestsIn(p, 'standard') })), [points]);
   return (
@@ -2110,7 +2145,7 @@ const fitRank = (fit: string) => (MOVE_FITS.includes(fit) ? MOVE_FITS.indexOf(fi
  */
 const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.critical : ink.muted);
 
-function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; partial: boolean; unfiltered: boolean }) {
+function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; partial: PartialEnds; unfiltered: boolean }) {
   const ink = useChartInk();
   const loading = answer === null;
   const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
@@ -2124,7 +2159,7 @@ function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: Re
   const longest = Math.max(1, ...moves.map(([, n]) => n));
   return (
     <ChartCard
-      title="Migration rewrites"
+      title={MIGRATION_REWRITES_TITLE}
       subtitle={noted(`Cache-write tokens the first request after a move wrote, per bucket${unfiltered ? UNFILTERED_NOTE : ''}`, partial)}
       failure={failed(error)}
       loading={loading}
@@ -2227,7 +2262,7 @@ function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis })
 function GuardrailsCard({ answer, error }: { answer: GuardrailCounts | null; error: string | null }) {
   const rows = answer?.guardrails ?? [];
   return (
-    <Card title="Guardrails" subtitle="Matches by guardrail in range, every key" padded={false} className="card--table analytics-guardrails">
+    <Card title={GUARDRAILS_TITLE} subtitle="Matches by guardrail in range, every key" padded={false} className="card--table analytics-guardrails">
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -2575,7 +2610,7 @@ function BurnCharts({
     return (
       <ChartCard
         title={SPEND_TITLE}
-        subtitle={noted(spendNote, partial, PARTIAL_NOTE)}
+        subtitle={noted(spendNote, { first: false, last: partial }, PARTIAL_NOTE)}
         failure={failed(error)}
         loading={loading}
         empty={empty ?? (spent.length === 0 ? 'No account spent dollars in this range.' : undefined)}

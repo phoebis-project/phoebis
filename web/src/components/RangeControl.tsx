@@ -9,6 +9,8 @@ export interface RangeControlProps {
   /** The clock, read while the popover is open and at Apply, so a typed end is capped at the instant the span is written rather than at the page's load. */
   now: () => number;
   onChange: (next: RangeValue) => void;
+  /** The window the view's reads cover, in a sentence the two titles carry after the span. */
+  sentence?: string;
   value: RangeValue;
   /** The window the view shows: the end the group's title names under a preset, and the span the Custom popover opens on. */
   window: { from: number; to: number };
@@ -20,10 +22,11 @@ type Side = 'from' | 'to';
  * Six pills in a 32 px group, 1h, 6h, 24h, 7d, 30d and Custom, the pressed one the address's preset or Custom while a
  * span stands, printing the span. A preset pill is named by the word it prints and carries its label on its title. The
  * group's title reads "Last 24 hours, ends {fmtAbsolute}" under a preset and "{from} to {to}" in fmtAbsolute under a
- * span, and the pressed pill, whose own title covers the group's, carries the same words. It draws `Segmented`'s markup
- * itself, since the Custom pill anchors a popover and the primitive's buttons take no ref.
+ * span, and the pressed pill, whose own title covers the group's, carries the same words. Where the view passes a
+ * sentence, both titles read "{span}. {sentence}". It draws `Segmented`'s markup itself, since the Custom pill anchors
+ * a popover and the primitive's buttons take no ref.
  */
-export function RangeControl({ now, onChange, value, window: shown }: RangeControlProps): JSX.Element {
+export function RangeControl({ now, onChange, sentence, value, window: shown }: RangeControlProps): JSX.Element {
   const boxId = useId();
   const titleId = useId();
   // Held in state through the ref callback, since the hooks lint refuses a ref read while rendering.
@@ -34,6 +37,7 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
   const to = fmtAbsolute(shown.to);
   const label = RANGE_PRESETS.find((p) => p.name === value.preset)?.label ?? value.preset;
   const span = custom ? `${fmtAbsolute(shown.from)} to ${to}` : `${label}, ends ${to}`;
+  const title = sentence === undefined ? span : `${span}. ${sentence}`;
 
   // A field's minute drops the window's seconds and milliseconds, so an untouched field keeps the window's own instant.
   const bound = (side: Side) => (edit === null ? Number.NaN : edit[side] === toLocalInput(edit.base[side]) ? edit.base[side] : Date.parse(edit[side]));
@@ -61,13 +65,13 @@ export function RangeControl({ now, onChange, value, window: shown }: RangeContr
 
   return (
     <>
-      <div className="segmented" role="group" aria-label="Range" title={span}>
+      <div className="segmented" role="group" aria-label="Range" title={title}>
         {RANGE_PRESETS.map((p) => (
-          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.name === value.preset ? span : p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
+          <button key={p.name} type="button" className={p.name === value.preset ? 'is-active' : ''} title={p.name === value.preset ? title : p.label} aria-pressed={p.name === value.preset} onClick={() => choose(p.name)}>
             {p.name}
           </button>
         ))}
-        <button ref={setAnchor} type="button" className={custom ? 'is-active' : ''} aria-pressed={custom} aria-haspopup="dialog" aria-expanded={edit !== null} title={custom ? span : undefined} onClick={toggle}>
+        <button ref={setAnchor} type="button" className={custom ? 'is-active' : ''} aria-pressed={custom} aria-haspopup="dialog" aria-expanded={edit !== null} title={custom ? title : undefined} onClick={toggle}>
           {custom ? spanText(shown.from, shown.to) : 'Custom'}
         </button>
       </div>

@@ -19511,6 +19511,53 @@ await forView('/analytics', async () => {
   }
 });
 
+// The range pill's title names the window the open tab's cards read, by inclusion of its instants, and a card whose
+// first bucket starts before that window notes it.
+await forView('/analytics', async () => {
+  const titleOf = (page) => pressedRange(page)?.getAttribute('title') ?? '';
+  const subtitleOf = (page, title) => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
+  {
+    // The 7-day preset at 14:30 starts at 14:30 on the 9th. The rollup reads sum whole hours from 14:00, and the
+    // routes' six-hour buckets start at 12:00: the page's series and the rewrites read each draw a first bucket that
+    // holds its hours from 14:00 alone, and the burn read reaches back to its first bucket's start.
+    const page = await mount('/analytics?range=7d', { now: CLOCK_ORIGIN });
+    const traffic = { outcome: subtitleOf(page, 'Requests by outcome'), rewrites: subtitleOf(page, 'Migration rewrites'), title: titleOf(page) };
+    await tab(page, 'Burn');
+    const burn = { subtitles: [...page.container.querySelectorAll('#burn .card__subtitle')].map((s) => s.textContent?.trim() ?? ''), title: titleOf(page) };
+    page.unmount();
+    results.push({
+      name: "/analytics under the 7-day preset the range pill names the whole hours on Traffic and the burn read's first bucket on Burn, and the Traffic cards note their partial first bucket",
+      ok:
+        traffic.title.includes(fmtAbsolute(Date.UTC(2026, 8, 9, 14))) &&
+        traffic.outcome === "Per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end" &&
+        traffic.rewrites === "Cache-write tokens the first request after a move wrote, per bucket. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end" &&
+        burn.title.includes(fmtAbsolute(Date.UTC(2026, 8, 9, 12))) &&
+        burn.subtitles.length > 0 &&
+        burn.subtitles.every((s) => !s.includes('The first bucket is partial')),
+      missing: [JSON.stringify(traffic), JSON.stringify(burn)],
+    });
+  }
+  {
+    // A past session span from 02:30 to 09:30 folds the request log over the range itself, while the burn read, the
+    // account rollups and the three Traffic cards with a route of their own send no session and read whole hours: the
+    // span's hourly buckets start at 02:00, and the hour ceiling of its end is 10:00.
+    const session = requests.find((r) => r.agentId === 'c21e')?.sessionId ?? '';
+    const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=2026-09-16T02:30:00.000Z&to=2026-09-16T09:30:00.000Z`, { now: CLOCK_ORIGIN });
+    const titles = { traffic: titleOf(page) };
+    await tab(page, 'Burn');
+    titles.burn = titleOf(page);
+    await tab(page, 'Accounts');
+    titles.accounts = titleOf(page);
+    page.unmount();
+    const start = fmtAbsolute(Date.UTC(2026, 8, 16, 2));
+    results.push({
+      name: "/analytics in a session view the range pill names the whole hours that Burn, Accounts and the Traffic cards reading a route of their own cover",
+      ok: titles.burn.includes(start) && titles.accounts.includes(start) && titles.traffic.includes(start) && titles.traffic.includes(fmtAbsolute(Date.UTC(2026, 8, 16, 10))),
+      missing: [JSON.stringify(titles)],
+    });
+  }
+});
+
 // The running burn bucket keeps its rate, and until it covers a tenth of its width it does not set the axis. jsdom lays
 // nothing out, so the chart containers read a browser's size here.
 await forView('/analytics', async () => {
@@ -24564,12 +24611,13 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     });
   }
   {
-    // A session view's Traffic cards fold the request log, which the route bounds at the range's end, while Migration
-    // rewrites reads its own route, which sums whole hours up to the hour ceiling of that end. The span ends at 09:30,
-    // inside its last hourly bucket, and the clock stands at 14:30: the fold's 09:00 bucket covers it up to 09:30 and
-    // is partial, and the route's covers it to 10:00, its own end, and is whole. A session counts among the filters the
-    // rewrites route passes by, so that card names them.
-    const name = "/analytics a past session span ending inside an hour notes the folded outcome chart's cut last bucket, and Migration rewrites, whole on its route, carries no note";
+    // A session view's Traffic cards fold the request log over the range itself, while Migration rewrites reads its own
+    // route, which sums whole hours from the hour that holds the start up to the hour ceiling of the end. The span runs
+    // from 02:30 to 09:30, inside its first and its last hourly bucket, and the clock stands at 14:30: the fold's 02:00
+    // bucket holds its traffic from 02:30 and its 09:00 bucket up to 09:30, both partial, while the route's two cover
+    // 02:00 to 03:00 and 09:00 to 10:00 and are whole. A session counts among the filters the rewrites route passes by,
+    // so that card names them.
+    const name = "/analytics a past session span starting and ending inside an hour notes the folded outcome chart's cut first and last buckets, and Migration rewrites, whole on its route, carries no note";
     const session = requests.find((r) => r.agentId === 'c21e')?.sessionId ?? '';
     const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=2026-09-16T02:30:00.000Z&to=2026-09-16T09:30:00.000Z`, { now: CLOCK_ORIGIN });
     const subtitleOf = (title) => [...page.container.querySelectorAll('#traffic .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title)?.querySelector('.card__subtitle')?.textContent?.trim() ?? null;
@@ -24577,7 +24625,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     page.unmount();
     results.push({
       name,
-      ok: JSON.stringify(read) === JSON.stringify({ outcome: "Per bucket, stacked. The last bucket is partial: it holds the traffic up to the range's end", rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The filters above do not apply here' }),
+      ok: JSON.stringify(read) === JSON.stringify({ outcome: "Per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end", rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The filters above do not apply here' }),
       missing: [JSON.stringify(read)],
     });
   }

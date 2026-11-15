@@ -775,6 +775,20 @@ export const lastBucketPartial = (buckets: readonly { at: number }[], bucketMs: 
   return last !== undefined && coveredEnd(rangeEndMs, readAt, wholeHours) < last.at + bucketMs;
 };
 
+/** How a read covers its range: a rollup read sums whole hours, the burn read starts at its first bucket, and a
+ *  session view folds the request log over the range itself. */
+export type ReadSource = 'burn' | 'rollup' | 'session';
+/** The window a read covers. Its end is the hour ceiling of the range's end and no later than the read's instant,
+ *  the range's own end in a session view. Its start is the hour that holds the range's start for a rollup read,
+ *  the first bucket's start for the burn read, and the range's own start in a session view. A burn answer with no
+ *  bucket reaches back to nothing, so it starts at the range's own start. */
+export function coveredWindow(source: ReadSource, range: { fromMs: number; toMs: number }, readAt: number, firstBucketAt: number | null): { fromMs: number; toMs: number } {
+  const fromMs = source === 'rollup' ? Math.floor(range.fromMs / HOUR) * HOUR : source === 'burn' && firstBucketAt !== null ? firstBucketAt : range.fromMs;
+  return { fromMs, toMs: coveredEnd(range.toMs, readAt, source !== 'session') };
+}
+/** Whether the first bucket holds only part of its span: the covered start lies after the bucket's own start. */
+export const firstBucketPartial = (buckets: readonly { at: number }[], coveredFromMs: number): boolean => buckets.length > 0 && coveredFromMs > buckets[0].at;
+
 /**
  * A capped axis's top raised to the last tick recharts would draw over [0, top] with `ticks` ticks: handed [0, top] as
  * it stands, recharts closes the round ticks with `top` itself as one more, unround tick.

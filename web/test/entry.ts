@@ -73,7 +73,7 @@ export * from '@/lib/unit';
 export * from '@/lib/windows';
 export { MockApi } from '@/mock';
 export { ACCOUNTS } from '@/mock/accounts';
-export { breakdownOf, burnOf, refusalCategoriesOf } from '@/mock/analytics';
+export { breakdownOf, burnOf, placementsOf, refusalCategoriesOf, rewritesOf } from '@/mock/analytics';
 export { leadOf } from '@/mock/lead';
 export { insideSessionExpiry, refusalOnlyRows, sessionsListedAt, withinNonCompanionTimeout } from '@/mock/operations';
 export { poolById } from '@/mock/pools';

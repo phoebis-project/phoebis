@@ -142,6 +142,25 @@ test("a chart's last bucket is partial where the hours a route sums, a fold's ra
   );
 });
 
+test("a rollup read's window reaches the whole hours a past range touches", () => {
+  // Read a day after the range ended, so no instant cuts the hour ceiling of its end.
+  const range = { fromMs: Date.UTC(2026, 8, 16, 10, 30), toMs: Date.UTC(2026, 8, 16, 11, 30) };
+  assert.deepEqual(d.coveredWindow('rollup', range, Date.UTC(2026, 8, 17, 11, 30), null), { fromMs: Date.UTC(2026, 8, 16, 10), toMs: Date.UTC(2026, 8, 16, 12) });
+});
+
+test("a live range's window ends at the read's instant", () => {
+  // No row past the read exists yet, so the window stops short of the hour ceiling of 23:00.
+  const end = Date.UTC(2026, 8, 16, 22, 31);
+  assert.equal(d.coveredWindow('rollup', { fromMs: end - 24 * HOUR, toMs: end }, end, null).toMs, end);
+});
+
+test('the first bucket is partial only where the covered start lies inside it', () => {
+  // The six-hour buckets of a 7-day range from 18:20 or from 19:20 both start at 18:00, and the whole hours cover
+  // them from 18:00 and from 19:00.
+  const buckets = [{ at: Date.UTC(2026, 8, 9, 18) }, { at: Date.UTC(2026, 8, 10, 0) }];
+  assert.deepEqual([d.firstBucketPartial(buckets, Date.UTC(2026, 8, 9, 18)), d.firstBucketPartial(buckets, Date.UTC(2026, 8, 9, 19))], [false, true]);
+});
+
 test('a capped axis top rises to the last of the five ticks recharts would draw over it', () => {
   // The expected tops are recharts-scale's last value of getNiceTickValues([0, top], 5) for each top.
   const tops = [[1_023, 1_200], [1_000, 1_000], [61.5, 80], [9.2, 12], [0.004, 0.004], [0.0013, 0.0014]];

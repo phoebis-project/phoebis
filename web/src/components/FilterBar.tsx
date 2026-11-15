@@ -28,8 +28,11 @@ export interface FilterBarProps<F extends object> {
   /** The search's placeholder and label, which a view without a search leaves out. The field reads and writes `filters.search` through useCommittedText. */
   placeholder?: string;
   presets?: Record<string, readonly Preset[]>;
-  /** The range slot, which a card view leaves out. It draws while `filters.range` holds a value, and `now` is the clock, as RangeControl reads it. */
-  range?: { now: () => number; window: { from: number; to: number } };
+  /**
+   * The range slot, which a card view leaves out. It draws while `filters.range` holds a value, and `now` is the clock
+   * and `sentence` the window the view's reads cover, as RangeControl reads them.
+   */
+  range?: { now: () => number; sentence?: string; window: { from: number; to: number } };
   refresh: RefreshControlProps;
   /**
    * The sticky variant (Analytics): sticky under the shell's top block, 8 px of vertical padding, the 92 % page tint
@@ -59,7 +62,7 @@ function Bar<F extends object>({ address, children, count, countSizer, dimension
   return (
     <div ref={ref} className={sticky ? 'filter-bar filter-bar--sticky' : 'filter-bar'}>
       <div className="filter-bar__row">
-        {range !== undefined && filters.range !== undefined && <RangeControl now={range.now} onChange={(next) => patch({ range: next })} value={filters.range} window={range.window} />}
+        {range !== undefined && filters.range !== undefined && <RangeControl now={range.now} onChange={(next) => patch({ range: next })} sentence={range.sentence} value={filters.range} window={range.window} />}
         {placeholder !== undefined && <SearchInput aria-label={placeholder} placeholder={placeholder} value={search.draft} onChange={(e) => search.onChange(e.target.value)} onBlur={search.onBlur} onKeyDown={search.onKeyDown} className="filter-bar__search" />}
         {dimensions !== undefined && <AddFilter buttonRef={addFilterRef} dimensions={dimensions} disabled={disabled} edit={edit} filters={filters} onEditDone={() => setEdit(null)} options={options} presets={presets} update={patch} />}
         {children}

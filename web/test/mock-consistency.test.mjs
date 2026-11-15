@@ -264,6 +264,27 @@ test("the pick line's runway keeps the longest of the ties the selection read a 
   assert.deepEqual(ids([tie('a', 600_000, null), tie('b', 900_000, null)]), []);
 });
 
+test("the placements answer counts a row from the hour that holds the range's start up to the hour ceiling of its end", async () => {
+  const d = await import('./dist/api.js');
+  // One static placement that read the cache, a hit, per row.
+  const placed = (at) => ({ at, attempts: [{ selection: { cacheRead: 100, placement: { prefixTokens: 0, rung: 'static' } } }] });
+  // A past range from 21:31 to 23:31: the route reads 21:00 up to midnight, the hour ceiling, which it leaves out.
+  const rows = [placed('2026-09-16T20:59:30.000Z'), placed('2026-09-16T21:10:00.000Z'), placed('2026-09-16T23:45:00.000Z'), placed('2026-09-17T00:00:00.000Z')];
+  const answer = d.placementsOf(rows, { from: '2026-09-16T21:31:00.000Z', to: '2026-09-16T23:31:00.000Z' });
+  assert.deepEqual(answer.map((r) => [r.rung, r.placements]), [['static', 2]], 'the rows of 21:10 and 23:45');
+});
+
+test("the rewrites answer counts a move from the hour that holds the range's start up to the hour ceiling of its end", async () => {
+  const d = await import('./dist/api.js');
+  // A move an account's state forced, which the ledger files in its hour's rollup.
+  const forced = (at) => ({ at, detail: { reason: 'drain', reasons: [] }, kind: 'pin_migrated' });
+  // Seven days from 21:31 on the 9th: the six-hour buckets run from 18:00 on the 9th to midnight on the 16th, and the
+  // route reads the hours from 21:00 on the 9th up to 22:00 on the 16th, the hour ceiling of the end.
+  const events = [forced('2026-09-09T20:10:00.000Z'), forced('2026-09-09T21:10:00.000Z'), forced('2026-09-16T21:45:00.000Z'), forced('2026-09-16T22:10:00.000Z')];
+  const answer = d.rewritesOf([], [], events, { from: '2026-09-09T21:31:00.000Z', to: '2026-09-16T21:31:00.000Z' });
+  assert.deepEqual(answer.moves, { drain: 2 }, 'the moves of 21:10 on the 9th and 21:45 on the 16th');
+});
+
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
 
