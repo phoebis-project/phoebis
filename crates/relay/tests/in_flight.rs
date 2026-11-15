@@ -1516,10 +1516,14 @@ async fn the_budget_holds_a_body_s_parsed_tree_from_before_the_parse_until_the_r
     assert_eq!(
         (
             refused.status().as_u16(),
-            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap(),
+            refused
+                .headers()
+                .get("x-should-retry")
+                .and_then(|value| value.to_str().ok())
         ),
-        (503, "body_budget_exhausted"),
-        "a body whose tree the budget cannot hold is refused"
+        (413, "body_over_budget", Some("false")),
+        "a body whose bytes and tree are more than the whole budget is refused for good"
     );
     drain(refused).await;
 
@@ -1547,6 +1551,114 @@ async fn the_budget_holds_a_body_s_parsed_tree_from_before_the_parse_until_the_r
         assert_eq!(answered.status().as_u16(), 200);
         drain(answered).await;
     }
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_and_tree_at_the_whole_budget_are_served_and_one_byte_over_is_refused_for_good() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    // The plain body's 1,000 bytes and its 9 elements at 363 bytes each, a tree of 3,267, fill a budget of 4,267
+    // exactly. Both budgets are worked from `TREE_BYTES_PER_ELEMENT` at 363, which no suite can import, so a
+    // remeasure of it moves both.
+    let plain = thousand_byte_body("");
+    let filled = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            body_budget_bytes: 4_267,
+            ..default_limits()
+        },
+    )
+    .await;
+    let served = filled
+        .app
+        .clone()
+        .oneshot(declared(&plain, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        served.status().as_u16(),
+        200,
+        "a body and tree equal to the whole budget are served"
+    );
+    drain(served).await;
+
+    let short = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            body_budget_bytes: 4_266,
+            ..default_limits()
+        },
+    )
+    .await;
+    let refused = short
+        .app
+        .clone()
+        .oneshot(declared(&plain, "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (413, "body_over_budget"),
+        "a body and tree one byte over the whole budget are refused for good"
+    );
+    drain(refused).await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_within_the_whole_budget_that_the_bodies_in_flight_leave_no_room_for_answers_503() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        phoebis_relay::Limits {
+            body_budget_bytes: 7_000,
+            ..default_limits()
+        },
+    )
+    .await;
+    // The held read reserves its declared 4,267 bytes from the head on, which stands for the bytes and the tree of
+    // one served plain body. A second plain body's 1,000 bytes and tree of 3,267 fit the whole budget of 7,000, and
+    // 4,267 + 4,267 = 8,534 do not fit beside the held read, so that body only has to wait.
+    let (holder, holder_tx) = channel_request(Some(4_267));
+    let app = h.app.clone();
+    let held = tokio::spawn(async move { app.oneshot(holder).await.unwrap() });
+    // The channel holds one chunk, so the second send returns once the relay took the first, past its reservation.
+    for chunk in [&b"{\"model\":"[..], b" "] {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            holder_tx.send(Ok(Bytes::from_static(chunk))),
+        )
+        .await
+        .expect("the relay takes the chunk")
+        .expect("the relay reads the held body rather than refusing it");
+    }
+
+    let refused = h
+        .app
+        .clone()
+        .oneshot(declared(&thousand_byte_body(""), "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            refused.status().as_u16(),
+            refused.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (503, "body_budget_exhausted"),
+        "a body that fits the whole budget but not beside the bodies in flight is told to come again"
+    );
+    drain(refused).await;
+    drop(holder_tx);
+    held.await.unwrap();
     up.shutdown().await;
 }
 

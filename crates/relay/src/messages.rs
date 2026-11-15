@@ -63,10 +63,10 @@ use crate::classify::{
 use crate::credit::{hex_of, CreditDigest, CreditStore};
 use crate::dispatch::{self, until_canceled, AttemptFailure, Sent};
 use crate::errors::{
-    accounts_at_cap, body_budget_exhausted, drift_words, key_body_reads, key_refusal,
-    no_store_answer, relay_failure, Failure, FailureClass, ACCOUNT_CANCELED, CLIENT_GONE_CODE,
-    GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND, ROUTER_SHUTDOWN_CODE,
-    ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    accounts_at_cap, body_budget_exhausted, body_over_budget, drift_words, key_body_reads,
+    key_refusal, no_store_answer, relay_failure, Failure, FailureClass, ACCOUNT_CANCELED,
+    CLIENT_GONE_CODE, GUARDRAIL_BLOCKED, METHOD_NOT_ALLOWED, MODEL_NOT_ALLOWED, NOT_FOUND,
+    ROUTER_SHUTDOWN_CODE, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
 };
 use crate::exhaustion::{exhaustion_failure, exhaustion_response, pool_moved_failure};
 use crate::facts::{
@@ -1510,6 +1510,11 @@ impl Relay {
             // counts it before it is built and a budget that cannot grant it refuses here.
             let tree_bytes = elements as u64 * TREE_BYTES_PER_ELEMENT;
             let tree_budget = if reservation.is_some() {
+                // The body's reservation holds `raw.len()` here, after the shrinks of the read. Above the whole
+                // budget no wait makes room for the body and its tree, so the refusal is for good.
+                if raw.len() as u64 + tree_bytes > self.limits.body_budget_bytes {
+                    return Err(body_over_budget());
+                }
                 Some(
                     self.body_budget
                         .try_reserve(tree_bytes)

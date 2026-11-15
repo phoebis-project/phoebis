@@ -584,11 +584,13 @@ Refused with:
 upstream accepts, and a value above it is refused as pointless. `body_budget_bytes` is the bytes of bodies the whole
 process holds at once, with each body's parsed tree while the relay holds it, sized for a household whose keys carry
 agent tools that fan out (about 500 one-MiB bodies, or fifteen at the per-body bound, since each body needs room for its
-tree while the relay parses it), and a request that would pass it is refused with the router's own
-`503 body_budget_exhausted`. `key_body_reads` bounds the bodies one key has arriving at once, and a request past it is
-refused `429 key_body_reads` with `Retry-After: 1`. `body_read_seconds` is how long a body may take to arrive after
-authentication, under the stream's idle bound of 600 seconds, and a body that takes longer is answered
-`408 request_timeout`.
+tree while the relay parses it), and a request that would pass it beside the bodies in flight is refused with the
+router's own `503 body_budget_exhausted`. A body whose bytes and parsed tree are above the whole budget can never fit,
+so it is refused for good with `413 body_over_budget`. A body at the per-body bound with 1,000,000 elements needs
+396,554,432 bytes, a little over 378 MiB, so a budget set lower refuses such a body for good. `key_body_reads` bounds
+the bodies one key has arriving at once, and a request past it is refused `429 key_body_reads` with `Retry-After: 1`.
+`body_read_seconds` is how long a body may take to arrive after authentication, under the stream's idle bound of 600
+seconds, and a body that takes longer is answered `408 request_timeout`.
 
 `sign_cch_placeholder` signs a restored `cch=00000` with this build's formula instead of sending the placeholder, off
 until a server rejection of the placeholder proves it necessary.

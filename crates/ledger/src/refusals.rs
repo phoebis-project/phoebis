@@ -13,6 +13,7 @@ const REFUSAL_CODES: &[&str] = &[
     "auth_malformed",
     "auth_missing",
     "auth_unknown",
+    "body_over_budget",
     "body_shape",
     "client_contract",
     "client_drift",

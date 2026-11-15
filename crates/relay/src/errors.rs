@@ -27,8 +27,9 @@ pub(crate) struct Failure {
     pub message: Cow<'static, str>,
     /// The `Retry-After` the answer carries, in seconds.
     pub retry_after: Option<u64>,
-    /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends neither a refused
-    /// credential nor what a guardrail, the contract or the drift check refused.
+    /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends none of the refusals that no
+    /// resend heals: a refused credential, what a guardrail, the contract or the drift check refused, and a body above
+    /// the whole body budget.
     pub no_retry: bool,
     /// The outcome the ledger files the request under, carried by the answer itself so no reader infers it from the
     /// code.
@@ -129,6 +130,26 @@ pub(crate) fn body_budget_exhausted() -> Failure {
         message: Cow::Borrowed("the router holds as many request bytes as it allows"),
         retry_after: None,
         no_retry: false,
+        class: FailureClass::Refused,
+    }
+}
+
+/// The error code of a request whose body and parsed tree are more than the whole of the process's byte budget.
+pub const BODY_OVER_BUDGET: &str = "body_over_budget";
+
+/// 413 `request_too_large`, the message `the request body and its parsed tree are larger than the router's body
+/// budget`, no `Retry-After` and `x-should-retry: false`: the body and the configured budget decide it, whatever the
+/// bodies in flight hold, so no wait makes room for it.
+pub(crate) fn body_over_budget() -> Failure {
+    Failure {
+        status: StatusCode::PAYLOAD_TOO_LARGE,
+        error_type: "request_too_large",
+        code: BODY_OVER_BUDGET,
+        message: Cow::Borrowed(
+            "the request body and its parsed tree are larger than the router's body budget",
+        ),
+        retry_after: None,
+        no_retry: true,
         class: FailureClass::Refused,
     }
 }
@@ -832,8 +853,8 @@ mod tests {
     }
 
     /// A client that retries its 4xx answers would send a blocked request, one the gate, the contract or the drift
-    /// check refused, or a refused credential again unchanged, and no other refusal asks the client to stop, so the
-    /// header rides those answers alone.
+    /// check refused, or a refused credential again unchanged, so those answers carry the header, and none of the
+    /// other arms this case lists does.
     #[test]
     fn no_retry_writes_the_header_and_no_other_arm_does() {
         let errors = [
