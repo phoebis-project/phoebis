@@ -269,10 +269,11 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
 
 function AccountDetail({ account, awaitingReading, generation, now, onToast, onPair, onChanged, settings }: { account: Account; awaitingReading: boolean; generation: number; now: number; onChanged: () => void; onPair: (repair: boolean) => void; onToast: (m: string) => void; settings: Loaded<Settings> }) {
   const navigate = useNavigate();
-  const history = useAsync(() => api.getQuotaHistory(account.id), [account.id]);
   const { week } = useAppSettings();
-  // An API-key account and a usage-based seat report no weekly window, so neither draws the block nor reads its route.
+  // An API-key account and a usage-based seat report no plan window, so neither draws the allowance block or the trend,
+  // nor reads their routes.
   const allowanceShown = account.kind === 'oauth' && !account.usageBased;
+  const history = useAsync(() => (allowanceShown ? api.getQuotaHistory(account.id) : Promise.resolve(null)), [account.id, allowanceShown]);
   // A weekly row changes once a week, so the block reads again on the bar's Refresh and once the list's poll answers a
   // weekly window past its reset, never at the list's cadence. The route ends the week at the term's end, which moves
   // with a saved or cleared end and with the plan-ended flag while the windows keep their resets, so those read again
@@ -325,6 +326,11 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
   const extra = account.extraUsage;
   const planExtra = planExtraUsage(account);
   const overage = planOverage(account);
+  // The router withholds every window of a row whose term ended or that is not paired or needs re-auth, so its empty
+  // trend reads the Usage card's sentence, where another account's names the first sample to come.
+  const trendWithheld = account.planEndedAt !== null || account.status === 'unpaired' || account.status === 'reauth_required';
+  const trendEmptyTitle = trendWithheld ? 'No samples in the last 7 days' : 'No samples yet';
+  const trendEmptyBody = trendWithheld ? noWindowSentence(account, now) : 'Quota samples appear after the first successful quota fetch.';
   /**
    * The router's answer once it took the change, null once it refused. An editor's refusal reaches its own callout, or
    * the shell's toast naming the account once the operator left it, since the callout left with the detail.
@@ -678,9 +684,9 @@ function AccountDetail({ account, awaitingReading, generation, now, onToast, onP
         </Card>
       </div>
 
-      {isOauth && (
+      {allowanceShown && (
         <Card title="7-day trend" subtitle="Utilization of each window, sampled every 5 minutes">
-          <TrendChart history={history.data} loading={history.loading} hasFable={account.fableWindow !== null} />
+          <TrendChart emptyBody={trendEmptyBody} emptyTitle={trendEmptyTitle} history={history.data} loading={history.loading} hasFable={account.fableWindow !== null} />
         </Card>
       )}
 
@@ -902,14 +908,15 @@ function AllowanceColumn({ account, costs, holder, week, window: w }: { account:
 }
 
 // Memoized, since the list's poll and the clock re-render the detail, and each render would rebuild the chart's lines
-// from the week of samples its props have not changed.
-const TrendChart = memo(function TrendChart({ history, loading, hasFable }: { hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
+// from the week of samples its props have not changed. So the detail hands it the empty state's words, never the
+// account or the clock.
+const TrendChart = memo(function TrendChart({ emptyBody, emptyTitle, history, loading, hasFable }: { emptyBody: string; emptyTitle: string; hasFable: boolean; history: QuotaHistory[] | null; loading: boolean }) {
   const ink = useChartInk();
   const data = useMemo(() => (history ? joinTrend(history, hasFable) : []), [history, hasFable]);
   if (loading || !history) return <Skeleton height={CHART_HEIGHT} />;
-  if (data.length === 0) return <EmptyState title="No samples yet" body="Quota samples appear after the first successful quota fetch." />;
+  if (data.length === 0) return <EmptyState title={emptyTitle} body={emptyBody} />;
   const series: { color: string; dashed?: boolean; key: 'u5' | 'u7' | 'uf'; name: string; type: 'linear' | 'monotone'; width: number }[] = [
-    { color: ink.series[0], key: 'u5', name: '5-hour', type: 'linear', width: 1.5 },
+    ...(data.some((p) => p.u5 !== null) ? [{ color: ink.series[0], key: 'u5' as const, name: '5-hour', type: 'linear' as const, width: 1.5 }] : []),
     { color: ink.series[1], key: 'u7', name: '7-day', type: 'monotone', width: 2 },
     ...(hasFable ? [{ color: ink.series[2], dashed: true, key: 'uf' as const, name: 'Fable 7-day', type: 'monotone' as const, width: 2 }] : []),
   ];
@@ -920,7 +927,7 @@ const TrendChart = memo(function TrendChart({ history, loading, hasFable }: { ha
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(v: number) => fmtDayShort(v)} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={60} />
           <YAxis {...PCT_AXIS} />
-          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<(typeof data)[number]>((p) => series.map((s) => ({ color: s.color, label: `${s.name} used`, value: p[s.key] === null ? 'no sample yet' : pct(p[s.key]) })))} />
+          <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<(typeof data)[number]>((p) => series.map((s) => ({ color: s.color, label: `${s.name} used`, value: p[s.key] === null ? 'no sample' : pct(p[s.key]) })))} />
           {series.map((s) => (
             <Line key={s.key} type={s.type} dataKey={s.key} stroke={s.color} strokeWidth={s.width} strokeDasharray={s.dashed ? '5 4' : undefined} dot={false} isAnimationActive={false} />
           ))}

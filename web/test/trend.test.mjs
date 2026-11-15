@@ -22,8 +22,8 @@ test('samples on one bucket at different instants join', () => {
     ]),
   ];
   assert.deepEqual(joinTrend(history, true, 1), [
-    { at: Date.parse(at(0, 10)), u5: 20, u7: 50, uf: 10 },
-    { at: Date.parse(at(5, 20)), u5: 30, u7: 60, uf: 15 },
+    { at: Date.parse(at(0)), u5: 20, u7: 50, uf: 10 },
+    { at: Date.parse(at(5)), u5: 30, u7: 60, uf: 15 },
   ]);
   // Without a Fable window the series stays out of the points even where samples exist.
   assert.deepEqual(
@@ -84,9 +84,31 @@ test('a series that starts late is null before its first sample', () => {
       [60, 75],
     ],
   );
-  // The default keeps every third 5-hour sample, the first among them.
+  // The default keeps every third bucket of the joint base, the first among them.
   assert.deepEqual(
     joinTrend(history, true).map((p) => p.at),
     [Date.parse(at(0)), Date.parse(at(15))],
   );
+});
+
+test('a 5-hour series that stops ends there while the 7-day series runs on', () => {
+  // One sample a day: the offsets 1,440, 4,320 and 8,640 minutes fall on the second, fourth and seventh days.
+  const history = [
+    series('5h', [
+      [at(0), 0.2],
+      [at(1440), 0.3],
+    ]),
+    series('7d', [
+      [at(0), 0.41],
+      [at(1440), 0.42],
+      [at(4320), 0.5],
+      [at(8640), 0.6],
+    ]),
+  ];
+  assert.deepEqual(joinTrend(history, false, 1), [
+    { at: Date.parse(at(0)), u5: 20, u7: 41, uf: null },
+    { at: Date.parse(at(1440)), u5: 30, u7: 42, uf: null },
+    { at: Date.parse(at(4320)), u5: null, u7: 50, uf: null },
+    { at: Date.parse(at(8640)), u5: null, u7: 60, uf: null },
+  ]);
 });

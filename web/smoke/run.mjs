@@ -5826,6 +5826,29 @@ await forView('/accounts', async () => {
   });
 });
 await forView('/accounts', async () => {
+  // contract is a usage-based seat and annex an API-key account (`SEEDS` in `web/src/mock/accounts.ts`), so neither has
+  // a window to trend: neither draws the trend card nor reads the quota history. workshop's poll carries no 5-hour
+  // window, so its chart lists the 7-day line and no 5-hour one, where primary's lists both.
+  const legendOf = (page) => {
+    const card = [...page.container.querySelectorAll('.detail .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === '7-day trend');
+    return card ? [...card.querySelectorAll('.legend li')].map((li) => li.textContent?.trim() ?? '') : null;
+  };
+  const reads = countCalls('getQuotaHistory');
+  const seen = {};
+  for (const id of ['contract', 'annex', 'primary', 'workshop']) {
+    const page = await mount(`/accounts/${id}`, { now: CLOCK_ORIGIN });
+    seen[id] = { legend: legendOf(page), reads: reads.calls.length };
+    page.unmount();
+  }
+  reads.restore();
+  const { annex, contract, primary, workshop } = seen;
+  results.push({
+    name: '/accounts a seat draws no trend and an account without a 5-hour window lists no 5-hour line',
+    ok: contract.legend === null && contract.reads === 0 && annex.reads === 0 && primary.legend?.includes('5-hour window') === true && primary.reads === 1 && workshop.legend?.includes('7-day window') === true && !workshop.legend.includes('5-hour window'),
+    missing: [JSON.stringify(seen)],
+  });
+});
+await forView('/accounts', async () => {
   // "Meter drift" over the mock's reconciled windows (`RECONCILIATIONS` in mock/analytics.ts), second in the grid beside
   // "Allowance left at reset": primary's newest 5-hour window ended at the 11:44 reset (0.52 over 0.5), its newest 7-day
   // and Fable weeks where its current ones began, and nightly's newest 5-hour window ended at the 13:11 reset, charged
