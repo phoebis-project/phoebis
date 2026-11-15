@@ -4647,10 +4647,11 @@ impl BurnSums {
 }
 
 /// The row's funding decides its unit, so the kind the registry holds for the account now has no say and a deleted
-/// or recreated account moves no dollar into a share. `price_request` answers every figure: the row's read-time
-/// dollars, a billed row's in `usd` and a plan row's in `plan_usd`, and for a plan row the Pro-week and Pro 5-hour
-/// figures against the anchor row in force at the key's `now`, and, where `shares` holds and the row recorded a tier,
-/// the shares of that tier's windows (each banded at the key's `band_at`, else its `at`). A plan row with no tier
+/// or recreated account moves no dollar into a share. `price_request` answers the row's read-time dollars, a billed
+/// row's in `usd` and a plan row's in `plan_usd`, and for a plan row the Pro-week figure against the anchor row in
+/// force at the key's `now`, and, where `shares` holds and the row recorded a tier, the shares of that tier's windows
+/// (each banded at the key's `band_at`, else its `at`). The burn is the one reader of a plan row's Pro 5-hour figure,
+/// so this function prices it against the same anchor row through `price_equivalent_at`. A plan row with no tier
 /// recorded prices no share and still its figures. A free classifier call spends no window, so it leaves out a window
 /// its tier does not size, and on a tier the revision does not size it leaves every window as the bucket's other rows
 /// set it. A fast row and one in overage add their dollars and a zero share where the tables size the tier: fast mode
@@ -4659,8 +4660,9 @@ impl BurnSums {
 /// plan row reads 0 there and only an idle bucket reads `None`. The Fable week's figure takes the Pro-week figure of a
 /// row whose model draws that week and a zero for every other row. A bucket holding a row the table cannot price
 /// answers `None` on that window and in the figure, whichever row came first, and a row with no token has nothing to
-/// price and leaves every figure as the other rows set it. The figures are `price_request`'s, which the session fold
-/// prices a request through too, so a session's spend and its burn series price one way.
+/// price and leaves every figure as the other rows set it. The dollars, the Pro-week figure and the shares are
+/// `price_request`'s, which the session fold prices a request through too, so a session's spend and its burn series
+/// price one way.
 pub(crate) fn price_usage(
     point: &mut BurnSums,
     prices: &PriceRevisions,
@@ -4685,14 +4687,16 @@ pub(crate) fn price_usage(
     ]
     .into_iter()
     .filter_map(|(window, latch)| Some((*shares.get(window?)?, latch)));
-    if price.funding == Funding::Plan {
+    let five_hour_equivalent = if price.funding == Funding::Plan {
         point.plan_usd += price.usd;
+        price_equivalent_at(tables, &key, FIVE_HOUR, usage)
     } else {
         point.usd += price.usd;
-    }
+        Some(0.0)
+    };
     windows.for_each(|(share, latch)| latch.add(share));
     point.equivalent.add(price.equivalent);
-    point.five_hour_equivalent.add(price.five_hour_equivalent);
+    point.five_hour_equivalent.add(five_hour_equivalent);
     // Every row with tokens off the Fable week adds a zero, so a busy bucket never reads idle, and an unpriced row
     // latches the bucket only where it draws the week.
     point
@@ -4707,9 +4711,8 @@ pub(crate) fn price_usage(
     point.uncached_tokens += usage.input;
 }
 
-/// What one request's serving attempt costs, as `price_usage` prices a usage row: a `price_row` call and the Pro 5-hour
-/// figure beside it, under the funding, the tier, the entrypoint, the classifier and the band at the attempt's
-/// completion.
+/// What one request's serving attempt costs: the `price_row` call that `price_usage` prices a usage row through, under
+/// the funding, the tier, the entrypoint, the classifier and the band at the attempt's completion.
 #[derive(Debug)]
 pub struct RequestPrice {
     pub funding: Funding,
@@ -4718,9 +4721,6 @@ pub struct RequestPrice {
     /// A plan row's Pro-week figure, `None` where the cost model prices nothing for it, and `Some(0.0)` on a billed
     /// row.
     pub equivalent: Option<f64>,
-    /// A plan row's Pro share of the 5-hour window, `None` where the cost model prices nothing for it on that window,
-    /// and `Some(0.0)` on a billed row and on a free classifier call.
-    pub five_hour_equivalent: Option<f64>,
     /// A plan row's shares of its tier's windows as `Priced::plan_shares` answers them, keyed `five_hour`,
     /// `seven_day`, `seven_day_<family>`, a window the tables do not size `None`, and a billed row's zero on each window
     /// its tier sizes, none for an api_key row. A free classifier call spends no window, so it leaves out a window its
@@ -4741,18 +4741,13 @@ pub(crate) fn price_request(
         return None;
     }
     let priced = price_row(prices, tables, &key, usage);
-    let (equivalent, five_hour_equivalent, shares) = match key.funding {
+    let (equivalent, shares) = match key.funding {
         // The share fold's map: a tier the cost revision does not size keys every window the model draws unpriced,
         // while a free call spends no window, so it leaves out a window where its tier does not size it.
-        Funding::Plan => (
-            priced.equivalent,
-            price_equivalent_at(tables, &key, FIVE_HOUR, usage),
-            priced.plan_shares(&key),
-        ),
+        Funding::Plan => (priced.equivalent, priced.plan_shares(&key)),
         // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at, so the
         // zero share rests on the tier alone. An api_key account has no window to share.
         funding => (
-            Some(0.0),
             Some(0.0),
             key.tier
                 .filter(|_| funding != Funding::ApiKey)
@@ -4763,7 +4758,6 @@ pub(crate) fn price_request(
         funding: key.funding,
         usd: priced.usd.as_ref().map_or(0.0, CostSplit::total),
         equivalent,
-        five_hour_equivalent,
         shares,
     })
 }

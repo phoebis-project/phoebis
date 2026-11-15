@@ -5468,9 +5468,9 @@ fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle
         let point = point_at(&points, hour);
         assert!(point.usd > 0.0, "{point:?}");
         assert_eq!(
-            (point.equivalent, point.unpriced),
-            (Some(0.0), false),
-            "a billed row adds a zero figure: {point:?}"
+            (point.equivalent, point.five_hour_equivalent, point.unpriced),
+            (Some(0.0), Some(0.0), false),
+            "a billed row adds a zero Pro-week and a zero Pro 5-hour figure: {point:?}"
         );
     }
     let idle = point_at(&points, 0);
