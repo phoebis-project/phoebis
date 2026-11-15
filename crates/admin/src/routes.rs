@@ -1997,14 +1997,18 @@ pub(crate) struct LedgerStats {
     pub schema_version: Option<u32>,
     pub written: u64,
     pub dropped: u64,
+    /// The batches lost since start because the write panicked, their records counted in `dropped`.
     pub write_failures: u64,
+    /// The tries the ledger file refused since start, each one's records kept by the writer for its next try.
+    pub write_retries: u64,
     /// The cache-map writes whose decision row the ledger never stored, counted and never retried.
     pub cache_map_orphans: u64,
     /// The router events the ledger's mirror missed because its receiver lagged, each a decision or an event row
     /// never written.
     pub mirror_lagged: u64,
     pub gaps: u64,
-    pub last_gap_at: i64,
+    /// The instant of the writer's newest gap, null while it has recorded none since the start.
+    pub last_gap_at: Option<i64>,
     pub channel_depth: usize,
     /// The records waiting in the writer channel now.
     pub queued: usize,
@@ -2090,6 +2094,9 @@ pub(crate) struct KeepaliveStats {
     pub bus_gaps: u64,
     pub retained_bytes: usize,
     pub running_probes: usize,
+    /// Every session entry the engine holds, an ended session's among them until its expiry.
+    pub session_entries: usize,
+    /// The sessions that hold a slot under `max_sessions`, the count the keepalive overview answers beside the cap.
     pub sessions: usize,
 }
 
@@ -2154,10 +2161,13 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             written: load(&stats.written),
             dropped: load(&stats.dropped),
             write_failures: load(&stats.write_failures),
+            write_retries: load(&stats.write_retries),
             cache_map_orphans: load(&stats.cache_map_orphans),
             mirror_lagged: load(&stats.mirror_lagged),
             gaps: load(&stats.gaps),
-            last_gap_at: stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
+            // 0 is the atomic's start value, an instant no gap stamped on the writer's clock reads.
+            last_gap_at: Some(stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed))
+                .filter(|&at| at != 0),
             channel_depth: phoebis_ledger::CHANNEL_DEPTH,
             queued: state.ledger.queued(),
             behind: state.ledger.behind(),
@@ -2215,7 +2225,8 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             bus_gaps: keepalive_stats.bus_gaps,
             retained_bytes: keepalive_stats.retained_bytes,
             running_probes: keepalive_stats.running_probes,
-            sessions: keepalive_stats.sessions,
+            session_entries: keepalive_stats.sessions,
+            sessions: keepalive_stats.live_sessions,
         },
     })
     .into_response()

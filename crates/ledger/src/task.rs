@@ -101,7 +101,11 @@ impl Default for LedgerConfig {
 pub struct LedgerStats {
     pub dropped: AtomicU64,
     pub written: AtomicU64,
+    /// Batches lost since start because the write panicked, each of their records counted in `dropped`.
     pub write_failures: AtomicU64,
+    /// Tries the file refused since start, one for a batch's first try, each retry in place and each record of a
+    /// replay or a hold. The writer keeps a refused try's records for the next one.
+    pub write_retries: AtomicU64,
     pub gaps: AtomicU64,
     pub last_gap_at: AtomicI64,
     /// Requests answered `ledger_behind` at admission.
@@ -1726,7 +1730,7 @@ impl Handles {
             }
             Ok((Err(error), _)) => {
                 tracing::error!(%error, records = size, "a ledger batch could not be written");
-                stats.write_failures.fetch_add(1, Ordering::Relaxed);
+                stats.write_retries.fetch_add(1, Ordering::Relaxed);
                 Landed::Refused {
                     database_wide: error.is_database_wide(),
                     error: error.to_string(),

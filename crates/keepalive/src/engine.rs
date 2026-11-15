@@ -550,6 +550,7 @@ pub struct EngineStats {
     pub live_sessions: usize,
     pub retained_bytes: usize,
     pub running_probes: usize,
+    /// Every session entry the engine holds: a session that holds no slot counts here and not in `live_sessions`.
     pub sessions: usize,
 }
 

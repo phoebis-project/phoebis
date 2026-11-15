@@ -27633,10 +27633,11 @@ export const FIXTURES: Record<string, Fixture> = {
         "written": 69,
         "dropped": 0,
         "write_failures": 0,
+        "write_retries": 0,
         "cache_map_orphans": 1,
         "mirror_lagged": 0,
         "gaps": 0,
-        "last_gap_at": 0,
+        "last_gap_at": null,
         "channel_depth": 4096,
         "queued": 0,
         "behind": false,
@@ -27709,6 +27710,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "bus_gaps": 0,
         "retained_bytes": 232,
         "running_probes": 0,
+        "session_entries": 1,
         "sessions": 1
       }
     }

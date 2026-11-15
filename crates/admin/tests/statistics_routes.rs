@@ -335,6 +335,11 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(false), Some(0), Some(0)),
         "a ledger that lands every batch is current, retries nothing and parks nothing: {system}"
     );
+    assert_eq!(
+        system["ledger"]["last_gap_at"],
+        serde_json::Value::Null,
+        "the gap row above went in past the writer, which has stamped no gap of its own since the start: {system}"
+    );
     assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
     // A write in flight reads `depth` 1 for an instant, so the idle figures are waited for.
     wait_json(&parts.app, "/admin/system", &cookie, |system| {
@@ -498,6 +503,54 @@ async fn the_system_document_reads_a_degraded_ledger_its_retry_and_its_parked_re
         ),
         (Some(true), Some(1), Some(1)),
         "{system}"
+    );
+    assert_eq!(
+        (
+            system["ledger"]["write_retries"].as_u64(),
+            system["ledger"]["write_failures"].as_u64()
+        ),
+        (Some(1), Some(0)),
+        "the refused try is a retry whose records the writer keeps, so no batch is lost: {system}"
+    );
+}
+
+/// A full channel drops what does not fit, and the writer's gap for it dates the system document's `last_gap_at`.
+#[tokio::test]
+async fn the_system_document_answers_the_instant_of_a_gap_the_writer_recorded() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A long transaction on the writer connection holds the writer, so the channel fills.
+    let db = parts.db.clone();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
+    let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        db.write(|_| {
+            held_tx.send(()).unwrap();
+            hold_rx.recv().unwrap();
+            Ok(())
+        })
+        .unwrap()
+    });
+    held_rx.await.unwrap();
+    for _ in 0..phoebis_ledger::CHANNEL_DEPTH + 100 {
+        parts.ledger.record(Record::Event(EventRecord {
+            at: common::NOW,
+            kind: "cooldown_set".into(),
+            ..Default::default()
+        }));
+    }
+    hold_tx.send(()).unwrap();
+    holder.join().unwrap();
+    let system = wait_json(&parts.app, "/admin/system", &cookie, |system| {
+        system["ledger"]["gaps"]
+            .as_u64()
+            .is_some_and(|gaps| gaps > 0)
+    })
+    .await;
+    assert_eq!(
+        system["ledger"]["last_gap_at"].as_i64(),
+        Some(common::NOW),
+        "the clock never moved, so the gap reads the rig's instant: {system}"
     );
 }
 

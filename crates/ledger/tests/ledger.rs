@@ -6664,8 +6664,8 @@ async fn spent_by_a(h: &Harness) -> f64 {
         .map_or(0.0, |r| r.spent_usd)
 }
 
-fn write_failures(h: &Harness) -> u64 {
-    h.ledger.stats().write_failures.load(Ordering::SeqCst)
+fn write_retries(h: &Harness) -> u64 {
+    h.ledger.stats().write_retries.load(Ordering::SeqCst)
 }
 
 fn retrying(h: &Harness) -> u64 {
@@ -6704,11 +6704,11 @@ async fn step_until(h: &Harness, by: Duration, mut done: impl FnMut() -> bool) {
 /// has failed, so the replay one record at a time runs after the last.
 async fn through_the_retries(h: &Harness) {
     wait_for(Duration::from_secs(5), || {
-        (write_failures(h) == 1 && retrying(h) == 1).then_some(())
+        (write_retries(h) == 1 && retrying(h) == 1).then_some(())
     })
     .await;
     for (n, delay) in BATCH_RETRY_DELAYS.into_iter().enumerate() {
-        step_until(h, delay, || write_failures(h) >= n as u64 + 2).await;
+        step_until(h, delay, || write_retries(h) >= n as u64 + 2).await;
     }
 }
 
@@ -6752,6 +6752,14 @@ async fn a_priced_batch_refused_once_lands_on_its_retry_and_the_member_spend_rea
     })
     .await;
     assert_eq!(retrying(&h), 0);
+    assert_eq!(
+        (
+            write_retries(&h),
+            h.ledger.stats().write_failures.load(Ordering::SeqCst)
+        ),
+        (1, 0),
+        "the one refused try counts as a retry, and a batch that landed on it lost nothing"
+    );
     assert_eq!(h.ledger.dropped(), 0, "nothing was dropped");
     assert_eq!(h.ledger.parked_priced(), 0);
     assert_eq!(parked_rows(&h).await, 0);
@@ -6960,14 +6968,14 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
     through_the_retries(&h).await;
     // The replay met the full disk on its first record, so the batch is held whole.
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 6).then_some(())
+        (write_retries(&h) == 6).then_some(())
     })
     .await;
     step(&h, BATCH_RETRY_HOLD - Duration::from_secs(1));
-    stays_for(Duration::from_millis(400), || write_failures(&h) == 6).await;
+    stays_for(Duration::from_millis(400), || write_retries(&h) == 6).await;
     step(&h, Duration::from_secs(1));
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 7).then_some(())
+        (write_retries(&h) == 7).then_some(())
     })
     .await;
     assert!(
@@ -7040,7 +7048,7 @@ async fn a_held_batch_lands_on_the_tier_its_first_try_read_after_a_reload_moved_
         })
         .await;
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 1).then_some(())
+        (write_retries(&h) == 1).then_some(())
     })
     .await;
     set_tier(&h.store, "a", "default_claude_max_5x");
@@ -7048,7 +7056,7 @@ async fn a_held_batch_lands_on_the_tier_its_first_try_read_after_a_reload_moved_
     through_the_retries(&h).await;
     // The replay after the last in-place retry met the full disk too, so the batch waits out the hold.
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 6).then_some(())
+        (write_retries(&h) == 6).then_some(())
     })
     .await;
     h.db.free_the_disk();
@@ -7078,11 +7086,11 @@ async fn a_parking_insert_the_database_refuses_keeps_the_record_held() {
     h.ledger.record_request(finished("poison", true)).await;
     through_the_retries(&h).await;
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 6).then_some(())
+        (write_retries(&h) == 6).then_some(())
     })
     .await;
     // The park was refused, so the record waits in the hold and is tried again after it.
-    step_until(&h, BATCH_RETRY_HOLD, || write_failures(&h) == 7).await;
+    step_until(&h, BATCH_RETRY_HOLD, || write_retries(&h) == 7).await;
     assert_eq!(h.ledger.dropped(), 0, "the record is not dropped");
     assert_eq!(parked_rows(&h).await, 0, "nor parked");
     assert_eq!(h.ledger.parked_priced(), 0);
@@ -7196,7 +7204,7 @@ async fn a_landing_batch_whose_spend_read_fails_keeps_the_degradation() {
     refuse_requests(&h.db, None);
     h.ledger.record_request(finished("r1", true)).await;
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 1 && h.ledger.degraded()).then_some(())
+        (write_retries(&h) == 1 && h.ledger.degraded()).then_some(())
     })
     .await;
     // Armed before the retry lands, for the spend read the landed batch runs.
@@ -7308,13 +7316,13 @@ async fn a_stop_during_a_hold_tries_the_batch_once_more_and_counts_what_is_still
         .await;
     through_the_retries(&h).await;
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 6).then_some(())
+        (write_retries(&h) == 6).then_some(())
     })
     .await;
     assert_eq!(h.ledger.dropped(), 0, "the held batch waits out its hold");
     h.ledger.clone().shutdown().await.unwrap();
     assert!(
-        write_failures(&h) >= 7,
+        write_retries(&h) >= 7,
         "the stop gave the batch one more try"
     );
     assert_eq!(
@@ -7745,7 +7753,7 @@ async fn hold_a_batch(h: &Harness) {
         .await;
     through_the_retries(h).await;
     wait_for(Duration::from_secs(5), || {
-        (write_failures(h) == 6).then_some(())
+        (write_retries(h) == 6).then_some(())
     })
     .await;
 }
@@ -7792,7 +7800,7 @@ async fn a_replay_asked_under_a_held_batch_answers_held_past_its_bound_and_never
     assert!(matches!(answer, Err(LedgerError::WriterHeld)), "{answer:?}");
     // The step also ran out the hold, and the batch met the full disk once more.
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 7).then_some(())
+        (write_retries(&h) == 7).then_some(())
     })
     .await;
     free_the_writer(&h).await;
@@ -7852,7 +7860,7 @@ async fn two_replays_asked_under_a_held_batch_both_answer_held_past_the_bound_an
         "{answers:?}"
     );
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 7).then_some(())
+        (write_retries(&h) == 7).then_some(())
     })
     .await;
     free_the_writer(&h).await;
@@ -7896,7 +7904,7 @@ async fn a_replay_whose_caller_went_away_before_its_deadline_never_runs_after_it
     assert!(replay.await.unwrap_err().is_cancelled());
     step(&h, BOUND + Duration::from_secs(1));
     wait_for(Duration::from_secs(5), || {
-        (write_failures(&h) == 7).then_some(())
+        (write_retries(&h) == 7).then_some(())
     })
     .await;
     free_the_writer(&h).await;

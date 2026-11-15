@@ -925,6 +925,15 @@ async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_an
         overview["limits"]["sessions"],
         serde_json::json!({ "count": 1, "max": 128 })
     );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            system["keepalive"]["sessions"].as_u64(),
+            system["keepalive"]["session_entries"].as_u64()
+        ),
+        (Some(1), Some(2)),
+        "the system document's session count is the overview's, and its entries keep the ended one: {system}"
+    );
 }
 
 /// The overview lists no row for an inference rollup row, and the day's expired count still takes its expiries.

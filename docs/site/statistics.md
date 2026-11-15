@@ -523,7 +523,12 @@ dashboard's Replay, its parked row deleted in the transaction that lands the rec
 record keeps its request and attempt rows and not its captured bodies, so a parked request loses its capture and keeps
 its cost. While a batch is under retry the ledger is degraded: the system page shows it,
 `phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
-the spend is read again.
+the spend is read again. On `GET /admin/system`, `ledger.write_retries` counts one per try the file refused, and
+`ledger.write_failures` counts the batches a panicking write lost, whose records also count in `ledger.dropped`.
+`ledger.last_gap_at` reads the instant of the writer's newest `ledger_gap`, or null while the writer has recorded none
+since the start. The same answer's `keepalive.sessions` counts the sessions that hold a slot under `max_sessions`, the
+count `GET /admin/keepalive/overview` answers beside the cap, and `keepalive.session_entries` counts every session entry
+the keepalive engine holds, an ended session's among them until its expiry.
 
 The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
 row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole

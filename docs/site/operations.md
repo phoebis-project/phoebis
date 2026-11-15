@@ -364,10 +364,10 @@ On the host:
    the budget cut, which still runs on a blocking thread, ends with the process, and a warn line names that write. The
    unit's `TimeoutStopSec=40` leaves five seconds past the budget.
 7. Confirm the upgrade with `phoebis --version`, then `phoebis status` for `ready`, or `GET /admin/system` for
-   `version`, `storage_ok`, `ready`, `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`.
-   `router.dropped_reports` counts the reports a closed queue refused at shutdown, zero on a running router, and a loop
-   that stopped keeping up shows as `router.queued` at `command_depth` and as keys holding their requests past the
-   answer.
+   `version`, `storage_ok`, `ready`, `ledger.dropped` and `ledger.write_failures` each reading `0`, and
+   `router.dropped_reports` all reading `0`. `router.dropped_reports` counts the reports a closed queue refused at
+   shutdown, zero on a running router, and a loop that stopped keeping up shows as `router.queued` at `command_depth`
+   and as keys holding their requests past the answer.
 
 Under the container, the same sequence is: read the changelog, take the backup (`docker compose exec phoebis phoebis
 backup --to /var/lib/phoebis/backups/<name>`), set `image:` in `compose.yaml` to the new version, validate the mounted
