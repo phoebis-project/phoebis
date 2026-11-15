@@ -1572,7 +1572,8 @@ impl Store {
              state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
              canceled = COALESCE(?8, canceled), \
              subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at ELSE ?9 END, \
-             revision = revision + 1, updated_at = ?4 \
+             revision = revision + 1, updated_at = ?4, \
+             state_changed_at = CASE WHEN ?3 IS NULL OR ?3 = state THEN state_changed_at ELSE ?4 END \
              WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
             params![
                 u.id,

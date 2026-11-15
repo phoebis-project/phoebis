@@ -487,8 +487,27 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
     assert_eq!(sessions.len(), 1, "the session row stays");
     assert_eq!(agents.len(), 2, "the agent rows stay");
     assert!(agents.iter().all(|agent| agent.body.is_none()));
+    // The run stamps the wall clock, which no read answers, so its stamp is read beside the store.
+    let raw = rusqlite::Connection::open(registry(dir.path())).unwrap();
     for before in seeded {
         assert_ne!(before.state_cause, StateCause::Operator, "{}", before.id);
+        let updated_at: i64 = raw
+            .query_row(
+                "SELECT updated_at FROM accounts WHERE id = ?1",
+                [&before.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .account_extras_of(&before.id)
+                .unwrap()
+                .unwrap()
+                .state_changed_at,
+            updated_at,
+            "the run dates the state it changes on {}",
+            before.id
+        );
         let after = store.account(&before.id).unwrap().unwrap();
         let expected = match before.kind {
             AccountKind::Oauth => AccountState::Disconnected,

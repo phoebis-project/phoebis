@@ -87,11 +87,12 @@ fn rename(
 }
 
 /// The eighth step taken back on a file this build wrote, which every case that takes a file back past version 8
-/// runs first, since on reopen the step refuses its two tables, its three new pool columns and its pin column as
-/// duplicates and finds no `window_ceiling` to rename and no `session_first_seen` to drop.
+/// runs first, since on reopen the step refuses its account column, its pin column, its three new pool columns and
+/// its two tables as duplicates and finds no `window_ceiling` to rename and no `session_first_seen` to drop.
 fn eighth_step_taken_back(conn: &rusqlite::Connection) {
     conn.execute_batch(
-        "ALTER TABLE pools DROP COLUMN fable_reservation_shedding;
+        "ALTER TABLE accounts DROP COLUMN state_changed_at;
+         ALTER TABLE pools DROP COLUMN fable_reservation_shedding;
          CREATE TABLE session_first_seen (
            key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,
            PRIMARY KEY (key_id, session_id, agent_id)
@@ -415,7 +416,7 @@ fn a_registry_before_the_sixth_step_keeps_its_pins_unended_zeroes_a_classifier_c
 }
 
 #[test]
-fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_off_and_a_weekly_ceiling_of_one_unless_another_ceiling_was_chosen(
+fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_off_and_a_weekly_ceiling_of_one_unless_another_ceiling_was_chosen_and_its_account_s_state_dated_from_the_row_s_last_write(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let key = StorageKey::generate();
@@ -441,9 +442,27 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
                 "test",
             )
             .unwrap();
+        store
+            .create_account(&account("a", AccountKind::Oauth), None, 5_000, "admin")
+            .unwrap();
+        store
+            .commit_account_update(&AccountUpdate {
+                id: "a",
+                expected_revision: 1,
+                incarnation: 1,
+                lifecycle_generation: 1,
+                label: "renamed",
+                secret: None,
+                state: None,
+                at: 6_000,
+                actor: "admin",
+                enabled: None,
+                cancellation: None,
+            })
+            .unwrap();
     }
-    // The file as a version-7 build left it: the pools stored, the eighth step taken back, which leaves each pool's
-    // one ceiling in `window_ceiling`, and the marker at 7.
+    // The file as a version-7 build left it: the pools and the account stored, the eighth step taken back, which
+    // leaves each pool's one ceiling in `window_ceiling`, and the marker at 7.
     let conn = rusqlite::Connection::open(&path).unwrap();
     eighth_step_taken_back(&conn);
     conn.execute_batch("UPDATE meta SET value = '7' WHERE key = 'schema_version';")
@@ -473,6 +492,15 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
         ceilings("low"),
         (0.9, 0.9),
         "a pool at another ceiling keeps it for both kinds of window"
+    );
+    assert_eq!(
+        store
+            .account_extras_of("a")
+            .unwrap()
+            .unwrap()
+            .state_changed_at,
+        6_000,
+        "an account stored before the step dates its state from the row's last write"
     );
 }
 
@@ -1671,6 +1699,127 @@ fn each_state_writer_stores_its_word_beside_the_state() {
         read("b"),
         (AccountState::Unpaired, StateCause::Paired),
         "the creation writes the row's own word"
+    );
+}
+
+#[test]
+fn each_state_writer_dates_the_state_it_changes_and_leaves_the_date_of_the_state_it_keeps() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let dated = || {
+        store
+            .account_extras_of("a")
+            .unwrap()
+            .unwrap()
+            .state_changed_at
+    };
+    // No read answers the row's stamp, and the three writers stamp the wall clock, so the stamp is read beside the
+    // store.
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let updated_at = || -> i64 {
+        raw.query_row(
+            "SELECT updated_at FROM accounts WHERE id = 'a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let commit = |state: Option<AccountState>, at: i64| {
+        let row = store.account("a").unwrap().unwrap();
+        store
+            .commit_account_update(&AccountUpdate {
+                id: "a",
+                expected_revision: row.revision,
+                incarnation: row.incarnation,
+                lifecycle_generation: row.lifecycle_generation,
+                label: "renamed",
+                secret: None,
+                state: state.map(|state| (state, StateCause::Operator)),
+                at,
+                actor: "admin",
+                enabled: None,
+                cancellation: None,
+            })
+            .unwrap();
+    };
+    store
+        .create_account(
+            &account("a", AccountKind::ApiKey),
+            Some(&Secret::new("k1")),
+            1_000,
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(dated(), 1_000, "the creation dates the state it writes");
+    commit(None, 2_000);
+    assert_eq!(
+        dated(),
+        1_000,
+        "an edit that stages no state leaves the date"
+    );
+    commit(Some(AccountState::Ready), 3_000);
+    assert_eq!(
+        dated(),
+        1_000,
+        "an edit that stages the state the row holds leaves the date"
+    );
+    commit(Some(AccountState::ReauthRequired), 4_000);
+    assert_eq!(dated(), 4_000, "an edit that stages another state dates it");
+
+    commit(Some(AccountState::Ready), 5_000);
+    store
+        .set_state("a", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    assert_eq!(
+        dated(),
+        5_000,
+        "a mark of the state the row holds leaves the date"
+    );
+    store
+        .set_state("a", AccountState::ReauthRequired, StateCause::AuthFailed)
+        .unwrap();
+    assert_eq!(dated(), updated_at(), "a mark of another state dates it");
+
+    commit(Some(AccountState::FundingRequired), 6_000);
+    assert!(store
+        .set_state_if_generations(
+            "a",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+            1,
+            1,
+            1
+        )
+        .unwrap()
+        .is_some());
+    assert_eq!(dated(), 6_000, "a repeated verdict leaves the date");
+    assert!(store
+        .set_state_if_generations(
+            "a",
+            AccountState::ReauthRequired,
+            StateCause::AuthFailed,
+            1,
+            1,
+            1
+        )
+        .unwrap()
+        .is_some());
+    assert_eq!(dated(), updated_at(), "a verdict of another state dates it");
+
+    commit(Some(AccountState::Disconnected), 7_000);
+    store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    assert_eq!(
+        dated(),
+        7_000,
+        "a disconnect of a disconnected account leaves the date"
+    );
+    commit(Some(AccountState::Ready), 8_000);
+    store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    assert_eq!(
+        dated(),
+        updated_at(),
+        "a disconnect of a ready account dates it"
     );
 }
 
@@ -3865,6 +4014,24 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
             "admin",
         )
         .unwrap();
+    store
+        .create_account(&account("idle", AccountKind::Oauth), None, 1, "admin")
+        .unwrap();
+    store
+        .commit_account_update(&AccountUpdate {
+            id: "idle",
+            expected_revision: 1,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            label: "idle",
+            secret: None,
+            state: Some((AccountState::Disconnected, StateCause::Operator)),
+            at: 7_000,
+            actor: "admin",
+            enabled: None,
+            cancellation: None,
+        })
+        .unwrap();
     store.insert_pool(&pool("main"), "test").unwrap();
     store
         .set_pool_members("main", &[member("claude", 1), member("vendor", 2)], "test")
@@ -3908,9 +4075,38 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
         states,
         vec![
             ("claude".to_string(), AccountState::Disconnected),
+            ("idle".to_string(), AccountState::Disconnected),
             ("vendor".to_string(), AccountState::Unpaired),
         ],
         "each account rests where the Disconnect action leaves it"
+    );
+    let dated = |id: &str| {
+        store
+            .account_extras_of(id)
+            .unwrap()
+            .unwrap()
+            .state_changed_at
+    };
+    // The sequence stamps the wall clock, which no read answers, so its stamp is read beside the store.
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let updated_at = |id: &str| -> i64 {
+        raw.query_row(
+            "SELECT updated_at FROM accounts WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        dated("claude"),
+        updated_at("claude"),
+        "the run dates a state it changes"
+    );
+    assert_eq!(dated("vendor"), updated_at("vendor"));
+    assert_eq!(
+        dated("idle"),
+        7_000,
+        "the run leaves the date of a state the account already held"
     );
     assert!(store.credentials("claude").unwrap().is_none());
     assert!(store.api_key_secret("vendor").unwrap().is_none());

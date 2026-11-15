@@ -148,6 +148,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         .unwrap();
     assert!(run[1].started_at < run[0].started_at);
     let run_started = run.last().unwrap().started_at;
+    let marked_at = parts.clock_cell.load(std::sync::atomic::Ordering::SeqCst);
     parts
         .store
         .set_state(
@@ -246,7 +247,6 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         ],
     )
     .await;
-    let first_read = parts.clock_cell.load(std::sync::atomic::Ordering::SeqCst);
     let body = json(get(app, "/admin/attention", Some(&cookie)).await).await;
     let items = body["items"].as_array().unwrap();
     assert_eq!(
@@ -301,10 +301,10 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             "subject": { "type": "account", "id": "business", "label": "Business" },
             "link": { "page": "accounts", "id": "business" },
             "pools": ["main"],
-            "since": first_read,
+            "since": marked_at,
             "detail": { "account": "business", "label": "Business" },
         }),
-        "the registry records no time for a state change, so the first read that saw it dates it"
+        "the item dates from the instant the registry recorded for the change"
     );
     assert_eq!(
         items[4]["pools"],

@@ -218,7 +218,9 @@ DELETE FROM api_key_secrets;
 UPDATE keepalive_agents SET body_sealed = NULL, body_nonce = NULL WHERE body_sealed IS NOT NULL;
 UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END,
   state_cause = 'operator', lifecycle_generation = lifecycle_generation + 1, revision = revision + 1,
-  updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+  updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+  state_changed_at = CASE WHEN state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END
+    THEN state_changed_at ELSE CAST(strftime('%s', 'now') AS INTEGER) * 1000 END;
 UPDATE refresh_attempts SET resolved_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000, outcome = 'failed',
   detail = 'disconnected', cause = 'disconnected' WHERE resolved_at IS NULL OR outcome = 'uncertain';
 COMMIT;

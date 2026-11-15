@@ -265,8 +265,9 @@ pub struct Condition {
     pub detail: serde_json::Value,
 }
 
-/// The request-fed state and the first-seen times of the two account states. Nothing of it is stored: a restart
-/// starts every exhaustion and refusal over, and the state kinds date themselves from the first read that sees them.
+/// The request-fed state and the first-seen times of the conditions `dated_condition` dates, a degraded writer and
+/// the keepalive engine's three. Nothing of it is stored: a restart starts every exhaustion and refusal over, and
+/// those conditions date themselves from the first read that sees them.
 #[derive(Default)]
 pub(crate) struct ReaderState {
     drift: HashMap<String, Drift>,
@@ -521,8 +522,8 @@ pub(crate) fn refresh_facts(
         .collect()
 }
 
-/// What the reset condition and the wall's join read beside the accounts: each account's stored extras and the
-/// warning's days.
+/// What the reset condition, the wall's join and the two account states read beside the accounts: each account's
+/// stored extras and the warning's days.
 pub(crate) struct ResetFacts<'a> {
     pub extras: &'a BTreeMap<String, AccountExtras>,
     pub warning_days: u32,
@@ -550,7 +551,8 @@ impl ResetFacts<'_> {
 /// one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` with their
 /// `refresh_facts` and their extras, and the parked rows, before it takes the reader's state, and a read that fails
 /// fails the whole answer, since a series answered without its evidence could clear a real alarm. `resets` carries
-/// those extras, whose stored limit resets `limit_reset_ending` and the wall's `reset` read, with the warning's days.
+/// those extras, whose stored limit resets `limit_reset_ending` and the wall's `reset` read and whose state instants
+/// date the two account states, with the warning's days.
 /// `ledger` carries the parked rows, the fold's routing conditions and the expiries between turns of the last 24 hours
 /// by pool and key. It is `None` where no ledger is built, and none of `ledger_record_parked`, `meter_drift`, the four
 /// routing conditions (`wall_reached`, `destination_spent`, `shed_no_runway` and `slowed_long`) and
@@ -715,15 +717,18 @@ pub(crate) fn conditions(
             )
         };
         // Every account carries the re-auth series, since the relay marks an API key the upstream refuses the
-        // same way as an OAuth login; only an API key runs out of funding. The registry records no time for a
-        // state change, so the first read that sees the state dates it.
+        // same way as an OAuth login, and only an API key runs out of funding.
         let mut states = vec![(Kind::ReauthRequired, AccountState::ReauthRequired)];
         if account.kind == AccountKind::ApiKey {
             states.push((Kind::FundingRequired, AccountState::FundingRequired));
         }
         for (kind, held_state) in states {
             let holds = account.state == held_state;
-            let since = since_of(state, &mut seen, kind, &account.id, holds, now);
+            // The extras are read apart from the accounts, so one deleted in between has no entry and no date.
+            let since = holds
+                .then(|| resets.extras.get(&account.id))
+                .flatten()
+                .map(|extras| extras.state_changed_at);
             out.push(condition(
                 kind,
                 holds,
@@ -890,8 +895,8 @@ pub(crate) fn conditions(
             json!({ "expired": expired }),
         ));
     }
-    // A cleared state, a deleted account and an account that changed kind all lose their first-seen time, so the
-    // next holding read dates the state afresh.
+    // A cleared condition and one whose subject this read no longer lists lose their first-seen time, so the next
+    // holding read dates it afresh.
     state.state_since.retain(|entry, _| seen.contains(entry));
     Ok(out)
 }

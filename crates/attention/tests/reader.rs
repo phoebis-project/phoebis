@@ -20,8 +20,8 @@ use phoebis_bus::{Kind as RequestKind, Origin, Outcome, QUEUE_DEPTH};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceRevisions, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AttemptOutcome, NewBundle, Secret, StateCause,
-    StorageKey, Store,
+    AccountKind, AccountRow, AccountState, AccountUpdate, AttemptOutcome, NewBundle, Secret,
+    StateCause, StorageKey, Store,
 };
 use serde_json::json;
 use tower::ServiceExt;
@@ -516,25 +516,33 @@ async fn a_version_that_does_not_read_as_a_release_files_under_one_other_subject
     );
 }
 
+/// Moves the account to `state` through the account edit stamped `at`, the instant the registry records for it.
+fn mark(rig: &Rig, id: &str, state: AccountState, at: i64) {
+    let row = rig.store.account(id).unwrap().unwrap();
+    rig.store
+        .commit_account_update(&AccountUpdate {
+            id,
+            expected_revision: row.revision,
+            incarnation: row.incarnation,
+            lifecycle_generation: row.lifecycle_generation,
+            label: &row.label,
+            secret: None,
+            state: Some((state, StateCause::Operator)),
+            at,
+            actor: "test",
+            enabled: None,
+            cancellation: None,
+        })
+        .unwrap();
+}
+
 #[tokio::test]
-async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_them() {
+async fn the_account_states_hold_by_kind_and_date_from_the_instant_the_registry_recorded_for_the_change(
+) {
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
-    rig.store
-        .set_state(
-            "business",
-            AccountState::ReauthRequired,
-            StateCause::Operator,
-        )
-        .unwrap();
-    rig.store
-        .set_state(
-            "direct",
-            AccountState::FundingRequired,
-            StateCause::Operator,
-        )
-        .unwrap();
-    read(&attention, NOW + 1_000);
+    mark(&rig, "business", AccountState::ReauthRequired, NOW + 1_000);
+    mark(&rig, "direct", AccountState::FundingRequired, NOW + 2_000);
     let conditions = read(&attention, NOW + 5_000);
     let reauth = find(&conditions, Kind::ReauthRequired, "business").unwrap();
     assert_eq!(
@@ -545,10 +553,10 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
             &vec!["main".to_string()],
             &json!({ "account": "business", "label": "business" })
         ),
-        "the registry records no time for a state change, so the first read that saw it dates it"
+        "the item dates from the instant the registry recorded for the change"
     );
     let funding = find(&conditions, Kind::FundingRequired, "direct").unwrap();
-    assert_eq!((funding.holds, funding.since), (true, Some(NOW + 1_000)));
+    assert_eq!((funding.holds, funding.since), (true, Some(NOW + 2_000)));
     assert_eq!(
         funding.link,
         Some(Link {
@@ -556,13 +564,9 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
             id: "direct".into()
         })
     );
-    rig.store
-        .set_state("business", AccountState::Ready, StateCause::Operator)
-        .unwrap();
-    rig.store
-        .set_state("direct", AccountState::Ready, StateCause::Operator)
-        .unwrap();
-    let conditions = read(&attention, NOW + 6_000);
+    mark(&rig, "business", AccountState::Ready, NOW + 6_000);
+    mark(&rig, "direct", AccountState::Ready, NOW + 6_000);
+    let conditions = read(&attention, NOW + 7_000);
     assert!(
         !find(&conditions, Kind::ReauthRequired, "business")
             .unwrap()
@@ -573,32 +577,24 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
             .unwrap()
             .holds
     );
-    rig.store
-        .set_state(
-            "business",
-            AccountState::ReauthRequired,
-            StateCause::Operator,
-        )
-        .unwrap();
+    mark(&rig, "business", AccountState::ReauthRequired, NOW + 8_000);
     let conditions = read(&attention, NOW + 9_000);
     assert_eq!(
         find(&conditions, Kind::ReauthRequired, "business")
             .unwrap()
             .since,
-        Some(NOW + 9_000),
-        "a state that cleared and came back dates from the read that saw it again"
+        Some(NOW + 8_000),
+        "a state that cleared and came back dates from the write that set it again"
     );
     // The relay marks an API key the upstream refuses as it marks an OAuth login whose refresh is gone.
-    rig.store
-        .set_state("direct", AccountState::ReauthRequired, StateCause::Operator)
-        .unwrap();
+    mark(&rig, "direct", AccountState::ReauthRequired, NOW + 10_000);
     let conditions = read(&attention, NOW + 12_000);
     let refused = find(&conditions, Kind::ReauthRequired, "direct").unwrap();
     assert_eq!(
         (refused.holds, refused.since, &refused.pools, &refused.link),
         (
             true,
-            Some(NOW + 12_000),
+            Some(NOW + 10_000),
             &vec!["main".to_string()],
             &Some(Link {
                 page: "accounts",

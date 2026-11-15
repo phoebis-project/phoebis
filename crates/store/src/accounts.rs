@@ -201,8 +201,8 @@ pub(crate) fn insert_account_row(
     let identity_json = identity_json(row)?;
     let incarnation = next_incarnation_in(tx, Tombstones::Account, &row.id)?;
     tx.execute(
-        "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9)",
+        "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at, state_changed_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9, ?9)",
         params![
             row.id,
             row.kind,
@@ -400,7 +400,8 @@ impl Store {
     ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "UPDATE accounts SET state = ?2, state_cause = ?4, revision = revision + 1, updated_at = ?3 \
+            "UPDATE accounts SET state = ?2, state_cause = ?4, revision = revision + 1, updated_at = ?3, \
+             state_changed_at = CASE WHEN state = ?2 THEN state_changed_at ELSE ?3 END \
              WHERE id = ?1",
             params![id, state, self.now_ms(), cause],
         )?;
@@ -449,7 +450,8 @@ impl Store {
         let now = self.now_ms();
         let updated = tx.execute(
             "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
-             state_cause = ?4, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
+             state_cause = ?4, revision = revision + 1, updated_at = ?3, \
+             state_changed_at = CASE WHEN state = ?2 THEN state_changed_at ELSE ?3 END WHERE id = ?1",
             params![id, AccountState::Disconnected, now, cause],
         )?;
         if updated == 0 {
@@ -708,7 +710,7 @@ const LIMIT_RESETS_FENCE: &str =
 pub(crate) const TERM_COLUMNS: &str =
     "id, subscription_since, trial_ends_at, canceled, subscription_ends_at, \
      subscription_tier, kind, profile_json, plan_ended_at, \
-     limit_resets_json, limit_resets_read_at, limit_resets_epoch, created_at";
+     limit_resets_json, limit_resets_read_at, limit_resets_epoch, created_at, state_changed_at";
 
 static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
@@ -728,6 +730,7 @@ fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
         limit_resets_epoch: row.get::<_, i64>(11)? as u64,
         limit_resets_read_at: row.get(10)?,
         profile,
+        state_changed_at: row.get(13)?,
         term,
     };
     Ok((extras.term.account_id.clone(), extras))
@@ -776,8 +779,8 @@ impl SubscriptionTerm {
 }
 
 /// What `Store::account_extras` answers for one account: the stored `profile_json` document, parsed, what
-/// `subscription_term` answers for it, the stored limit reset block with its read's instant and its epoch, and when
-/// the row was created.
+/// `subscription_term` answers for it, the stored limit reset block with its read's instant and its epoch, when the
+/// row was created and when its state last changed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct AccountExtras {
     /// When the row was created, in epoch milliseconds: a new account under a deleted id starts over here.
@@ -791,6 +794,9 @@ pub struct AccountExtras {
     pub limit_resets_read_at: Option<i64>,
     /// `None` without a stored document and for one that does not parse.
     pub profile: Option<serde_json::Value>,
+    /// When the account's state last changed, in epoch milliseconds: the stamp of the write that set the state the row
+    /// holds. A write that keeps the state leaves it. A row stored before the column reads its `updated_at`.
+    pub state_changed_at: i64,
     pub term: SubscriptionTerm,
 }
 
@@ -906,7 +912,8 @@ pub(crate) fn set_state_if_generations_on(
     };
     let revision: Option<i64> = conn
         .prepare_cached(
-            "UPDATE accounts SET state = ?2, state_cause = ?7, revision = revision + 1, updated_at = ?3 \
+            "UPDATE accounts SET state = ?2, state_cause = ?7, revision = revision + 1, updated_at = ?3, \
+             state_changed_at = CASE WHEN state = ?2 THEN state_changed_at ELSE ?3 END \
              WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
              AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
                   OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5)) \

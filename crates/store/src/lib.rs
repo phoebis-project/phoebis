@@ -1010,7 +1010,8 @@ impl RecoveryStore {
         tx.execute(
             "UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END, \
              state_cause = ?1, lifecycle_generation = lifecycle_generation + 1, revision = revision + 1, \
-             updated_at = ?2",
+             updated_at = ?2, state_changed_at = CASE WHEN state = \
+             CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END THEN state_changed_at ELSE ?2 END",
             params![cause, now],
         )?;
         tx.execute(

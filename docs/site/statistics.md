@@ -782,8 +782,8 @@ lands or the router restarts, and the listener keeps serving the pair it had
 loader's line and when the pair still served was loaded.
 
 **`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
-([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
-the first read of this process that saw the state. The detail names the account and its label.
+([account states](pairing.md#account-states)). The item dates from the instant the registry recorded for the change to
+that state, so the date holds across a restart. The detail names the account and its label.
 
 **`funding_required`** holds while the account's state is `funding_required`, set when the upstream refuses a request
 over the account's credit balance. It clears when the operator clears funding or when the router's retry succeeds after
