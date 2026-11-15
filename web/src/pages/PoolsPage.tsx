@@ -30,7 +30,7 @@ import { IconPencil, IconPlus } from '@/components/ui/icons';
 import { PopoverHost, useHoldHost } from '@/components/ui/Popover';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, NumberInput, PageLink, Refusal, Select, Skeleton, StaleRefusal, SwitchedNumber, Toggle, Warning, type DialogGroup } from '@/components/ui/primitives';
 import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS_CODEC, sortDirOf, type PoolsAddress } from '@/lib/address';
-import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
+import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, nativeSidesOf, sidesLine, sumFunded, UNIT_TILE_LABEL, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
@@ -312,6 +312,7 @@ export function PoolsPage() {
   );
   const attentionOf = useMemo(() => new Map((pools.data ?? []).map((p) => [p.id, (attention.items ?? []).filter((i) => i.pools.includes(p.id))])), [attention.items, pools.data]);
   const dayTile = totals ? sumTileOf(unit, totals.day, reading) : null;
+  const named = unit === 'equivalent' || unit === 'usd';
 
   return (
     <PopoverHost.Provider value={host}>
@@ -346,7 +347,7 @@ export function PoolsPage() {
           <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
           <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
           <Tile label="Requests, 24h" value={totals ? fmtInt(totals.requests) : null} />
-          <Tile label="Cost, 24h" value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.failure ?? null} />
+          <Tile label={named ? `${UNIT_TILE_LABEL[unit]}, 24h` : 'Cost, 24h'} value={dayTile?.value ?? null} title={dayTile?.title} failure={dayTile?.failure ?? null} />
         </div>
         {/* A failed read leaves the cards on the last answer's items, or none before the first. This line says so. */}
         {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
@@ -607,6 +608,8 @@ function PoolCard({
   reading: WeekReading;
 }) {
   const standingId = useId();
+  const { unit } = useAppSettings();
+  const named = unit === 'equivalent' || unit === 'usd';
   const warnedAt = pool.warnings.length === 0 ? null : warningGroup(pool.warnings[0]);
   const tiers = selectionOrder(pool, accounts ?? [], now);
   const grouped = kindOrdered(pool);
@@ -786,7 +789,7 @@ function PoolCard({
           <dd className="num">{fmtInt(pool.requests24h)}</dd>
         </div>
         <div>
-          <dt>Cost 24h</dt>
+          <dt>{named ? `${UNIT_TILE_LABEL[unit]} 24h` : 'Cost 24h'}</dt>
           <PoolCost pool={pool} reading={reading} />
         </div>
         <div>

@@ -17,7 +17,7 @@ import { sumTileOf, Tile } from '@/components/ui/Tile';
 import { IconPlus } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorRow, Menu, Skeleton, SkeletonRows, StampSub } from '@/components/ui/primitives';
 import { EDIT_PARAM, EDIT_PARAMS, KEY_SORT_KEYS, KEYS_CODEC, sortDirOf, type KeysAddress } from '@/lib/address';
-import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
+import { dollarsUnder, fundedRankOf, nativeSidesOf, sidesLine, sumFunded, UNIT_TILE_LABEL, UNPRICED_TITLE, type WeekReading } from '@/lib/analytics';
 import { effectiveCaptureHours } from '@/lib/capture';
 import { KEYS_DIMENSIONS, notLoadedReason } from '@/lib/filterBar';
 import { fmtAbsolute, fmtCompact, fmtDate, fmtInt, fmtRelative, fmtUsd, noun, plural } from '@/lib/format';
@@ -181,6 +181,7 @@ export function KeysPage() {
     };
   }, [keys.data, unit]);
   const lifetimeTile = totals ? sumTileOf(unit, totals.lifetime, reading) : null;
+  const named = unit === 'equivalent' || unit === 'usd';
 
   const run = useRun(keys.reload);
 
@@ -217,7 +218,7 @@ export function KeysPage() {
           <Tile label="Keys" value={totals ? fmtInt(totals.keys) : null} />
           <Tile label="Active" value={totals ? fmtInt(totals.active) : null} />
           <Tile label="Lifetime requests" value={totals ? fmtCompact(totals.requests) : null} />
-          <Tile label="Lifetime cost" value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.failure ?? null} />
+          <Tile label={named ? `${UNIT_TILE_LABEL[unit]}, lifetime` : 'Lifetime cost'} value={lifetimeTile?.value ?? null} title={lifetimeTile?.title} failure={lifetimeTile?.failure ?? null} />
         </div>
 
         <div className="keys-layout">

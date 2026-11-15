@@ -17,7 +17,7 @@ import { WindowTriple } from '@/components/ui/QuotaBars';
 import { SpeedChip } from '@/components/ui/SpeedChip';
 import { sumTileOf } from '@/components/ui/Tile';
 import { accountHref, requestHref } from '@/lib/address';
-import { dollarsUnder, equivalentOrDash, nativeSidesOf, probeParts, type WeekReading } from '@/lib/analytics';
+import { dollarsOf, dollarsUnder, equivalentOrDash, nativeSidesOf, probeParts, UNIT_TILE_LABEL, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMiB, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortModel, tokensTotal } from '@/lib/format';
 import { failedFirst, refreshAttention, useAsync, useAttention, useNow, useWeekReading, type Loaded } from '@/lib/hooks';
@@ -138,7 +138,7 @@ export function DashboardPage() {
         <div className="stat-grid stat-grid--day">
           <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={sparks.requests} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
           <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={sparks.tokens} color={ink.series[2]} />
-          <StatTile label="Estimated cost, 24h" value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} failure={costTile?.failure} color={ink.series[1]} />
+          <StatTile label={`${UNIT_TILE_LABEL[dollarsOf(unit)]}, 24h`} value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} failure={costTile?.failure} color={ink.series[1]} />
           <StatTile
             label="Error rate, 24h"
             value={o ? fmtPct(o.errorRate24h ?? 0, 1) : null}

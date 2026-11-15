@@ -1644,8 +1644,8 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // stored default, and its spark leaves the hour that priced nothing a gap. Billed dollars reads the billed side
   // alone.
   const day = await api.getOverview();
-  const tileRead = (page) => {
-    const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Estimated cost, 24h');
+  const tileRead = (page, label) => {
+    const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === label);
     return {
       lines: [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']),
       note: tile?.querySelector('.stat__note')?.textContent ?? '',
@@ -1656,16 +1656,16 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       value: tile?.querySelector('.stat__value')?.textContent ?? '',
     };
   };
-  const native = tileRead(m);
+  const native = tileRead(m, 'Estimated cost, 24h');
   results.push({
     name: "/ under native the story's day, which a Sonnet 4.5 request priced nothing on, reads a dash titled why on the Estimated cost, 24h tile's subscription line beside the billed dollars, and its note the billed dollars per hour",
     ok: shellUnit(m)?.value === 'native' && day.day24h.equivalent === null && day.day24h.billedUsd > 0 && JSON.stringify(native.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && native.note === `${fmtUsd(day.day24h.billedUsd / 24)} billed per hour` && native.title === UNPRICED_TITLE && native.spark,
     missing: [JSON.stringify(native), `the day's figure ${day.day24h.equivalent}`],
   });
   await chooseUnit(m, 'usd');
-  const billed = tileRead(m);
+  const billed = tileRead(m, 'Billed dollars, 24h');
   results.push({
-    name: "/ under Billed dollars the Estimated cost, 24h tile reads the day's billed dollars alone, the native tile's billed line",
+    name: "/ under Billed dollars the Billed dollars, 24h tile reads the day's billed dollars alone, the native tile's billed line",
     ok: shellUnit(m)?.value === 'usd' && billed.lines.length === 0 && billed.value === fmtUsd(day.day24h.billedUsd) && billed.value === native.lines[1]?.[0] && billed.note === `${fmtUsd(day.day24h.billedUsd / 24)} per hour` && billed.title === null && billed.spark,
     missing: [JSON.stringify(billed)],
   });
@@ -1677,11 +1677,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const priced = { ...day, day24h: { ...day.day24h, equivalent: 0.024 }, hourly };
   api.getOverview = async () => priced;
   const pricedPage = await mount('/');
-  const pricedRead = tileRead(pricedPage);
+  const pricedRead = tileRead(pricedPage, 'Estimated cost, 24h');
   pricedPage.unmount();
   api.getOverview = async () => ({ ...priced, day24h: { ...priced.day24h, billedUsd: 0 } });
   const unbilled = await mount('/');
-  const unbilledRead = tileRead(unbilled);
+  const unbilledRead = tileRead(unbilled, 'Estimated cost, 24h');
   unbilled.unmount();
   delete api.getOverview;
   results.push({
@@ -1701,7 +1701,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     return { ...o, day24h: { ...o.day24h, billedUsd: 0 } };
   };
   const planOnly = await mount('/');
-  const planRead = tileRead(planOnly);
+  const planRead = tileRead(planOnly, 'Estimated cost, 24h');
   planOnly.unmount();
   delete api.getOverview;
   results.push({
@@ -1718,13 +1718,13 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   };
   const equivalentPage = await mount('/');
   await chooseUnit(equivalentPage, 'equivalent');
-  const equivalentRead = { ...tileRead(equivalentPage), unit: shellUnit(equivalentPage)?.value ?? null };
+  const equivalentRead = { ...tileRead(equivalentPage, 'Dollar equivalent, 24h'), unit: shellUnit(equivalentPage)?.value ?? null };
   await chooseUnit(equivalentPage, 'native');
   localStorage.removeItem('phoebis.unit');
   equivalentPage.unmount();
   delete api.getOverview;
   results.push({
-    name: "/ under Dollar equivalent the Estimated cost, 24h tile's note reads the subscription requests' dollars per hour",
+    name: "/ under Dollar equivalent the Dollar equivalent, 24h tile's note reads the subscription requests' dollars per hour",
     ok: equivalentRead.unit === 'equivalent' && equivalentRead.note === '$0.30 per hour',
     missing: [JSON.stringify(equivalentRead)],
   });
@@ -6171,18 +6171,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     // side and the tile read the dash titled why, since a partial sum would read as the whole. A pool sums its members'
     // accounts, so no card carries a hint. The page reads the settings beside the pools, and the figures wait on them.
     const listed = await api.listPools();
-    const tileRead = (page) => {
-      const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Cost, 24h');
+    const tileRead = (page, label) => {
+      const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === label);
       return { lines: [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), title: tile?.getAttribute('title') ?? null, value: tile?.querySelector('.stat__value')?.textContent ?? '' };
     };
-    const costRead = (page, name) => {
+    const costRead = (page, name, label) => {
       const pool = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
-      const dd = [...(pool?.querySelectorAll('.pool__stats dt') ?? [])].find((dt) => dt.textContent?.trim() === 'Cost 24h')?.nextElementSibling;
+      const dd = [...(pool?.querySelectorAll('.pool__stats dt') ?? [])].find((dt) => dt.textContent?.trim() === label)?.nextElementSibling;
       return { lines: [...(dd?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), skeleton: !!dd?.querySelector('.skeleton'), text: dd?.textContent?.trim() ?? '', title: dd?.getAttribute('title') ?? null };
     };
     const sum = (read) => listed.reduce((n, p) => n + read(p), 0);
     const dayFigure = listed.reduce((n, p) => (n === null || p.day24h.equivalent === null ? null : n + p.day24h.equivalent), 0);
-    const tile = tileRead(m);
+    const tile = tileRead(m, 'Cost, 24h');
     results.push({
       name: "/pools under native and the Ultra week the Cost, 24h tile stacks the pools' figure over subscription, a dash titled why while a pool's day priced nothing, above their billed dollars over billed",
       ok: shellUnit(m)?.value === 'native' && dayFigure === null && JSON.stringify(tile.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(sum((p) => p.day24h.billedUsd)), 'billed']]) && tile.title === UNPRICED_TITLE,
@@ -6192,7 +6192,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const billed = (p) => p.day24h.billedUsd > 0;
     const wantLines = (p) => [...(plan(p) ? [[p.day24h.equivalent === null ? '-' : weekFull(p.day24h.equivalent), 'subscription']] : []), ...(billed(p) ? [[fmtUsd(p.day24h.billedUsd), 'billed']] : [])];
     const wantTitle = (p) => (p.day24h.equivalent === null ? UNPRICED_TITLE : [...(plan(p) ? [weekFull(p.day24h.equivalent)] : []), ...(billed(p) ? [`${fmtUsd(p.day24h.billedUsd)} billed`] : [])].join(', '));
-    const cells = listed.map((p) => ({ id: p.id, pool: p, read: costRead(m, p.name), want: wantLines(p) }));
+    const cells = listed.map((p) => ({ id: p.id, pool: p, read: costRead(m, p.name, 'Cost 24h'), want: wantLines(p) }));
     const wrongCells = cells.filter(({ pool, read, want }) => (want.length > 0 && JSON.stringify(read.lines) !== JSON.stringify(want)) || (want.length > 0 && read.title !== wantTitle(pool)) || read.skeleton);
     const priced = cells.filter((c) => typeof c.pool.day24h.equivalent === 'number' && c.pool.day24h.equivalent > 0);
     const billedOnly = cells.filter((c) => c.want.length === 1 && billed(c.pool));
@@ -6208,7 +6208,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const byWeek = {};
     for (const week of ['pro', 'max', 'ultra']) {
       await chooseWeek(m, week);
-      byWeek[week] = { stored: localStorage.getItem('phoebis.week'), text: costRead(m, workshop?.name ?? '').lines[0]?.[0] ?? null };
+      byWeek[week] = { stored: localStorage.getItem('phoebis.week'), text: costRead(m, workshop?.name ?? '', 'Cost 24h').lines[0]?.[0] ?? null };
     }
     localStorage.removeItem('phoebis.week');
     await chooseWeek(m, 'ultra');
@@ -6220,10 +6220,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(byWeek), ...['pro', 'max', 'ultra'].map((week) => `${week}: ${scaled(week)}`)],
     });
     await chooseUnit(m, 'usd');
-    const usdTile = tileRead(m);
-    const usdCells = listed.map((p) => [p.id, costRead(m, p.name).text, fmtUsd(p.day24h.billedUsd)]);
+    const usdTile = tileRead(m, 'Billed dollars, 24h');
+    const usdCells = listed.map((p) => [p.id, costRead(m, p.name, 'Billed dollars 24h').text, fmtUsd(p.day24h.billedUsd)]);
     results.push({
-      name: "/pools under Billed dollars the Cost, 24h tile and each card's Cost 24h read the day's billed dollars alone",
+      name: "/pools under Billed dollars the Billed dollars, 24h tile and each card's Billed dollars 24h read the day's billed dollars alone",
       ok: shellUnit(m)?.value === 'usd' && usdTile.lines.length === 0 && usdTile.value === fmtUsd(sum((p) => p.day24h.billedUsd)) && usdTile.title === null && usdCells.every(([, text, want]) => text === want) && listed.some((p) => p.day24h.billedUsd !== p.day24h.cost),
       missing: [JSON.stringify(usdTile), ...usdCells.map((c) => c.join(' '))],
     });
@@ -6238,7 +6238,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const flaggedPools = new Set([planPool?.id, billedPool?.id]);
     api.listPools = async () => (await poolsOf.call(api)).map((p) => (flaggedPools.has(p.id) ? { ...p, day24h: { ...p.day24h, equivalent: null } } : p));
     const dashed = await mount('/pools');
-    const dashedRead = listed.map((p) => costRead(dashed, p.name));
+    const dashedRead = listed.map((p) => costRead(dashed, p.name, 'Cost 24h'));
     dashed.unmount();
     delete api.listPools;
     const dashLines = (p) => [['-', 'subscription'], ...(p.day24h.billedUsd > 0 ? [[fmtUsd(p.day24h.billedUsd), 'billed']] : [])];
@@ -10026,8 +10026,8 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     const parts = [...(side.equivalent === null ? ['-'] : side.equivalent > 0 ? [weekFull(side.equivalent)] : []), ...(side.billedUsd > 0 ? [`${fmtUsd(side.billedUsd)} billed`] : [])];
     return parts.length ? parts.join(', ') : '-';
   };
-  const tileRead = (page) => {
-    const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === 'Lifetime cost');
+  const tileRead = (page, label) => {
+    const tile = [...page.container.querySelectorAll('.stat-grid .stat')].find((t) => t.querySelector('.stat__label')?.textContent === label);
     return { lines: [...(tile?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => [l.querySelector('.cost-figure')?.textContent ?? '', l.querySelector('.stat__pair-word')?.textContent ?? '']), title: tile?.getAttribute('title') ?? null, value: tile?.querySelector('.stat__value')?.textContent ?? '' };
   };
   const barsRead = (page) =>
@@ -10043,7 +10043,7 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
   const byPrefix = new Map(listed.map((k) => [k.prefix, k]));
   const sum = (read) => listed.reduce((n, k) => n + read(k), 0);
   const unpricedKeys = listed.filter((k) => k.lifetime.equivalent === null).map((k) => k.id);
-  const tile = tileRead(m);
+  const tile = tileRead(m, 'Lifetime cost');
   results.push({
     name: "/keys under native and the Ultra week the Lifetime cost tile reads a dash titled why over subscription while a key priced nothing, above the keys' billed dollars over billed",
     ok: shellUnit(m)?.value === 'native' && unpricedKeys.length > 0 && JSON.stringify(tile.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(sum((k) => k.lifetime.billedUsd)), 'billed']]) && tile.title === UNPRICED_TITLE,
@@ -10085,13 +10085,13 @@ columnsMarked('/keys every header cell is fit or fill, and Name, Models and Stat
     missing: wrongSubs.map((s) => JSON.stringify(s)),
   });
   await chooseUnit(m, 'usd');
-  const usdTile = tileRead(m);
+  const usdTile = tileRead(m, 'Billed dollars, lifetime');
   const usdBars = barsRead(m);
   const usdSubs = subsRead(m);
   const usdRanks = usdBars.map((b) => keyOf(b)?.lifetime.billedUsd ?? -1);
   const wrongUsd = [...usdBars.filter((b) => b.figure !== fmtUsd(keyOf(b)?.lifetime.billedUsd ?? NaN)), ...usdSubs.filter((s) => s.text !== fmtUsd(keyById.get(s.id)?.usage7d.billedUsd ?? NaN))];
   results.push({
-    name: "/keys under Billed dollars the Lifetime cost tile, each bar's label and each row's 7-day line read the billed dollars alone, and the bars rank by them",
+    name: "/keys under Billed dollars the Billed dollars, lifetime tile, each bar's label and each row's 7-day line read the billed dollars alone, and the bars rank by them",
     ok:
       shellUnit(m)?.value === 'usd' &&
       usdTile.lines.length === 0 &&
@@ -19597,7 +19597,7 @@ await forView('/analytics', async () => {
   });
   results.push({
     name: '/analytics under All in dollars Plan per hour says a range of billed traffic alone holds no subscription traffic',
-    ok: billedPlan === 'No subscription traffic in this range.',
+    ok: billedPlan === 'No traffic drew plan quota in this range.',
     missing: [String(billedPlan)],
   });
 });

@@ -2267,7 +2267,7 @@ const FIVE_HOUR_SUBTITLE = "The subscription traffic per hour as a share of the 
 const FIVE_HOUR_ULTRA_NOTE = "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window.";
 const FABLE_WEEK_TITLE = 'Fable week per hour';
 const FABLE_WEEK_SUBTITLE = "The subscription traffic per hour as a share of the chosen tier's Fable week";
-const NO_PLAN_TRAFFIC = 'No subscription traffic in this range.';
+const NO_PLAN_TRAFFIC = 'No traffic drew plan quota in this range.';
 /** Plan per hour's empty sentence under a dollar position where the range holds subscription traffic, a line or a tier
  *  unknown entry under Native, and no group's plan dollars are above zero. */
 const NO_LISTED_PLAN_TRAFFIC = 'No subscription traffic in this range carries an API list price.';

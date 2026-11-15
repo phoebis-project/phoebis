@@ -361,8 +361,12 @@ export const UNIT_SUBSET: Record<DollarPosition, string> = { all: 'all requests'
 export const NATIVE_SUBSET = 'the subscription requests as shares of the chosen week and the billed requests in dollars';
 /** The Cost section's meta line per dollar position, after the dollars in range. */
 const UNIT_META: Record<DollarPosition, string> = { all: 'all requests', equivalent: 'equivalent', usd: 'billed' };
-/** The first Cost tile's label per dollar position. */
-const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
+/**
+ * The cost label per dollar position. The Analytics page's first Cost tile reads it under a dollar position, the
+ * Dashboard's cost tile under every position through `dollarsOf`, and the Keys and Pools cost tiles and a pool card's
+ * cost row under the two positions that name one side.
+ */
+export const UNIT_TILE_LABEL: Record<DollarPosition, string> = { all: 'Estimated cost', equivalent: 'Dollar equivalent', usd: 'Billed dollars' };
 
 /** The chosen week a page's figures read in, and `scale` its factor over the Pro-week figure, null while the cost model
  *  is out or where it sizes no week for the chosen tier. `failure` is the settings read's failure while the scale is
