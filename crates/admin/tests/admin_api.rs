@@ -985,8 +985,11 @@ async fn a_pairing_ends_a_run_of_failed_refreshes_with_its_own_committed_attempt
     assert!(refresh_failed_holds(&app, &cookie).await);
     assert_eq!(pair_business(&app, &cookie).await.status(), 200);
     let newest = store
-        .newest_resolved_refresh_attempts("business", 1, 16)
-        .unwrap();
+        .refresh_histories(&[("business", 1)], 16)
+        .unwrap()
+        .remove("business")
+        .unwrap()
+        .attempts;
     assert_eq!(
         (newest[0].outcome.as_str(), newest[0].detail.as_deref()),
         ("committed", Some("pairing"))
@@ -1006,8 +1009,11 @@ async fn a_pairing_whose_credential_commit_fails_records_no_committed_attempt() 
     assert_eq!(pair_business(&app, &cookie).await.status(), 500);
     assert!(
         store
-            .newest_resolved_refresh_attempts("business", 1, 16)
+            .refresh_histories(&[("business", 1)], 16)
             .unwrap()
+            .remove("business")
+            .unwrap()
+            .attempts
             .iter()
             .all(|a| a.detail.as_deref() != Some("pairing")),
         "no success is recorded for a credential that was never stored"

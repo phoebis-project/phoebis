@@ -475,7 +475,12 @@ fn a_missing_key_file_is_generated_at_0600_and_the_recovery_discards_every_seale
         assert_eq!(attempt.outcome, Some(OutcomeWord::Failed), "{id}");
         assert_eq!(attempt.detail.as_deref(), Some("disconnected"), "{id}");
         assert_eq!(
-            store.newest_resolved_refresh_attempts(id, 1, 1).unwrap()[0]
+            store
+                .refresh_histories(&[(id, 1)], 1)
+                .unwrap()
+                .remove(id)
+                .unwrap()
+                .attempts[0]
                 .cause
                 .as_deref(),
             Some("disconnected"),

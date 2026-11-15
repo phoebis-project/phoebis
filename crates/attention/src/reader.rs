@@ -505,21 +505,22 @@ pub(crate) fn refresh_facts(
     store: &Store,
     accounts: &[AccountRow],
 ) -> Result<HashMap<String, RefreshFacts>, StoreError> {
-    accounts
+    let holders: Vec<(&str, u64)> = accounts
         .iter()
         .filter(|account| account.kind == AccountKind::Oauth)
-        .map(|account| {
-            let attempts = store.newest_resolved_refresh_attempts(
-                &account.id,
-                account.incarnation,
-                REFRESH_RUN_READ,
-            )?;
-            let ends_at = store
-                .credential_metadata(&account.id)?
-                .and_then(|credential| credential.refresh_expires_at);
-            Ok((account.id.clone(), RefreshFacts { attempts, ends_at }))
+        .map(|account| (account.id.as_str(), account.incarnation))
+        .collect();
+    Ok(store
+        .refresh_histories(&holders, REFRESH_RUN_READ)?
+        .into_iter()
+        .map(|(id, history)| {
+            let facts = RefreshFacts {
+                attempts: history.attempts,
+                ends_at: history.refresh_expires_at,
+            };
+            (id, facts)
         })
-        .collect()
+        .collect())
 }
 
 /// What the reset condition, the wall's join and the two account states read beside the accounts: each account's

@@ -59,7 +59,7 @@ macro_rules! text_enum {
             ) -> rusqlite::types::FromSqlResult<Self> {
                 let word = value.as_str()?;
                 $name::parse(word).ok_or_else(|| {
-                    rusqlite::types::FromSqlError::Other(format!("unknown word {word:?}").into())
+                    rusqlite::types::FromSqlError::Other($crate::unknown_word_error(word))
                 })
             }
         }
@@ -70,6 +70,13 @@ macro_rules! text_enum {
             }
         }
     };
+}
+
+/// The error of a stored word outside a decoder's set, one text for every decoder. Public for the expansions of
+/// `text_enum!` in the ledger's columns.
+#[doc(hidden)]
+pub fn unknown_word_error(word: &str) -> Box<dyn std::error::Error + Send + Sync> {
+    format!("unknown word {word:?}").into()
 }
 
 mod accounts;
@@ -110,7 +117,7 @@ pub use accounts::{
 pub use backup::{snapshot, BackupError, RETRY_PAUSE};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, CredentialStanding, LastAttempt,
-    NewBundle, OutcomeWord, PendingAttempt, ResolvedAttempt, Secret, Settled,
+    NewBundle, OutcomeWord, PendingAttempt, RefreshHistory, ResolvedAttempt, Secret, Settled,
 };
 pub use keepalive::{
     keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,

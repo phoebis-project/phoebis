@@ -1,5 +1,6 @@
 //! Encrypted credential bundles, API-key secrets, and refresh-attempt bookkeeping.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use rusqlite::types::{FromSql, FromSqlResult, ValueRef};
@@ -268,6 +269,14 @@ pub struct CredentialStanding {
     pub pending: Result<bool, StoreError>,
 }
 
+/// One holder's refresh history as `refresh_histories` reads it.
+#[derive(Debug)]
+pub struct RefreshHistory {
+    /// Newest first.
+    pub attempts: Vec<ResolvedAttempt>,
+    pub refresh_expires_at: Option<i64>,
+}
+
 impl LastAttempt {
     /// `None` for an attempt still in flight.
     pub fn settled(&self) -> Option<Settled> {
@@ -329,6 +338,21 @@ fn last_refresh_attempt_in(
         })
         .optional()?;
     Ok(attempt)
+}
+
+fn newest_resolved_attempts_in(
+    conn: &Connection,
+    account_id: &str,
+    incarnation: u64,
+    limit: usize,
+) -> Result<Vec<ResolvedAttempt>, StoreError> {
+    let mut stmt = conn.prepare_cached(&HOLDER_NEWEST_RESOLVED)?;
+    let rows = stmt.query_map(
+        params![account_id, incarnation as i64, limit as i64],
+        row_to_resolved_attempt,
+    )?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(StoreError::from)
 }
 
 // (generation, sealed, nonce, issued_at, expires_at, refresh_expires_at, scopes, lifecycle_generation)
@@ -525,6 +549,39 @@ impl Store {
                 metadata: credential_metadata_in(&conn, account_id),
                 last_attempt: last_refresh_attempt_in(&conn, account_id, incarnation),
                 pending: has_pending_refresh_attempt_in(&conn, account_id, incarnation),
+            })
+            .collect()
+    }
+
+    /// Each `(account_id, incarnation)`'s newest settled attempts, newest first and bounded by `limit` per holder, with
+    /// the refresh token end its stored credential holds, keyed by the account's id, under one take of the connection,
+    /// so the attention reader's walk of every account for a run of failures takes the store once at each read. A
+    /// previous holder's history under the id is not this one's. A holder with no attempt reads an empty list and one
+    /// with no credential row reads no end. The first statement that fails fails the whole read.
+    pub fn refresh_histories(
+        &self,
+        holders: &[(&str, u64)],
+        limit: usize,
+    ) -> Result<HashMap<String, RefreshHistory>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        crate::injected_failure(
+            &self.hooks.fail_next_refresh_read,
+            "injected refresh read failure",
+        )?;
+        let conn = self.conn.lock().expect(LOCK_POISONED);
+        holders
+            .iter()
+            .map(|&(account_id, incarnation)| {
+                let attempts = newest_resolved_attempts_in(&conn, account_id, incarnation, limit)?;
+                let refresh_expires_at = credential_metadata_in(&conn, account_id)?
+                    .and_then(|credential| credential.refresh_expires_at);
+                Ok((
+                    account_id.to_string(),
+                    RefreshHistory {
+                        attempts,
+                        refresh_expires_at,
+                    },
+                ))
             })
             .collect()
     }
@@ -1060,29 +1117,6 @@ impl Store {
             incarnation,
         )
     }
-
-    /// The newest settled attempts of the holder `incarnation` names, newest first, bounded by `limit`: the
-    /// attention reader walks them for a run of failures, and a previous holder's history is not this one's.
-    pub fn newest_resolved_refresh_attempts(
-        &self,
-        account_id: &str,
-        incarnation: u64,
-        limit: usize,
-    ) -> Result<Vec<ResolvedAttempt>, StoreError> {
-        #[cfg(any(test, feature = "debug-hooks"))]
-        crate::injected_failure(
-            &self.hooks.fail_next_refresh_read,
-            "injected refresh read failure",
-        )?;
-        let conn = self.conn.lock().expect(LOCK_POISONED);
-        let mut stmt = conn.prepare_cached(&HOLDER_NEWEST_RESOLVED)?;
-        let rows = stmt.query_map(
-            params![account_id, incarnation as i64, limit as i64],
-            row_to_resolved_attempt,
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(StoreError::from)
-    }
 }
 
 #[cfg(test)]
@@ -1174,6 +1208,22 @@ mod tests {
             !plan.contains("TEMP B-TREE"),
             "and the index supplies the order rather than a sort: {plan}"
         );
+    }
+
+    #[test]
+    fn the_refresh_histories_of_three_holders_take_the_connection_once() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let takes = || {
+            store
+                .conn
+                .lock_count
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+        let before = takes();
+        store
+            .refresh_histories(&[("a", 1), ("b", 1), ("c", 1)], 16)
+            .unwrap();
+        assert_eq!(takes() - before, 1);
     }
 
     #[test]

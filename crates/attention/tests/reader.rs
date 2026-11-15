@@ -649,8 +649,11 @@ async fn two_failed_refreshes_in_a_row_hold_until_one_commits_and_date_from_the_
         .unwrap();
     let attempts = rig
         .store
-        .newest_resolved_refresh_attempts("business", 1, 16)
-        .unwrap();
+        .refresh_histories(&[("business", 1)], 16)
+        .unwrap()
+        .remove("business")
+        .unwrap()
+        .attempts;
     assert!(attempts[1].started_at < attempts[0].started_at);
     let conditions = read(&attention, NOW);
     let held = find(&conditions, Kind::RefreshFailed, "business").unwrap();
@@ -707,8 +710,11 @@ async fn a_lost_refresh_a_committed_retry_supersedes_counts_no_second_failure() 
         .unwrap();
     let attempts = rig
         .store
-        .newest_resolved_refresh_attempts("business", 1, 16)
-        .unwrap();
+        .refresh_histories(&[("business", 1)], 16)
+        .unwrap()
+        .remove("business")
+        .unwrap()
+        .attempts;
     let rows: Vec<_> = attempts
         .iter()
         .map(|a| (a.id, a.outcome.as_str(), a.detail.as_deref()))
@@ -789,8 +795,11 @@ async fn a_pairing_that_supersedes_a_pending_retry_leaves_no_refresh_run() {
         .unwrap();
     let rows: Vec<_> = rig
         .store
-        .newest_resolved_refresh_attempts("business", 1, 16)
+        .refresh_histories(&[("business", 1)], 16)
         .unwrap()
+        .remove("business")
+        .unwrap()
+        .attempts
         .into_iter()
         .map(|a| (a.id, a.outcome.as_str().to_string(), a.detail))
         .collect();

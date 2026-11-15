@@ -1463,7 +1463,12 @@ async fn an_attempt_another_holder_of_the_id_left_is_closed_at_start_rather_than
         Some("superseded")
     );
     assert_eq!(
-        store.newest_resolved_refresh_attempts("a", 2, 1).unwrap()[0]
+        store
+            .refresh_histories(&[("a", 2)], 1)
+            .unwrap()
+            .remove("a")
+            .unwrap()
+            .attempts[0]
             .cause
             .as_deref(),
         Some("superseded")

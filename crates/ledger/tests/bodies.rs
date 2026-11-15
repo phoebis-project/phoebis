@@ -443,8 +443,11 @@ async fn five_settled_refresh_attempts(up: &FakeUpstream, retention_days: u32) -
 
 fn settled_refresh_attempts(h: &Harness) -> usize {
     h.store
-        .newest_resolved_refresh_attempts("a", 1, 10)
+        .refresh_histories(&[("a", 1)], 10)
         .unwrap()
+        .remove("a")
+        .unwrap()
+        .attempts
         .len()
 }
 

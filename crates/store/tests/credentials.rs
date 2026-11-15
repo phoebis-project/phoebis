@@ -839,8 +839,11 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
     let open = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
     let read = |incarnation: u64, limit: usize| {
         store
-            .newest_resolved_refresh_attempts("a", incarnation, limit)
+            .refresh_histories(&[("a", incarnation)], limit)
             .unwrap()
+            .remove("a")
+            .unwrap()
+            .attempts
             .into_iter()
             .map(|a| (a.id, a.outcome.as_str().to_string(), a.detail))
             .collect::<Vec<_>>()
@@ -898,6 +901,72 @@ fn a_holders_newest_settled_attempts_read_newest_first_within_the_bound_and_its_
         read(1, 16).len(),
         3,
         "and the previous holder keeps its own"
+    );
+}
+
+#[test]
+fn one_refresh_history_read_answers_each_holders_own_attempts_and_end_under_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_account(&account("a")).unwrap();
+    store.insert_account(&account("b")).unwrap();
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                refresh_expires_at: Some(1_800_500_000_000),
+                ..bundle("at-a")
+            },
+        )
+        .unwrap();
+    let settle = |holder: &str, outcome: AttemptOutcome| {
+        let id = store.open_refresh_attempt(holder, 1, 1, 1).unwrap();
+        store.resolve_refresh_attempt(id, 1, outcome).unwrap();
+        id
+    };
+    let first = settle(
+        "a",
+        AttemptOutcome::Failed {
+            cause: "first".into(),
+            detail: "first".into(),
+        },
+    );
+    let second = settle(
+        "a",
+        AttemptOutcome::Failed {
+            cause: "second".into(),
+            detail: "second".into(),
+        },
+    );
+    let committed = settle("b", AttemptOutcome::Committed);
+    let mut histories = store.refresh_histories(&[("a", 1), ("b", 1)], 16).unwrap();
+    let mut entry = |id: &str| {
+        let history = histories.remove(id).unwrap();
+        let attempts: Vec<_> = history
+            .attempts
+            .into_iter()
+            .map(|a| (a.id, a.outcome.as_str(), a.detail))
+            .collect();
+        (attempts, history.refresh_expires_at)
+    };
+    assert_eq!(
+        entry("a"),
+        (
+            vec![
+                (second, "failed", Some("second".to_string())),
+                (first, "failed", Some("first".to_string())),
+            ],
+            Some(1_800_500_000_000)
+        ),
+        "the first holder reads its own two attempts, newest first, and its stored end"
+    );
+    assert_eq!(
+        entry("b"),
+        (vec![(committed, "committed", None)], None),
+        "the second reads its own attempt, and no end, since it holds no credential"
     );
 }
 

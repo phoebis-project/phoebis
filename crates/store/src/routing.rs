@@ -191,7 +191,7 @@ impl FromSql for CooldownScope {
     fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
         let word = value.as_str()?;
         CooldownScope::parse(word)
-            .ok_or_else(|| FromSqlError::Other(format!("unknown word {word:?}").into()))
+            .ok_or_else(|| FromSqlError::Other(crate::unknown_word_error(word)))
     }
 }
 

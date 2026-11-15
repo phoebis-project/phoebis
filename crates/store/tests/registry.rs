@@ -3039,8 +3039,11 @@ fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_
     );
     assert_eq!(credential.access_token.expose(), "at-test-not-a-token");
     let attempts = store
-        .newest_resolved_refresh_attempts("fresh", 1, 10)
-        .unwrap();
+        .refresh_histories(&[("fresh", 1)], 10)
+        .unwrap()
+        .remove("fresh")
+        .unwrap()
+        .attempts;
     assert_eq!(attempts.len(), 1, "the pairing's own resolved attempt");
     assert_eq!(
         (
@@ -3078,8 +3081,11 @@ fn a_paired_account_is_born_ready_with_its_credential_attempt_and_change_in_one_
             store.accounts().unwrap(),
             store.credentials("fresh").unwrap().map(|c| c.generation),
             store
-                .newest_resolved_refresh_attempts("fresh", 1, 10)
+                .refresh_histories(&[("fresh", 1)], 10)
                 .unwrap()
+                .remove("fresh")
+                .unwrap()
+                .attempts
                 .len(),
             store.registry_changes_after(0, 10).unwrap().len(),
         )
@@ -3537,8 +3543,11 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
     );
     assert_eq!(
         store
-            .newest_resolved_refresh_attempts("a", 1, 10)
+            .refresh_histories(&[("a", 1)], 10)
             .unwrap()
+            .remove("a")
+            .unwrap()
+            .attempts
             .len(),
         3,
         "the fresh attempts stay beside the open one"

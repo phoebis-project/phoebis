@@ -427,7 +427,7 @@ impl FromSql for CompanionPermissions {
         let words: Vec<String> =
             serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
         CompanionPermissions::from_words(&words)
-            .map_err(|word| FromSqlError::Other(format!("unknown word {word:?}").into()))
+            .map_err(|word| FromSqlError::Other(crate::unknown_word_error(&word)))
     }
 }
 
@@ -2236,7 +2236,7 @@ fn unknown_word(column: usize, word: &str) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(
         column,
         rusqlite::types::Type::Text,
-        format!("unknown word {word:?}").into(),
+        crate::unknown_word_error(word),
     )
 }
 

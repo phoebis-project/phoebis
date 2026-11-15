@@ -144,8 +144,11 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     }
     let run = parts
         .store
-        .newest_resolved_refresh_attempts("business", 1, 16)
-        .unwrap();
+        .refresh_histories(&[("business", 1)], 16)
+        .unwrap()
+        .remove("business")
+        .unwrap()
+        .attempts;
     assert!(run[1].started_at < run[0].started_at);
     let run_started = run.last().unwrap().started_at;
     let marked_at = parts.clock_cell.load(std::sync::atomic::Ordering::SeqCst);
