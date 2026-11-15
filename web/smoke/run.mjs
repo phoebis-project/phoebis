@@ -28593,11 +28593,11 @@ await forView(['/', '/analytics', '/pools', '/sessions', '/settings'], async () 
     page.unmount();
     api.getSettings = getSettings;
     results.push({
-      name: "/settings and /sessions a cost model answer the console cannot read says so on About's row beside the configured path and on the reference's two cost model tabs, which draw no figure",
+      name: "/settings and /sessions a cost model answer the console cannot read says so on About's row beside the row's source words and on the reference's two cost model tabs, which draw no figure",
       ok:
         unreadable.problem === SAID &&
         path !== null &&
-        rowText === `${path}. ${SAID}` &&
+        rowText === `shipped table (no file at ${path}). ${SAID}` &&
         drawn.planRates.error === SAID &&
         drawn.planRates.tables === 0 &&
         drawn.tiers.error === SAID &&
@@ -29120,10 +29120,11 @@ await forView('/settings', async () => {
   // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
   // blank both.
   const { getSettings } = api;
-  // The file's one entry dated in free text, which no instant reads, so it stands as the entry in force.
+  // The file's one entry dated in free text, which no instant reads, so it stands as the entry in force. A table the
+  // router read from its file opens the row with the path.
   const wire = SETTINGS_WIRE.api_prices;
   const entry = { ...wire.revisions.find((r) => r.effective === wire.effective), content: { ...wire.content, effective: 'v3' }, effective: 'v3' };
-  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...wire, content: entry.content, effective: 'v3', revisions: [entry] } }));
+  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...wire, content: entry.content, effective: 'v3', revisions: [entry], source: 'file' } }));
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const sidebar = page.container.querySelector('.sidebar')?.textContent ?? '';
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -29136,16 +29137,29 @@ await forView('/settings', async () => {
 await forView('/settings', async () => {
   // A pending entry: the row names the date in force, the count with the pending entry among it, and the next date, the
   // earliest held entry's, so the story's own entry of 2026-10-09 ahead of the added one of 2099. That entry carries an
-  // instant, whose time reads in the viewer's zone, UTC under the smoke.
+  // instant, whose time reads in the viewer's zone, UTC under the smoke. The table reads from its file, so the row
+  // opens with the path.
   const { getSettings } = api;
   const wired = decodeSettings(SETTINGS_WIRE);
   const pending = { effective: '2099-01-01', effectiveDate: new Date(Date.parse('2099-01-01')).toISOString(), models: [] };
-  api.getSettings = () => Promise.resolve({ ...wired, apiPrices: { ...wired.apiPrices, revisions: [...wired.apiPrices.revisions, pending] } });
+  api.getSettings = () => Promise.resolve({ ...wired, apiPrices: { ...wired.apiPrices, revisions: [...wired.apiPrices.revisions, pending], source: 'file' } });
   const page = await mount('/settings', { now: CLOCK_ORIGIN });
   const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
   const want = `${SETTINGS_WIRE.storage.api_prices_path}, effective ${effectiveLabel(revisionAt(wired.apiPrices.revisions, CLOCK_ORIGIN).effective)}, ${wired.apiPrices.revisions.length + 1} revisions, next Oct 09, 2026, 18:30`;
   results.push({ name: '/settings a pending price entry reads on its About row after the date in force and the revision count as the next date', ok: row === want, missing: [row || 'no API prices path row', want] });
+  api.getSettings = getSettings;
+  page.unmount();
+});
+
+// An unset key leaves the router the table it ships, so the answer reads `shipped` beside a null path.
+await forView('/settings', async () => {
+  const { getSettings } = api;
+  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...SETTINGS_WIRE.api_prices, source: 'shipped' }, storage: { ...SETTINGS_WIRE.storage, api_prices_path: null } }));
+  const page = await mount('/settings', { now: CLOCK_ORIGIN });
+  const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
+  results.push({ name: '/settings the About card names the shipped table where no path is configured', ok: row.startsWith('shipped table (not configured), '), missing: [row || 'no API prices path row'] });
   api.getSettings = getSettings;
   page.unmount();
 });
@@ -29196,6 +29210,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
+  // The two cost files' rows open on the shipped table's words, since both captured tables read `shipped` beside the
+  // two paths the mock's `SETTINGS_WIRE` configures.
   // Each cost file's row carries its date in force and its revision count, read off the captured revisions through the
   // page's own label, and the price file's row the date and time of the entry it holds next, the story's instant
   // 2026-10-09T18:30:00Z, whose time reads in the viewer's zone, UTC under the smoke. The three keepalive limits read
@@ -29204,8 +29220,8 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   // words them, written out since no other check reads the page's step from seconds to milliseconds.
   const wired = decodeSettings(SETTINGS_WIRE);
   const revisionsText = (revisions) => `effective ${effectiveLabel(revisionAt(revisions, CLOCK_ORIGIN).effective)}, ${revisions.length === 1 ? '1 revision' : `${revisions.length} revisions`}`;
-  const priceRow = `API prices path=${wired.storage.apiPricesPath}, ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
-  const costRow = `Subscription costs path=${wired.storage.subscriptionCostsPath}, ${revisionsText(wired.subscriptionCosts.revisions)}`;
+  const priceRow = `API prices path=shipped table (no file at ${wired.storage.apiPricesPath}), ${revisionsText(wired.apiPrices.revisions)}, next Oct 09, 2026, 18:30`;
+  const costRow = `Subscription costs path=shipped table (no file at ${wired.storage.subscriptionCostsPath}), ${revisionsText(wired.subscriptionCosts.revisions)}`;
   results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates in force and revision counts, the three retention lines, the two session lines, the reset warning line and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, `Profile=${wired.about.profile}`, `Metrics listener=${wired.listeners.metrics}`, `Ledger path=${wired.storage.ledgerPath}`, priceRow, costRow, `Storage path=${wired.storage.path}`, `Requests, samples and the routing log=kept for ${wired.retention.retentionDays} days`, `Rollups=kept for ${wired.retention.rollupRetentionDays} days`, `Body capture=at most ${wired.retention.bodyCaptureMaxHours} hours`, `Session expiry=1d (${wired.sessions.expireAfterSeconds} s)`, `Non-companion timeout=1h (${wired.sessions.nonCompanionIdleSeconds} s)`, `Reset warning=${wired.usage.limitResetWarningDays} days before a reset ends`, 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page, and phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   results.push({
@@ -29274,7 +29290,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
     'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
     "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
     'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
-    'Worth setting for Fable 5.1 sessions in a pool with cache warming on',
+    'Worth setting for Fable 5.2 and Fable 5.1 sessions in a pool with cache warming on',
     'Leave it unset without warming.',
   ]);
   const relayedAsIs = m.text().includes('the router relays the reduced shape as is');

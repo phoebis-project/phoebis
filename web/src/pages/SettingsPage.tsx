@@ -41,7 +41,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
   {
     term: 'CLAUDE_CODE_PROMPT_CACHE_TTL=5m',
-    body: 'Worth setting for Fable 5.1 sessions in a pool with cache warming on: at a 0.025x read price a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset without warming.',
+    body: 'Worth setting for Fable 5.2 and Fable 5.1 sessions in a pool with cache warming on: at a 0.025x read price a five-minute entry kept warm by probes stays cheaper than a one-hour entry. Leave it unset without warming.',
   },
 ];
 
@@ -62,6 +62,10 @@ const revisionsNote = (revisions: { effective: string; effectiveDate: string | n
   const count = plural(revisions.length, 'revision');
   return `effective ${effectiveLabel(inForce.effective)}, ${count}${pending === undefined ? '' : `, next ${effectiveLabel(pending.effective)}`}`;
 };
+
+/** A price row's source words. With no path set the router can only have read the table it ships. */
+const sourceWords = (source: string, path: string | null): string =>
+  path === null ? 'shipped table (not configured)' : source === 'shipped' ? `shipped table (no file at ${path})` : path;
 
 function SecretBadge({ configured }: { configured: boolean }) {
   return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;
@@ -153,8 +157,8 @@ export function SettingsPage() {
                 { label: 'Profile', value: s.about.profile, mono: true },
                 { label: 'Metrics listener', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
                 { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
-                { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, ${revisionsNote(s.apiPrices.revisions, s.apiPrices.effective, now)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
-                { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, ${revisionsNote(s.subscriptionCosts.revisions, s.subscriptionCosts.effective, now)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
+                { label: 'API prices path', value: `${sourceWords(s.apiPrices.source, s.storage.apiPricesPath)}, ${revisionsNote(s.apiPrices.revisions, s.apiPrices.effective, now)}`, mono: s.apiPrices.source !== 'shipped' && s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
+                { label: 'Subscription costs path', value: `${sourceWords(s.subscriptionCosts.source, s.storage.subscriptionCostsPath)}${s.subscriptionCosts.problem === null ? `, ${revisionsNote(s.subscriptionCosts.revisions, s.subscriptionCosts.effective, now)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.subscriptionCosts.source !== 'shipped' && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Requests, samples and the routing log', value: keptFor(s.retention.retentionDays), title: bootstrapNote('stats.retention_days') },
                 { label: 'Rollups', value: keptFor(s.retention.rollupRetentionDays), title: bootstrapNote('stats.rollup_retention_days') },
