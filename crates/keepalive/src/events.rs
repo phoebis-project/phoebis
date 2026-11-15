@@ -577,10 +577,9 @@ impl Inner {
                 // A person at the terminal says nothing about the agent's work, so presence moves the idle clock
                 // alone.
                 if *presence {
-                    // Presence restarts the window, so the one counted so far ends with no return, closed before
-                    // the start moves. The person's restart outranks the floor the close leaves: a clock that
-                    // stepped back would otherwise place the new start behind it.
-                    agent.close_idle_episode();
+                    // An open window stays open, since a person at the terminal has not come back to the conversation
+                    // until a request says so. Presence moves the next window's start on purpose, so the floor goes: a
+                    // clock that stepped back would otherwise leave that start behind the last close.
                     agent.idle_window_floor = None;
                     agent.last_presence_at = Some(now);
                 }

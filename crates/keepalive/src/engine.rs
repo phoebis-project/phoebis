@@ -631,8 +631,8 @@ pub(crate) struct Agent {
     pub idle_episode: Option<IdleEpisode>,
     /// The start of main's last closed idle window. The next opens only from a start past it, so a close that leaves
     /// the start in place, a foreign request or a lapse a registration adopts again, never reopens the same window.
-    /// A close that restarts the window on purpose (a request, presence, a park's end, a revival) clears it: the
-    /// floor orders starts, and a clock that stepped back before the restart is no ordering.
+    /// An event that moves the next window's start on purpose (a park's end, a presence report, a request, a revival)
+    /// clears it: the floor orders starts, and a clock that stepped back before that event is no ordering.
     pub idle_window_floor: Option<i64>,
     /// The anchor of main's last admitted request, retained or not, which the next idle window judges a return against
     /// and the chain watch reads the next request's chain against.

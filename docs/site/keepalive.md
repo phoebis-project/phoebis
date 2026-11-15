@@ -268,13 +268,14 @@ hours, and above. Windows are counted whether or not a recipe is retained, so on
 records when the user came back, and a pool with keepalive off or a key without the `keepalive` permission records its
 returns too. A window that opens before the session's first request has no conversation to compare against and counts no
 return. A window counts under the pool its key was in when it opened. A return's age is read at the prompt that
-announced it, however long the request takes to follow. A lapsed lease, a park that ends without a request, a presence
-report, a release of the main conversation, a request on a new conversation and the session's end close a window with no
-return. After a request that continued or restarted the conversation, the next window starts at the request's own
-instant, except on a main conversation reported `unknown`, where the request moves no start. After any other close, the
-next window opens only once its start moves past the one in force at that close, at a park's end, a presence report, a
-prompt, a request or the session's revival. A busy report pauses the count without closing the window, and a subagent or
-a silent session opens none.
+announced it, however long the request takes to follow. A lapsed lease, a park that ends without a request, a release of
+the main conversation, a request on a new conversation and the session's end close a window with no return. A presence
+report leaves an open window open, so a return typed after a long gap counts at the gap's age. After a request that
+continued or restarted the conversation, the next window starts at the request's own instant, except on a main
+conversation reported `unknown`, where the request moves no start. After any other close, the next window opens only
+once its start moves past the one in force at that close, at a park's end, a presence report, a prompt, a request or the
+session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session opens
+none.
 
 No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
 by bucket.

@@ -716,7 +716,8 @@ async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
             ([1, 1, 1, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
             "the open window, keepalive {keepalive}"
         );
-        activity(&mut r, "presence");
+        r.state("main", "parked");
+        r.state("main", "idle");
         tick_to(&mut r, start, 21).await;
         assert_eq!(
             (reached_in(&r, "main"), reached_in(&r, "warm")),
@@ -742,7 +743,8 @@ async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
     );
     move_key_to_warm(&r).await;
     tick_to(&mut r, start, 12).await;
-    activity(&mut r, "presence");
+    r.state("main", "parked");
+    r.state("main", "idle");
     tick_to(&mut r, start, 13).await;
     assert_eq!(
         (reached_in(&r, "main"), reached_in(&r, "warm")),
@@ -1550,14 +1552,22 @@ async fn a_park_report_and_a_prompt_inside_the_same_second_count_the_first_bucke
     );
 }
 
-/// A presence report starts the window over on purpose, so the floor the closed window left does not refuse a start
-/// that a backward clock step placed behind it. The park's end and a revival restart the window the same way.
+/// A presence report clears the floor a closed window left, so a start that a backward clock step placed behind it
+/// still opens a window. The park's end and a revival clear it the same way.
 #[tokio::test]
 async fn a_presence_report_after_a_backward_clock_step_opens_a_window_that_counts_its_return() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 6).await;
     assert_eq!(reached(&r), [1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    // The lease lapses at 7 minutes 30 seconds, and the tick at 8 minutes closes the window with the floor at its
+    // start. A lapsed session answers a report as an ended instance, so the same instance registers it again.
+    tick_silent_to(&mut r, start, 8).await;
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
     // The wall clock steps back to a second before the window began, and the person types.
     r.advance(start - 1_000 - r.now());
     activity(&mut r, "presence");
@@ -1574,6 +1584,29 @@ async fn a_presence_report_after_a_backward_clock_step_opens_a_window_that_count
         "and its return counts at the window's age"
     );
     assert_eq!(r.status("main").state, AgentState::Busy);
+}
+
+#[tokio::test]
+async fn a_return_after_a_presence_report_counts_at_the_windows_age() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 180).await;
+    activity(&mut r, "presence");
+    tick_to(&mut r, start, 184).await;
+    r.observe_with("main", &next_turn()).await;
+    // 3 hours 4 minutes is 11,040 seconds, inside the bucket from 7,200 to 14,400.
+    assert_eq!(returned(&r), [0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
+}
+
+#[tokio::test]
+async fn a_window_open_at_a_presence_report_reaches_its_next_bucket() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 180).await;
+    activity(&mut r, "presence");
+    tick_to(&mut r, start, 240).await;
+    // The tick at 4 hours, 14,400 seconds, crosses into the bucket that starts there.
+    assert_eq!(reached(&r), [1, 1, 1, 1, 1, 1, 1, 0, 0, 0]);
 }
 
 /// The session expiry counts from the later of the last request and the last report, and a session is held until the
