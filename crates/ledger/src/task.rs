@@ -1951,9 +1951,6 @@ async fn fill_sessions(
     tick: &mut tokio::time::Interval,
 ) -> Filled {
     loop {
-        if tick_due(tick).await {
-            return Filled::Due;
-        }
         let prices = pricing.revisions();
         match blocking(db, move |db| crate::session_totals::fill_step(db, &prices)).await {
             Ok(true) => {}
@@ -1965,6 +1962,9 @@ async fn fill_sessions(
                 );
                 return Filled::Refused;
             }
+        }
+        if tick_due(tick).await {
+            return Filled::Due;
         }
     }
 }

@@ -1828,8 +1828,9 @@ fn write_raw(path: &std::path::Path, sql: &str) {
 }
 
 /// A request landed again leaves the sums row its first landing added and counts its serving attempt's tokens alone,
-/// though the trail's earlier attempt on `a` answered with tokens too. The first landing found the session holding no
-/// other request, so it marked it, and the agent's newest request names the replacement's account.
+/// though the trail's earlier attempt on `a` answered with tokens too and the trail lists it last. The first landing
+/// found the session holding no other request, so it marked it, and the agent's newest request names the replacement's
+/// account.
 #[test]
 fn a_request_landed_again_counts_once_by_its_serving_attempt_in_the_session_its_first_landing_marked(
 ) {
@@ -1844,8 +1845,8 @@ fn a_request_landed_again_counts_once_by_its_serving_attempt_in_the_session_its_
     db.insert_request_at(
         &request,
         &[
-            answered("r1", 1, "a", at, 100),
             answered("r1", 2, "b", at, 300),
+            answered("r1", 1, "a", at, 100),
         ],
         None,
         &prices,
@@ -1936,6 +1937,82 @@ async fn a_landing_on_a_session_the_fill_has_not_reached_is_counted_once_by_the_
     up.shutdown().await;
 }
 
+/// A start walks the requests from the newest again once the fill of the start before it ended: the first life's fill
+/// marks session `old` and finds no row left, and the second life's fill marks session `new`, written between the two
+/// lives and received after each row the first life walked.
+#[tokio::test]
+async fn a_start_fills_a_session_received_after_the_rows_the_fill_of_the_start_before_walked() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    drop(LedgerDb::open(&path).unwrap());
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id) VALUES \
+             ('r-old', {at}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 'old', 'g'); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r-old', 1, 'a', 'oauth', {at}, 'succeeded', 100);",
+            at = phoebis_ledger::test_tables::JANUARY_2026,
+        ),
+    );
+    let h = purging_often(Arc::new(LedgerDb::open(&path).unwrap()), &up).await;
+    // Two calls end this fill: the one that marks `old` and the one that finds no row left. A run of the fill makes
+    // one call at least, ahead of the first pass and behind it, so the fill has ended once the second pass is done.
+    wait_for(Duration::from_secs(5), || {
+        (h.ledger.stats().purge_passes.load(Ordering::SeqCst) >= 2).then_some(())
+    })
+    .await;
+    h.ledger.clone().shutdown().await.unwrap();
+    drop(h);
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id) VALUES \
+             ('r-new', {later}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 'new', 'g'); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r-new', 1, 'a', 'oauth', {later}, 'succeeded', 100);",
+            later = phoebis_ledger::test_tables::JANUARY_2026 + 1_000,
+        ),
+    );
+    let _h = on_disk(&up, fresh_store(), &path, quick()).await;
+    wait_for_session_marked(&path, "new").await;
+    up.shutdown().await;
+}
+
+/// The fill goes on past a walk whose rows hold no session without a mark: session `s`'s one request lies below 1,000
+/// requests of no session received after it, and the start's fill marks it.
+#[tokio::test]
+async fn the_fill_goes_on_past_a_full_walk_that_met_no_session_without_a_mark() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    drop(LedgerDb::open(&path).unwrap());
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id) VALUES \
+             ('r1', {at}, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 's', 'g'); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r1', 1, 'a', 'oauth', {at}, 'succeeded', 100); \
+             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) \
+             INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts) \
+             SELECT 'no-session-' || i, {at} + i, 'claude-sonnet-5', 'claude-sonnet-5', 0, 'inference', 'client', \
+             'succeeded', 0 FROM n;",
+            at = phoebis_ledger::test_tables::JANUARY_2026,
+        ),
+    );
+    let _h = on_disk(&up, fresh_store(), &path, quick()).await;
+    wait_for_session_marked(&path, "s").await;
+    up.shutdown().await;
+}
+
 /// A price list whose Haiku 5.5 row opens its long-context cells past `over` prompt tokens.
 fn haiku_over(over: u64) -> PriceRevisions {
     PriceRevisions::from_yaml(
@@ -1975,32 +2052,30 @@ async fn started_under(
     .await
 }
 
-/// A request lands before the band re-fold's first mark at a threshold of 1,000, which bands its 1,500-token prompt
-/// long. The next start loads a threshold of 2,000, under which the prompt is standard: the re-fold's pass leaves the
-/// request out of its walk, and the session's sums row takes the new band once the start's step and the fill ran.
+/// A request written before the step, a day before the band re-fold's first mark, takes the band of the first start's
+/// threshold of 1,000 once that start's fill sums it: its 1,500-token prompt is long. The next start loads a threshold
+/// of 2,000, under which the prompt is standard: the re-fold's pass leaves the request out of its walk, and the
+/// session's sums row takes the new band once the start's step cleared the session and the fill summed it again.
 #[tokio::test]
 async fn a_moved_threshold_bands_a_session_again_past_the_refolds_since_floor() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ledger.sqlite");
     let at = phoebis_ledger::test_tables::JANUARY_2026;
+    drop(LedgerDb::open(&path).unwrap());
+    write_raw(
+        &path,
+        &format!(
+            "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, attempts, \
+             key_id, session_id, agent_id) VALUES \
+             ('r1', {at}, 'claude-haiku-5-5', 'claude-haiku-5-5', 0, 'inference', 'client', 'succeeded', 1, \
+              'desktop', 's', 'g'); \
+             INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, input_tokens) \
+             VALUES ('r1', 1, 'a', 'oauth', {at}, 'succeeded', 1500);"
+        ),
+    );
     let h = started_under(&up, &path, haiku_over(1_000), at + 86_400_000).await;
-    let request = RequestRecord {
-        model: "claude-haiku-5-5".into(),
-        canonical_model: "claude-haiku-5-5".into(),
-        ..session_request("r1", "s", at)
-    };
-    h.ledger
-        .record_request(Record::Request {
-            request,
-            attempts: vec![answered("r1", 1, "a", at, 1_500)],
-            bodies: None,
-        })
-        .await;
-    wait_for(Duration::from_secs(5), || {
-        (!session_sums(&path, "s").is_empty()).then_some(())
-    })
-    .await;
+    wait_for_session_marked(&path, "s").await;
     assert_eq!(session_sums(&path, "s")[0].2, "long");
     h.ledger.clone().shutdown().await.unwrap();
     drop(h);
@@ -2015,7 +2090,9 @@ async fn a_moved_threshold_bands_a_session_again_past_the_refolds_since_floor() 
 
 /// The retention purge cuts a session's sums at the requests' cutoff: one request in an hour before the cutoff's and
 /// two in the hour the cutoff splits, ten minutes either side of it. The pass leaves the request after the cutoff
-/// counted alone, and the agent's first request reads its receipt.
+/// counted alone, and the agent's first request reads its receipt. Session `t` holds a refused request in an hour
+/// before the cutoff's, which adds no sums row, and a served one in the hour after the split one: the pass finds `t`
+/// through its facts, keeps the served request's row and reads the agent's first request at its receipt.
 #[test]
 fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hour_it_splits() {
     const MINUTE: i64 = 60_000;
@@ -2038,6 +2115,27 @@ fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hou
         )
         .unwrap();
     }
+    let refused_at = cutoff - 150 * MINUTE;
+    db.insert_request_at(
+        &RequestRecord {
+            outcome: "rejected".into(),
+            refused: true,
+            attempts: 0,
+            ..session_request("t-refused", "t", refused_at)
+        },
+        &[],
+        None,
+        &prices,
+    )
+    .unwrap();
+    let served_at = cutoff + 70 * MINUTE;
+    db.insert_request_at(
+        &session_request("t-served", "t", served_at),
+        &[answered("t-served", 1, "a", served_at, 100)],
+        None,
+        &prices,
+    )
+    .unwrap();
     phoebis_ledger::run_retention_blocking(
         &db,
         &LedgerConfig {
@@ -2052,6 +2150,10 @@ fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hou
     assert_eq!(
         (session_requests(&path, "s"), agent_facts(&path, "s", "g").0),
         (1, Some(cutoff + 10 * MINUTE))
+    );
+    assert_eq!(
+        (session_requests(&path, "t"), agent_facts(&path, "t", "g").0),
+        (1, Some(cutoff + 70 * MINUTE))
     );
 }
 

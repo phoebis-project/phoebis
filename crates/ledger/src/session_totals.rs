@@ -45,7 +45,7 @@ use crate::{LedgerDb, LedgerError};
 pub(crate) const RESERVED_ID: &str = "";
 
 /// The `meta` key of the fill's cursor: `{"received_at": <ms>, "rowid": <rowid>}`, the last request row a walk
-/// examined, newest first.
+/// examined, newest first, standing while a fill is under way.
 const FILL_CURSOR_KEY: &str = "session_totals_fill";
 
 /// The `meta` key of the thresholds the stored sums rows were banded under: `{"revisions": [..]}`, each revision in
@@ -353,33 +353,54 @@ impl Facts {
         }
     }
 
-    /// Whether the row holds a pick `request` is the one of: its id is a stored request's, or its receipt a stored
-    /// instant.
-    fn held_by(&self, request: &SessionRequest) -> bool {
-        let at = Some(request.received_at);
-        let id = Some(request.id.as_str());
-        self.last_request_at == at
-            || self.last_inference_at == at
-            || self.first_request_at == at
-            || self.served_id.as_deref() == id
-            || self.newest_id.as_deref() == id
-            || self.probe_id.as_deref() == id
+    /// The instant of `pick`, `None` where the row holds none.
+    fn instant(&self, pick: Pick) -> Option<i64> {
+        match pick {
+            Pick::LastRequest => self.last_request_at,
+            Pick::LastInference => self.last_inference_at,
+            Pick::Served => self.served_at,
+            Pick::FirstRequest => self.first_request_at,
+            Pick::Newest => self.newest_at,
+            Pick::Probe => self.probe_at,
+        }
     }
 
-    /// Whether a stored instant of the row lies before `cutoff`.
-    fn before(&self, cutoff: i64) -> bool {
-        [
-            self.last_request_at,
-            self.last_inference_at,
-            self.served_at,
-            self.first_request_at,
-            self.newest_at,
-            self.probe_at,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|at| at < cutoff)
+    /// Whether `request` is the one `pick` names: its id is the pick's, or its receipt the pick's instant where the
+    /// pick keeps no id.
+    fn held(&self, pick: Pick, request: &SessionRequest) -> bool {
+        let id = Some(request.id.as_str());
+        match pick {
+            Pick::LastRequest | Pick::LastInference | Pick::FirstRequest => {
+                self.instant(pick) == Some(request.received_at)
+            }
+            Pick::Served => self.served_id.as_deref() == id,
+            Pick::Newest => self.newest_id.as_deref() == id,
+            Pick::Probe => self.probe_id.as_deref() == id,
+        }
     }
+}
+
+/// A pick of a facts row, which `reread` reads again on its own: the session row's first three, an agent row's last
+/// three.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pick {
+    LastRequest,
+    LastInference,
+    Served,
+    FirstRequest,
+    Newest,
+    Probe,
+}
+
+impl Pick {
+    const ALL: [Pick; 6] = [
+        Pick::LastRequest,
+        Pick::LastInference,
+        Pick::Served,
+        Pick::FirstRequest,
+        Pick::Newest,
+        Pick::Probe,
+    ];
 }
 
 /// One session's totals: its sums rows by key and its facts rows by agent, the session's own row under `RESERVED_ID`.
@@ -451,8 +472,8 @@ pub(crate) fn land(
                     take_sums(tx, key, &sums, counts)?;
                 }
                 for agent in std::iter::once(RESERVED_ID).chain(old.agent_id.as_deref()) {
-                    if read_facts(tx, key, agent)?.is_some_and(|facts| facts.held_by(&old)) {
-                        reread_row(tx, key, agent)?;
+                    if let Some(facts) = read_facts(tx, key, agent)? {
+                        reread(tx, key, agent, facts, |facts, pick| facts.held(pick, &old))?;
                     }
                 }
             }
@@ -554,7 +575,9 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
 /// one write transaction that writes the sum with the mark and moves the cursor past the session's row. A request of
 /// the session that landed after the snapshot's newest landing makes the write leave the sum out and the cursor short
 /// of the row, so the next call sums the session again: no landing batch waits on a session's sum, and no request is
-/// counted twice or left out. Answers whether the walk left rows below the cursor.
+/// counted twice or left out. The call that finds no row left deletes the cursor, so each start walks from the top
+/// and finds a session that lost its mark, or that kept only rows above a cursor once a pass took its older ones.
+/// Answers whether the walk left rows below the cursor.
 pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, LedgerError> {
     db.purge(|conn| {
         let (walked, summed) = {
@@ -578,9 +601,14 @@ pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, 
                 cursor = *at;
             }
         }
-        write_meta(&tx, FILL_CURSOR_KEY, &cursor)?;
+        let left = walked.unmarked.is_some() || !walked.ended;
+        if left {
+            write_meta(&tx, FILL_CURSOR_KEY, &cursor)?;
+        } else {
+            tx.execute("DELETE FROM meta WHERE key = ?1", params![FILL_CURSOR_KEY])?;
+        }
         tx.commit()?;
-        Ok(walked.unmarked.is_some() || !walked.ended)
+        Ok(left)
     })
 }
 
@@ -593,7 +621,8 @@ struct Banded {
 /// The start's step for a moved threshold, behind `refold_bands` and ahead of the ledger task. A start that finds the
 /// stored thresholds differ from `prices` clears each session with a sums row at or after the first hour the two
 /// lists differ, with no `since` floor, so a request `refold_bands` leaves out of its walk moves too. The clears, the
-/// fill cursor's reset and the write of the loaded list commit together, and the fill then sums those sessions again.
+/// reset of the fill's cursor, which drops the cursor of a fill that a shutdown cut short, and the write of the loaded
+/// list commit together, and the fill then sums those sessions again.
 /// A first start finds no stored list, writes it and clears nothing. Answers the sessions cleared, and sums nothing.
 pub fn unmark_rebanded_sessions(
     db: &LedgerDb,
@@ -722,9 +751,9 @@ fn settle_session(
     }
     let mut deleted = 0;
     for (agent, facts) in read_all_facts(tx, key)? {
-        if facts.before(cutoff) {
-            deleted += reread_row(tx, key, &agent)?;
-        }
+        deleted += reread(tx, key, &agent, facts, |facts, pick| {
+            facts.instant(pick).is_some_and(|at| at < cutoff)
+        })?;
     }
     Ok(deleted)
 }
@@ -801,9 +830,10 @@ static PUT_FACTS: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+/// The session's own facts row, its mark, with `RESERVED_ID` bound as `?4`.
 const MARKED: &str =
     "SELECT 1 FROM session_facts WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 \
-    AND agent_id = ''";
+    AND agent_id = ?4";
 
 /// A request of the session under its key other than `?4`. The reads of a session's requests walk the session index of
 /// its id and check the key on each row.
@@ -1097,9 +1127,11 @@ fn clear_session(tx: &Transaction<'_>, key: &SessionSpendKey) -> Result<usize, L
 }
 
 fn marked(conn: &Connection, key: &SessionSpendKey) -> Result<bool, LedgerError> {
+    let mut binds = session_binds(key).to_vec();
+    binds.push(Value::Text(RESERVED_ID.to_string()));
     Ok(conn
         .prepare_cached(MARKED)?
-        .query_row(params_from_iter(session_binds(key)), |_| Ok(()))
+        .query_row(params_from_iter(binds), |_| Ok(()))
         .optional()?
         .is_some())
 }
@@ -1134,78 +1166,83 @@ fn landed_since(conn: &Connection, key: &SessionSpendKey, stamp: i64) -> Result<
         .is_some())
 }
 
-/// Facts row `agent` of session `key` read again from the request rows that remain, the session's own row under
-/// `RESERVED_ID`. An agent's row left with no pick is deleted, and the answer counts it.
-fn reread_row(
+/// Each pick of facts row `agent` of session `key` that `stale` names, among those the row holds a value of, read again
+/// from the request rows that remain, the session's own row under `RESERVED_ID`. A pick that holds no value takes no
+/// walk of the session. An agent's row left with no pick is deleted, and the answer counts it.
+fn reread(
     tx: &Transaction<'_>,
     key: &SessionSpendKey,
     agent: &str,
+    mut facts: Facts,
+    stale: impl Fn(&Facts, Pick) -> bool,
 ) -> Result<usize, LedgerError> {
-    let mut binds = session_binds(key).to_vec();
+    let picks: Vec<Pick> = Pick::ALL
+        .into_iter()
+        .filter(|pick| facts.instant(*pick).is_some() && stale(&facts, *pick))
+        .collect();
+    if picks.is_empty() {
+        return Ok(0);
+    }
+    let session = session_binds(key).to_vec();
+    let mut agent_binds = session.clone();
+    agent_binds.push(Value::Text(agent.to_string()));
     let one = |sql: &str, binds: &[Value]| -> Result<Option<i64>, LedgerError> {
         Ok(tx
             .prepare_cached(sql)?
             .query_row(params_from_iter(binds), |r| r.get(0))
             .optional()?)
     };
-    let facts = if agent == RESERVED_ID {
-        let served: Option<(i64, String, Option<String>)> = tx
-            .prepare_cached(SESSION_SERVED)?
-            .query_row(params_from_iter(&binds), |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
-            .optional()?;
-        Facts {
-            last_request_at: one(SESSION_NEWEST, &binds)?,
-            last_inference_at: one(SESSION_NEWEST_INFERENCE, &binds)?,
-            served_at: served.as_ref().map(|s| s.0),
-            served_id: served.as_ref().map(|s| s.1.clone()),
-            user_agent: served.and_then(|s| s.2),
-            ..Facts::default()
+    for pick in picks {
+        match pick {
+            Pick::LastRequest => facts.last_request_at = one(SESSION_NEWEST, &session)?,
+            Pick::LastInference => {
+                facts.last_inference_at = one(SESSION_NEWEST_INFERENCE, &session)?
+            }
+            Pick::Served => {
+                let served: Option<(i64, String, Option<String>)> = tx
+                    .prepare_cached(SESSION_SERVED)?
+                    .query_row(params_from_iter(&session), |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    })
+                    .optional()?;
+                facts.served_at = served.as_ref().map(|s| s.0);
+                facts.served_id = served.as_ref().map(|s| s.1.clone());
+                facts.user_agent = served.and_then(|s| s.2);
+            }
+            Pick::FirstRequest => facts.first_request_at = one(AGENT_FIRST, &agent_binds)?,
+            Pick::Newest => {
+                type Newest = (i64, String, String, Option<String>, Option<String>);
+                let newest: Option<Newest> = tx
+                    .prepare_cached(&AGENT_NEWEST)?
+                    .query_row(params_from_iter(&agent_binds), |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    })
+                    .optional()?;
+                facts.newest_at = newest.as_ref().map(|n| n.0);
+                facts.newest_id = newest.as_ref().map(|n| n.1.clone());
+                facts.newest_model = newest.as_ref().map(|n| n.2.clone());
+                facts.newest_agent_type = newest.as_ref().and_then(|n| n.3.clone());
+                facts.newest_account_id = newest.and_then(|n| n.4);
+            }
+            Pick::Probe => {
+                let probe: Option<(i64, String, String)> = tx
+                    .prepare_cached(AGENT_PROBE)?
+                    .query_row(params_from_iter(&agent_binds), |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    })
+                    .optional()?;
+                facts.probe_at = probe.as_ref().map(|p| p.0);
+                facts.probe_id = probe.as_ref().map(|p| p.1.clone());
+                facts.probe_model = probe.map(|p| p.2);
+            }
         }
-    } else {
-        binds.push(Value::Text(agent.to_string()));
-        type Newest = (i64, String, String, Option<String>, Option<String>);
-        let newest: Option<Newest> = tx
-            .prepare_cached(&AGENT_NEWEST)?
-            .query_row(params_from_iter(&binds), |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })
-            .optional()?;
-        let probe: Option<(i64, String, String)> = tx
-            .prepare_cached(AGENT_PROBE)?
-            .query_row(params_from_iter(&binds), |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
-            .optional()?;
-        let (newest_at, newest_id, newest_model, newest_agent_type, newest_account_id) =
-            match newest {
-                Some((at, id, model, agent_type, account)) => {
-                    (Some(at), Some(id), Some(model), agent_type, account)
-                }
-                None => (None, None, None, None, None),
-            };
-        Facts {
-            first_request_at: one(AGENT_FIRST, &binds)?,
-            newest_at,
-            newest_id,
-            newest_model,
-            newest_agent_type,
-            newest_account_id,
-            probe_at: probe.as_ref().map(|p| p.0),
-            probe_id: probe.as_ref().map(|p| p.1.clone()),
-            probe_model: probe.map(|p| p.2),
-            ..Facts::default()
-        }
-    };
+    }
     if agent != RESERVED_ID && facts == Facts::default() {
-        let mut binds = session_binds(key).to_vec();
-        binds.push(Value::Text(agent.to_string()));
         return Ok(tx
             .prepare_cached(&format!(
                 "DELETE FROM session_facts WHERE {SESSION_KEY} AND agent_id = ?4"
             ))?
-            .execute(params_from_iter(binds))?);
+            .execute(params_from_iter(agent_binds))?);
     }
     write_facts(tx, key, agent, &facts)?;
     Ok(0)
@@ -1669,4 +1706,65 @@ fn session_key_of(row: &rusqlite::Row) -> rusqlite::Result<SessionSpendKey> {
         key_generation: row.get(1)?,
         session_id: row.get(2)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_tables::JANUARY_2026;
+
+    /// A price list whose Haiku 5.5 row opens its long-context cells past `over` prompt tokens.
+    fn haiku_over(over: u64) -> PriceRevisions {
+        PriceRevisions::from_yaml(
+            &format!(
+                "revisions:\n  - effective: 2026-01-01\n    models:\n      claude-haiku-5-5:\n        input: 1\n        \
+                 cache_write_5m: 1.25\n        cache_write_1h: 2\n        cache_read: 0.1\n        output: 5\n        \
+                 long_context: {{over: {over}, input: 5, cache_write_5m: 6.25, cache_write_1h: 10, cache_read: 0.5, \
+                 output: 25}}\n"
+            ),
+            "test",
+        )
+        .expect("the list parses")
+    }
+
+    /// A start whose moved threshold clears a session above the cursor of a fill that a shutdown cut short has that
+    /// session summed again: the first start's fill makes one call, which marks `new` and stops with `old` below its
+    /// cursor, and the next start's step clears `new` before its fill runs to the end.
+    #[test]
+    fn a_moved_threshold_drops_the_cursor_of_a_fill_cut_short_and_the_fill_marks_the_session_it_cleared(
+    ) {
+        let db = LedgerDb::open_in_memory().unwrap();
+        db.write(|c| {
+            c.execute_batch(&format!(
+                "INSERT INTO requests (id, received_at, model, canonical_model, stream, kind, origin, outcome, \
+                 attempts, key_id, session_id) VALUES \
+                 ('r-old', {at}, 'claude-haiku-5-5', 'claude-haiku-5-5', 0, 'inference', 'client', 'succeeded', 1, \
+                  'desktop', 'old'), \
+                 ('r-new', {later}, 'claude-haiku-5-5', 'claude-haiku-5-5', 0, 'inference', 'client', 'succeeded', \
+                  1, 'desktop', 'new'); \
+                 INSERT INTO attempts (request_id, attempt, account_id, account_kind, started_at, outcome, \
+                 input_tokens) VALUES ('r-old', 1, 'a', 'oauth', {at}, 'succeeded', 100), \
+                 ('r-new', 1, 'a', 'oauth', {later}, 'succeeded', 100);",
+                at = JANUARY_2026,
+                later = JANUARY_2026 + 1_000,
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+        let first = haiku_over(1_000);
+        unmark_rebanded_sessions(&db, &first).unwrap();
+        fill_step(&db, &first).unwrap();
+        let moved = haiku_over(2_000);
+        unmark_rebanded_sessions(&db, &moved).unwrap();
+        while fill_step(&db, &moved).unwrap() {}
+        let new = SessionSpendKey {
+            key_id: "desktop".into(),
+            key_generation: 0,
+            session_id: "new".into(),
+        };
+        assert!(
+            db.read_blocking(|c| marked(c, &new)).unwrap(),
+            "the fill marks the session the step cleared"
+        );
+    }
 }

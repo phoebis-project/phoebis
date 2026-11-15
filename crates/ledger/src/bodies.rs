@@ -262,9 +262,10 @@ pub(crate) const PURGE_SESSION_SUMS: &str = "DELETE FROM session_sums WHERE (key
 /// was received before it was decided. One whose request never landed leaves at the same age by its own stamp.
 pub(crate) const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
 
-/// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid, a bodies slice
-/// freeing about `PURGE_SLICE_BYTES` with the stored response counted at its length, a body above it alone in its
-/// slice, so the writer waits behind one slice at most and the slice holds the lock for a fraction of the busy timeout.
+/// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid, or by primary key
+/// for the session totals, whose table holds no rowid, a bodies slice freeing about `PURGE_SLICE_BYTES` with the stored
+/// response counted at its length, a body above it alone in its slice, so the writer waits behind one slice at most and
+/// the slice holds the lock for a fraction of the busy timeout.
 /// A bodies slice ends after the body in progress once a write is waiting, so that write waits for one body at most.
 /// Adds what it deleted to `purged` and answers whether the family has more rows to purge in this pass: a full slice,
 /// or a bodies slice cut short, means another may follow.
