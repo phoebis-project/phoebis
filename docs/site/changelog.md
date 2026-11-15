@@ -270,20 +270,20 @@ usage-based seat or an unheld tier under the ring with the reason, and the card 
 tier for whose range holds no priced bucket as tier unknown ([Dashboard](console.md#dashboard),
 [Analytics](console.md#analytics)). The Dashboard's rings list each account with the most of its own window left first
 ([Dashboard](console.md#dashboard)). The Dashboard's rings read the week's unpriced sentence where the chosen week's
-tier has no 7-day capacity ([Dashboard](console.md#dashboard)). A Quota card marks every window whose reset is its
-soonest in the accent ink, the Fable row and a seat's Spend row among them ([Quota](console.md#quota)). A Quota card's
-Refresh draws its reading the moment it answers, at the reading's instant ([Quota](console.md#quota)). A usage-based
-seat draws one spend bar wherever the window bars are drawn, with its amounts, its reset marked estimated until a header
-names it, and a lane on the Quota windows timeline ([Quota](console.md#quota)). An account in the `disconnected` or
-`reauth_required` state reports no quota window, so neither a console view nor the status screen draws its last reading
-([Quota](console.md#quota)). Each window the accounts route serves carries its lead over pace, which the console's pace
-words, pace mark and pace orders read ([Quota](console.md#quota)). On a screen under 900 px wide the Quota cards' reset
-label takes a line of its own under the meter ([Quota](console.md#quota)). The Quota cards sort by the bar's Sort
-control, on Default order in the route's order, on a pace key per window with the account furthest ahead first, or on a
-recovery key per window with the soonest reset first and a usage-based seat among the accounts without that window by
-name, and the Quota windows timeline draws each bar in its account's color, each lane stacking its account and its chips
-above its bars on a narrow screen ([Quota](console.md#quota)). The Quota cards' reset line and the window bars of the
-Dashboard and the Accounts list read the share the projection leaves, such as `19% left at the reset`
+tier has no 7-day capacity ([Dashboard](console.md#dashboard)). A Quota card marks every window whose reset lies within
+60 s of its soonest in the accent ink, the Fable row and a seat's Spend row among them ([Quota](console.md#quota)). A
+Quota card's Refresh draws its reading the moment it answers, at the reading's instant ([Quota](console.md#quota)). A
+usage-based seat draws one spend bar wherever the window bars are drawn, with its amounts, its reset marked estimated
+until a header names it, and a lane on the Quota windows timeline ([Quota](console.md#quota)). An account in the
+`disconnected` or `reauth_required` state reports no quota window, so neither a console view nor the status screen draws
+its last reading ([Quota](console.md#quota)). Each window the accounts route serves carries its lead over pace, which
+the console's pace words, pace mark and pace orders read ([Quota](console.md#quota)). On a screen under 900 px wide the
+Quota cards' reset label takes a line of its own under the meter ([Quota](console.md#quota)). The Quota cards sort by
+the bar's Sort control, on Default order in the route's order, on a pace key per window with the account furthest ahead
+first, or on a recovery key per window with the soonest reset first and a usage-based seat among the accounts without
+that window by name, and the Quota windows timeline draws each bar in its account's color, each lane stacking its
+account and its chips above its bars on a narrow screen ([Quota](console.md#quota)). The Quota cards' reset line and the
+window bars of the Dashboard and the Accounts list read the share the projection leaves, such as `19% left at the reset`
 ([Quota](console.md#quota)). The Quota windows timeline draws its now marker and its day grid over the bars, so the
 marker stands at the instant's place on them and no grid line crosses a lane's stacked account and chips on a narrow
 screen ([Quota](console.md#quota)). The Quota view leaves out an account that is disconnected or needs

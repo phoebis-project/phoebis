@@ -294,24 +294,31 @@ and the routing log keep the used share, the figure that each window's ceiling i
 whose reset has passed with no reading since reads `expired {ago}` instead, with "no reading since the reset, {time}" on
 hover, and draws no share and an empty meter until the next reading, and a window the account does not report keeps its
 row with its words muted in the reset label's place and on the chip's hover ("no 5-hour window", "no 7-day window", "no
-Fable window"). A card with no window yet reads "No quota windows reported yet.", and one whose read failed shows the
-error with `, next attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads the
-share of its monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the reading's
-currency on hover and `resets {ago}` under it, and no pace, since the router projects no burn on the seat. With no limit
-set its chip reads the amount spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No
-spend reading yet." in the windows' place. Until a reset header names the spend window's reset, the router estimates it
-as 00:00 UTC on the first of the next month, and the line reads `resets {ago}, estimated`, the word in the muted ink,
-with `resets {time} (estimated: no reset header has been seen for this window yet)` on hover. The reset label of every
-row whose reset is the card's soonest, a seat's Spend row among them, reads in the accent ink, its hover adding "the
-first of this account to recover". The "Extra usage" chip reads `off`, `not in use`, `in use` or `not reported`, with
-the month's spend against its limit while extra usage is enabled and the reading carries the amounts, in the serious
-tone while requests bill as extra usage, and the provider's reason inside the line with the whole message on hover. The
-chips name the plan the router resolved from the organization type and the tier ("Plan", reading "Free", "Pro", "Max",
-"Ultra" or "Usage-based", the display name claude.ai sends where the account carries one, the tier on hover), when the
-plan of an account marked canceled ends (in the serious tone inside a week), and when a trial ends ("Trial"). The poll
-reading says when the poll last asked the endpoint and how it answered, with the whole message and the backoff on hover,
-and "Refresh" reads this account's endpoint and its limit resets now. A card that shows an error, whose last poll
-failed, or that is backing off counts as needing attention.
+Fable window"). A window that has not opened, which the router reads at 0% used with no reset, reads "not open" in the
+reset label's place with no projection beside it, on the card's row and on the window bars of the Dashboard's account
+cards and the Accounts views, and its chip on the timeline reads "not open" in the share's place. A window with a used
+share and no reset reads "not reported" there, followed by its projection where the window carries one, and the bars of
+the Dashboard's account cards and of the Accounts list draw that projection in the word's place. Its chip on the
+timeline keeps its share, with "no reset reported" on hover, and the timeline draws no bar for either window. A card
+with no window yet reads "No quota windows reported yet.", and one whose read failed shows the error with `, next
+attempt {time}` and a "Retry" button in the windows' place. A usage-based seat's Spend row reads the share of its
+monthly spend limit left, `59% left`, over the meter, with the amount spent of the limit in the reading's currency on
+hover and `resets {ago}` under it, and no pace, since the router projects no burn on the seat. With no limit set its
+chip reads the amount spent, `$1,025.00 spent`, and no meter draws, and a seat with no reading yet reads "No spend
+reading yet." in the windows' place. Until a reset header names the spend window's reset, the router estimates it as
+00:00 UTC on the first of the next month, and the line reads `resets {ago}, estimated`, the word in the muted ink, with
+`resets {time} (estimated: no reset header has been seen for this window yet)` on hover. The reset label of every row
+whose reset lies within 60 s of the card's soonest, the slack within which the router reads two resets as one, a seat's
+Spend row among them, reads in the accent ink, its hover adding "the first of this account to recover". The "Extra
+usage" chip reads `off`, `not in use`, `in use` or `not reported`, with the month's spend against its limit while extra
+usage is enabled and the reading carries the amounts, in the serious tone while requests bill as extra usage, and the
+provider's reason inside the line with the whole message on hover. The chips name the plan the router resolved from the
+organization type and the tier ("Plan", reading "Free", "Pro", "Max", "Ultra" or "Usage-based", the display name
+claude.ai sends where the account carries one, the tier on hover), when the plan of an account marked canceled ends (in
+the serious tone inside a week), and when a trial ends ("Trial"). The poll reading says when the poll last asked the
+endpoint and how it answered, with the whole message and the backoff on hover, and "Refresh" reads this account's
+endpoint and its limit resets now. A card that shows an error, whose last poll failed, or that is backing off counts as
+needing attention.
 
 A card of an account that holds a one-time limit reset closes its chip row with a Resets chip. It reads the count of
 resets left and "available" while one can be used now, as in `Resets 2 available`. Where none can, the reason of the
@@ -365,21 +372,22 @@ Quota windows lays the same windows across a calendar titled "Quota windows", wi
 the Weekly mode, `three days` in the 5-hour mode), "Previous period", "Today" and "Next period" buttons, the mode switch
 Weekly or 5-hour, an "Account" axis and a now marker over the bars at the instant's place in the span. It draws one lane
 per listed account with a window or a spend reading, and each lane carries the chips "5-hour limit", "7-day limit" and
-"Fable 7-day limit", each with its share left and its reset on hover, and one bar per window in the account's color, the
-current bar filled from the window's start by its used share in a stronger tone, so a fill past the now line is ahead of
-pace and one short of it behind, the upcoming window dashed and the elapsed ones muted. A usage-based seat's lane
-carries one chip, "Spend limit", with the amount left of the limit (`$1,475.00 of $2,500.00 left`, or the amount spent
-where no limit is set) and the reset with the estimate's word on hover, and one bar per monthly spend window, the
-current one from one calendar month before the reset to the reset, filled by the share spent and labeled as a plan bar
-is. The current bar is labeled with the share left and its reset, `59% left · Sep 19 20:10`, or with the share alone
-where the bar is too narrow for both, and a bar too narrow for its label keeps it on hover. On a narrow screen each lane
-stacks its account and its chips above its bars, the now marker and the day grid cross the bars alone, the marker's pill
-under the day labels, and the day axis prints short labels. A 5-hour cell too narrow for its full labels prints the hour
-alone, `06` under the 24-hour time format and `6 AM` under the 12-hour one. Under the 12-hour format the 5-hour mode
-draws fewer, wider cells where twelve would be too narrow for `12 AM`. An account marked canceled with a saved end shows
-the end on its lane: no window opens after it, and the window that spans it stops there. The legend reads current
-window, upcoming, used, past window, now and plan ends, and the note "Each bar is one full quota window, drawn from when
-it opened to when it resets, and labeled with the instant it resets. Lanes ending together compete for the same days."
+"Fable 7-day limit", each with its share left and its reset on hover, and one bar per window that has a reset in the
+account's color, the current bar filled from the window's start by its used share in a stronger tone, so a fill past the
+now line is ahead of pace and one short of it behind, the upcoming window dashed and the elapsed ones muted. A
+usage-based seat's lane carries one chip, "Spend limit", with the amount left of the limit (`$1,475.00 of $2,500.00
+left`, or the amount spent where no limit is set) and the reset with the estimate's word on hover, and one bar per
+monthly spend window, the current one from one calendar month before the reset to the reset, filled by the share spent
+and labeled as a plan bar is. The current bar is labeled with the share left and its reset, `59% left · Sep 19 20:10`,
+or with the share alone where the bar is too narrow for both, and a bar too narrow for its label keeps it on hover. On a
+narrow screen each lane stacks its account and its chips above its bars, the now marker and the day grid cross the bars
+alone, the marker's pill under the day labels, and the day axis prints short labels. A 5-hour cell too narrow for its
+full labels prints the hour alone, `06` under the 24-hour time format and `6 AM` under the 12-hour one. Under the
+12-hour format the 5-hour mode draws fewer, wider cells where twelve would be too narrow for `12 AM`. An account marked
+canceled with a saved end shows the end on its lane: no window opens after it, and the window that spans it stops there.
+The legend reads current window, upcoming, used, past window, now and plan ends, and the note "Each bar is one full
+quota window, drawn from when it opened to when it resets, and labeled with the instant it resets. Lanes ending together
+compete for the same days."
 
 ## Accounts
 
@@ -446,9 +454,12 @@ reading yet" on a usage-based seat, or "No quota window is read since the plan e
 ended), or "The first quota reading is in flight." from a pairing's confirm that started the account's first poll until
 its first reading lands, where a usage-based seat reads "No spend reading yet". On an account whose plan ended the
 plan-ended sentence stands first, and it stands too on a subscription account that is not paired or needs re-auth and
-whose canceled end has passed. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 5-hour,
-7-day and Fable 7-day windows of a subscription account, or "No samples yet" with "Quota samples appear after the first
-successful quota fetch."
+whose canceled end has passed. "7-day trend" ("Utilization of each window, sampled every 5 minutes") draws the 7-day
+window of a subscription account, its Fable 7-day window where the account carries one and its 5-hour window where the
+week holds a 5-hour sample, each line ending at its own last sample. A week with no sample reads "No samples yet" with
+"Quota samples appear after the first successful quota fetch.", or "No samples in the last 7 days" over the Usage card's
+sentence on an account whose plan ended, that is not paired or that needs re-auth. A usage-based seat's detail draws no
+trend card.
 
 "Allowance left at reset" draws, for a subscription account that is not a usage-based seat, one column per weekly window
 (the 7-day window, then each model week): the share left unused at the latest reset with "left at the reset of {date}"
@@ -1518,18 +1529,19 @@ button of its own ("The unit every view prices a request in. Native reads a subs
 chosen week and a billed request in dollars."), the five browser preferences the shell reads, and at a phone's width
 each row's control wraps under its label, the Unit row's position select, week select and legend button onto a second
 line. "About" lists Version, Profile, Metrics listener, Ledger path, API prices path and Subscription costs path (each
-as the path or "not configured", then its table's entry in force, its revision count and the next date while one is
-pending, as `effective {date}, {n} revisions, next {date}`, each date with its time where the entry carries one, the
-last reading `{problem}` in their place while the cost model reports a problem), Storage path, "Requests, samples and
-the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever" where its key is 0), "Body capture" (as
-`at most {n} hours`, the longest a pool or a key keeps captured bodies), "Session expiry" (as `1d (86400 s)`, how long a
-session stays listed after its last activity), "Non-companion timeout" (as `1h (3600 s)`, how long a session no mod
-reports stays listed after its last use, or the session expiry where that is the lesser of the two, which also bounds
-the lines its pins draw), "Reset warning" (as `5 days before a reset ends`, or "off" at 0, how long before an unused
-limit reset ends the Dashboard raises its item and the Quota card's Resets chip takes the tone of a plan about to end),
-and Admin secret as "configured" or "not configured", each path's, each retention line's, each session line's and the
-reset warning's hover naming the bootstrap key that sets it, and closes on "The values the configuration file sets are
-on the installation page, and `phoebis check-config` prints this router's."
+as the source the router read, the file's path, `shipped table (no file at {path})` where a path is set and no file
+stands there, or `shipped table (not configured)` where the key is unset, then its table's entry in force, its revision
+count and the next date while one is pending, as `effective {date}, {n} revisions, next {date}`, each date with its time
+where the entry carries one, the last reading `{problem}` in their place while the cost model reports a problem),
+Storage path, "Requests, samples and the routing log" and "Rollups" (each as `kept for {n} days`, or "kept forever"
+where its key is 0), "Body capture" (as `at most {n} hours`, the longest a pool or a key keeps captured bodies),
+"Session expiry" (as `1d (86400 s)`, how long a session stays listed after its last activity), "Non-companion timeout"
+(as `1h (3600 s)`, how long a session no mod reports stays listed after its last use, or the session expiry where that
+is the lesser of the two, which also bounds the lines its pins draw), "Reset warning" (as `5 days before a reset ends`,
+or "off" at 0, how long before an unused limit reset ends the Dashboard raises its item and the Quota card's Resets chip
+takes the tone of a plan about to end), and Admin secret as "configured" or "not configured", each path's, each
+retention line's, each session line's and the reset warning's hover naming the bootstrap key that sets it, and closes on
+"The values the configuration file sets are on the installation page, and `phoebis check-config` prints this router's."
 
 "Downstream client configuration" ("Put it in the env block of the client's settings file or export it in the shell
 that launches the client, and replace the token with a key from the Keys page.") shows the seven lines that point

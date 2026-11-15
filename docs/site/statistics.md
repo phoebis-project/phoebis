@@ -264,10 +264,10 @@ A request's cost is an estimate at list prices per million tokens, computed from
 reads it: an estimate rather than a bill, since tier and batch modifiers are not known here and subscription quota is
 the rate-limit windows, never this number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the
 binary. `stats.api_prices_path` replaces its whole list with a file of the operator's own, Settings names each table's
-path and date on its About card, and the cost reference dialog the Sessions view opens draws the table ([The cost
-reference](console.md#the-cost-reference)). A request with usage on a model the entry in force does not price reads no
-cost estimate and is counted in `phoebis_pricing_unknown_model_total`, while a client classifier call the plan paid
-reads zero on any model.
+source and date on its About card, the file the router read or the shipped table, and the cost reference dialog the
+Sessions view opens draws the table ([The cost reference](console.md#the-cost-reference)). A request with usage on a
+model the entry in force does not price reads no cost estimate and is counted in `phoebis_pricing_unknown_model_total`,
+while a client classifier call the plan paid reads zero on any model.
 
 The file is a list of revisions under its one key, `revisions`: each entry carries an `effective` and the whole table in
 force from it, `models`. An `effective` is a date in `YYYY-MM-DD` form, in force from 00:00 UTC of that day, or an
@@ -505,13 +505,14 @@ file, adds both lines and points `stats.subscription_costs_path` at the copy.
 ## Body capture
 
 Body capture is off until a key or a pool asks for it. Once asked for, a capture holds the request and response
-bodies of that key or pool in the ledger for the hours it names, each body cut at 8 MiB if the stream ran longer,
-the row keeping the length it ran to so the drawer can say how much was dropped, and each captured body is dropped
-once its hours run out. `stats.body_capture_max_hours` is the ceiling a key or pool may ask for, because the
-bodies are prompts and how long they are kept is the operator's call rather than the caller's. The console lists a
-captured body in the request drawer, with a control to copy it, and draws it in the wide view. A captured request body
-is the body as the client sent it, so a session in auto mode shows its `safeguards` member whole whether or not the
-router dropped it on the way upstream, which is the warning the capture control carries ([Keys](routing.md#keys)).
+bodies of that key or pool in the ledger for the hours it names, the response cut at 8 MiB if the stream ran longer, the
+row keeping the length it ran to so the drawer can say how much was dropped, and the request kept whole, up to
+`proxy.max_request_bytes`. Each captured body is dropped once its hours run out. `stats.body_capture_max_hours` is the
+ceiling a key or pool may ask for, because the bodies are prompts and how long they are kept is the operator's call
+rather than the caller's. The console lists a captured body in the request drawer, with a control to copy it, and draws
+it in the wide view. A captured request body is the body as the client sent it, so a session in auto mode shows its
+`safeguards` member whole whether or not the router dropped it on the way upstream, which is the warning the capture
+control carries ([Keys](routing.md#keys)).
 
 ## The ledger writer
 
@@ -690,7 +691,7 @@ Each family means what its entry below says, the text a `# HELP` line would hold
 
 The views that show the figures above are described on [The console](console.md), each with its figures, filters and
 controls: the [Dashboard](console.md#dashboard) with its attention line, five 24-hour tiles and two capacity rings,
-and [Settings](console.md#settings) with the About card that names each price table's path and date.
+and [Settings](console.md#settings) with the About card that names each price table's source and date.
 
 ### Quota
 
