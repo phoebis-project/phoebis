@@ -1,6 +1,7 @@
 //! Reads for the admin routes: the request log with its filters and cursor, the rollup series and breakdown
 //! with merged histograms, the dashboard's day, and the newest quota sample per window.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock};
 
@@ -282,21 +283,17 @@ fn key_lifetimes(
     args: &mut Vec<rusqlite::types::Value>,
     clauses: &mut Vec<String>,
 ) {
-    if selectors.is_empty() {
-        return;
-    }
-    let keys = key_selectors(selectors, live);
-    if keys.is_empty() {
-        clauses.push("0".into());
-    } else {
-        key_clause(&keys, true, args, clauses);
+    match key_selectors(selectors, live) {
+        Some(keys) => key_clause(&keys, true, args, clauses),
+        None => clauses.push("0".into()),
     }
 }
 
 /// Each selector as `LiveKeys::selects` reads it: the reserved id at any generation, every other selector at the
-/// lifetime `lifetime_of` answers. A selector that names no lifetime drops out.
-fn key_selectors(selectors: &[String], live: &LiveKeys) -> Vec<KeySelector> {
-    selectors
+/// lifetime `lifetime_of` answers. A selector that names no lifetime drops out, and `None` where `selectors` names keys
+/// and every one drops out, which selects no row rather than every row.
+fn key_selectors(selectors: &[String], live: &LiveKeys) -> Option<Vec<KeySelector>> {
+    let keys: Vec<KeySelector> = selectors
         .iter()
         .filter_map(|selector| {
             if selector == UNATTRIBUTED {
@@ -311,7 +308,8 @@ fn key_selectors(selectors: &[String], live: &LiveKeys) -> Vec<KeySelector> {
                     key_generation: Some(generation),
                 })
         })
-        .collect()
+        .collect();
+    (selectors.is_empty() || !keys.is_empty()).then_some(keys)
 }
 
 /// One clause matching any of `keys`, a selector with a generation on the pair and one without on the id alone. With
@@ -1522,6 +1520,12 @@ impl LogStatement {
             &mut args,
             &mut clauses,
         );
+        if !filter.accounts.is_empty() {
+            let marks = bind_all(&filter.accounts, &mut args);
+            clauses.push(format!(
+                "({alias}.account_id IN ({marks}) OR {alias}.from_account_id IN ({marks}))"
+            ));
+        }
         LogStatement { clauses, args }
     }
 
@@ -1533,12 +1537,6 @@ impl LogStatement {
 /// `None` when the kinds name no decision, so the statement is never run.
 pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
     let mut statement = LogStatement::new("d", filter);
-    if !filter.accounts.is_empty() {
-        let marks = bind_all(&filter.accounts, &mut statement.args);
-        statement.clauses.push(format!(
-            "(d.account_id IN ({marks}) OR d.from_account_id IN ({marks}))"
-        ));
-    }
     if let Some(kinds) = &filter.kinds {
         let of_kind = (!kinds.decisions.is_empty()).then(|| {
             format!(
@@ -1560,12 +1558,6 @@ pub(crate) fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStateme
 /// `None` when the kinds name no event kind, so the statement is never run.
 fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
     let mut statement = LogStatement::new("e", filter);
-    if !filter.accounts.is_empty() {
-        let marks = bind_all(&filter.accounts, &mut statement.args);
-        statement.clauses.push(format!(
-            "(e.account_id IN ({marks}) OR e.from_account_id IN ({marks}))"
-        ));
-    }
     if let Some(kinds) = &filter.kinds {
         if kinds.events.is_empty() {
             return None;
@@ -2249,16 +2241,12 @@ impl RollupFilter {
     /// `lifetime_of` answers. `None` when the filter names keys and none of them names a lifetime, which selects no row
     /// rather than every row.
     pub fn rollup_select(&self, live: &LiveKeys) -> Option<RollupSelect> {
-        let keys = key_selectors(&self.keys, live);
-        if !self.keys.is_empty() && keys.is_empty() {
-            return None;
-        }
         Some(RollupSelect {
             pools: self.pools.clone(),
             accounts: self.accounts.clone(),
             kinds: self.kinds.clone(),
             models: canonical_models(&self.models),
-            keys,
+            keys: key_selectors(&self.keys, live)?,
             clients: self.clients.to_vec(),
             user_agents: self.user_agents.to_vec(),
             ..RollupSelect::default()
@@ -2804,12 +2792,18 @@ struct PlanSums {
 }
 
 impl PlanSums {
-    /// Folds what one plan-funded row adds once, whatever its parts: its counts when `counted`, as the request dollars
-    /// take the row, and the wasted and kept-warm figures `EquivalentSums::add_row` prices at `key`, its hour's end.
+    /// Folds what one plan-funded row adds once, whatever its parts: its counts and its kept-warm credits when
+    /// `counted`, as the request dollars take the row, and the wasted and kept-warm figures `EquivalentSums::add_row`
+    /// prices at `key`, its hour's end.
     fn add_row(&mut self, row: &RollupRow, key: &RowKey<'_>, costs: &PlanTables, counted: bool) {
         if counted {
             self.requests += row.requests;
             self.output_tokens += row.output_tokens;
+            // The summed rows `group_row` reads key no funding, so the plan-served credits fold here per row, under the
+            // gate the group's `kept_warm` counts take.
+            self.kept_warm_requests += row.kept_warm_requests;
+            self.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
+            self.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
         }
         self.equivalent.add_row(row, |usage| {
             price_equivalent_at(costs, key, SEVEN_DAY, usage)
@@ -2980,13 +2974,6 @@ impl GroupSums {
                 kept.map_or(0.0, |usd| usd.cache_write_usd - usd.cache_read_usd);
         }
         if plan {
-            // The summed rows `group_row` reads key no funding, so the plan-served counts fold here per row, the
-            // credits under the gate `kept_warm` takes and ahead of the token test that skips a credit's row.
-            if counted {
-                entry.plan.kept_warm_requests += row.kept_warm_requests;
-                entry.plan.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
-                entry.plan.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
-            }
             entry.plan.add_row(row, &end_key, costs, counted);
         }
         // Each row prices under the account tier it recorded. A tier of `UNATTRIBUTED` (a profile not yet read, a row
@@ -3591,10 +3578,8 @@ pub fn revision_spans(
     let price_instants = prices.instants();
     let cost_instants = costs.map_or(&[][..], |costs| costs.instants());
     // Before a list's first entry `in_force` already reads that entry, so only the later entries move a revision.
-    let mut edges: Vec<i64> = [price_instants, cost_instants]
-        .into_iter()
-        .flat_map(|instants| instants.iter().skip(1))
-        .map(|ms| hour_of(*ms))
+    let mut edges: Vec<i64> = later_instants(prices, costs)
+        .map(hour_of)
         .filter(|hour| *hour > from_hour && *hour < to_hour)
         .collect();
     edges.sort_unstable();
@@ -3699,6 +3684,30 @@ impl SideKey {
             .map(String::clone),
         )
     }
+
+    /// `of` for a row its caller drops after the lookup, its strings moved out rather than cloned.
+    fn take(row: &mut RollupRow) -> SideKey {
+        SideKey(
+            row.key_generation,
+            [
+                &mut row.key_id,
+                &mut row.pool_id,
+                &mut row.account_id,
+                &mut row.canonical_model,
+                &mut row.kind,
+                &mut row.user_agent,
+                &mut row.client,
+                &mut row.effort,
+                &mut row.request_class,
+                &mut row.speed,
+                &mut row.funding,
+                &mut row.band,
+                &mut row.tier,
+                &mut row.classifier,
+            ]
+            .map(std::mem::take),
+        )
+    }
 }
 
 /// One earlier side of a boundary hour: the requests received under `at` and at or after the instant before it (the
@@ -3740,9 +3749,10 @@ pub(crate) fn earlier_sides(
     let mut fold = |requests: Vec<RequestRecord>| -> Result<(), LedgerError> {
         for (request, attempts) in with_attempts(conn, requests)? {
             let side = &mut sides[instants.partition_point(|at| *at <= request.received_at)];
-            for delta in deltas_of(&request, &attempts, prices, FoldRules::ALL) {
-                let counts = side.counts.entry(SideKey::of(&delta)).or_default();
-                *counts = usage_sum(*counts, delta.usage());
+            for mut delta in deltas_of(&request, &attempts, prices, FoldRules::ALL) {
+                let usage = delta.usage();
+                let counts = side.counts.entry(SideKey::take(&mut delta)).or_default();
+                *counts = usage_sum(*counts, usage);
             }
         }
         Ok(())
@@ -3836,31 +3846,48 @@ impl Sides {
         db.read(move |c| Sides::load(c, &prices, &hours)).await
     }
 
-    /// The boundary hours the read loaded, ascending: the hours a SQL sum binds out of its statement.
-    fn hours(&self) -> Vec<i64> {
-        self.0.keys().copied().collect()
-    }
-}
-
-/// The runs of `[from_hour, to_hour)` that hold none of `hours` (ascending), so a SQL sum keeps its statement for every
-/// hour no entry splits. With no hour inside the range the one run is the range itself.
-fn unsplit_ranges(from_hour: i64, to_hour: i64, hours: &[i64]) -> Vec<(i64, i64)> {
-    let mut ranges = Vec::new();
-    let mut start = from_hour;
-    for hour in hours
-        .iter()
-        .copied()
-        .filter(|hour| *hour >= from_hour && *hour < to_hour)
-    {
-        if hour > start {
-            ranges.push((start, hour));
+    /// A priced SQL sum over `spans` (ascending, as `revision_spans` answers them) with the loaded boundary hours bound
+    /// out: each span is cut around those hours and `sum` takes each piece in order, the piece keeping its span's `at`,
+    /// so the statement runs for every hour no entry splits. Then `stored` takes each loaded boundary hour inside the
+    /// spans, ascending, to price that hour's stored rows by their parts, since `price_group` would price the hour
+    /// whole at its end.
+    fn split_sum(
+        &self,
+        spans: impl IntoIterator<Item = Span>,
+        mut sum: impl FnMut(Span) -> Result<(), LedgerError>,
+        mut stored: impl FnMut(i64) -> Result<(), LedgerError>,
+    ) -> Result<(), LedgerError> {
+        let mut bound_out = Vec::new();
+        for span in spans {
+            let mut start = span.from_hour;
+            for hour in self
+                .0
+                .keys()
+                .copied()
+                .filter(|hour| *hour >= span.from_hour && *hour < span.to_hour)
+            {
+                if hour > start {
+                    sum(Span {
+                        from_hour: start,
+                        to_hour: hour,
+                        ..span
+                    })?;
+                }
+                start = hour_end(hour);
+                bound_out.push(hour);
+            }
+            if span.to_hour > start {
+                sum(Span {
+                    from_hour: start,
+                    ..span
+                })?;
+            }
         }
-        start = hour_end(hour);
+        for hour in bound_out {
+            stored(hour)?;
+        }
+        Ok(())
     }
-    if to_hour > start {
-        ranges.push((start, to_hour));
-    }
-    ranges
 }
 
 /// One part of a stored row: the instant it prices at and its five token counts.
@@ -3913,7 +3940,7 @@ pub(crate) fn row_parts(row: &RollupRow, sides: &Sides) -> Parts {
         return Parts::Whole(std::iter::once(whole));
     };
     let key = SideKey::of(row);
-    let earlier: Vec<Part> = hour
+    let mut earlier: Vec<Part> = hour
         .iter()
         .filter_map(|side| {
             side.counts.get(&key).map(|usage| Part {
@@ -3922,22 +3949,21 @@ pub(crate) fn row_parts(row: &RollupRow, sides: &Sides) -> Parts {
             })
         })
         .collect();
+    if earlier.is_empty() {
+        return Parts::Whole(std::iter::once(whole));
+    }
     let summed = earlier
         .iter()
         .fold(PinUsage::default(), |sum, part| usage_sum(sum, part.usage));
-    let rest = match usage_less(whole.usage, summed) {
-        Some(rest) if !earlier.is_empty() => rest,
-        _ => return Parts::Whole(std::iter::once(whole)),
+    let Some(rest) = usage_less(whole.usage, summed) else {
+        return Parts::Whole(std::iter::once(whole));
     };
-    let parts: Vec<Part> = earlier
-        .into_iter()
-        .chain(std::iter::once(Part {
-            usage: rest,
-            ..whole
-        }))
-        .filter(|part| tokens_of(part.usage) > 0)
-        .collect();
-    Parts::Split(parts.into_iter())
+    earlier.push(Part {
+        usage: rest,
+        ..whole
+    });
+    earlier.retain(|part| tokens_of(part.usage) > 0);
+    Parts::Split(earlier.into_iter())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -4021,22 +4047,21 @@ fn price_group(
     let key = group.price_key(last_millisecond(group.hour), now);
     let (cost_usd, billed_usd, equivalent) =
         shared_of(&price_row(prices, costs, &key, usage), key.funding, usage);
-    let totals = if probes {
-        Totals {
-            cost_usd,
-            billed_usd,
-            ..Totals::default()
-        }
-    } else {
-        Totals {
-            cost_usd,
-            requests: clamped_count(r, offset + 8)?,
-            tokens: tokens_of(usage),
-            billed_usd,
-            equivalent,
-        }
+    let totals = Totals {
+        cost_usd,
+        requests: clamped_count(r, offset + 8)?,
+        tokens: tokens_of(usage),
+        billed_usd,
+        equivalent,
     };
-    Ok((group.hour, totals))
+    Ok((
+        group.hour,
+        if probes {
+            totals.dollars_only()
+        } else {
+            totals
+        },
+    ))
 }
 
 /// A stored row's totals as a group of a priced SQL sum answers them, the dollars and the Pro-week figure of each of
@@ -4056,23 +4081,30 @@ fn row_totals(
         billed_usd += billed;
         equivalent = add_figures(equivalent, figure);
     }
-    if row.kind == Kind::Probe.as_str() {
-        return Totals {
-            cost_usd,
-            billed_usd,
-            ..Totals::default()
-        };
-    }
-    Totals {
+    let totals = Totals {
         cost_usd,
         requests: row.requests,
         tokens: tokens_of(row.usage()),
         billed_usd,
         equivalent,
+    };
+    if row.kind == Kind::Probe.as_str() {
+        totals.dollars_only()
+    } else {
+        totals
     }
 }
 
 impl Totals {
+    /// A probe's totals, which add its dollars alone, with no request, no token and the zero figure of no plan row.
+    fn dollars_only(self) -> Totals {
+        Totals {
+            cost_usd: self.cost_usd,
+            billed_usd: self.billed_usd,
+            ..Totals::default()
+        }
+    }
+
     pub fn add(&mut self, o: &Totals) {
         self.cost_usd += o.cost_usd;
         self.requests += o.requests;
@@ -4164,34 +4196,39 @@ fn grouped_totals<K: Ord>(
     let offset = group_columns.len();
     let group_columns = group_columns.join(", ");
     let sides = Sides::on(conn, prices, Some(&costs.revisions), since_hour, to_hour)?;
-    let bound_out = sides.hours();
     let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {PRICE_GROUP_COLUMNS}, {PRICE_GROUP_SUMS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2 GROUP BY {group_columns}, {PRICE_GROUP_COLUMNS} ORDER BY {group_columns}, {PRICE_GROUP_COLUMNS}"))?;
-    let mut out: BTreeMap<K, Totals> = BTreeMap::new();
-    for span in revision_spans(prices, Some(&costs.revisions), since_hour, to_hour) {
-        for (from, to) in unsplit_ranges(span.from_hour, span.to_hour, &bound_out) {
-            let rows = stmt.query_map(params![from, to], |r| {
+    let mut rows_stmt: Option<rusqlite::Statement<'_>> = None;
+    let out: RefCell<BTreeMap<K, Totals>> = RefCell::default();
+    sides.split_sum(
+        revision_spans(prices, Some(&costs.revisions), since_hour, to_hour),
+        |piece| {
+            let rows = stmt.query_map(params![piece.from_hour, piece.to_hour], |r| {
                 let Some(key) = key_of(r)? else {
                     return Ok(None);
                 };
                 let (_, totals) = price_group(r, offset, prices, costs, now)?;
                 Ok(Some((key, totals)))
             })?;
+            let mut out = out.borrow_mut();
             for row in rows {
                 if let Some((key, totals)) = row? {
                     out.entry(key).or_default().add(&totals);
                 }
             }
-        }
-    }
-    if !bound_out.is_empty() {
-        let mut stmt = conn.prepare(&format!("SELECT {group_columns}, {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2"))?;
-        for hour in bound_out {
+            Ok(())
+        },
+        |hour| {
+            let stmt = match rows_stmt.as_mut() {
+                Some(stmt) => stmt,
+                None => rows_stmt.insert(conn.prepare(&format!("SELECT {group_columns}, {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2"))?),
+            };
             let rows = stmt.query_map(params![hour, hour_end(hour)], |r| {
                 let Some(key) = key_of(r)? else {
                     return Ok(None);
                 };
                 Ok(Some((key, row_to_rollup_at(r, offset)?)))
             })?;
+            let mut out = out.borrow_mut();
             for row in rows {
                 if let Some((key, row)) = row? {
                     out.entry(key)
@@ -4199,9 +4236,10 @@ fn grouped_totals<K: Ord>(
                         .add(&row_totals(&row, &sides, prices, costs, now));
                 }
             }
-        }
-    }
-    Ok(out)
+            Ok(())
+        },
+    )?;
+    Ok(out.into_inner())
 }
 
 /// The requests per account over `[since_hour, to_hour)`, probe rows left out, summed in one statement with no
@@ -4315,35 +4353,43 @@ pub fn session_identities(
 /// The `named` table the identities read and the session totals' reads seek from, with its binds. Its placeholders
 /// number from `?1`, so a statement's further binds go after these.
 fn named_sessions(sessions: &[SessionSpendKey]) -> (String, Vec<rusqlite::types::Value>) {
-    let mut binds = Vec::with_capacity(sessions.len() * 3);
+    named_sessions_with(sessions, &[], |_| Vec::new())
+}
+
+/// `named_sessions` with `extra_columns` after the three key columns, each session binding the values `extra_of`
+/// answers for it after its own three.
+fn named_sessions_with(
+    sessions: &[SessionSpendKey],
+    extra_columns: &[&str],
+    extra_of: impl Fn(&SessionSpendKey) -> Vec<rusqlite::types::Value>,
+) -> (String, Vec<rusqlite::types::Value>) {
+    let mut binds = Vec::with_capacity(sessions.len() * (3 + extra_columns.len()));
     let values: Vec<String> = sessions
         .iter()
         .map(|key| {
-            format!(
-                "({})",
-                bind_all(
-                    &[
-                        rusqlite::types::Value::Text(key.key_id.clone()),
-                        rusqlite::types::Value::Integer(key.key_generation),
-                        rusqlite::types::Value::Text(key.session_id.clone()),
-                    ],
-                    &mut binds,
-                )
-            )
+            let mut tuple = vec![
+                rusqlite::types::Value::Text(key.key_id.clone()),
+                rusqlite::types::Value::Integer(key.key_generation),
+                rusqlite::types::Value::Text(key.session_id.clone()),
+            ];
+            tuple.extend(extra_of(key));
+            format!("({})", bind_all(&tuple, &mut binds))
         })
         .collect();
+    let columns = ["key_id", "key_generation", "session_id"]
+        .into_iter()
+        .chain(extra_columns.iter().copied())
+        .collect::<Vec<_>>()
+        .join(", ");
     (
-        format!(
-            "named(key_id, key_generation, session_id) AS (VALUES {})",
-            values.join(", ")
-        ),
+        format!("named({columns}) AS (VALUES {})", values.join(", ")),
         binds,
     )
 }
 
 /// `session_identities_chunk`'s statement and its binds, spelled once so the plan test explains the statement the
-/// read runs. Each named session costs three seeks of the session index, the `EXISTS`, the marking request's lookup and
-/// the first request's, each stopping early, and the two fork facts are read off the marking row by primary key. The
+/// read runs. Each named session costs two seeks of the session index, the marking request's lookup and the first
+/// request's, each stopping early, and the two fork facts are read off the marking row by primary key. The
 /// index is named: the lookup binds a key and a session, two indexes lead with one of them each, and the planner weighs
 /// them by statistics the file may lack or that a key holding most rows can mislead.
 pub(crate) fn session_identities_statement(
@@ -4365,10 +4411,7 @@ pub(crate) fn session_identities_statement(
                     WHERE r.session_id = n.session_id AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
                       AND r.kind != 'probe' \
                     ORDER BY r.received_at ASC, r.id ASC LIMIT 1) AS first_request_at \
-             FROM named n \
-            WHERE EXISTS (SELECT 1 FROM requests r INDEXED BY requests_session \
-                           WHERE r.session_id = n.session_id AND r.key_id = n.key_id \
-                             AND r.key_generation = n.key_generation AND r.kind != 'probe')) \
+             FROM named n) \
          SELECT m.key_id, m.key_generation, m.session_id, r.forked_from, r.fork_depth, m.first_request_at \
            FROM marked m LEFT JOIN requests r ON r.id = m.marking_id"
     );
@@ -4394,7 +4437,19 @@ fn session_identities_chunk(
             first_request_at: r.get(5)?,
         })
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    // The statement answers every named session, and `requests.received_at` is never null, so a session reads no first
+    // request exactly where it holds no request that is no probe, and the ledger holds no identity for it.
+    Ok(rows
+        .filter(|row| {
+            !matches!(
+                row,
+                Ok(SessionIdentity {
+                    first_request_at: None,
+                    ..
+                })
+            )
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Main's placements under each named session's key, keyed by the session: the count of its `pin_created` and
@@ -4423,40 +4478,24 @@ fn session_placements_chunk(
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let mut binds = Vec::with_capacity(sessions.len() * 4);
-    let values: Vec<String> = sessions
-        .iter()
-        .map(|key| {
-            let until = live
-                .0
-                .get(&key.key_id)
-                .filter(|&&generation| generation != key.key_generation);
-            format!(
-                "({})",
-                bind_all(
-                    &[
-                        rusqlite::types::Value::Text(key.key_id.clone()),
-                        rusqlite::types::Value::Integer(key.key_generation),
-                        rusqlite::types::Value::Text(key.session_id.clone()),
-                        until.map_or(rusqlite::types::Value::Null, |&generation| {
-                            rusqlite::types::Value::Integer(generation)
-                        }),
-                    ],
-                    &mut binds,
-                )
-            )
-        })
-        .collect();
+    let (named, binds) = named_sessions_with(sessions, &["live_generation"], |key| {
+        let until = live
+            .0
+            .get(&key.key_id)
+            .filter(|&&generation| generation != key.key_generation);
+        vec![until.map_or(rusqlite::types::Value::Null, |&generation| {
+            rusqlite::types::Value::Integer(generation)
+        })]
+    });
     let kinds = sql_list(&[PIN_CREATED, PIN_MIGRATED]);
     let sql = format!(
-        "WITH named(key_id, key_generation, session_id, live_generation) AS (VALUES {}) \
+        "WITH {named} \
          SELECT n.key_id, n.key_generation, n.session_id, \
                 (SELECT COUNT(*) FROM events e INDEXED BY events_session \
                   WHERE e.session_id = n.session_id AND e.at >= n.key_generation \
                     AND (n.live_generation IS NULL OR e.at < n.live_generation) \
                     AND e.key_id = n.key_id AND e.agent_id = '{MAIN_AGENT}' AND e.kind IN ({kinds})) \
-           FROM named n",
-        values.join(", ")
+           FROM named n"
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(binds), |r| {
@@ -4542,7 +4581,6 @@ pub fn member_spends(
         (Some(start), Some(end)) => Sides::on(conn, prices, None, start / 1_000, end / 1_000)?,
         _ => Sides::default(),
     };
-    let bound_out = sides.hours();
     // Prepared once outside the per-member loop: a monthly member's period scans up to a month of rows, and
     // re-parsing the same statement text for every member in a pool would add nothing but overhead.
     let mut stmt = conn.prepare(&format!(
@@ -4550,13 +4588,7 @@ pub fn member_spends(
          SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens) FROM rollups_hourly \
          WHERE {MEMBER_SPEND_FILTER} GROUP BY canonical_model, speed, band"
     ))?;
-    let mut rows_stmt = (!bound_out.is_empty())
-        .then(|| {
-            conn.prepare(&format!(
-                "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {MEMBER_SPEND_FILTER}"
-            ))
-        })
-        .transpose()?;
+    let mut rows_stmt: Option<rusqlite::Statement<'_>> = None;
     for (
         BudgetedMember {
             pool_id,
@@ -4567,19 +4599,28 @@ pub fn member_spends(
         (period_start, period_end),
     ) in members.iter().zip(periods)
     {
-        let mut spent_usd = 0.0;
-        for span in revision_spans(prices, None, period_start / 1_000, period_end / 1_000) {
-            let table = prices.in_force(span.at);
-            for (from, to) in unsplit_ranges(span.from_hour, span.to_hour, &bound_out) {
-                let rows =
-                    stmt.query_map(params![pool_id, account_id, from, to, metered_only], |r| {
+        let spent_usd = Cell::new(0.0);
+        sides.split_sum(
+            revision_spans(prices, None, period_start / 1_000, period_end / 1_000),
+            |piece| {
+                let table = prices.in_force(piece.at);
+                let rows = stmt.query_map(
+                    params![
+                        pool_id,
+                        account_id,
+                        piece.from_hour,
+                        piece.to_hour,
+                        metered_only
+                    ],
+                    |r| {
                         Ok((
                             r.get::<_, String>(0)?,
                             r.get::<_, String>(1)?,
                             r.get::<_, String>(2)?,
                             summed_usage(r, 3)?,
                         ))
-                    })?;
+                    },
+                )?;
                 for row in rows {
                     let (model, speed, band, usage) = row?;
                     // A model the revision cannot price contributes nothing: the analytics already read such a row as
@@ -4590,16 +4631,20 @@ pub fn member_spends(
                         Band::of_rollup(&band),
                         usage,
                     ) {
-                        spent_usd += split.total();
+                        spent_usd.set(spent_usd.get() + split.total());
                     }
                 }
-            }
-        }
-        let period_hours = (period_start / 1_000)..(period_end / 1_000);
-        if let Some(rows_stmt) = rows_stmt.as_mut() {
-            for hour in bound_out.iter().filter(|hour| period_hours.contains(hour)) {
+                Ok(())
+            },
+            |hour| {
+                let rows_stmt = match rows_stmt.as_mut() {
+                    Some(stmt) => stmt,
+                    None => rows_stmt.insert(conn.prepare(&format!(
+                        "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {MEMBER_SPEND_FILTER}"
+                    ))?),
+                };
                 let rows = rows_stmt.query_map(
-                    params![pool_id, account_id, hour, hour_end(*hour), metered_only],
+                    params![pool_id, account_id, hour, hour_end(hour), metered_only],
                     |r| row_to_rollup_at(r, 0),
                 )?;
                 for row in rows {
@@ -4611,19 +4656,20 @@ pub fn member_spends(
                             Band::of_rollup(&row.band),
                             part.usage,
                         ) {
-                            spent_usd += split.total();
+                            spent_usd.set(spent_usd.get() + split.total());
                         }
                     }
                 }
-            }
-        }
+                Ok(())
+            },
+        )?;
         out.push(MemberSpend {
             pool_id: pool_id.clone(),
             account_id: account_id.clone(),
             period: *period,
             period_start,
             period_end,
-            spent_usd,
+            spent_usd: spent_usd.get(),
             observed_at: now,
         });
     }
@@ -4856,7 +4902,6 @@ pub fn pools_traffic(
         return Ok(BTreeMap::new());
     }
     let sides = Sides::on(conn, prices, Some(&costs.revisions), from_hour, to_hour)?;
-    let bound_out = sides.hours();
     let fold = TrafficFold::new(
         from_hour,
         to_hour,
@@ -4866,10 +4911,12 @@ pub fn pools_traffic(
         now,
         sides,
     )?;
-    let mut out: BTreeMap<String, Vec<TrafficBucket>> = pool_ids
-        .iter()
-        .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
-        .collect();
+    let out: RefCell<BTreeMap<String, Vec<TrafficBucket>>> = RefCell::new(
+        pool_ids
+            .iter()
+            .map(|pool_id| (pool_id.clone(), fold.zero.clone()))
+            .collect(),
+    );
     let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
     let mut clauses = vec![format!("{NO_PLAN_PROBES} AND hour >= ?1 AND hour < ?2")];
     pool_term(pool_ids, &[], &mut args, &mut clauses);
@@ -4881,37 +4928,53 @@ pub fn pools_traffic(
          FROM rollups_hourly WHERE {filter} GROUP BY pool_id, {PRICE_GROUP_COLUMNS} \
          ORDER BY pool_id, {PRICE_GROUP_COLUMNS}"
     ))?;
-    for (from, to) in unsplit_ranges(from_hour, to_hour, &bound_out) {
-        (args[0], args[1]) = (from.into(), to.into());
-        let groups = stmt.query_map(params_from_iter(&args), |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                clamped_count(r, 1)?,
-                price_group(r, 2, prices, costs, now)?,
-            ))
-        })?;
-        for group in groups {
-            let (pool_id, failed, (hour, totals)) = group?;
-            if let Some(buckets) = out.get_mut(&pool_id) {
-                fold.add_sums(buckets, hour, failed, &totals);
+    let mut rows_args = args.clone();
+    let mut rows: Option<rusqlite::Statement<'_>> = None;
+    // One span over the range, its `at` unread: `price_group` prices each group at its own hour.
+    let range = Span {
+        from_hour,
+        to_hour,
+        at: 0,
+    };
+    fold.sides.split_sum(
+        [range],
+        |piece| {
+            (args[0], args[1]) = (piece.from_hour.into(), piece.to_hour.into());
+            let groups = stmt.query_map(params_from_iter(&args), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    clamped_count(r, 1)?,
+                    price_group(r, 2, prices, costs, now)?,
+                ))
+            })?;
+            let mut out = out.borrow_mut();
+            for group in groups {
+                let (pool_id, failed, (hour, totals)) = group?;
+                if let Some(buckets) = out.get_mut(&pool_id) {
+                    fold.add_sums(buckets, hour, failed, &totals);
+                }
             }
-        }
-    }
-    if !bound_out.is_empty() {
-        let mut rows = conn.prepare(&format!(
-            "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {filter}"
-        ))?;
-        for hour in bound_out {
-            (args[0], args[1]) = (hour.into(), hour_end(hour).into());
-            for row in rows.query_map(params_from_iter(&args), |r| row_to_rollup_at(r, 0))? {
+            Ok(())
+        },
+        |hour| {
+            let rows = match rows.as_mut() {
+                Some(rows) => rows,
+                None => rows.insert(conn.prepare(&format!(
+                    "SELECT {ROLLUP_COLUMNS} FROM rollups_hourly WHERE {filter}"
+                ))?),
+            };
+            (rows_args[0], rows_args[1]) = (hour.into(), hour_end(hour).into());
+            let mut out = out.borrow_mut();
+            for row in rows.query_map(params_from_iter(&rows_args), |r| row_to_rollup_at(r, 0))? {
                 let row = row?;
                 if let Some(buckets) = out.get_mut(&row.pool_id) {
                     fold.add(buckets, &row);
                 }
             }
-        }
-    }
-    Ok(out)
+            Ok(())
+        },
+    )?;
+    Ok(out.into_inner())
 }
 
 /// The zero buckets of a traffic range and the fold that adds figures to the bucket of their hour, nothing before the
@@ -5000,15 +5063,6 @@ pub struct SeriesFilter {
     pub pools: Vec<String>,
     /// Request classes, `NO_CLASS` naming the classless rows; empty means every class. `rollups_hourly` only.
     pub request_classes: Vec<String>,
-}
-
-impl SeriesFilter {
-    /// The key selectors resolved against `live` as `RollupFilter::rollup_select` resolves its own, `None` where the
-    /// filter names keys and none of them names a lifetime, which selects no row rather than every row.
-    fn key_select(&self, live: &LiveKeys) -> Option<Vec<KeySelector>> {
-        let keys = key_selectors(&self.keys, live);
-        (self.keys.is_empty() || !keys.is_empty()).then_some(keys)
-    }
 }
 
 /// The first bucket's edge at or below `start`, in seconds, once the range up to `end` passes the guard every series
@@ -5175,58 +5229,83 @@ struct TierSums {
 impl BurnSums {
     /// The point, each tier's entry its latch's figure.
     pub(crate) fn point(self) -> BurnPoint {
-        let by_tier = |latch: fn(&TierSums) -> Latch| -> BTreeMap<String, Option<f64>> {
-            self.tiers
-                .iter()
-                .map(|(tier, sums)| (tier.clone(), latch(sums).figure()))
-                .collect()
-        };
+        let BurnSums {
+            at,
+            cached_tokens,
+            five_hour_share,
+            seven_day_share,
+            model_week_share,
+            tokens,
+            uncached_tokens,
+            usd,
+            plan_usd,
+            tiers,
+            unpriced,
+        } = self;
+        let mut equivalent_by_tier = BTreeMap::new();
+        let mut five_hour_equivalent_by_tier = BTreeMap::new();
+        let mut fable_equivalent_by_tier = BTreeMap::new();
+        for (tier, sums) in tiers {
+            equivalent_by_tier.insert(tier.clone(), sums.seven_day.figure());
+            five_hour_equivalent_by_tier.insert(tier.clone(), sums.five_hour.figure());
+            fable_equivalent_by_tier.insert(tier, sums.fable_week.figure());
+        }
         BurnPoint {
-            at: self.at,
-            cached_tokens: self.cached_tokens,
-            five_hour_share: self.five_hour_share.figure(),
-            seven_day_share: self.seven_day_share.figure(),
-            model_week_share: self.model_week_share.figure(),
-            tokens: self.tokens,
-            uncached_tokens: self.uncached_tokens,
-            usd: self.usd,
-            plan_usd: self.plan_usd,
-            equivalent_by_tier: by_tier(|sums| sums.seven_day),
-            five_hour_equivalent_by_tier: by_tier(|sums| sums.five_hour),
-            fable_equivalent_by_tier: by_tier(|sums| sums.fable_week),
-            unpriced: self.unpriced,
+            at,
+            cached_tokens,
+            five_hour_share: five_hour_share.figure(),
+            seven_day_share: seven_day_share.figure(),
+            model_week_share: model_week_share.figure(),
+            tokens,
+            uncached_tokens,
+            usd,
+            plan_usd,
+            equivalent_by_tier,
+            five_hour_equivalent_by_tier,
+            fable_equivalent_by_tier,
+            unpriced,
         }
     }
 
     /// A priced row's share of each tier's windows under the cost revision in force at the key's `at` and the regime
-    /// its entrypoint names, its band read at the key's `band_at`, else its `at`. `share_at` divides in the Pro-week
-    /// figure's order, so under one revision the anchor tier's entry reads that figure to the last digit.
+    /// its entrypoint names, its band read at the key's `band_at`, else its `at`. `tier_shares` divides as `share_at`
+    /// does, in the Pro-week figure's order, so under one revision the anchor tier's entry reads that figure to the
+    /// last digit.
     fn add_tiers(&mut self, tables: &PlanTables, key: &RowKey<'_>, usage: PinUsage) {
         let costs = tables.revisions.in_force(key.at);
         // Neither a billed row nor a free classifier call spends a plan window, so each adds a zero ahead of any
         // tier's size.
         let plan = key.funding == Funding::Plan && !key.free();
+        if !plan {
+            for sums in self.tiers.values_mut() {
+                sums.seven_day.add(Some(0.0));
+                sums.five_hour.add(Some(0.0));
+                sums.fable_week.add(Some(0.0));
+            }
+            return;
+        }
         let fable_week = model_week(key.model) == Some(SEVEN_DAY_FABLE);
-        let band_at = key.band_at.unwrap_or(key.at);
-        for (tier, sums) in &mut self.tiers {
-            let share = |window: &str| {
-                if plan {
-                    costs.share_at(window, key.entrypoint, tier, key.model, usage, band_at)
-                } else {
-                    Some(0.0)
-                }
-            };
-            sums.seven_day.add(share(SEVEN_DAY));
-            sums.five_hour.add(share(FIVE_HOUR));
+        let (weights, shares) = costs.tier_shares(
+            key.entrypoint,
+            key.model,
+            usage,
+            key.band_at.unwrap_or(key.at),
+            self.tiers.keys().map(String::as_str),
+            [
+                Some(SEVEN_DAY),
+                Some(FIVE_HOUR),
+                fable_week.then_some(SEVEN_DAY_FABLE),
+            ],
+        );
+        for (sums, [seven_day, five_hour, fable]) in self.tiers.values_mut().zip(shares) {
+            sums.seven_day.add(seven_day);
+            sums.five_hour.add(five_hour);
             // A row off the Fable week adds a zero, so a busy bucket never reads idle there.
-            sums.fable_week.add(if fable_week {
-                share(SEVEN_DAY_FABLE)
-            } else {
-                Some(0.0)
-            });
+            sums.fable_week
+                .add(if fable_week { fable } else { Some(0.0) });
         }
         // The model's weight alone sets the flag, so a tier the revision does not size never reads as unpriced.
-        self.unpriced |= plan && costs.weight(key.model, SEVEN_DAY).is_none();
+        self.unpriced |= weights[0].is_none();
     }
 }
 
@@ -5372,7 +5451,9 @@ pub fn burn_series_over(
     let (first, last) = bucket_range(filter)?;
     let mut sums = empty_burn_sums(first, last, filter.bucket_seconds, &burn_tiers(tables));
     let shares = names_one_account(&filter.accounts);
-    let keys = key_selectors(&filter.keys, live);
+    let Some(keys) = key_selectors(&filter.keys, live) else {
+        return Ok(sums.into_iter().map(BurnSums::point).collect());
+    };
     let sides = Sides::default();
     for row in rows.iter().filter(|r| burn_scope_holds(filter, &keys, r)) {
         price_burn_row(
@@ -5422,11 +5503,11 @@ fn burn_tiers(tables: &PlanTables) -> BTreeSet<&str> {
         .collect()
 }
 
-/// Whether a row lies in the filter's scopes. `keys` holds the filter's selectors as `key_selectors` resolved them,
-/// each matched on its id and on its generation where it carries one, so the reserved id matches at any generation and
-/// a filter whose selectors resolved to none matches no row.
+/// Whether a row lies in the filter's scopes. `keys` holds the filter's selectors as `key_selectors` resolved them, an
+/// empty list matching every key, each matched on its id and on its generation where it carries one, so the reserved id
+/// matches at any generation.
 fn burn_scope_holds(filter: &SeriesFilter, keys: &[KeySelector], r: &RollupRow) -> bool {
-    (filter.keys.is_empty()
+    (keys.is_empty()
         || keys.iter().any(|k| {
             k.key_id == r.key_id && k.key_generation.is_none_or(|g| g == r.key_generation)
         }))
@@ -5470,7 +5551,7 @@ fn price_burn_row(
 /// ones `burn_series_over` answers for that group's rows alone, the shares answered where each group holds one
 /// account's rows. A group is answered where a row of the range itself holds a token, and the read reaches back to the
 /// first bucket's edge, which may start before it. Each group carries the unit its rows' recorded funding names, as
-/// `recorded_unit` reads it. The sides of the read's boundary hours load in one read ahead of the pages, so each
+/// `BurnGroup::finish` reads it. The sides of the read's boundary hours load in one read ahead of the pages, so each
 /// request of such an hour prices at the entries in force when it arrived. A filter whose keys name no lifetime answers
 /// no group.
 #[allow(clippy::too_many_arguments)]
@@ -5492,7 +5573,7 @@ pub async fn burn_groups_paged(
     };
     let (first, last) = bucket_range(filter)?;
     let from_hour = hour_of(filter.from);
-    let Some(keys) = filter.key_select(live) else {
+    let Some(keys) = key_selectors(&filter.keys, live) else {
         return Ok(Vec::new());
     };
     let select = RollupSelect {
@@ -5502,30 +5583,26 @@ pub async fn burn_groups_paged(
         ..RollupSelect::default()
     };
     let sides = Sides::paged(db, prices, Some(&tables.revisions), first, last).await?;
-    // Each group's points, whether a row of the range itself holds a token, and whether a row with a token is
-    // plan-funded.
-    let mut groups: BTreeMap<String, (Vec<BurnSums>, bool, bool)> = BTreeMap::new();
+    let mut groups: BTreeMap<String, BurnGroup> = BTreeMap::new();
     let tiers = burn_tiers(tables);
     read_rollups_paged(db, &select, first, last, |row| {
-        if !burn_scope_holds(filter, &select.keys, row) {
+        // The read binds the pools, the accounts and the keys, which leaves the request classes to this test.
+        if !(filter.request_classes.is_empty()
+            || filter.request_classes.contains(&row.request_class))
+        {
             return;
         }
-        let (points, held, plan_funded) =
-            groups.entry(grouping.group_of(row)).or_insert_with(|| {
-                (
-                    empty_burn_sums(first, last, filter.bucket_seconds, &tiers),
-                    false,
-                    false,
-                )
-            });
+        let group = groups
+            .entry(grouping.group_of(row))
+            .or_insert_with(|| BurnGroup::new(first, last, filter.bucket_seconds, &tiers));
         // A token is what `price_request` prices, whatever the tables then answer, so a group whose model has no
         // weight stays and reads unpriced.
         if tokens_of(row.usage()) > 0 {
-            *held |= row.hour >= from_hour && row.hour < last;
-            *plan_funded |= row.funding_kind() == Funding::Plan;
+            group.held |= row.hour >= from_hour && row.hour < last;
+            group.plan_funded |= row.funding_kind() == Funding::Plan;
         }
         price_burn_row(
-            points,
+            &mut group.sums,
             first,
             filter.bucket_seconds,
             row,
@@ -5539,25 +5616,41 @@ pub async fn burn_groups_paged(
     .await?;
     Ok(groups
         .into_iter()
-        .filter(|(_, (_, held, _))| *held)
-        .map(|(group, (sums, _, plan_funded))| {
-            (
-                group,
-                recorded_unit(plan_funded),
-                sums.into_iter().map(BurnSums::point).collect(),
-            )
+        .filter_map(|(id, group)| {
+            let (unit, points) = group.finish()?;
+            Some((id, unit, points))
         })
         .collect())
 }
 
-/// The unit a burn group's recorded funding names, for a reader whose registry no longer holds the group's account:
-/// the window share where a row of the group that holds a token was plan-funded, dollars where every such row was
-/// billed.
-fn recorded_unit(plan_funded: bool) -> BurnUnit {
-    if plan_funded {
-        BurnUnit::WindowShare
-    } else {
-        BurnUnit::Usd
+/// One group's or session's burn buckets as its rows or attempts price in, whether one of the range itself holds a
+/// token, and whether one with a token is plan-funded.
+struct BurnGroup {
+    sums: Vec<BurnSums>,
+    held: bool,
+    plan_funded: bool,
+}
+
+impl BurnGroup {
+    fn new(first: i64, last: i64, bucket_seconds: i64, tiers: &BTreeSet<&str>) -> BurnGroup {
+        BurnGroup {
+            sums: empty_burn_sums(first, last, bucket_seconds, tiers),
+            held: false,
+            plan_funded: false,
+        }
+    }
+
+    /// The unit and the points, `None` unless a row or attempt of the range itself holds a token. The unit is the one
+    /// the recorded funding names, for a reader whose registry no longer holds the group's account: the window share
+    /// where one that holds a token was plan-funded, dollars where every such one was billed.
+    fn finish(self) -> Option<(BurnUnit, Vec<BurnPoint>)> {
+        let unit = if self.plan_funded {
+            BurnUnit::WindowShare
+        } else {
+            BurnUnit::Usd
+        };
+        self.held
+            .then(|| (unit, self.sums.into_iter().map(BurnSums::point).collect()))
     }
 }
 
@@ -5568,8 +5661,7 @@ pub fn rewrite_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let (from_hour, to_hour) = rollup_hours(filter)?;
-    let mut args: Vec<rusqlite::types::Value> = vec![from_hour.into(), to_hour.into()];
+    let mut args: Vec<rusqlite::types::Value> = vec![hour_of(filter.from).into(), last.into()];
     let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
     in_list("account_id", &filter.accounts, &mut args, &mut clauses);
     let mut stmt = conn.prepare(&format!(
@@ -5620,8 +5712,7 @@ pub fn held_series(
     filter: &SeriesFilter,
 ) -> Result<Vec<(i64, u64, u64)>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let (from_hour, to_hour) = rollup_hours(filter)?;
-    let (sql, args) = held_series_statement(filter, from_hour, to_hour);
+    let (sql, args) = held_series_statement(filter, hour_of(filter.from), last);
     let mut stmt = conn.prepare(&sql)?;
     let hours = stmt
         .query_map(params_from_iter(args), |r| {
@@ -5800,8 +5891,7 @@ fn top_sessions_by_tokens(
 }
 
 /// The columns of `attempts a JOIN requests r` an attempt is priced from, in the order `PricedAttempt::read` reads
-/// them. The completion is aliased `completed`, so a statement's `WHERE` can bound it. `SESSION_REQUEST_FROM` counts
-/// these fifteen columns, so a column added here moves it.
+/// them. The completion is aliased `completed`, so a statement's `WHERE` can bound it.
 pub(crate) const PRICED_ATTEMPT_COLUMNS: &str =
     "COALESCE(a.finished_at, r.finished_at, a.started_at) AS completed, r.canonical_model, \
      a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.output_tokens, \
@@ -5834,35 +5924,47 @@ pub(crate) struct PricedAttempt {
 }
 
 impl PricedAttempt {
-    // Offsets past `first` of the request columns `session_request_of` takes, for a request no attempt joined, so
-    // both readers of `PRICED_ATTEMPT_COLUMNS` name one place.
+    // Offsets past `first` of each column of `PRICED_ATTEMPT_COLUMNS`, so both its readers name one place. `TOKENS`
+    // is the first of the five counts: input, cache read, both writes and output.
+    const COMPLETED: usize = 0;
     const MODEL: usize = 1;
+    const TOKENS: usize = 2;
     const RECEIVED_AT: usize = 7;
+    const SPEED: usize = 8;
+    const ACCOUNT_KIND: usize = 9;
+    const OVERAGE_IN_USE: usize = 10;
+    const TIER: usize = 11;
+    const CLIENT: usize = 12;
+    const CLASSIFIER: usize = 13;
+    const USAGE_BASED: usize = 14;
 
     /// The attempt from `PRICED_ATTEMPT_COLUMNS` read from column `first` on, a missing or negative token count read
     /// as zero.
     pub(crate) fn read(row: &Row, first: usize) -> rusqlite::Result<PricedAttempt> {
         let tokens = |i: usize| -> rusqlite::Result<u64> {
-            Ok(row.get::<_, Option<i64>>(first + i)?.unwrap_or(0).max(0) as u64)
+            Ok(row
+                .get::<_, Option<i64>>(first + Self::TOKENS + i)?
+                .unwrap_or(0)
+                .max(0) as u64)
         };
         Ok(PricedAttempt {
-            completed_at: row.get(first)?,
+            completed_at: row.get(first + Self::COMPLETED)?,
             canonical_model: row.get(first + Self::MODEL)?,
             usage: PinUsage {
-                input: tokens(2)?,
-                cache_read: tokens(3)?,
-                write_5m: tokens(4)?,
-                write_1h: tokens(5)?,
-                output: tokens(6)?,
+                input: tokens(0)?,
+                cache_read: tokens(1)?,
+                write_5m: tokens(2)?,
+                write_1h: tokens(3)?,
+                output: tokens(4)?,
             },
             received_at: row.get(first + Self::RECEIVED_AT)?,
-            speed: row.get(first + 8)?,
-            account_kind: row.get(first + 9)?,
-            overage_in_use: row.get(first + 10)?,
-            tier: row.get(first + 11)?,
-            client: row.get(first + 12)?,
-            classifier: row.get(first + 13)?,
-            usage_based: row.get(first + 14)?,
+            speed: row.get(first + Self::SPEED)?,
+            account_kind: row.get(first + Self::ACCOUNT_KIND)?,
+            overage_in_use: row.get(first + Self::OVERAGE_IN_USE)?,
+            tier: row.get(first + Self::TIER)?,
+            client: row.get(first + Self::CLIENT)?,
+            classifier: row.get(first + Self::CLASSIFIER)?,
+            usage_based: row.get(first + Self::USAGE_BASED)?,
         })
     }
 
@@ -5975,17 +6077,10 @@ pub struct SessionSpendKey {
 /// them.
 const SESSION_SPEND_COLUMNS: &str =
     "r.session_id, r.key_id, r.key_generation, r.id, r.agent_id, r.agent_type, \
-     r.user_agent, r.request_class, a.account_id, r.kind, r.refused";
+     r.user_agent, r.request_class, a.account_id, r.kind, r.refused, r.requested_speed";
 
 /// The column `PRICED_ATTEMPT_COLUMNS` starts at in the session reads.
-const SESSION_SPEND_PRICED_FROM: usize = 11;
-
-/// The columns past `PRICED_ATTEMPT_COLUMNS` that `session_request_of` takes for a session's totals, from
-/// `SESSION_REQUEST_FROM` on.
-const SESSION_REQUEST_COLUMNS: &str = "r.requested_speed";
-
-/// The column `SESSION_REQUEST_COLUMNS` starts at, past the fifteen of `PRICED_ATTEMPT_COLUMNS`.
-const SESSION_REQUEST_FROM: usize = SESSION_SPEND_PRICED_FROM + 15;
+const SESSION_SPEND_PRICED_FROM: usize = 12;
 
 /// The number of request `r`'s serving attempt, its last by number, the attempt the landing takes the row's serving
 /// facts from. The session reads join that attempt's own row, since its price reads members the request row does not
@@ -6007,7 +6102,7 @@ pub(crate) fn session_spend_of_statement(
     let (named, binds) = named_sessions(sessions);
     let sql = format!(
         "WITH {named} \
-         SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS}, {SESSION_REQUEST_COLUMNS} \
+         SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM named n CROSS JOIN requests r INDEXED BY requests_session ON r.session_id = n.session_id \
          AND r.key_id = n.key_id AND r.key_generation = n.key_generation \
          LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
@@ -6053,7 +6148,7 @@ pub(crate) fn session_hour_statement(
     hour: i64,
 ) -> (String, Vec<rusqlite::types::Value>) {
     let sql = format!(
-        "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS}, {SESSION_REQUEST_COLUMNS} \
+        "SELECT {SESSION_SPEND_COLUMNS}, {PRICED_ATTEMPT_COLUMNS} \
          FROM requests r INDEXED BY requests_session \
          LEFT JOIN attempts a ON a.request_id = r.id AND a.attempt = {SERVING_ATTEMPT_NUMBER} \
          WHERE r.session_id = ?1 AND r.key_id = ?2 AND r.key_generation = ?3 \
@@ -6087,23 +6182,25 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
     let first = SESSION_SPEND_PRICED_FROM;
     let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
         Ok(row
-            .get::<_, Option<i64>>(first + i)?
+            .get::<_, Option<i64>>(first + PricedAttempt::TOKENS + i)?
             .map(|n| n.max(0) as u64))
     };
     let serving = match row.get::<_, Option<String>>(8)? {
         Some(account_id) => Some(Serving {
             account_id,
-            account_kind: AccountKind::parse(&row.get::<_, String>(first + 9)?),
-            usage_based: row.get(first + 14)?,
-            overage_in_use: row.get(first + 10)?,
-            speed: row.get(first + 8)?,
-            tier: row.get(first + 11)?,
-            completed_at: row.get(first)?,
-            input_tokens: tokens(2)?,
-            cache_read_tokens: tokens(3)?,
-            cache_write_5m_tokens: tokens(4)?,
-            cache_write_1h_tokens: tokens(5)?,
-            output_tokens: tokens(6)?,
+            account_kind: AccountKind::parse(
+                &row.get::<_, String>(first + PricedAttempt::ACCOUNT_KIND)?,
+            ),
+            usage_based: row.get(first + PricedAttempt::USAGE_BASED)?,
+            overage_in_use: row.get(first + PricedAttempt::OVERAGE_IN_USE)?,
+            speed: row.get(first + PricedAttempt::SPEED)?,
+            tier: row.get(first + PricedAttempt::TIER)?,
+            completed_at: row.get(first + PricedAttempt::COMPLETED)?,
+            input_tokens: tokens(0)?,
+            cache_read_tokens: tokens(1)?,
+            cache_write_5m_tokens: tokens(2)?,
+            cache_write_1h_tokens: tokens(3)?,
+            output_tokens: tokens(4)?,
         }),
         None => None,
     };
@@ -6122,9 +6219,9 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
         refused: row.get(10)?,
         canonical_model: row.get(first + PricedAttempt::MODEL)?,
         received_at: row.get(first + PricedAttempt::RECEIVED_AT)?,
-        client: row.get(first + 12)?,
-        classifier: row.get(first + 13)?,
-        requested_speed: row.get(SESSION_REQUEST_FROM)?,
+        client: row.get(first + PricedAttempt::CLIENT)?,
+        classifier: row.get(first + PricedAttempt::CLASSIFIER)?,
+        requested_speed: row.get(11)?,
         serving,
     })
 }
@@ -6148,15 +6245,16 @@ pub fn session_burn_series(
     let shares = names_one_account(&filter.accounts);
     let (first, last) = bucket_range(filter)?;
     let from_hour = hour_of(filter.from);
-    let Some(keys) = filter.key_select(live) else {
+    let Some(keys) = key_selectors(&filter.keys, live) else {
         return Ok(Vec::new());
     };
     // The ranking counts the attempts the gate below counts, so a session whose tokens lie in the first bucket's
     // reach-back alone takes none of the slots, while the attempts read keeps the reach-back in the first point.
+    let (start, end) = request_bounds(filter.from, filter.to);
     let sessions = top_sessions_by_tokens(
         conn,
-        from_hour * 1_000,
-        last * 1_000,
+        start,
+        end,
         SESSION_BURN_LIMIT,
         &filter.accounts,
         &keys,
@@ -6166,18 +6264,12 @@ pub fn session_burn_series(
         return Ok(Vec::new());
     }
     let tiers = burn_tiers(tables);
-    // Each session's points, whether an attempt of the range itself holds a token, and whether an attempt with a
-    // token is plan-funded.
-    let mut by_session: HashMap<String, (Vec<BurnSums>, bool, bool)> = sessions
+    let mut by_session: HashMap<String, BurnGroup> = sessions
         .iter()
         .map(|id| {
             (
                 id.clone(),
-                (
-                    empty_burn_sums(first, last, filter.bucket_seconds, &tiers),
-                    false,
-                    false,
-                ),
+                BurnGroup::new(first, last, filter.bucket_seconds, &tiers),
             )
         })
         .collect();
@@ -6193,7 +6285,7 @@ pub fn session_burn_series(
         if !filter.accounts.is_empty() && !filter.accounts.contains(&a.account_id) {
             continue;
         }
-        let Some((series, held, plan_funded)) = by_session.get_mut(&a.session_id) else {
+        let Some(group) = by_session.get_mut(&a.session_id) else {
             continue;
         };
         let bucket_at = a.at / 1_000;
@@ -6201,7 +6293,8 @@ pub fn session_burn_series(
         if bucket_at >= last {
             continue;
         }
-        let Some(point) = bucket_slot(series, first, filter.bucket_seconds, bucket_at) else {
+        let Some(point) = bucket_slot(&mut group.sums, first, filter.bucket_seconds, bucket_at)
+        else {
             continue;
         };
         // `price_usage` leaves the point as it is for an attempt with no token, so its band is never read.
@@ -6209,21 +6302,15 @@ pub fn session_burn_series(
             continue;
         }
         let (key, usage) = a.priced.usage(prices, now);
-        *held |= bucket_at >= from_hour;
-        *plan_funded |= key.funding == Funding::Plan;
+        group.held |= bucket_at >= from_hour;
+        group.plan_funded |= key.funding == Funding::Plan;
         price_usage(point, prices, tables, key, usage, shares);
     }
     Ok(sessions
         .into_iter()
         .filter_map(|id| {
-            let (series, held, plan_funded) = by_session.remove(&id)?;
-            held.then(|| {
-                (
-                    id,
-                    recorded_unit(plan_funded),
-                    series.into_iter().map(BurnSums::point).collect(),
-                )
-            })
+            let (unit, points) = by_session.remove(&id)?.finish()?;
+            Some((id, unit, points))
         })
         .collect())
 }
@@ -6279,7 +6366,6 @@ mod tests {
             },
         ];
         let seeks_the_session_index = |plan: &[String]| {
-            // SQLite runs the `EXISTS` as a join and prints its seek as `SEARCH r EXISTS USING INDEX ...`.
             assert!(
                 plan.iter()
                     .filter(|step| step.starts_with("SEARCH r ")

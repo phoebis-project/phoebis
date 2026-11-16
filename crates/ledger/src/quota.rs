@@ -273,6 +273,18 @@ struct Completion {
     attempt: Attempt,
 }
 
+impl Completion {
+    /// The completion of `attempt` on `account`, the hold read once the attempt's own reads are done.
+    fn of(poll: &QuotaPoll, account: AccountRow, attempt: Attempt) -> Completion {
+        Completion {
+            held: poll.usage.held_for(&account.id),
+            account_id: account.id,
+            incarnation: account.incarnation,
+            attempt,
+        }
+    }
+}
+
 /// What an attempt was, which decides what its completion moves on the slot.
 enum Attempt {
     /// The slot's own poll on its cadence.
@@ -456,14 +468,13 @@ impl QuotaPoll {
                         let poll = self.clone();
                         let handle = attempts.spawn(async move {
                             let read = poll.read_profile(&account, PROFILE_SOURCE).await;
-                            Completion {
-                                held: poll.usage.held_for(&account.id),
-                                account_id: account.id,
-                                incarnation: account.incarnation,
-                                attempt: Attempt::Restart {
+                            Completion::of(
+                                &poll,
+                                account,
+                                Attempt::Restart {
                                     answered: read != ProfileRead::Unread,
                                 },
-                            }
+                            )
                         });
                         slot.in_flight = Some(handle.id());
                         continue;
@@ -500,14 +511,13 @@ impl QuotaPoll {
                         {
                             let _ = poll.read_limit_resets(&account).await;
                         }
-                        Completion {
-                            held: poll.usage.held_for(&account.id),
-                            account_id: account.id,
-                            incarnation: account.incarnation,
-                            attempt: Attempt::Poll {
+                        Completion::of(
+                            &poll,
+                            account,
+                            Attempt::Poll {
                                 profile_tried: profile_due || profile_read,
                             },
-                        }
+                        )
                     });
                     slot.in_flight = Some(handle.id());
                 }

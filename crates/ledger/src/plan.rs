@@ -763,6 +763,46 @@ impl SubscriptionCosts {
         priced_windows(canonical_model, |window| self.share_on(&facts, window))
     }
 
+    /// `share_at` on each of `windows` under each of `tiers`, the band read at `band_at`, with the facts no tier
+    /// changes read once: the counts, the multipliers and the band factors, then each window's priced window, weight
+    /// and units, so a tier reads its capacity alone. Each share divides in `share_on`'s order, so it reads
+    /// `share_at`'s answer to the last digit. Answers each window's weight beside one entry of shares per tier, in the
+    /// order of `tiers`, a `None` window reading `None` in both.
+    pub(crate) fn tier_shares<'t, const N: usize>(
+        &self,
+        entrypoint: Option<&str>,
+        canonical_model: &str,
+        usage: PinUsage,
+        band_at: i64,
+        tiers: impl IntoIterator<Item = &'t str>,
+        windows: [Option<&str>; N],
+    ) -> ([Option<f64>; N], Vec<[Option<f64>; N]>) {
+        let counts = counts_of(usage);
+        let multipliers = self.multipliers(canonical_model);
+        let band = self
+            .peak
+            .covers(band_at)
+            .then(|| self.band_factors(entrypoint));
+        let weights = windows.map(|window| self.weight(canonical_model, window?));
+        let units = std::array::from_fn::<_, N, _>(|i| {
+            let (priced, divisor) = self.priced_window(windows[i]?)?;
+            let units = multipliers.units(weights[i]?, counts);
+            let factor = band.map_or(1.0, |factors| factors.on(priced));
+            Some((priced, units, factor, divisor))
+        });
+        let shares = tiers
+            .into_iter()
+            .map(|tier| {
+                let capacity = self.capacity_of(entrypoint, tier);
+                units.map(|window| {
+                    let (priced, units, factor, divisor) = window?;
+                    Some(units / capacity?.on(priced)? / factor / divisor)
+                })
+            })
+            .collect();
+        (weights, shares)
+    }
+
     fn row_facts<'a>(
         &'a self,
         entrypoint: Option<&str>,
