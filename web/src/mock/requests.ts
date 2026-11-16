@@ -1,4 +1,4 @@
-import { agentTokenOf, plus } from '@/api/fold';
+import { agentTokenOf, couldNotCache, plus } from '@/api/fold';
 import type {
   AccountKind, AccountRollup, ApiKey, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostShares, CostSplit, DiagnosticsSource, LatencyHistograms, PinMigrationReason, Placement,
   PriceCells, QuotaSample, RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason, WindowId, WindowSample,
@@ -308,14 +308,24 @@ const missRng = createRng(1_517);
 const MEMBER_CLIENT_KEYS: ReadonlySet<string> = new Set(['ci', 'desktop']);
 
 /**
- * Who put the diagnostics member on a request's serving body, as the relay reads it: the client where its build sends
- * one, else the router where the pool's `cacheDiagnostics` is on. A token count carries neither, since its schema has
- * no slot for the member, and a request no attempt served sent no body.
+ * Whether a request's body carried a cache breakpoint, the one fact the relay keeps for its selection and its row. The
+ * story's clients mark a classifier call and a turn whose session a pinning pool holds, a probe replays a marked turn,
+ * and a token count marks none.
  */
-function sourceOf(keyId: string | null, poolId: string | null, kind: RequestKind, attempted: boolean): DiagnosticsSource | null {
+function markerOf(r: Pick<RequestLog, 'classifier' | 'kind' | 'poolId' | 'sessionId'>): boolean {
+  if (r.kind === 'probe') return true;
+  return r.kind === 'inference' && (r.classifier !== null || ((poolById.get(r.poolId ?? '')?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null));
+}
+
+/**
+ * Who put the diagnostics member on a request's serving body, as the relay reads it: the client where its build sends
+ * one, else the router where the pool's `cacheDiagnostics` is on and the body marked a cache breakpoint. A token count
+ * carries neither, since its schema has no slot for the member, and a request no attempt served sent no body.
+ */
+function sourceOf(keyId: string | null, poolId: string | null, kind: RequestKind, attempted: boolean, marked: boolean): DiagnosticsSource | null {
   if (kind === 'count_tokens' || !attempted) return null;
   if (MEMBER_CLIENT_KEYS.has(keyId ?? '')) return 'client';
-  return poolById.get(poolId ?? '')?.cacheDiagnostics === true ? 'router' : null;
+  return marked && poolById.get(poolId ?? '')?.cacheDiagnostics === true ? 'router' : null;
 }
 
 /**
@@ -663,16 +673,10 @@ function buildRequests(): RequestLog[] {
     const counted = finalStatus === 200 && kind === 'count_tokens' ? rng.int(2_000, 60_000) : null;
     const drawnUsage = finalStatus === 200 && counted === null ? usageFor(modelOn(drawnHead ?? '', drawn), kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     const usage = model.includes('fable') || model.includes('opus') ? drawnUsage : { ...drawnUsage, thinking: 0 };
-    const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0);
-    const diagnosis = diagnosed(tried, kind, source);
     // The story hour's rows leave below, so the rows the drawer reads land before it.
     const owable = lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 && whole && atMs < STORY_HOUR_FROM;
     const turn = owable ? owed.shift() : undefined;
     const autoMode = turn !== undefined && 'autoMode' in turn ? turn.autoMode : null;
-    const attempts =
-      turn !== undefined && 'refusal' in turn
-        ? onServing(diagnosis, (a) => ({ ...a, response: { ...a.response, refusalCategory: turn.refusal, refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } }))
-        : diagnosis;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     // The request runs from its arrival to its last attempt's end, the gaps between attempts included, as the router
     // stamps it.
@@ -692,6 +696,15 @@ function buildRequests(): RequestLog[] {
     const id = `req_${rng.uuid().slice(0, 12)}`;
     const sessionId = rng.pick(SESSION_IDS);
     const agent = storyAgent(sessionId, hints);
+    // The marker reads the session, so the reasons the member decides follow its draw. They draw from a stream of their
+    // own, so their place moves no draw of the main stream.
+    const cacheMarker = markerOf({ classifier: REQUEST_SAMPLE.classifier, kind, poolId: lane.poolId, sessionId });
+    const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0, cacheMarker);
+    const diagnosis = diagnosed(tried, kind, source);
+    const attempts =
+      turn !== undefined && 'refusal' in turn
+        ? onServing(diagnosis, (a) => ({ ...a, response: { ...a.response, refusalCategory: turn.refusal, refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } }))
+        : diagnosis;
     rows.push({
       ...REQUEST_SAMPLE,
       guardrailId: null,
@@ -699,6 +712,7 @@ function buildRequests(): RequestLog[] {
       id,
       at: iso(atMs),
       autoMode,
+      cacheMarker,
       keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
       keyId: lane.keyId,
       poolId: lane.poolId,
@@ -759,7 +773,8 @@ function buildRequests(): RequestLog[] {
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
       const studio = kindOf('studio');
-      const notebookSource = sourceOf('notebook', 'work', kind, true);
+      const notebookMarker = markerOf({ ...moved, poolId: 'work' });
+      const notebookSource = sourceOf('notebook', 'work', kind, true, notebookMarker);
       Object.assign(moved, {
         accountId: 'studio',
         attempts: [
@@ -777,6 +792,7 @@ function buildRequests(): RequestLog[] {
         ],
         // The answering attempt keeps its start, so the request runs from its arrival to that attempt's end.
         durationMs: attemptEnd(answered) - atMs,
+        cacheMarker: notebookMarker,
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: round(costOf(drawn, moved.usage, false, atMs), 4),
@@ -1014,6 +1030,8 @@ interface StorySeed {
   attempts: StoryAttempt[];
   /** A token count's body as the relay estimated it, which the router stores no usage for. */
   bodyTokens?: number;
+  /** A body that marked no cache breakpoint, written by hand whatever `markerOf` reads for the turn. */
+  cacheMarker?: false;
   canonical?: string;
   /** Whether the bodies were captured, where it is not the laptop key's rule. */
   capturedBodies?: boolean;
@@ -1190,7 +1208,9 @@ function storyRow(seed: StorySeed): RequestLog {
   // An incomplete stream never reached the message_delta that carries the stop reason either, while the ledger still
   // files its attempt as an upstream error, so the stop reason reads a predicate of its own beside the outcome's.
   const stopless = cut || seed.outcome === 'incomplete';
-  const source = sourceOf(seed.keyId, poolId, kind, seed.attempts.length > 0);
+  // A refused request carries no marker, as the routing log's record of a refusal reads none.
+  const cacheMarker = seed.cacheMarker ?? (!seed.refused && markerOf({ classifier: seed.classifier ?? null, kind, poolId, sessionId }));
+  const source = sourceOf(seed.keyId, poolId, kind, seed.attempts.length > 0, cacheMarker);
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
     const oauth = accountById.get(a.accountId)?.kind === 'oauth';
@@ -1245,6 +1265,7 @@ function storyRow(seed: StorySeed): RequestLog {
     at: iso(seed.at),
     attempts,
     autoMode: null,
+    cacheMarker,
     canonicalModel: seed.canonical ?? seed.model,
     capturedBodies: seed.capturedBodies ?? seed.keyId === 'laptop',
     classifier: seed.classifier ?? null,
@@ -1348,6 +1369,7 @@ function storySeeds(): StorySeed[] {
       agentId: 'e90b',
       at: t(14, 21, 12),
       attempts: [{ accountId: 'primary', at: t(14, 21, 14), ms: 5_200, status: 200 }],
+      cacheMarker: false,
       held: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'], waits: [{ heldMs: 2_000, reason: 'cap' }] },
       id: 'req_69e30548-32e',
       keyId: 'desktop',
@@ -1362,7 +1384,7 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: 'main', session: 'cd9a5904', status: 401 },
     // A compacted conversation renews its pin cold and writes its prefix afresh.
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], contextCompacted: 'auto', errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 22_900, input: 1_100, output: 410 } },
-    { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
+    { agentId: 'main', at: t(14, 16, 40), attempts: [], cacheMarker: false, errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
     { agentId: null, at: t(14, 15, 48), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_9b4f1c62-a07', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: null, at: t(14, 15, 12), attempts: [], client: 'other', errorCode: 'client_not_allowed', id: 'req_2d8e5b13-f40', keyId: 'ci', model: '', outcome: 'rejected', refused: true, requestClass: null, session: null, status: 403, userAgent: BATCH_AGENT },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
@@ -2614,6 +2636,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         if (reason !== null && hitUnderReason(r)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + 1;
       }
       const keptHere = partRows.filter((r) => kept.has(r));
+      const uncached = ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0);
       const freed = freedPart({ classifier, funding });
       out.push({
         hour,
@@ -2670,7 +2693,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cacheMissReasons,
         cacheMissReasonHits,
         expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
-        uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
+        uncacheable: uncached.filter(couldNotCache).length,
+        uncached: uncached.length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
         // The router answers a zero split for a call it frees, as it answers its dollars.
         cost: freed ? sumSplit([]) : sumSplit(partRows.map((r) => costSplitOf(r.model, r.usage, servingResponse(r)?.speed === 'fast', r.at))),
@@ -2814,6 +2838,7 @@ function historicalRollups(): HourlyRollup[] {
       if (takesMaxEffort) maxEffortOwed = false;
       const fast = fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5);
       const outcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+      const uncached = Math.max(0, ok - Math.round(ok * 0.85));
       const inference: HourlyRollup = {
         hour: iso(t),
         client: CLIENTS[lane.keyId] ?? '-',
@@ -2841,7 +2866,10 @@ function historicalRollups(): HourlyRollup[] {
         ...synthesizeMissReasons(hm, ok, lane.keyId !== 'ci'),
         // The route answers no hit map for an hour folded before it counted one.
         cacheMissReasonHits: emptyCounts(),
-        uncached: Math.max(0, ok - Math.round(ok * 0.85)),
+        // The hour holds the lane's inference turns alone, so its uncached turns count where the lane's turns mark no
+        // breakpoint.
+        uncacheable: markerOf({ classifier: null, kind: 'inference', poolId: lane.poolId, sessionId }) ? 0 : uncached,
+        uncached,
         costUsd: costOf(model, usage, fast, t),
         cost: costSplitOf(model, usage, fast, t),
         // A synthesized hour holds no request of its own, so its tokens price as one answer at the hour, as its dollars
@@ -2902,6 +2930,7 @@ function historicalRollups(): HourlyRollup[] {
           cacheMisses: 0,
           ...synthesizeMissReasons(hm, probes, true),
           cacheMissReasonHits: emptyCounts(),
+          uncacheable: 0,
           uncached: 0,
           costUsd: probeCost,
           cost: costSplitOf(model, probeUsage, false, t),
@@ -2969,6 +2998,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       cacheMissReasons: emptyCacheMissReasons(),
       cacheMissReasonHits: emptyCounts(),
       expiredBetweenTurns: 0,
+      uncacheable: 0,
       uncached: 0,
       costUsd,
       cost: costSplitOf(r.model, usage, false, at),

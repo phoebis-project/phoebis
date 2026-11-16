@@ -483,6 +483,7 @@ export function decodeRequest(v: unknown): RequestLog {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
     attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, issuedDigest: strOrNull(a.issued_digest), outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), previousInputTokens: numOrNull(a.previous_input_tokens), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
     autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode),
+    cacheMarker: boolOrNull(r.cache_marker),
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: oneOf(CLASSIFIER_VALUES, r.classifier), client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
     costShares: orNull(r.cost_shares, nullableNumberMap), costUsd: num(r.cost_usd),
@@ -744,7 +745,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     rateLimited: num(g.rate_limited), refusals: counts(g.refusals), refused: num(g.refused), rejected: num(g.rejected), requests: num(g.requests),
     savingEquivalent: numOrNull(g.saving_equivalent),
     savingUsd: num(g.saving_usd),
-    succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
+    succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncacheable: num(g.uncacheable), uncached: num(g.uncached),
     wastedProbeReasons: wastedReasons(g.wasted_probe_reasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
   };
 }

@@ -57,6 +57,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   savingUsd: 0,
   succeeded: 0,
   tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 },
+  uncacheable: 0,
   uncached: 0,
   wastedProbeReasons: emptyWastedProbeReasons(),
   wastedProbeUsd: 0,
@@ -95,6 +96,13 @@ export function foldUserAgent(raw: string): string {
 
 /** A user agent as the ledger keys a rollup by it: its product token, `-` for a request that sent none. */
 export const agentTokenOf = (userAgent: string | null): string => (userAgent === null ? '-' : foldUserAgent(userAgent));
+
+/**
+ * Whether an uncached request could never have read a cache, as the router counts `uncacheable`: a token count whatever
+ * its body marked, and a request whose body carried no cache breakpoint. A row stored before the router kept the marker
+ * counts by its kind alone.
+ */
+export const couldNotCache = (r: Pick<RequestLog, 'cacheMarker' | 'kind'>): boolean => r.kind === 'count_tokens' || r.cacheMarker === false;
 
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
@@ -309,7 +317,10 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     // The diagnosed reason is a breakdown of its own and decides nothing here.
     if (r.usage.cacheRead > 0) g.cacheHits += 1;
     else if (r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0) g.cacheMisses += 1;
-    else g.uncached += 1;
+    else {
+      g.uncached += 1;
+      if (couldNotCache(r)) g.uncacheable += 1;
+    }
     const reason = servedMissReason(r);
     if (reason) {
       g.cacheMissReasons[reason] = countOf(g.cacheMissReasons, reason) + 1;
@@ -391,7 +402,7 @@ const plusBoth = <K extends string>(a: Record<K, number> | null, b: Record<K, nu
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncacheable', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
     out.cost = plusSplit(out.cost, g.cost);
     out.billed = plusSplit(out.billed, g.billed);
     out.costEquivalent = plus(out.costEquivalent, g.costEquivalent);

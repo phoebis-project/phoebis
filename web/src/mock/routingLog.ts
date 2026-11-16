@@ -1627,7 +1627,7 @@ function build(spec: Spec, messageRows: number): { record: DecisionRecord; summa
       agentId: r.agentId ?? 'main', at: iso(spec.at), attempt: spec.attempt, attempted: spec.attempted, bodyTokens: spec.kind === 'refused' ? null : bodyTokensOf(r), canonicalModel: r.canonicalModel,
       chain: { boundaries: r.kind === 'inference' ? Math.max(1, messageRows, Math.round(r.shape.messageCount / 4)) : 0, staticBoundaries: r.kind === 'inference' ? 2 : 0, staticHash: r.kind === 'inference' },
       clientClass: r.client === 'other' ? 'other' : 'claude_code',
-      flags: { contextCompacted: r.contextCompacted !== null, count: r.kind === 'count_tokens', fast, marker: r.kind === 'inference' && spec.pin !== 'pinning_off', portable, probe: r.kind === 'probe' },
+      flags: { contextCompacted: r.contextCompacted !== null, count: r.kind === 'count_tokens', fast, marker: r.cacheMarker === true, portable, probe: r.kind === 'probe' },
       holds: spec.holds ?? [],
       keyGeneration: r.keyGeneration, keyId: r.keyId ?? '', lane: { effort: r.shape.effort ?? '-', speed: fast ? 'fast' : 'standard', thinking: r.shape.thinkingType ?? 'none' }, parentAgentId: r.agentId === 'main' ? null : 'main', poolId: r.poolId ?? '',
       registryRevision: 412, requestClass: r.requestClass, requestId: r.id, seq: spec.seq, sessionId: r.sessionId,
@@ -1982,13 +1982,13 @@ const roundOfPins = (pins: RoundPin[]): ShedRound => ({ marks: pins.filter((p) =
 /**
  * A refusal at admission (a guardrail's block, a client's drift or contract) comes before any selection, so its record
  * leaves the parent agent, the lane, the chains, the accounts attempted and the holds empty. The block and the contract
- * keep the class and the count and probe flags the request carried, the drift keeps none of them. A key refusal is the
- * selection's own and keeps the request's facts.
+ * keep the class and the count, marker and probe flags the request carried, the drift keeps none of them. A key refusal
+ * is the selection's own and keeps the request's facts.
  */
 const refusedFacts = (r: RequestLog, drift: boolean): Pick<RecordRequest, 'attempted' | 'chain' | 'flags' | 'holds' | 'lane' | 'parentAgentId' | 'requestClass'> => ({
   attempted: [],
   chain: { boundaries: 0, staticBoundaries: 0, staticHash: false },
-  flags: { contextCompacted: false, count: !drift && r.kind === 'count_tokens', fast: false, marker: false, portable: false, probe: !drift && r.kind === 'probe' },
+  flags: { contextCompacted: false, count: !drift && r.kind === 'count_tokens', fast: false, marker: !drift && r.cacheMarker === true, portable: false, probe: !drift && r.kind === 'probe' },
   holds: [],
   lane: { effort: '', speed: '', thinking: '' },
   parentAgentId: null,

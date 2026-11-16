@@ -99,7 +99,11 @@ const pctOrDash = (rate: number | null) => (rate === null ? '-' : fmtPct(rate, 1
 const rateCell = (rate: number | null): ReactNode => (rate === null ? <span className="muted">-</span> : fmtPct(rate, 1));
 
 const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRead + g.tokens.cacheWrite5m + g.tokens.cacheWrite1h;
-const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncached ? g.cacheHits / (g.cacheHits + g.cacheMisses + g.uncached) : null);
+// A token count and a request with no cache breakpoint could never hit, so they leave the base.
+const hitRatioOf = (g: AnalyticsGroup) => {
+  const base = g.cacheHits + g.cacheMisses + g.uncached - g.uncacheable;
+  return base > 0 ? g.cacheHits / base : null;
+};
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
 /** A figure per counted unit, scaled, and null where the figure or the count is unknown or the count is not positive. */

@@ -24104,6 +24104,7 @@ await forView('/analytics', async () => {
     savingUsd: 0,
     succeeded: 0,
     tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 },
+    uncacheable: 0,
     uncached: 0,
     wastedProbeReasons: zeroed(template.wastedProbeReasons),
     wastedProbeUsd: 0,
@@ -24146,6 +24147,38 @@ await forView('/analytics', async () => {
     name: '/analytics a group of refused requests alone draws in the Traffic table only',
     ok: JSON.stringify(read) === JSON.stringify(want),
     missing: Object.entries(read).map(([list, value]) => `${list} ${JSON.stringify(value)}`),
+  });
+});
+
+await forView('/analytics', async () => {
+  // A token count and a request whose body marked no cache breakpoint could never read a cache, so the hit ratio's base
+  // leaves them out. The stub answers every breakdown read with two groups that a story group lends its shape: 100 hits
+  // and 25 uncached requests between them, all 25 uncacheable, read 100%, where a base that kept them reads 80%. A
+  // second answer of uncacheable requests alone leaves a base of nothing, which the head draws as 0%.
+  const breakdownRead = api.getAnalyticsBreakdown;
+  const headWith = async (classes) => {
+    api.getAnalyticsBreakdown = async (q) => {
+      const [template] = await breakdownRead.call(api, q);
+      return template === undefined ? [] : classes.map((c, i) => ({ ...template, key: `group-${i}`, label: `group-${i}`, ...c }));
+    };
+    const page = await mount('/analytics#cache', { now: CLOCK_ORIGIN });
+    const meta = page.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
+    page.unmount();
+    return meta;
+  };
+  const kept = await headWith([
+    { cacheHits: 60, cacheMisses: 0, uncacheable: 10, uncached: 10 },
+    { cacheHits: 40, cacheMisses: 0, uncacheable: 15, uncached: 15 },
+  ]);
+  const none = await headWith([
+    { cacheHits: 0, cacheMisses: 0, uncacheable: 10, uncached: 10 },
+    { cacheHits: 0, cacheMisses: 0, uncacheable: 15, uncached: 15 },
+  ]);
+  api.getAnalyticsBreakdown = breakdownRead;
+  results.push({
+    name: '/analytics the hit ratio leaves the uncacheable requests out of its base',
+    ok: kept.startsWith('100% hit ratio,') && none.startsWith('0% hit ratio,'),
+    missing: [kept, none],
   });
 });
 

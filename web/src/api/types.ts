@@ -882,6 +882,9 @@ export interface RequestLog {
   at: string;
   attempts: Attempt[];
   autoMode: AutoMode | null;
+  /** Whether the body carried a cache breakpoint or the pool's TTL policy added one, the fact the decision record holds
+   *  as `flags.marker`. Null on a row stored before the router kept it. */
+  cacheMarker: boolean | null;
   /** The model the router resolved the request to, which a pin and its events are keyed by. */
   canonicalModel: string;
   capturedBodies: boolean;
@@ -1694,6 +1697,11 @@ export interface AnalyticsGroup {
   /** The routes answer every key but `plainOutput`, which a view derives where it splits the output into its
    * thinking share and the rest. */
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; plainOutput?: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
+  /**
+   * The uncached requests that could never read a cache, a part of `uncached`: the token counts, and the requests whose
+   * body marked no cache breakpoint. The second part reads 0 for the hours the router folded before it kept the marker.
+   */
+  uncacheable: number;
   uncached: number;
   wastedProbeReasons: Record<WastedProbeReason, number>;
   wastedProbeUsd: number;

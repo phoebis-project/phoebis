@@ -107,6 +107,8 @@ export interface HourlyRollup {
   /** The account tier the hour's requests landed under, null for an API key account. */
   tier: string | null;
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
+  /** The part of `uncached` that `couldNotCache` reads as requests that could never read a cache. */
+  uncacheable: number;
   uncached: number;
   /** The requests' own agent folded to its product token, as the ledger keys a row, `-` for none. */
   userAgent: string;
@@ -385,6 +387,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     savingUsd: sumOf(counted, (r) => r.savingUsd),
     succeeded: outcomes.ok,
     tokens: sumEach(counted.map((r) => r.tokens), ZERO_TOKENS),
+    uncacheable: sumOf(counted, (r) => r.uncacheable),
     uncached: sumOf(counted, (r) => r.uncached),
     wastedProbeReasons,
     wastedProbeUsd: sumOf(probeRows, (r) => r.wastedProbeUsd),

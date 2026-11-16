@@ -1972,12 +1972,35 @@ test('a turn expired where it read under half the previous size', () => {
   assert.deepEqual(rows.map(expired), [1, 0, 0, 0, 0, 0, 0], 'under half of 1,000 counts, half does not, and no previous size, a divergence, no usage report, a token count and a probe count nothing');
 });
 
+test('the fold counts the requests that could never read a cache', () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const turn = ({ cacheMarker, cacheRead, kind }) => ({ ...base, cacheMarker, kind, usage: { ...base.usage, cacheRead, cacheWrite1h: 0, cacheWrite5m: 0 } });
+  // Each row folds alone, so a count of one names the row that made it.
+  const uncacheable = (row) => d.foldGroups([row], 'all')[0].uncacheable;
+  const rows = [
+    turn({ cacheMarker: null, cacheRead: 0, kind: 'count_tokens' }),
+    turn({ cacheMarker: false, cacheRead: 0, kind: 'inference' }),
+    turn({ cacheMarker: true, cacheRead: 0, kind: 'inference' }),
+    turn({ cacheMarker: null, cacheRead: 0, kind: 'inference' }),
+    turn({ cacheMarker: false, cacheRead: 900, kind: 'inference' }),
+  ];
+  assert.deepEqual(rows.map(uncacheable), [1, 1, 0, 0, 0], 'an uncached token count whatever its marker and an uncached turn with no marker count, while a marked turn, a turn stored before the marker and a turn that read the cache count nothing');
+});
+
 test("a group decodes its hits under each reason, and an attempt the size its pin's last report left", () => {
   const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], cache_miss_reason_hits: { messages_changed: 3 } });
   assert.deepEqual({ ...group.cacheMissReasonHits }, { messages_changed: 3 });
   const wire = fixture('requests').requests.find((r) => r.id === 'r-captured');
   const row = d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, previous_input_tokens: 1_234 })) });
   assert.equal(row.attempts[0].previousInputTokens, 1_234);
+});
+
+test("a group decodes its uncacheable requests, and a request its cache marker, null on a row stored before the column", () => {
+  // The capture's first group reads 1, so a copy's 7 proves the wire name.
+  const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], uncacheable: 7 });
+  const wire = fixture('requests').requests.find((r) => r.cache_marker === true);
+  const marker = (cacheMarker) => d.decodeRequest({ ...wire, cache_marker: cacheMarker }).cacheMarker;
+  assert.deepEqual([group.uncacheable, marker(false), marker(null)], [7, false, null]);
 });
 
 test('a value past 100 seconds reads in its own bucket', () => {

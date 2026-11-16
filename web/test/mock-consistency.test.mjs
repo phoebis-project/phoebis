@@ -4048,6 +4048,17 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   });
 }
 
+// The instant the smoke run and the browser pass pin, whose 14:00 hour the routing log's story writes by hand.
+const pinned = (loading = loading.then(() => storyAt('2026-09-16T14:30:00Z')));
+
+test("the story's 14:00 hour counts desktop's turn that marked no cache breakpoint and its token count as uncacheable", async () => {
+  const s = await pinned;
+  // Three of desktop's answers in the hour read and wrote nothing: the subagent turn whose body marked no breakpoint
+  // (req_69e30548-32e), the token count (req_3b8e51f4-0a9) and the classifier call that marked one (req_7c2e9f41-d03).
+  const [desktop] = s.lib.breakdownOf(s.allRollups, { from: '2026-09-16T14:00:00Z', groupBy: 'all', includeProbes: false, keyIds: ['desktop'], to: '2026-09-16T15:00:00Z' });
+  assert.deepEqual(desktop && [desktop.uncached, desktop.uncacheable], [3, 2]);
+});
+
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.
 const firstHour = loading.then(() => storyAt('2026-09-16T09:30:00Z'));
 
