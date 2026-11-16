@@ -2710,14 +2710,14 @@ fn run(
     // A move or a fresh placement releases the request's previous booking first, so a failover's booking replaces it
     // on a priced destination and the source's leaves even where the destination books nothing, else the source
     // would carry the rewrite and burn of a stream it no longer serves until the usage, the end or the expiry. A
-    // retry in place renews and never reaches here, so its booking stands. Then the selection books its rewrite and
-    // burn on the destination until the usage replaces it or the request ends. A count writes no cache, a probe
-    // replays a recipe the account carries, a fast request draws usage credits and no plan window, and the client's
-    // classifier call takes no share of a plan window on its judged turn's account and charges at its usage alone
-    // elsewhere, so none of them books. A destination without a tier prices nothing, and nothing priced is nothing to
-    // book, so an unpriced destination leaves no entry to expire or release.
+    // retry in place renews and never reaches here, so its booking stands. A probe never reaches here either, since it
+    // stays on its live pin or answers exhausted. Then the selection books its rewrite and burn on the destination
+    // until the usage replaces it or the request ends. A count writes no cache, a fast request draws usage credits and
+    // no plan window, and the client's classifier call takes no share of a plan window on its judged turn's account
+    // and charges at its usage alone elsewhere, so none of them books. A destination without a tier prices nothing,
+    // and nothing priced is nothing to book, so an unpriced destination leaves no entry to expire or release.
     state.release_reservation(&request.request_id);
-    if !(request.count || request.probe || request.fast || request.classifier) {
+    if !(request.count || request.fast || request.classifier) {
         if let Some(tier) = snapshot.priced_tier(&chosen.account_id) {
             let (rewrite, burn, regime) = pin_figures(
                 state,
