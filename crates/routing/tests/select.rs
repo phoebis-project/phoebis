@@ -30451,6 +30451,39 @@ fn a_row_idle_past_the_ttl_re_placed_elsewhere_names_the_account_it_left() {
 }
 
 #[test]
+fn the_pin_that_replaces_a_row_idle_past_the_ttl_carries_the_row_s_thinking_sums() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let sums = BTreeMap::from([("a".to_string(), 40_000), ("b".to_string(), 5_000)]);
+    let mut st = loaded(vec![PinRow {
+        thinking_sums: sums.clone(),
+        ..seeded_pin("s1", "a", T)
+    }]);
+    // Two hours idle under the pool's hour, so step 1 finds no live pin and the placement replaces the row.
+    let idle = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 2 * HOUR);
+    let d = decide(&mut st, &s, &idle, &mut rng());
+    assert_eq!(
+        d.record.pin.as_ref().map(|pin| pin.found),
+        Some("expired_idle")
+    );
+    let written: Vec<&BTreeMap<String, u64>> = d
+        .writes
+        .iter()
+        .filter_map(|write| match write {
+            StateWrite::UpsertPin(row) if row.key() == pin_key("s1") => Some(&row.thinking_sums),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        written,
+        [&sums],
+        "the session's prompt still holds the thinking the idle row summed"
+    );
+}
+
+#[test]
 fn a_row_idle_past_the_ttl_stands_through_a_cap_hold_and_the_landing_after_the_wait_names_the_account_it_left(
 ) {
     let s = snapshot(Pool {
