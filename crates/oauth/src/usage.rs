@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures::future::{BoxFuture, FutureExt, Shared};
 use phoebis_profile::Profile;
 use phoebis_store::{limit_resets_token, AccountRow, LimitResetsRow, Store};
 use phoebis_transport::control::ControlClient;
@@ -20,6 +19,7 @@ use crate::exchange::{
     claim_request, control_request, instant_ms, json_object, parse_profile, usage_json,
     ControlKind, OauthError, ProfileResponse,
 };
+use crate::inflight::{spawn_into, InflightMap, Joined};
 use crate::limit_resets::{
     fold_claim_answer, grant_states, parse_claim_answer, parse_limit_resets, ClaimAnswer,
     GrantStatus, LimitResets, SEVEN_DAY_FABLE,
@@ -693,8 +693,6 @@ fn ladder_step(in_a_row: u32) -> i64 {
         .unwrap_or(BACKOFF_CAP_MS)
 }
 
-type Joined<T> = Shared<BoxFuture<'static, T>>;
-
 type FetchOutcome = Result<(UsageSnapshot, Option<PollIssue>), String>;
 type SharedFetch = Joined<FetchOutcome>;
 
@@ -765,26 +763,6 @@ struct Inner {
     clock: Clock,
 }
 
-/// Removes an account's in-flight entry from `map` once its task ends, however it ends. A task that ends by a panic
-/// leaves no entry behind, or every later caller would join a future that has already resolved and the account would
-/// stay stuck on that one result until the process restarts. A poisoned map is left alone rather than asserted on,
-/// since a panic inside `Drop` while the task already unwinds aborts the process.
-pub(crate) struct InflightGuard<O: 'static, V: 'static> {
-    pub(crate) account_id: String,
-    pub(crate) inner: Arc<O>,
-    pub(crate) map: InflightMap<O, V>,
-}
-
-type InflightMap<O, V> = fn(&O) -> &Mutex<HashMap<String, V>>;
-
-impl<O: 'static, V: 'static> Drop for InflightGuard<O, V> {
-    fn drop(&mut self) {
-        if let Ok(mut inflight) = (self.map)(&self.inner).lock() {
-            inflight.remove(&self.account_id);
-        }
-    }
-}
-
 /// The account's task already in `map`, joined, or else `task` spawned and recorded there, with whether this call
 /// spawned it.
 fn join_or_spawn<T, F>(
@@ -802,28 +780,7 @@ where
     if let Some(existing) = inflight.get(account_id) {
         return (existing.clone(), false);
     }
-    let work = task(inner.clone(), account_id.to_string());
-    let guarded = inner.clone();
-    let id = account_id.to_string();
-    // Spawned so a caller that goes away stops neither the task other callers are joined to nor its writes. The map's
-    // lock is held across the spawn so a task finishing at once cannot remove the entry before it is inserted.
-    let handle = tokio::spawn(async move {
-        let _guard = InflightGuard {
-            account_id: id,
-            inner: guarded,
-            map,
-        };
-        work.await
-    });
-    let shared = async move {
-        match handle.await {
-            Ok(outcome) => outcome,
-            Err(_) => panicked(),
-        }
-    }
-    .boxed()
-    .shared();
-    inflight.insert(account_id.to_string(), shared.clone());
+    let shared = spawn_into(&mut inflight, inner, map, account_id, panicked, task);
     (shared, true)
 }
 
@@ -1491,22 +1448,25 @@ impl Inner {
             // and the instant remembered at its send would hold the next read back for an hour, so the read stays
             // due under the holder the row has now. The row holds what the caller should read.
             Ok(false) => {
-                let Some((stored, block)) = self.stored_limit_resets(account_id) else {
+                let Some((row, block)) = self.stored_limit_resets(account_id) else {
                     return Ok(None);
                 };
-                self.mark_resets_due(account_id, stored);
+                self.mark_resets_due(account_id, Identity::of_limit_resets(&row));
                 Ok(block)
             }
             Err(error) => Err(UsageError::Unavailable(format!("store: {error}"))),
         }
     }
 
-    /// The holder of the account's row and the block it stores, `None` for a row that is gone. The block reads `None`
-    /// without one and for a text that does not parse.
-    fn stored_limit_resets(&self, account_id: &str) -> Option<(Identity, Option<LimitResets>)> {
+    /// The account's row and the block it stores, `None` for a row that is gone. The block reads `None` without one and
+    /// for a text that does not parse.
+    fn stored_limit_resets(
+        &self,
+        account_id: &str,
+    ) -> Option<(LimitResetsRow, Option<LimitResets>)> {
         let row = self.store.limit_resets_row_of(account_id).ok().flatten()?;
         let block = row.text.as_deref().and_then(LimitResets::from_stored);
-        Some((Identity::of_limit_resets(&row), block))
+        Some((row, block))
     }
 
     /// The windows the holder's cached snapshot reads at their limit, `None` where the cache holds none for it.
@@ -1561,8 +1521,8 @@ impl Inner {
     /// The grant's label, the stored block's epoch and the grant's count where the block reads the grant usable at
     /// the service's clock, `None` for another state, for a grant the block does not list and for a row with no block.
     fn usable_grant(&self, account_id: &str, grant_id: &str) -> Option<(String, u64, u32)> {
-        let row = self.store.limit_resets_row_of(account_id).ok().flatten()?;
-        let block = LimitResets::from_stored(row.text.as_deref()?)?;
+        let (row, block) = self.stored_limit_resets(account_id)?;
+        let block = block?;
         let at = block.grants.iter().position(|grant| grant.id == grant_id)?;
         let usable = grant_states(&block, (self.clock)())[at].state == GrantStatus::Usable;
         usable.then(|| {
@@ -1673,7 +1633,7 @@ impl Inner {
             holder.lifecycle_generation,
             epoch,
             |stored| {
-                let mut block: LimitResets = serde_json::from_str(stored).ok()?;
+                let mut block = LimitResets::from_stored(stored)?;
                 fold_claim_answer(&mut block, grant_id, counted, answer);
                 Some(block.to_stored())
             },

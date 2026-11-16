@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
 use phoebis_profile::Profile;
 use phoebis_store::{
@@ -20,7 +19,8 @@ use serde_json::Value;
 use tracing::Instrument;
 
 use crate::exchange::{control_request, parse_token_response, refresh_body, ControlKind};
-use crate::usage::{InflightGuard, Refused};
+use crate::inflight::{spawn_into, Joined};
+use crate::usage::Refused;
 
 // A poisoned manager mutex means a prior panic happened while the refresh map was being mutated, so the
 // in-flight bookkeeping can no longer be trusted.
@@ -139,7 +139,7 @@ impl From<RefreshFailure> for AcquireError {
     }
 }
 
-type RefreshFuture = Shared<BoxFuture<'static, Result<AccessToken, RefreshFailure>>>;
+type RefreshFuture = Joined<Result<AccessToken, RefreshFailure>>;
 
 /// A backoff the manager armed on an account, on the manager's clock.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -640,40 +640,15 @@ impl CredentialManager {
                 None if self.inner.closing.load(Ordering::SeqCst) => {
                     return Err(AcquireError::ShuttingDown)
                 }
-                None => {
-                    let inner = self.inner.clone();
-                    let id = account_id.to_string();
-                    // The refresh owns the whole sequence in its own task, so a caller that goes away
-                    // mid-refresh only stops awaiting: the attempt row, the commit, and the resolution
-                    // still run to the end. The guard drops the entry once the refresh is over, and it
-                    // takes the same map lock, which is held across the spawn here so a refresh that
-                    // finishes at once cannot remove the entry before it is inserted. Dropping the entry
-                    // last also keeps the next caller from starting a second rotation while this commit is
-                    // still in flight.
-                    let handle = tokio::spawn(async move {
-                        let guard = InflightGuard {
-                            account_id: id,
-                            inner,
-                            map: |inner| &inner.inflight,
-                        };
-                        guard
-                            .inner
-                            .refresh(&guard.account_id, observed_generation)
-                            .await
-                    });
-                    let shared = async move {
-                        match handle.await {
-                            Ok(outcome) => outcome,
-                            // Nothing else joins a detached task, so this is a panic in the refresh; the
-                            // attempt row stays pending and `recover_on_start` settles it.
-                            Err(_) => Err(RefreshFailure::Unavailable("refresh panicked".into())),
-                        }
-                    }
-                    .boxed()
-                    .shared();
-                    inflight.insert(account_id.to_string(), shared.clone());
-                    shared
-                }
+                None => spawn_into(
+                    &mut inflight,
+                    &self.inner,
+                    |inner| &inner.inflight,
+                    account_id,
+                    // A panicked refresh leaves its attempt row pending, and `recover_on_start` settles it.
+                    || Err(RefreshFailure::Unavailable("refresh panicked".into())),
+                    move |inner, id| async move { inner.refresh(&id, observed_generation).await },
+                ),
             }
         };
         shared.await.map_err(AcquireError::from)
@@ -1351,6 +1326,7 @@ mod tests {
     use super::*;
 
     use fake_upstream::{FakeUpstream, Respond, Rule};
+    use futures::future::FutureExt;
     use phoebis_profile::fixtures::{control_response, ControlFixture};
     use phoebis_store::{AccountKind, Identity, NewBundle, StorageKey};
     use phoebis_transport::control::{ResolveFuture, Resolver};

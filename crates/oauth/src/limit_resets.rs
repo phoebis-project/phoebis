@@ -4,6 +4,7 @@ use phoebis_store::AccountExtras;
 use serde_json::{Map, Value};
 
 use crate::exchange::{instant_ms, json_object, OauthError};
+use crate::usage::FABLE_WINDOW_KEY;
 
 /// The id of the Fable week, the weekly window that Fable models draw beside the shared week.
 pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
@@ -11,13 +12,23 @@ pub const SEVEN_DAY_FABLE: &str = "seven_day_fable";
 /// The usage endpoint's key for the week a head reports as `7d_oi`, the overage-included week.
 pub const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
+/// The one id a window is answered under: the Fable week as `seven_day_fable`, whether a reading names it by the usage
+/// endpoint's `fable` key or as the overage-included week. The overage-included week reads as the Fable week until a
+/// second model week arrives by head, since the upstream's name for it is generic.
+pub fn account_window_id(key: &str) -> &str {
+    if key == FABLE_WINDOW_KEY {
+        SEVEN_DAY_FABLE
+    } else {
+        fable_week_of(key)
+    }
+}
+
 /// A window name as the router spells it: the upstream's name for the Fable week maps, every other reads as sent.
-pub(crate) fn window_name(sent: &str) -> String {
-    match sent {
+fn fable_week_of(name: &str) -> &str {
+    match name {
         SEVEN_DAY_OVERAGE_INCLUDED => SEVEN_DAY_FABLE,
         other => other,
     }
-    .to_string()
 }
 
 /// The block an account's usage body carries under `cedar_ember`, every instant in epoch milliseconds.
@@ -104,54 +115,59 @@ pub fn parse_limit_resets(body: &[u8]) -> Result<Option<LimitResets>, OauthError
     let map = json_object(body, "usage response")?;
     let block = match map.get("cedar_ember") {
         None | Some(Value::Null) => return Ok(None),
-        Some(Value::Object(block)) => block,
+        Some(Value::Object(object)) => Members {
+            document: LIMIT_RESET_BLOCK,
+            object,
+        },
         Some(_) => return Err(malformed(LIMIT_RESET_BLOCK, "cedar_ember")),
     };
-    let grants = required(LIMIT_RESET_BLOCK, block, "grants", Value::as_array)?
+    let grants = block
+        .required("grants", Value::as_array)?
         .iter()
         .map(parse_grant)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(LimitResets {
-        cooldown_until: optional(LIMIT_RESET_BLOCK, block, "cooldown_until", instant_ms)?,
-        eligible: required(LIMIT_RESET_BLOCK, block, "eligible", Value::as_bool)?,
+        cooldown_until: block.optional("cooldown_until", instant_ms)?,
+        eligible: block.required("eligible", Value::as_bool)?,
         grants,
-        ineligible_reason: optional(LIMIT_RESET_BLOCK, block, "ineligible_reason", as_string)?,
+        ineligible_reason: block.optional("ineligible_reason", as_string)?,
     }))
 }
 
 /// Older grants carry no `type`, `gives_back_weekly` or `unavailable_reason`, so a grant without them still parses,
 /// each read as its default.
 fn parse_grant(value: &Value) -> Result<Grant, OauthError> {
-    let grant = value
-        .as_object()
-        .ok_or_else(|| malformed(LIMIT_RESET_BLOCK, "grants"))?;
-    let clears = required(LIMIT_RESET_BLOCK, grant, "clears", window_names)?;
-    let gives_back_weekly = optional(
-        LIMIT_RESET_BLOCK,
-        grant,
-        "gives_back_weekly",
-        Value::as_bool,
-    )?
-    .unwrap_or(false);
+    let grant = Members {
+        document: LIMIT_RESET_BLOCK,
+        object: value
+            .as_object()
+            .ok_or_else(|| malformed(LIMIT_RESET_BLOCK, "grants"))?,
+    };
+    let clears = grant.required("clears", window_names)?;
+    let gives_back_weekly = grant
+        .optional("gives_back_weekly", Value::as_bool)?
+        .unwrap_or(false);
     let kind = kind_of(
         gives_back_weekly,
-        optional(LIMIT_RESET_BLOCK, grant, "type", Value::as_str)?,
+        grant.optional("type", Value::as_str)?,
         &clears,
     );
     Ok(Grant {
-        blocking: optional(LIMIT_RESET_BLOCK, grant, "blocking", window_names)?.unwrap_or_default(),
+        blocking: grant
+            .optional("blocking", window_names)?
+            .unwrap_or_default(),
         clears,
-        ends_at: required(LIMIT_RESET_BLOCK, grant, "ends_at", instant_ms)?,
+        ends_at: grant.required("ends_at", instant_ms)?,
         gives_back_weekly,
-        id: required(LIMIT_RESET_BLOCK, grant, "id", as_string)?,
+        id: grant.required("id", as_string)?,
         kind,
-        label: required(LIMIT_RESET_BLOCK, grant, "label", as_string)?,
-        paused: optional(LIMIT_RESET_BLOCK, grant, "paused", Value::as_bool)?.unwrap_or(false),
-        resets_left: required(LIMIT_RESET_BLOCK, grant, "resets_left", count)?,
-        resets_total: required(LIMIT_RESET_BLOCK, grant, "resets_total", count)?,
-        starts_at: required(LIMIT_RESET_BLOCK, grant, "starts_at", instant_ms)?,
-        unavailable_reason: optional(LIMIT_RESET_BLOCK, grant, "unavailable_reason", as_string)?,
-        usable_now: required(LIMIT_RESET_BLOCK, grant, "usable_now", Value::as_bool)?,
+        label: grant.required("label", as_string)?,
+        paused: grant.optional("paused", Value::as_bool)?.unwrap_or(false),
+        resets_left: grant.required("resets_left", count)?,
+        resets_total: grant.required("resets_total", count)?,
+        starts_at: grant.required("starts_at", instant_ms)?,
+        unavailable_reason: grant.optional("unavailable_reason", as_string)?,
+        usable_now: grant.required("usable_now", Value::as_bool)?,
     })
 }
 
@@ -176,31 +192,37 @@ fn kind_of(gives_back_weekly: bool, sent: Option<&str>, clears: &[String]) -> St
 const LIMIT_RESET_BLOCK: &str = "limit reset block";
 const CLAIM_ANSWER: &str = "claim answer";
 
-fn required<'a, T>(
-    document: &str,
+/// An object beside the name of its document, so no member read can name the other document in its refusal.
+struct Members<'a> {
+    document: &'static str,
     object: &'a Map<String, Value>,
-    member: &str,
-    read: impl FnOnce(&'a Value) -> Option<T>,
-) -> Result<T, OauthError> {
-    object
-        .get(member)
-        .and_then(read)
-        .ok_or_else(|| malformed(document, member))
 }
 
-/// A null member reads as an absent one, and any other value has to read as the member's type. An absent member is
-/// accepted, so the refusal names the type alone.
-fn optional<'a, T>(
-    document: &str,
-    object: &'a Map<String, Value>,
-    member: &str,
-    read: impl FnOnce(&'a Value) -> Option<T>,
-) -> Result<Option<T>, OauthError> {
-    match object.get(member) {
-        None | Some(Value::Null) => Ok(None),
-        Some(value) => read(value).map(Some).ok_or_else(|| {
-            OauthError::Malformed(format!("{document}: {member} is of another type"))
-        }),
+impl<'a> Members<'a> {
+    fn required<T>(
+        &self,
+        member: &str,
+        read: impl FnOnce(&'a Value) -> Option<T>,
+    ) -> Result<T, OauthError> {
+        self.object
+            .get(member)
+            .and_then(read)
+            .ok_or_else(|| malformed(self.document, member))
+    }
+
+    /// A null member reads as an absent one, and any other value has to read as the member's type. An absent member
+    /// is accepted, so the refusal names the type alone.
+    fn optional<T>(
+        &self,
+        member: &str,
+        read: impl FnOnce(&'a Value) -> Option<T>,
+    ) -> Result<Option<T>, OauthError> {
+        match self.object.get(member) {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => read(value).map(Some).ok_or_else(|| {
+                OauthError::Malformed(format!("{}: {member} is of another type", self.document))
+            }),
+        }
     }
 }
 
@@ -220,7 +242,7 @@ fn window_names(value: &Value) -> Option<Vec<String>> {
     value
         .as_array()?
         .iter()
-        .map(|name| name.as_str().map(window_name))
+        .map(|name| name.as_str().map(|name| fable_week_of(name).to_string()))
         .collect()
 }
 
@@ -299,14 +321,20 @@ pub struct ClaimAnswer {
 /// Reads a claim's answer. A member present with another type than its own fails the whole answer, as a member of the
 /// block does, so no count or instant is folded from an answer read in part.
 pub(crate) fn parse_claim_answer(body: &[u8]) -> Result<ClaimAnswer, OauthError> {
-    let answer = json_object(body, CLAIM_ANSWER)?;
+    let object = json_object(body, CLAIM_ANSWER)?;
+    let answer = Members {
+        document: CLAIM_ANSWER,
+        object: &object,
+    };
     Ok(ClaimAnswer {
-        cleared: optional(CLAIM_ANSWER, &answer, "cleared", window_names)?.unwrap_or_default(),
-        cooldown_until: optional(CLAIM_ANSWER, &answer, "cooldown_until", instant_ms)?,
-        reason: optional(CLAIM_ANSWER, &answer, "reason", as_string)?,
-        resets_left: optional(CLAIM_ANSWER, &answer, "resets_left", count)?,
-        result: required(CLAIM_ANSWER, &answer, "result", as_string)?,
-        weekly_resets_at: optional(CLAIM_ANSWER, &answer, "weekly_resets_at", instant_ms)?,
+        cleared: answer
+            .optional("cleared", window_names)?
+            .unwrap_or_default(),
+        cooldown_until: answer.optional("cooldown_until", instant_ms)?,
+        reason: answer.optional("reason", as_string)?,
+        resets_left: answer.optional("resets_left", count)?,
+        result: answer.required("result", as_string)?,
+        weekly_resets_at: answer.optional("weekly_resets_at", instant_ms)?,
     })
 }
 

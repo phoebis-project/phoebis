@@ -1,8 +1,7 @@
 //! The window whose reset refunds an account's allowance for a model.
 
+pub use phoebis_oauth::account_window_id;
 pub use phoebis_oauth::SEVEN_DAY_OVERAGE_INCLUDED;
-
-use phoebis_oauth::FABLE_WINDOW_KEY;
 
 use crate::select::FIVE_HOUR_MS;
 use crate::state::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS};
@@ -12,17 +11,6 @@ use crate::state::{FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS};
 /// with no row here is kept, persisted and shown, cools the account on a claim and feeds no allowance; a row is
 /// one line, added once the first live run reads the poll's keys and the 429 claims.
 pub const MODEL_WINDOWS: &[(&str, &str)] = &[("fable", SEVEN_DAY_FABLE)];
-
-/// The one id a window is answered under: the Fable week as `seven_day_fable`, whether a reading names it by the usage
-/// endpoint's `fable` key or as the overage-included week. The overage-included week reads as the Fable week until a
-/// second model week arrives by head, since the upstream's name for it is generic.
-pub fn account_window_id(key: &str) -> &str {
-    if key == FABLE_WINDOW_KEY || key == SEVEN_DAY_OVERAGE_INCLUDED {
-        SEVEN_DAY_FABLE
-    } else {
-        key
-    }
-}
 
 /// The week of its own of the first row whose family the folded id contains, `None` for a model that draws the shared
 /// week alone.
