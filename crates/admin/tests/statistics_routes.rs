@@ -1927,7 +1927,7 @@ async fn a_sessions_last_inference_reads_its_turn_and_its_last_request_the_later
 
 /// The session holds no pin. Main's refused request two days back is the session's first, the subagent's refused
 /// request a day later is its own first, ahead of its served one, and main's served request inside the hour keeps
-/// the session listed.
+/// the session listed. A second subagent's one request was refused, so it makes no entry.
 #[tokio::test]
 async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_past_the_expiry() {
     let (parts, cookie, generation) = sessions_on_desktop().await;
@@ -1956,6 +1956,13 @@ async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_pas
             "inference",
             generation,
         ),
+        refused_request(
+            "r-refused-only",
+            now - day + 2 * HOUR,
+            "s-first",
+            "worker-2",
+            generation,
+        ),
         agent_request(
             "r-main-served",
             now - 1_000,
@@ -1974,6 +1981,17 @@ async fn a_session_and_each_agent_read_their_first_request_refused_ones_kept_pas
         (row["pinned"].as_bool(), row["first_request_at"].as_i64()),
         (Some(false), Some(now - 2 * day)),
         "the session's first request is main's refused one, two days back: {row}"
+    );
+    let entries: Vec<&str> = row["agent_requests"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["agent_id"].as_str())
+        .collect();
+    assert_eq!(
+        entries,
+        ["main", "worker-1"],
+        "worker-2, whose requests were all refused, makes no entry: {row}"
     );
     let worker = row["agent_requests"]
         .as_array()
