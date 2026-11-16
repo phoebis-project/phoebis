@@ -24922,11 +24922,11 @@ fn a_span_ends_with_the_count_of_its_new_holds_and_the_next_span_counts_its_own(
         Some(until),
         "the retry waits to the second hold's instant"
     );
-    // The factor returns to 1 at `at` and reads 1 for the safety wait, so the drain closes the span: the counts its
-    // ends carry.
-    let close = |st: &mut RoutingState, at: i64| -> Vec<u64> {
+    let returned = |st: &mut RoutingState, at: i64| {
         st.write_slow_down("p", "a", &seeded_read(1.0, at), 1.0, at, AVERAGE_MS);
-        st.take_slow_down_edges(at + SLOW_DOWN_WAIT_MS)
+    };
+    let ends = |st: &mut RoutingState, at: i64| -> Vec<u64> {
+        st.take_slow_down_edges(at)
             .into_iter()
             .filter_map(|(_, _, edge)| match edge {
                 SlowDownEdge::Ended { holds, .. } => Some(holds),
@@ -24934,12 +24934,9 @@ fn a_span_ends_with_the_count_of_its_new_holds_and_the_next_span_counts_its_own(
             })
             .collect()
     };
-    assert_eq!(
-        close(&mut st, until + SECOND),
-        vec![2],
-        "two new holds, the retry counted with the hold it joined"
-    );
-
+    // No drain runs inside the safety wait, so the decide that reads the next dip once the wait has run out ends the
+    // first span itself and opens the next from no count.
+    returned(&mut st, until + SECOND);
     let reopened = until + SECOND + SLOW_DOWN_WAIT_MS;
     reading(&mut st, "a", 0.96, 2 * HOUR, reopened);
     let until = held_on(&decide(
@@ -24952,7 +24949,15 @@ fn a_span_ends_with_the_count_of_its_new_holds_and_the_next_span_counts_its_own(
     .until
     .expect("the next span's hold");
     assert_eq!(
-        close(&mut st, until + SECOND),
+        ends(&mut st, reopened),
+        vec![2],
+        "two new holds, the retry counted with the hold it joined"
+    );
+
+    // The factor reads 1 for the safety wait, so the drain closes the next span.
+    returned(&mut st, until + SECOND);
+    assert_eq!(
+        ends(&mut st, until + SECOND + SLOW_DOWN_WAIT_MS),
         vec![1],
         "the next span counts its own hold alone"
     );
