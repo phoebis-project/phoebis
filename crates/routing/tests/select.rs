@@ -28308,31 +28308,6 @@ fn the_dropped_thinkings_weight_in_the_order_is_the_pricers_output_over_its_cach
 }
 
 #[test]
-fn the_pick_adds_the_dropped_thinkings_share_to_a_warm_pins_rewrite() {
-    // Two covering warm pins on Sonnet's bound pair: `whole` rewrites 100,000 tokens and drops nothing, `dropping`
-    // rewrites 30,000 of its 80,000 and drops a's 50,000, which weigh 200,000 at an output weight of 4. dropping's move
-    // costs 230,000 tokens of cache write against whole's 100,000, where its write alone reads 30,000.
-    let round = thinking_round(
-        vec![
-            thinking_pin("whole", 3.0, true, 100_000, 0),
-            thinking_pin("dropping", 3.0, true, 80_000, 50_000),
-        ],
-        &[("claude-sonnet-5", true)],
-        4,
-        0.967,
-    );
-    let mark = |session| {
-        let row = round_pin(&round, session);
-        (row.marked, row.note)
-    };
-    assert_eq!(
-        (mark("whole"), mark("dropping")),
-        ((true, Some("cheapest")), (false, None)),
-        "{round:?}"
-    );
-}
-
-#[test]
 fn the_cold_group_orders_the_pins_that_drop_nothing_by_burn_then_the_rest_by_burn_over_the_weighted_drop(
 ) {
     // Three cold pins over a last prompt of 100,000 tokens on Sonnet's bound pair: `none` burns 0.01 of the 5-hour

@@ -369,7 +369,7 @@ pub(crate) struct AttemptResponse {
 }
 
 /// The blocks an answer dropped under one key of `input_transformations`.
-#[derive(serde::Serialize, serde::Deserialize, ToSchema)]
+#[derive(serde::Serialize, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputTransformationView {
     /// The dropped blocks under the key.

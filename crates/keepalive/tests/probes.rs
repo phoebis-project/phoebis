@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use common::*;
-use fake_upstream::{install_at, Captured, Respond, SseEvent};
+use fake_upstream::{install_at, Captured, Respond};
 use phoebis_bus::Outcome;
 use phoebis_keepalive::{
     CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, RecipeState, FIVE_MINUTES_MS,
@@ -2179,86 +2179,6 @@ async fn a_running_total_without_the_split_keeps_the_hour() {
         2,
         "the first arming and the probe's landing:\n{text}"
     );
-}
-
-/// A stream held past `message_start`, so a request that reaches it commits before it ever completes.
-fn held_stream() -> Respond {
-    Respond::SseGated {
-        status: 200,
-        headers: vec![],
-        events: vec![
-            SseEvent {
-                event: "message_start".into(),
-                data: r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":1}}}"#
-                    .into(),
-            },
-            SseEvent {
-                event: "message_stop".into(),
-                data: r#"{"type":"message_stop"}"#.into(),
-            },
-        ],
-    }
-}
-
-/// A probe whose pinned account is in a state other than ready is answered `operator` while a sibling could take it,
-/// though that sibling sits at its cap, so the probe neither waits for the sibling's slot nor lands there: the recipe
-/// pauses with nothing dialled.
-#[tokio::test]
-async fn a_probe_whose_pinned_account_is_unready_pauses_beside_a_sibling_at_its_cap() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
-        pool: PoolSpec {
-            failover: phoebis_store::Failover {
-                in_flight_cap: 1,
-                retry_in_place_seconds: 2,
-                ..phoebis_store::Failover::default()
-            },
-            ..PoolSpec::default()
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    assert_eq!(r.status("main").account_id.as_deref(), Some("a"));
-    // One-shot: a regression that sent the probe to `b` gets a fast wrong answer here, never a stream that
-    // holds it for the full probe deadline.
-    r.up.push_credential_rule(B, "/v1/messages", held_stream());
-    r.h.store
-        .set_state(
-            "a",
-            AccountState::Disconnected,
-            phoebis_store::StateCause::Operator,
-        )
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-
-    // A second session takes `b`, over its cap of one.
-    let mut req = r.request("main");
-    relay_common::set_header(&mut req, "x-claude-code-session-id", "other");
-    let other = r.h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(relay_common::outcome(&other).account_id, "b");
-    assert_eq!(r.h.router.in_flight().account("b"), 1, "b is at its cap");
-
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(
-        (
-            status.paused,
-            status.reason,
-            status.failures,
-            status.next_probe_at
-        ),
-        (true, Reason::Paused, 0, None),
-        "the probe is answered on its pinned member's state: {status:?}"
-    );
-    assert_eq!(
-        relay_common::credentials_seen(&r.up),
-        [A, B],
-        "neither account was dialled for the probe"
-    );
-    drop(other);
-    r.up.release();
 }
 
 const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";

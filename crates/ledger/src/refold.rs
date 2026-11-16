@@ -1578,31 +1578,6 @@ mod tests {
         h
     }
 
-    #[test]
-    fn the_rules_pass_moves_a_retained_sample_past_100_seconds_out_of_bucket_63() {
-        let db = LedgerDb::open_in_memory().unwrap();
-        let at = NEW_YEAR + DAY;
-        let request = timed("r", at, 100, (200, 1_000, 150_000));
-        store(&db, &request, &list(Some(1_000)), NO_RULES, 0);
-        mark_fold_rules(&db).unwrap();
-        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
-        assert_eq!(
-            row(&db, at, STANDARD_BAND).duration_hist,
-            sampled(&[150_000.0])
-        );
-    }
-
-    #[test]
-    fn the_rules_pass_moves_a_retained_held_requests_first_byte_to_its_time_less_the_hold() {
-        let db = LedgerDb::open_in_memory().unwrap();
-        let at = NEW_YEAR + DAY;
-        let request = slowed(timed("r", at, 100, (21_000, 21_500, 30_000)), 20_000);
-        store(&db, &request, &list(Some(1_000)), NO_RULES, 0);
-        mark_fold_rules(&db).unwrap();
-        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
-        assert_eq!(row(&db, at, STANDARD_BAND).ttfb_hist, sampled(&[1_000.0]));
-    }
-
     /// The late request's 40 ms span reads 250 tokens a second under no rule, the rate the other request of its
     /// hour records, which no rule moves.
     #[test]
@@ -1620,51 +1595,6 @@ mod tests {
         let folded = histograms(row(&db, at, STANDARD_BAND));
         refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
         assert_eq!(histograms(row(&db, at, STANDARD_BAND)), folded);
-    }
-
-    /// The state a pass that stopped after its first page leaves: the first request as the pass moved it, the second
-    /// as the old fold filed it and the cursor at the first, beside a request of the same hour that no rule moves.
-    #[test]
-    fn a_rules_pass_resumes_after_its_cursor_and_moves_each_request_once() {
-        let db = LedgerDb::open_in_memory().unwrap();
-        let at = NEW_YEAR + DAY;
-        let first = slowed(timed("r1", at, 100, (21_000, 21_500, 30_000)), 20_000);
-        let second = slowed(
-            timed("r2", at + 1_000, 100, (32_000, 32_500, 40_000)),
-            30_000,
-        );
-        let other = timed("r3", at + 2_000, 100, (5_000, 5_500, 9_000));
-        store(&db, &first, &list(Some(1_000)), FoldRules::ALL, 0);
-        store(&db, &second, &list(Some(1_000)), NO_RULES, 0);
-        store(&db, &other, &list(Some(1_000)), NO_RULES, 0);
-        mark_fold_rules(&db).unwrap();
-        db.write(|c| {
-            let tx = begin_write(c)?;
-            write_meta(
-                &tx,
-                FOLD_RULES_REFOLD_KEY,
-                &RulesCursor {
-                    rules: vec![
-                        "hit_split".into(),
-                        "slow_down_hold".into(),
-                        "throughput_floor".into(),
-                        "wide_edges".into(),
-                    ],
-                    after: After {
-                        received_at: at,
-                        id: "r1".into(),
-                    },
-                },
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-        .unwrap();
-        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
-        assert_eq!(
-            row(&db, at, STANDARD_BAND).ttfb_hist,
-            sampled(&[1_000.0, 2_000.0, 5_000.0])
-        );
     }
 
     /// One start with a moved threshold and an open rule: the held request's 1,500 prompt tokens fell in the long

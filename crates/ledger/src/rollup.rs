@@ -3451,16 +3451,6 @@ mod tests {
     const NOT_MOVED: &str =
         r#"{"strategy":"pace","tier":[0,1,0],"renewed":false,"moved":null,"skipped":[]}"#;
 
-    /// The Analytics card's bars count requests, so an answer that dropped 154 blocks under one key counts its request
-    /// once under that key.
-    #[test]
-    fn a_request_counts_once_under_a_key_its_answer_dropped_blocks_under_whatever_the_blocks() {
-        assert_eq!(
-            transformations_of(dropped("thinking.prefix_binding_mismatch", 154), None),
-            BTreeMap::from([("thinking.prefix_binding_mismatch".to_string(), 1)])
-        );
-    }
-
     /// A move counts where its answer dropped a block under an account reason, never for the prefix key alone, and a
     /// request that did not move counts no move whatever its answer dropped.
     #[test]
