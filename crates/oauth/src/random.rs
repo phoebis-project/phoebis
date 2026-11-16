@@ -41,14 +41,13 @@ pub fn ephemeral_port() -> u16 {
 pub fn uuid_v4_of(bits: u128) -> String {
     let bits = (bits & !(0xf << 76)) | (0x4 << 76);
     let bits = (bits & !(0x3 << 62)) | (0x2 << 62);
-    let hex = format!("{bits:032x}");
     format!(
-        "{}-{}-{}-{}-{}",
-        &hex[..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..]
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        (bits >> 96) as u32,
+        (bits >> 80) as u16,
+        (bits >> 64) as u16,
+        (bits >> 48) as u16,
+        bits & 0xffff_ffff_ffff
     )
 }
 
@@ -77,10 +76,15 @@ mod tests {
     #[test]
     fn the_formatter_stamps_the_version_and_the_variant_over_any_drawn_bits() {
         assert_eq!(
-            [uuid_v4_of(u128::MAX), uuid_v4_of(0)],
+            [
+                uuid_v4_of(u128::MAX),
+                uuid_v4_of(0),
+                uuid_v4_of(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef)
+            ],
             [
                 "ffffffff-ffff-4fff-bfff-ffffffffffff",
-                "00000000-0000-4000-8000-000000000000"
+                "00000000-0000-4000-8000-000000000000",
+                "01234567-89ab-4def-8123-456789abcdef"
             ]
         );
     }
