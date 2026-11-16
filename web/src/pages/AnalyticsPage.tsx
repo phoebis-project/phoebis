@@ -444,7 +444,7 @@ export function AnalyticsPage() {
     reload,
   );
   // The Saved by probes chart's series twin of that breakdown, counting probes under the same funding: the page's
-  // series counts them only when the address asks, and a bucket left with probe rows alone would draw no probe cost
+  // series counts them only when the address asks, and a bucket left with plan probes alone would draw no probe cost
   // there.
   const warmingSeries = useGatedRead(warming, () => api.getAnalyticsSeries({ ...query, funding: funded ? funding : undefined, includeProbes: true }), [query, funding, funded, warming, generation], reload);
   // Probes by outcome counts the probes of both sides. Under native and All in dollars the two reads above carry no
@@ -582,8 +582,8 @@ export function AnalyticsPage() {
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
   // A session view folds the request log, which the page reads with the toggle, so its figure holds no probe while the
-  // toggle is off.
-  const costHead = costHeadOf(unit, costTotals, week, scale, !includeProbes && sessionId === null);
+  // toggle is off. Dollar equivalent reads the plan rows, which hold no billed probe.
+  const costHead = costHeadOf(unit, costTotals, week, scale, !includeProbes && sessionId === null && unit !== 'equivalent');
   const nativeRatios = scale === null ? null : nativeRatiosOf(costTotals, week, scale);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);

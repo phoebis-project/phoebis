@@ -303,11 +303,14 @@ test("a billed probe's dollars count with probes off", async () => {
   const probes = (ok) => ({ failed: 0, held: 0, ok, skipped: 0 });
   const seat = { ...template, cost: { cacheRead: 0.38, cacheWrite: 0, input: 0, output: 0.02 }, costUsd: 0.4, funding: 'usage_based', probes: probes(2), requests: outcomes(2) };
   const plan = { ...template, cost: { cacheRead: 0.28, cacheWrite: 0, input: 0, output: 0.02 }, costUsd: 0.3, funding: 'plan', probes: probes(3), requests: outcomes(3) };
-  const [all] = d.breakdownOf([seat, plan], { from: template.hour, groupBy: 'all', includeProbes: false, to: iso(Date.parse(template.hour) + HOUR) });
+  const query = { from: template.hour, groupBy: 'all', includeProbes: false, to: iso(Date.parse(template.hour) + HOUR) };
+  const [all] = d.breakdownOf([seat, plan], query);
   // The seat's dollars and their split under both sums, as the route adds a billed probe whatever the flag, and no
   // request of either row.
   const split = { cacheRead: 0.38, cacheWrite: 0, input: 0, output: 0.02 };
   assert.deepEqual(all && [all.costUsd, all.cost, all.billedUsd, all.billed, all.requests], [0.4, split, 0.4, split, 0]);
+  // A group of plan probes alone leaves the answer, as the route drops one from a read that does not count probes.
+  assert.deepEqual(d.breakdownOf([plan], query), []);
 });
 
 // One load at a time, since each pins the clock its bundle reads while it loads.

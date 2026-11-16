@@ -20523,9 +20523,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: JSON.stringify(headSelects) === JSON.stringify([['cost', true, 0], ['cache', true, 0], ['cache-warming', true, 0]]) && shellUnit(m) !== null,
       missing: [JSON.stringify(headSelects), shellUnit(m) === null ? 'no Unit select in the top bar' : ''],
     });
-    // Include probes is off, so a dollar position's line closes on the sentence that a billed probe's dollars count.
+    // Include probes is off, so the lines of All in dollars and Billed dollars close on the sentence that a billed
+    // probe's dollars count. Dollar equivalent reads the plan rows, which hold no billed probe, so its line ends at its
+    // word.
     const NOTE = "A billed probe's dollars count whatever the Include probes toggle says";
-    const META = { all: new RegExp(`^\\$[\\d,.]+ in range, all requests\\. ${NOTE}$`), equivalent: new RegExp(`^\\$[\\d,.]+ in range, equivalent\\. ${NOTE}$`), usd: new RegExp(`^\\$[\\d,.]+ in range, billed\\. ${NOTE}$`) };
+    const META = { all: new RegExp(`^\\$[\\d,.]+ in range, all requests\\. ${NOTE}$`), equivalent: /^\$[\d,.]+ in range, equivalent$/, usd: new RegExp(`^\\$[\\d,.]+ in range, billed\\. ${NOTE}$`) };
     const written = [];
     for (const value of ['usd', 'equivalent', 'all']) {
       await chooseUnit(m, value);
@@ -21397,11 +21399,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const counted = await answer({ includeProbes: true });
       const plan = counted.find((g) => g.key === 'probe');
       const billed = (await answer({ funding: 'billed', includeProbes: true })).find((g) => g.key === 'probe');
-      // The billed side's probe dollars are the billed probes' own, which the whole read keeps with probes off.
-      const kept = (await answer({ includeProbes: false })).find((g) => g.key === 'probe');
-      const near = (x) => billed !== undefined && billed.costUsd > 0 && Math.abs(x - billed.costUsd) < 1e-9;
-      const keptRight = kept !== undefined && kept.requests === 0 && near(kept.costUsd) && near(kept.billedUsd);
-      const t = [...kinds.container.querySelectorAll('#cache-warming > .tiles-row .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
+      const t =[...kinds.container.querySelectorAll('#cache-warming > .tiles-row .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
       const lines = [...(t?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
         const figure = l.cloneNode(true);
         figure.querySelector('.stat__pair-word')?.remove();
@@ -21410,18 +21408,19 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const want = plan === undefined || billed === undefined ? null : [[plan.probeEquivalent === null ? '-' : weekFull(plan.probeEquivalent.cost), 'subscription'], [fmtUsd(billed.probeCostUsd), 'billed']];
       kinds.unmount();
       results.push({
-        name: "/analytics under native grouped by kind with Include probes off the Probe cost tile reads the probe kind's plan figure and billed dollars, a group a read that does not count probes keeps for its billed probes' dollars with no request",
-        ok: q?.includeProbes === false && keptRight && want !== null && JSON.stringify(lines) === JSON.stringify(want),
-        missing: [`query ${JSON.stringify(q)}`, `kept ${JSON.stringify(kept && [kept.requests, kept.costUsd, kept.billedUsd])} against ${billed?.costUsd}`, JSON.stringify(lines), JSON.stringify(want)],
+        name: "/analytics under native grouped by kind with Include probes off the Probe cost tile reads the probe kind's plan figure and billed dollars",
+        ok: q?.includeProbes === false && want !== null && JSON.stringify(lines) === JSON.stringify(want),
+        missing: [`query ${JSON.stringify(q)}`, JSON.stringify(lines), JSON.stringify(want)],
       });
     }
     {
       // Grouped by kind with Include probes off, the probe kind leaves each bucket whose probes the plan paid for alone
       // and stays, for its dollars, in the five hours a billed probe ran, as the breakdown answers it, so Probes by
-      // outcome draws its bars and its legend only while its own reads count probes. The figures are the probe rows of
-      // the story's rollups (`ALL_ROLLUPS`, mock/requests.ts) over the day to 14:30: 30 ok of which 11 migrated,
-      // 1 held, 32 skipped and 4 failed, in 18 hourly buckets that stack 37 nonzero bars. jsdom lays nothing out, so
-      // the chart's container reads a browser's size here.
+      // outcome draws all its bars only while its own reads count probes. Its legend reads the warming breakdown's
+      // probe counts, which a read with probes off still holds here. The figures are the probe rows of the story's
+      // rollups (`ALL_ROLLUPS`, mock/requests.ts) over the day to 14:30: 30 ok of which 11 migrated, 1 held, 32 skipped
+      // and 4 failed, in 18 hourly buckets that stack 37 nonzero bars. jsdom lays nothing out, so the chart's container
+      // reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
         return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -21615,11 +21614,13 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       }
     }
     {
-      // One account whose real requests the plan paid for and whose probes ran in overage, and a second whose rows in
-      // the range are probes in overage alone, answered as the route answers them: a dollar side keeps that side's
-      // rows alone, and a breakdown that does not count probes drops a group left with probe rows alone. The tile
-      // reads every probe's dollars and count under the whole as under Billed dollars, and the two positions add up
-      // to the whole.
+      // One account whose real requests the plan paid for and whose probes ran in overage, a second whose rows in the
+      // range are probes in overage alone and a third whose rows are probes the plan paid for alone, answered as the
+      // route answers them: a dollar side keeps that side's rows alone, and a breakdown that does not count probes
+      // keeps a group of billed probes alone with its dollars and probe counts and no request, and drops a group of
+      // plan probes alone. So the third account's probes reach the tile only through a read that counts probes. The
+      // tile reads every probe's dollars and count under the whole, the overage probes' under Billed dollars and the
+      // plan's under Dollar equivalent, and the two positions add up to the whole.
       const now = Date.now();
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
@@ -21629,9 +21630,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       api.getAnalyticsBreakdown = async (q) => {
         const real = q.funding !== 'billed';
         const probed = q.funding !== 'plan';
-        const mixed = real || q.includeProbes ? [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }] : [];
-        const probeOnly = probed && q.includeProbes ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3, savingUsd: 0 }] : [];
-        return [...mixed, ...probeOnly];
+        const mixed = [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }];
+        const billedProbes = probed ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: q.includeProbes ? 3 : 0, savingUsd: 0 }] : [];
+        const planProbes = q.funding !== 'billed' && q.includeProbes ? [{ ...template, key: 'idler', keptWarm: zero, label: 'idler', probeCostUsd: 0.1, probes: probesOf(2), requests: 2, savingUsd: 0 }] : [];
+        return [...mixed, ...billedProbes, ...planProbes];
       };
       const tileUnder = async (unit) => {
         localStorage.removeItem('phoebis.unit');
@@ -21652,14 +21654,14 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const count = (read) => Number(/^(\d[\d,]*) probes sent, /.exec(read[1])?.[1].replace(/,/g, '') ?? NaN);
       results.push({
         name: '/analytics under Billed dollars the Probe cost tile reads the probes an overage paid for beside plan-funded requests and for a probe-only group, and the two positions add up to the whole',
-        ok: template !== undefined && usd(whole) === 0.8 && count(whole) === 8 && usd(billed) === 0.8 && count(billed) === 8 && billed[1].endsWith(', billed') && usd(plan) === 0 && count(plan) === 0 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
+        ok: template !== undefined && usd(whole) === 0.9 && count(whole) === 10 && usd(billed) === 0.8 && count(billed) === 8 && billed[1].endsWith(', billed') && usd(plan) === 0.1 && count(plan) === 2 && Math.abs(usd(billed) + usd(plan) - usd(whole)) < 0.005 && count(billed) + count(plan) === count(whole),
         missing: [`template ${template?.key}`, `whole ${JSON.stringify(whole)}`, `billed ${JSON.stringify(billed)}`, `plan ${JSON.stringify(plan)}`],
       });
-      // The tiles' figures are the stub's own: the plan side's credits saved $0.20, the probes cost $0.50 beside them
-      // and $0.30 on the probe-only group, all of them billed.
+      // The tiles' figures are the stub's own: the plan side's credits saved $0.20, the overage probes cost $0.50
+      // beside them and $0.30 on the second group, and the plan's probes $0.10 on the third.
       const savingWant = {
-        all: [['$0.20', '2 requests kept warm, all requests', false], ['-$0.60', 'less the probe cost, all requests', true]],
-        equivalent: [['$0.20', "2 requests kept warm, the subscription requests' equivalent", false], ['$0.20', "less the probe cost, the subscription requests' equivalent", false]],
+        all: [['$0.20', '2 requests kept warm, all requests', false], ['-$0.70', 'less the probe cost, all requests', true]],
+        equivalent: [['$0.20', "2 requests kept warm, the subscription requests' equivalent", false], ['$0.10', "less the probe cost, the subscription requests' equivalent", false]],
         usd: [['$0.00', '0 requests kept warm, billed', false], ['-$0.80', 'less the probe cost, billed', true]],
       };
       const savingGot = { all: underWhole.saving, equivalent: underPlan.saving, usd: underBilled.saving };
@@ -21672,9 +21674,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     }
     {
       // The Saved by probes chart reads a series of its own that counts probes under the position's funding, as the
-      // Probe cost tile reads its breakdown: the route answers a group left with probe rows alone only to a query that
-      // counts them, so the second bucket's probe-only group reaches the legend through that read alone. A dollar side
-      // narrows the rows as the breakdown stub above does, and the figures are the stub's own.
+      // Probe cost tile reads its breakdown: a series that does not count probes keeps a group of billed probes alone
+      // with its dollars and probe counts and no request, as the route answers it, and drops a group of plan probes
+      // alone, so the second bucket's plan probes reach the legend through that read alone. A dollar side narrows the
+      // rows as the breakdown stub above does, and the figures are the stub's own.
       const now = Date.now();
       const query = { from: new Date(now - 24 * 3_600_000).toISOString(), groupBy: 'account', to: new Date(now).toISOString() };
       const template = (await api.getAnalyticsBreakdown(query)).find((g) => g.key === 'primary');
@@ -21686,9 +21689,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         asked.push({ funding: q.funding ?? null, includeProbes: q.includeProbes === true });
         const real = q.funding !== 'billed';
         const probed = q.funding !== 'plan';
-        const first = real || q.includeProbes ? [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }] : [];
-        const second = probed && q.includeProbes ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: 3, savingUsd: 0 }] : [];
-        return [{ at: hours[0], groups: first }, { at: hours[1], groups: second }];
+        const first = [{ ...template, keptWarm: real ? { requests: 2, tokens1h: 0, tokens5m: 1_000 } : zero, probeCostUsd: probed ? 0.5 : 0, probes: probesOf(probed ? 5 : 0), requests: (real ? 10 : 0) + (probed && q.includeProbes ? 5 : 0), savingUsd: real ? 0.2 : 0 }];
+        const billedProbes = probed ? [{ ...template, key: 'warmer', keptWarm: zero, label: 'warmer', probeCostUsd: 0.3, probes: probesOf(3), requests: q.includeProbes ? 3 : 0, savingUsd: 0 }] : [];
+        const planProbes = q.funding !== 'billed' && q.includeProbes ? [{ ...template, key: 'idler', keptWarm: zero, label: 'idler', probeCostUsd: 0.1, probes: probesOf(2), requests: 2, savingUsd: 0 }] : [];
+        return [{ at: hours[0], groups: first }, { at: hours[1], groups: [...billedProbes, ...planProbes] }];
       };
       const legendUnder = async (unit) => {
         localStorage.removeItem('phoebis.unit');
@@ -21709,7 +21713,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         name: "/analytics the Saved by probes chart's legend counts the probe cost of a bucket that holds probes alone, read off a series that counts probes under the position's funding, and its net is the gross less that cost",
         ok:
           template !== undefined && asks(whole, null) && asks(billed, 'billed') &&
-          JSON.stringify(whole.legend) === JSON.stringify([['Saved by probes', '$0.20', false], ['Probe cost', '$0.80', false], ['Net saving', '-$0.60', true]]) &&
+          JSON.stringify(whole.legend) === JSON.stringify([['Saved by probes', '$0.20', false], ['Probe cost', '$0.90', false], ['Net saving', '-$0.70', true]]) &&
           JSON.stringify(billed.legend) === JSON.stringify([['Saved by probes', '$0.00', false], ['Probe cost', '$0.80', false], ['Net saving', '-$0.80', true]]),
         missing: [`template ${template?.key}`, `all ${JSON.stringify(whole)}`, `usd ${JSON.stringify(billed)}`],
       });

@@ -1213,6 +1213,15 @@ export class MockApi implements Api {
     const rated = last24h.filter((r) => !r.refused && r.kind !== 'probe');
     for (const r of last24h) {
       const bucket = hourlyMap.get(startOfHour(Date.parse(r.at)));
+      // The day's rows hold a billed probe for its dollars, and nothing else of it counts, as the route skips a probe
+      // ahead of its refusals.
+      if (r.kind === 'probe') {
+        if (!r.refused) {
+          cost += r.costUsd;
+          if (bucket) bucket.cost += r.costUsd;
+        }
+        continue;
+      }
       // The ledger's fold books a refused request under its refusals map and nothing else.
       if (r.refused) {
         if (r.errorCode) refusalCodes.set(r.errorCode, (refusalCodes.get(r.errorCode) ?? 0) + 1);
@@ -1221,8 +1230,6 @@ export class MockApi implements Api {
       }
       cost += r.costUsd;
       if (bucket) bucket.cost += r.costUsd;
-      // The day's rows hold a billed probe for its dollars, and nothing else of it counts.
-      if (r.kind === 'probe') continue;
       const total = tokensTotal(r.usage);
       tokens += total;
       cached += r.usage.cacheRead;
@@ -1243,7 +1250,7 @@ export class MockApi implements Api {
       day24h: { billedUsd: day.billedUsd, cost, equivalent: day.equivalent },
       errorRate24h: rated.length ? rated.filter((r) => r.outcome !== 'succeeded').length / rated.length : null,
       hourly: [...hourlyMap.values()],
-      refused24h: last24h.filter((r) => r.refused).length,
+      refused24h: last24h.filter((r) => r.refused && r.kind !== 'probe').length,
       requests24h: rated.length,
       tokens24h: tokens,
       tokensCached24h: cached,
