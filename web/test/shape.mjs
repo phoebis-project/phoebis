@@ -15,18 +15,19 @@ export const OPAQUE = (path) => path.endsWith('.detail');
 
 /** An open map (`AnalyticsGroup.errors`, `Record<string, number>`) holds one entry per error code observed in
  * the range, and its keys are data, not schema. A group's `refusals` is one by refusal code, keyed apart in the mock
- * and the fixture by design. `cacheMissReasons` is one too past its nine known keys, since the
- * route answers any name the beta sent, unlike a closed enum-keyed record such as `wastedProbeReasons`, which
- * decodes with every key always present and stays checked by key set; so is `Pool.movesPerHour`, one entry per
- * move reason seen in the last hour, the rewrite route's `moves`, the same over the range, and a window fit's
- * `corrections`, one factor per model the fit corrected. The window-keyed maps are open the same way, one entry
+ * and the fixture by design. `cacheMissReasons` is one too past its ten known keys, since the route answers any name
+ * the beta sent, and `cacheMissReasonHits` holds one entry per reason a request hit under, a reason with none left
+ * out, unlike a closed enum-keyed record such as `wastedProbeReasons`, which decodes with every key always present
+ * and stays checked by key set. `Pool.movesPerHour` is an open map too, one entry per move reason seen in the last
+ * hour, and so are the rewrite route's `moves`, the same over the range, and a window fit's `corrections`, one factor
+ * per model the fit corrected. The window-keyed maps are open the same way, one entry
  * per window the rows priced or sampled: a group's or a request's `costShares` (a figure per window, a window the
  * account's set lacks or a group could not price dropped) and an account hour's `windows` (a sample per window). A
  * session spend part's `billedUsdByAccount` holds one entry per account that billed the part's requests, so its keys
  * are the accounts and differ from one session to another.
  * Matched by path only where the fixture's own shape there is an object, so a same-named scalar
  * (`Overview.hourly[].errors`, a plain count) still takes the ordinary type check below. */
-const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.movesPerHour', '.moves', '.corrections', '.costShares', '.windows', '.billedUsdByAccount'];
+const MAP_PATHS = ['.errors', '.refusals', '.cacheMissReasons', '.cacheMissReasonHits', '.movesPerHour', '.moves', '.corrections', '.costShares', '.windows', '.billedUsdByAccount'];
 const MAP = (path, want) => MAP_PATHS.some((suffix) => path.endsWith(suffix)) && typeof want === 'object' && want !== null && !Array.isArray(want);
 /**
  * The entry kinds a map admits beside its first entry's own, by the path the map sits at: a request row's share map

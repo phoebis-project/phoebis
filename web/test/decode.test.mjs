@@ -1938,6 +1938,48 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   assert.equal(m.cacheMissReasons.none, 0, 'the reason breakdown stays its own count');
 });
 
+test('a request that read nine tenths of its prompt hits under its reason', () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = { ...base.attempts[base.attempts.length - 1], cacheMissReason: 'messages_changed' };
+  const read = (cacheRead, input, cacheWrite5m) => ({ ...base, attempts: [attempt], usage: { ...base.usage, cacheRead, cacheWrite1h: 0, cacheWrite5m, input } });
+  // 900 of a prompt of 1,000 is 90%, 899 of 1,000 falls under it, and 900 beside a write of 200 and an input of 100
+  // is 75% of 1,200.
+  const [g] = d.foldGroups([read(900, 100, 0), read(899, 101, 0), read(900, 100, 200)], 'all');
+  assert.deepEqual({ ...g.cacheMissReasonHits }, { messages_changed: 1 });
+});
+
+test('a turn expired where it read under half the previous size', () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const attempt = base.attempts[base.attempts.length - 1];
+  const turn = ({ cacheRead, kind = 'inference', previousInputTokens = 1_000, reason = 'not_requested', storedTokens = { input: 300, output: 100 } }) => ({
+    ...base,
+    attempts: [{ ...attempt, cacheMissReason: reason, previousInputTokens }],
+    kind,
+    storedTokens,
+    usage: { ...base.usage, cacheRead, cacheWrite1h: 0, cacheWrite5m: 0, input: 0 },
+  });
+  // Each row folds alone, so a count of one names the row that made it.
+  const expired = (row) => d.foldGroups([row], 'all')[0].expiredBetweenTurns;
+  const rows = [
+    turn({ cacheRead: 499 }),
+    turn({ cacheRead: 500 }),
+    turn({ cacheRead: 0, previousInputTokens: null, reason: 'none' }),
+    turn({ cacheRead: 100, reason: 'messages_changed' }),
+    turn({ cacheRead: 0, reason: null, storedTokens: { input: null, output: null } }),
+    turn({ cacheRead: 100, kind: 'count_tokens' }),
+    turn({ cacheRead: 100, kind: 'probe' }),
+  ];
+  assert.deepEqual(rows.map(expired), [1, 0, 0, 0, 0, 0, 0], 'under half of 1,000 counts, half does not, and no previous size, a divergence, no usage report, a token count and a probe count nothing');
+});
+
+test("a group decodes its hits under each reason, and an attempt the size its pin's last report left", () => {
+  const group = d.decodeAnalyticsGroup({ ...fixture('analytics_breakdown').rows[0], cache_miss_reason_hits: { messages_changed: 3 } });
+  assert.deepEqual({ ...group.cacheMissReasonHits }, { messages_changed: 3 });
+  const wire = fixture('requests').requests.find((r) => r.id === 'r-captured');
+  const row = d.decodeRequest({ ...wire, attempts: wire.attempts.map((a) => ({ ...a, previous_input_tokens: 1_234 })) });
+  assert.equal(row.attempts[0].previousInputTokens, 1_234);
+});
+
 test('a value past 100 seconds reads in its own bucket', () => {
   const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const p99 = (ttfbMs) => d.foldGroups([{ ...base, held: null, ttfbMs }], 'all')[0].percentiles.ttfbMs.p99;
@@ -1987,7 +2029,7 @@ test('a cache-miss reason the console does not know keeps its own name on the at
   const summed = d.sumGroups([group, group, folded]);
   assert.equal(summed.cacheMissReasons.future_reason, 7);
   assert.equal(summed.cacheMissReasons.none, 4);
-  assert.deepEqual(d.missReasonOrder([group, { cacheMissReasons: { a_reason: 1, none: 0 } }]), [...d.CACHE_MISS_REASONS, 'a_reason', 'future_reason'], 'the known nine in reading order, then the rest alphabetically');
+  assert.deepEqual(d.missReasonOrder([group, { cacheMissReasons: { a_reason: 1, none: 0 } }]), [...d.CACHE_MISS_REASONS, 'a_reason', 'future_reason'], 'the known ten in reading order, then the rest alphabetically');
   assert.equal(d.missLabel('future_reason'), 'future_reason');
   assert.equal(d.missLabel('messages_changed'), 'History edited');
 });

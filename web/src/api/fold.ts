@@ -1,7 +1,7 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, latencySamples, servedMissReason, servingAttempt } from '@/lib/dimensions';
+import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -23,6 +23,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   cacheHits: 0,
   cacheMisses: 0,
   cacheMissReasons: emptyCacheMissReasons(),
+  cacheMissReasonHits: emptyCounts(),
   clientCanceled: 0,
   cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
   costEquivalent: 0,
@@ -310,7 +311,10 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     else if (r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0) g.cacheMisses += 1;
     else g.uncached += 1;
     const reason = servedMissReason(r);
-    if (reason) g.cacheMissReasons[reason] = countOf(g.cacheMissReasons, reason) + 1;
+    if (reason) {
+      g.cacheMissReasons[reason] = countOf(g.cacheMissReasons, reason) + 1;
+      if (hitUnderReason(r)) g.cacheMissReasonHits[reason] = countOf(g.cacheMissReasonHits, reason) + 1;
+    }
     if (expiredBetweenTurns(r)) g.expiredBetweenTurns += 1;
   }
   for (const { group: g, rows: list } of groups.values()) {
@@ -401,6 +405,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const [code, n] of Object.entries(g.errors)) out.errors[code] = countOf(out.errors, code) + n;
     for (const [code, n] of Object.entries(g.refusals)) out.refusals[code] = countOf(out.refusals, code) + n;
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = countOf(out.cacheMissReasons, reason) + n;
+    for (const [reason, n] of Object.entries(g.cacheMissReasonHits)) out.cacheMissReasonHits[reason] = countOf(out.cacheMissReasonHits, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = plusBoth(out.keptWarm, g.keptWarm);
     for (const k of ['failed', 'held', 'migrated', 'ok', 'planOk', 'skipped'] as const) out.probes[k] += g.probes[k];

@@ -31,6 +31,7 @@ import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel
 import { clock } from '@/lib/clock';
 import { fableWeekReadingOf, fableWeekScaleAt, failed, fiveHourReadingOf, fiveHourScaleAt, pendingReading, weekScale, weekScaleAt, type ScaleAt } from '@/lib/costs';
 import { countOf, groupInto } from '@/lib/counts';
+import { REASON_HIT_PERCENT } from '@/lib/dimensions';
 import { ANALYTICS_DIMENSIONS, chipText, escapePattern } from '@/lib/filterBar';
 import { effectiveInterval, ENDED_RANGE, readEnd, spanEnded } from '@/lib/follow';
 import { SESSION_CHARS, fmtAbsolute, fmtBytes, fmtCompact, fmtDayTick, fmtDuration, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtShortTime, fmtUsd, fmtUsdTick, fmtWeek, keyLifetime, pct, plural, shortId, shortModel, upperFirst, usdTickDigits, weekShort } from '@/lib/format';
@@ -1458,14 +1459,23 @@ function CountBars({ color, empty, rows }: { color: string; empty: string; rows:
 
 /**
  * A bar list's row, `fill` the bar's share of its track. `count` is drawn as given, so a list can link it, and `title`
- * is the label's hover, for a label that shortens what it names.
+ * is the label's hover, for a label that shortens what it names. A `second` part takes its `portion` of the bar after
+ * the first, in its own ink and with its own hover.
  */
-function HBarRow({ color, count, fill, label, labelClass, rowClass, share, title }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; share: string; title?: string }) {
+function HBarRow({ color, count, fill, label, labelClass, rowClass, second, share, title }: { color: string; count: ReactNode; fill: number; label: string; labelClass?: string; rowClass?: string; second?: { color: string; portion: number; title: string }; share: string; title?: string }) {
   return (
     <li className={rowClass}>
       <span className={labelClass} title={title}>{label}</span>
       <div className="hbars__track">
-        <span className="hbars__fill" style={{ width: `${fill * 100}%`, background: color }} />
+        {second === undefined ? (
+          <span className="hbars__fill" style={{ width: `${fill * 100}%`, background: color }} />
+        ) : (
+          // A part with nothing in it draws no segment, since a segment keeps a sliver's width.
+          <span className="hbars__stack" style={{ width: `${fill * 100}%` }}>
+            {second.portion < 1 && <span className="hbars__seg" style={{ background: color, flexGrow: 1 - second.portion }} />}
+            {second.portion > 0 && <span className="hbars__seg" title={second.title} style={{ background: second.color, flexGrow: second.portion }} />}
+          </span>
+        )}
       </div>
       <span className="num">
         {count} <span className="muted">{share}</span>
@@ -1498,18 +1508,24 @@ function EffortBars({ groups, color }: { color: string; groups: AnalyticsGroup[]
   return <CountBars color={color} empty="No requests in range." rows={rows} />;
 }
 
-const MISS_REASON_BLURB =
-  'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.';
+const MISS_REASON_BLURB = `From the cache diagnostics beta: the reason each answered request drew. A gray part counts the requests under a reason that read ${REASON_HIT_PERCENT}% or more of their prompt from the cache. Not requested sent no diagnostics member, and No reason returned sent one and drew no reason`;
+
+/** The hover of a fault reason's hit part, on its bar and beside its count in the table. */
+const reasonHitTitle = (hits: number) => `${fmtInt(hits)} of these requests read ${REASON_HIT_PERCENT}% or more of their prompt from the cache`;
+
+/** A request not asked, an answer that returned no reason and a comparison still running: no finished comparison. */
+const NEUTRAL_REASONS: readonly CacheMissReason[] = ['not_requested', 'not_returned', 'pending'];
 
 /**
- * A request not asked and a comparison still running read as neutral, since neither has a finished comparison behind
- * it. Every other reason but no divergence reads as a fault, like the error bars above: a diagnosed divergence, a
- * missing previous message, an unavailable comparison and a name the console has no label for.
+ * Every reason but no divergence and the neutral ones reads as a fault, like the error bars above: a diagnosed
+ * divergence, a missing previous message, an unavailable comparison and a name the console has no label for. A fault's
+ * bar and cell draw apart the requests under it that still read their prompt from the cache.
  */
+const isFaultReason = (reason: CacheMissReason): boolean => reason !== 'none' && !NEUTRAL_REASONS.includes(reason);
+
 function reasonColor(ink: ReturnType<typeof useChartInk>, reason: CacheMissReason): string {
   if (reason === 'none') return ink.series[2];
-  if (reason === 'not_requested' || reason === 'pending') return ink.muted;
-  return ink.series[7];
+  return isFaultReason(reason) ? ink.series[7] : ink.muted;
 }
 
 /**
@@ -1535,7 +1551,7 @@ function CountLink({ children, target }: { children: ReactNode; target: Requests
 function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks: boolean; totals: AnalyticsGroup }) {
   const ink = useChartInk();
   const rows = missReasonOrder([totals])
-    .map((reason) => ({ count: countOf(totals.cacheMissReasons, reason), reason }))
+    .map((reason) => ({ count: countOf(totals.cacheMissReasons, reason), hits: isFaultReason(reason) ? countOf(totals.cacheMissReasonHits, reason) : 0, reason }))
     .sort((a, b) => b.count - a.count);
   const max = Math.max(1, ...rows.map((r) => r.count));
   if (rows.every((r) => r.count === 0)) return <p className="muted">No diagnostics in range.</p>;
@@ -1548,6 +1564,7 @@ function ReasonBars({ link, plainLinks, totals }: { link: ReasonLink; plainLinks
           count={<CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count: r.count, reason: r.reason })}>{fmtInt(r.count)}</CountLink>}
           fill={r.count / max}
           label={missLabel(r.reason)}
+          second={r.hits > 0 ? { color: ink.muted, portion: r.hits / r.count, title: reasonHitTitle(r.hits) } : undefined}
           share={fmtPct(totals.requests ? r.count / totals.requests : 0, 1)}
         />
       ))}
@@ -1707,7 +1724,17 @@ function MissReasonsByGroup({ groupBy, groups, groupLabel, link, loading, order,
   const reasons = missReasonOrder(groups);
   const cell = (g: AnalyticsGroup, reason: CacheMissReason) => {
     const count = countOf(g.cacheMissReasons, reason);
-    return <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
+    const hits = isFaultReason(reason) ? countOf(g.cacheMissReasonHits, reason) : 0;
+    const counted = <CountLink target={plainLinks ? SEVERAL_CLIENTS : requestsLink({ ...link, count, group: { by: groupBy, key: g.key }, reason })}>{fmtInt(count)}</CountLink>;
+    if (hits === 0) return counted;
+    return (
+      <>
+        {counted}{' '}
+        <span className="muted" title={reasonHitTitle(hits)}>
+          {fmtInt(hits)} hit
+        </span>
+      </>
+    );
   };
   return (
     <BreakdownTable

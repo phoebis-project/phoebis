@@ -481,7 +481,7 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, issuedDigest: strOrNull(a.issued_digest), outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: accountKind(a.account_kind), cacheMissReason: strOrNull(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, issuedDigest: strOrNull(a.issued_digest), outcome: outcomeOf(a.outcome), overageInUse: boolOrNull(a.overage_in_use), previousInputTokens: numOrNull(a.previous_input_tokens), response: responseOf(a.response), selection: decodeSelection(a.selection), serviceTier: strOrNull(a.service_tier), startedAt: isoOr(a.started_at, epoch), tier: strOrNull(a.tier), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), usageBased: bool(a.usage_based), windows: attemptWindows(a.windows) })),
     autoMode: oneOf(AUTO_MODE_VALUES, r.auto_mode),
     canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), classifier: oneOf(CLASSIFIER_VALUES, r.classifier), client: strOrNull(r.client), clientContract: strOrNull(r.client_contract), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted),
     costEquivalent: numOrNull(r.cost_equivalent),
@@ -719,7 +719,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   return {
     attempts: num(g.attempts), billed: costSplit(g.billed), billedUsd: num(g.billed_usd),
     cacheEquivalent: orNull(g.cache_equivalent, (e) => ({ read: num(e.read), write: num(e.write) })),
-    cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons), clientCanceled: num(g.client_canceled),
+    cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons), cacheMissReasonHits: counts(g.cache_miss_reason_hits), clientCanceled: num(g.client_canceled),
     cost: costSplit(g.cost), costEquivalent: numOrNull(g.cost_equivalent), costUsd: num(g.cost_usd),
     costShares: orNull(g.cost_shares, nullableNumberMap),
     equivalentSplit: orNull(g.equivalent_split, costSplit),

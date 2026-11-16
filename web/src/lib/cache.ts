@@ -2,16 +2,17 @@ import type { CacheMissReason, WastedProbeReason } from '@/api/types';
 import { emptyCounts, lookup } from '@/lib/counts';
 
 /**
- * Reading order for the panels: the no-divergence answer, the diagnosed divergences, the two non-answers, then the
+ * Reading order for the panels: the no-divergence answer, the diagnosed divergences, the three non-answers, then the
  * comparison still running when the answer went out.
  */
-export const CACHE_MISS_REASONS: CacheMissReason[] = ['none', 'model_changed', 'system_changed', 'tools_changed', 'messages_changed', 'previous_message_not_found', 'unavailable', 'not_requested', 'pending'];
+export const CACHE_MISS_REASONS: CacheMissReason[] = ['none', 'model_changed', 'system_changed', 'tools_changed', 'messages_changed', 'previous_message_not_found', 'unavailable', 'not_requested', 'not_returned', 'pending'];
 
 export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
   messages_changed: 'History edited',
   model_changed: 'Model changed',
   none: 'No divergence',
   not_requested: 'Not requested',
+  not_returned: 'No reason returned',
   pending: 'Pending',
   previous_message_not_found: 'Previous message not found',
   system_changed: 'System prompt changed',
@@ -23,7 +24,7 @@ export const CACHE_MISS_LABEL: Record<CacheMissReason, string> = {
 export const missLabel = (reason: CacheMissReason): string => lookup(CACHE_MISS_LABEL, reason) ?? reason;
 
 /**
- * The misses-by-reason table's header words, one per reason so ten columns fit beside the group column. The
+ * The misses-by-reason table's header words, one per reason so eleven columns fit beside the group column. The
  * header's title carries `missLabel`, and the panel keeps the full labels.
  */
 export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
@@ -31,6 +32,7 @@ export const CACHE_MISS_SHORT: Record<CacheMissReason, string> = {
   model_changed: 'Model',
   none: 'None',
   not_requested: 'Not requested',
+  not_returned: 'Not returned',
   pending: 'Pending',
   previous_message_not_found: 'No previous',
   system_changed: 'System',
@@ -78,6 +80,7 @@ export const emptyCacheMissReasons = (): Record<CacheMissReason, number> =>
     model_changed: 0,
     none: 0,
     not_requested: 0,
+    not_returned: 0,
     pending: 0,
     previous_message_not_found: 0,
     system_changed: 0,

@@ -719,7 +719,7 @@ export interface AttemptWindow {
 
 /**
  * Why the prompt-cache prefix did not hit, as the cache diagnostics beta named it. The router stores whatever
- * name the beta sends, so a name added after the console's nine (`CACHE_MISS_REASONS`) is kept as sent.
+ * name the beta sends, so a name added after the console's ten (`CACHE_MISS_REASONS`) is kept as sent.
  */
 export type CacheMissReason = string;
 
@@ -800,6 +800,13 @@ export interface Attempt {
   outcome: AttemptOutcome;
   /** The head's overage flag as the attempt stored it: null on an API-key attempt and on a head that reported none. */
   overageInUse: boolean | null;
+  /**
+   * The size (input, read and both writes) of the pin's last usage report as the selection handed it on. Null where
+   * the attempt lands off the account of that report (a move, a later leg of a failover), on a turn the router read
+   * as compacted, as a changed lane or as a static restart, on a pin with no usage report yet, and on an attempt
+   * stored before the column.
+   */
+  previousInputTokens: number | null;
   response: AttemptResponse;
   /** Null for an attempt the router stored no trace for. */
   selection: SelectionTrace | null;
@@ -1601,8 +1608,13 @@ export interface AnalyticsGroup {
   cacheEquivalent: { read: number; write: number } | null;
   cacheHits: number;
   cacheMisses: number;
-  /** The eight known reasons always, beside any other name the route answered. */
+  /** The ten known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
+  /**
+   * Per reason, the requests under it whose serving attempt read `REASON_HIT_PERCENT` or more of its prompt from the
+   * cache. A reason with none is no key, and an hour folded before the route counted them reads empty.
+   */
+  cacheMissReasonHits: Record<CacheMissReason, number>;
   /** The requests a client left before their answer ended, counted in `requests` and in neither `failed` nor `errors`,
    *  since a client that hangs up is no fault of the route. */
   clientCanceled: number;

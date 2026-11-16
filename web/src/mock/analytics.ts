@@ -32,8 +32,10 @@ export interface HourlyRollup {
   accountId: string;
   cacheHits: number;
   cacheMisses: number;
-  /** Attempts that carried diagnostics, counted by what they reported. */
+  /** Answered attempts, counted by the word each filed: the upstream's reason or the relay's own. */
   cacheMissReasons: Record<CacheMissReason, number>;
+  /** Per reason, the requests under it that `hitUnderReason` reads as a hit. A reason with none is no key. */
+  cacheMissReasonHits: Record<CacheMissReason, number>;
   /**
    * `client` for the client's own classifier call on the account and incarnation its judged turn ended on, `client_off`
    * where it ran off them or in a session with no turn to judge, else `-`.
@@ -54,9 +56,8 @@ export interface HourlyRollup {
    */
   errors: Record<string, number>;
   /**
-   * Requests that diagnosed no divergence yet read no cache, so the entry
-   * expired between turns. The reason counts cannot be split this way once
-   * summed, which is why the ledger carries it.
+   * Requests that `expiredBetweenTurns` reads as a turn whose cache expired: under half the size the pin's last report
+   * left. The reason counts cannot be split this way once summed, which is why the ledger carries it.
    */
   expiredBetweenTurns: number;
   /** Attempts that moved to another member before the request succeeded. */
@@ -318,6 +319,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const cacheMissReasons = emptyCacheMissReasons();
   // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
   for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasons)) cacheMissReasons[reason] = countOf(cacheMissReasons, reason) + n;
+  const cacheMissReasonHits = emptyCounts();
+  for (const r of counted) for (const [reason, n] of Object.entries(r.cacheMissReasonHits)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + n;
   const refusals = emptyCounts();
   for (const r of counted) for (const [code, n] of Object.entries(r.refusals)) refusals[code] = countOf(refusals, code) + n;
   const wastedProbeReasons = emptyWastedProbeReasons();
@@ -348,6 +351,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     cacheHits: sumOf(counted, (r) => r.cacheHits),
     cacheMisses: sumOf(counted, (r) => r.cacheMisses),
     cacheMissReasons,
+    cacheMissReasonHits,
     clientCanceled,
     cost: sumSplit(priced.map((r) => r.cost)),
     costShares,

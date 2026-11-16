@@ -853,13 +853,13 @@ await forView('/', async () => {
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
-    // The expiries between turns rank last: 53 of the day's 54 sit on a pool that warms caches under a key the
-    // keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's rows).
+    // The expiries between turns rank last: 12 of the day's 14 sit on a pool that warms caches under a key the
+    // keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's rows), the other two on ci.
     [
-      'Expired between turns: 53 in 24h',
+      'Expired between turns: 12 in 24h',
       'badge--warning',
       '/sessions',
-      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 53'],
+      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 12'],
     ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -1282,11 +1282,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (207
-  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 54 expiries between turns the ledger rows of the day
+  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 14 expiries between turns the ledger rows of the day
   // hold and the three bus gaps, the last two hours back. The expired part takes the warning ink while the attention
   // item `expired_between_turns` holds, which the mock holds over its expiries on the pools that warm caches under
   // keys that may be probed for (`ATTENTION` in mock/attention.ts), and with an attention answer that lacks the item
-  // it takes none, the overview's count of 54 standing. The last gap is inside the day, so the bus gaps part takes the
+  // it takes none, the overview's count of 14 standing. The last gap is inside the day, so the bus gaps part takes the
   // warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the mock
   // anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
   const overview = await api.getKeepaliveOverview();
@@ -1329,9 +1329,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 54 · bus gaps 3',
+    line: 'expired between turns 14 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 54', title: null, warning: true },
+      { text: 'expired between turns 14', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '207 ok (75%) of 277',
@@ -19891,6 +19891,24 @@ await forView('/analytics', async () => {
 });
 
 await forView('/analytics', async () => {
+  // The route's answer with five requests under a history edit in its first group and none in the rest, two of the
+  // five reading 90% or more of their prompt from the cache: the fault's bar draws the three that missed, then the two
+  // that hit, the hit part with its hover.
+  const name = "/analytics a fault reason's bar draws its hits apart";
+  const breakdownOf = api.getAnalyticsBreakdown;
+  api.getAnalyticsBreakdown = async (...args) =>
+    (await breakdownOf.apply(api, args)).map((g, i) => ({ ...g, cacheMissReasonHits: i === 0 ? { messages_changed: 2 } : {}, cacheMissReasons: { ...g.cacheMissReasons, messages_changed: i === 0 ? 5 : 0 } }));
+  const page = await mount('/analytics');
+  await tab(page, 'Cache');
+  const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason');
+  const bar = [...(card?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'History edited');
+  const parts = [...(bar?.querySelectorAll('.hbars__stack > .hbars__seg') ?? [])].map((s) => [s.style.flexGrow, s.getAttribute('title')]);
+  results.push({ name, ok: JSON.stringify(parts) === JSON.stringify([['0.6', null], ['0.4', '2 of these requests read 90% or more of their prompt from the cache']]), missing: bar ? parts.map((p) => p.join(' ')) : ['no History edited bar'] });
+  delete api.getAnalyticsBreakdown;
+  page.unmount();
+});
+
+await forView('/analytics', async () => {
   // The story's two rows the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, sit inside the default
   // day, so the card lists their code with its count, while the client's own cancel counts under Client canceled alone.
   const cutCheck = "/analytics the Errors by code card lists the router's own cut under its code";
@@ -20167,7 +20185,7 @@ expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Ti
   results.push({ name: "/analytics the Latency head names the merged histograms and the slow-down's hold left out", ok: meta === "Percentiles read from merged per-hour histograms. The slow-down's hold is left out", missing: [meta] });
 }
 await tab(m, 'Cache');
-expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
+expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: the reason each answered request drew. A gray part counts the requests under a reason that read 90% or more of their prompt from the cache. Not requested sent no diagnostics member, and No reason returned sent one and drew no reason', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
 {
   // A request refused before it resolved a model read no cache, so Cache by model lists its group under neither its
   // key nor its "no model" label, the route's word for it.
@@ -22504,12 +22522,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
   const bars = [...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
   const labels = CACHE_MISS_REASONS.map(missLabel);
-  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 9 && labels.every((l) => bars.includes(l)), missing: bars });
+  results.push({ name: '/analytics misses-by-reason draws a bar per reason', ok: bars.length === 10 && labels.every((l) => bars.includes(l)), missing: bars });
   const counts = [...(missCard()?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 9 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
+  results.push({ name: '/analytics misses-by-reason sorts by count', ok: counts.length === 10 && counts.every((v, i) => i === 0 || counts[i - 1] >= v), missing: counts.map(String) });
   results.push({ name: '/analytics misses-by-reason counts something', ok: counts.some((v) => v > 0), missing: counts.map(String) });
   const shares = [...(missCard()?.querySelectorAll('.hbars--reasons li .num .muted') ?? [])].map((n) => n.textContent?.trim());
-  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 9 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
+  results.push({ name: '/analytics misses-by-reason shows a share per reason', ok: shares.length === 10 && shares.every((v) => /^\d+\.\d%$/.test(v ?? '')), missing: shares });
   const cacheMeta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
   results.push({ name: '/analytics cache meta puts expired between turns next to hit ratio', ok: /hit ratio, \d[\d,]* expired between turns,/.test(cacheMeta), missing: [cacheMeta] });
   // The panel names a reason by its label and its links by the name the beta sent.
@@ -22686,13 +22704,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics reason columns follow the documented order', ok: JSON.stringify(heads) === JSON.stringify(['Key', ...shortOrder, 'Expired between turns']), missing: heads });
     results.push({ name: '/analytics the misses headers read their short words with the full label on the title', ok: JSON.stringify(titles) === JSON.stringify(order), missing: titles.map(String) });
     const panel = Object.fromEntries([...(missCard()?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => [li.children[0]?.textContent?.trim(), Number(li.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, ''))]));
-    const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
+    // A fault reason's cell holds its hit words beside the count, so a reason cell's count is read off its link, and
+    // the plain expired cell off its own text.
+    const cells = [...(table?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children]);
+    const columnSum = (i) => cells.reduce((n, row) => n + Number(((row[i + 1].firstElementChild ?? row[i + 1]).textContent ?? '').trim().replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
+    // The ci key's client sends its own member, and its one account, an API key, answers without the beta, so each
+    // answer files No reason returned. Its two turns that read under half their pin's last prompt, req_f0d5174c-6eb and
+    // req_52f62e67-839, count as expired between turns.
     const ci = body.find((row) => row[0] === 'ci') ?? [];
-    results.push({ name: '/analytics an API-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0' && ci[10] === '0', missing: ci });
+    results.push({ name: '/analytics a key whose member an API-key account answers without the beta reads No reason returned alone', ok: ci.length > 0 && ci.slice(1, 9).every((v) => v === '0') && Number(ci[9]) > 0 && ci[10] === '0' && ci[11] === '2', missing: ci });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
-    results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(9), missing: [String(metaExpired), String(columnSum(9))] });
+    // The expired column follows the reason columns.
+    results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(order.length), missing: [String(metaExpired), String(columnSum(order.length))] });
   }
   {
     const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
@@ -22924,8 +22949,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const grouped = [...unfiltered.values()].reduce((n, v) => n + v, 0);
       results.push({ name: "/analytics the key grouping's total equals the ungrouped total", ok: unfiltered.size > 1 && meta.endsWith('errors') && grouped === shown, missing: [meta, String(grouped)] });
     }
-    // One hour of the month reports a reason the console has no label for; the table lists it under its own name
-    // after the nine it knows, with a break opportunity after its underscore, and the panel draws a bar for it.
+    // One hour of the month reports a reason the console has no label for. The table lists it under its own name after
+    // the ten it knows, with a break opportunity after its underscore, and the panel draws a bar for it.
     await tab(m, 'Cache');
     const reasonThs = [...([...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Misses by reason by key'))?.querySelectorAll('thead th') ?? [])];
     const reasonHeads = reasonThs.map((th) => th.textContent?.trim());
@@ -22938,7 +22963,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         JSON.stringify(reasonHeads.slice(-3)) === JSON.stringify(['Pending', 'future_reason', 'Expired between turns']) &&
         JSON.stringify(unknownParts) === JSON.stringify(['future_', '<wbr>', 'reason']) &&
         unknownHead?.getAttribute('title') === 'future_reason' &&
-        monthBars.length === 10 &&
+        monthBars.length === 11 &&
         monthBars.includes('future_reason'),
       missing: [...reasonHeads, JSON.stringify(unknownParts), ...monthBars],
     });
@@ -24726,8 +24751,9 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
   }
   {
     // The story's first session (`STORY_AGENTS[0]`) runs main, the fork c21e and e4b7, and c21e's one request of the
-    // default day is req_96461df2-61a, a history edited miss eleven hours back, beside a probe the page leaves out. The
-    // rollups carry no agent, so Add filter offers Agent under a session alone.
+    // default day is req_96461df2-61a eleven hours back, beside a probe the page leaves out. It is the agent's first
+    // answered turn, whose diagnostics member named no previous message, so it files No reason returned. The rollups
+    // carry no agent, so Add filter offers Agent under a session alone.
     const name = '/analytics an agent narrows the session view to its requests and its reasons links, and Add filter offers Agent under a session alone';
     const agent = 'c21e';
     const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
@@ -24755,7 +24781,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
       ok:
         JSON.stringify(bare) === JSON.stringify(['true', "An agent narrows one session's view, so pick a session first."]) &&
         JSON.stringify(read) === JSON.stringify({ chips: ['agent: c21e', `session: ${session.slice(0, 8)}…`], requests: 1, row: [null, null] }) &&
-        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'messages_changed', session }]),
+        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'not_returned', session }]),
       missing: [JSON.stringify(bare), JSON.stringify(read), JSON.stringify(links)],
     });
   }

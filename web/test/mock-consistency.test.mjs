@@ -3737,12 +3737,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`a row names who put the diagnostics member on its body exactly when its serving attempt reads a diagnosed reason, at ${at}`, async () => {
+  test(`an answered row names who put the diagnostics member on its body exactly when its serving attempt reads a word other than not_requested, at ${at}`, async () => {
     const s = await story;
-    const diagnosed = (reason) => reason === 'none' || reason === 'pending' || reason === 'previous_message_not_found' || reason === 'unavailable' || reason.endsWith('_changed');
+    const diagnosed = (reason) => reason === 'none' || reason === 'not_returned' || reason === 'pending' || reason === 'previous_message_not_found' || reason === 'unavailable' || reason.endsWith('_changed');
     for (const r of s.requests) {
       const reason = r.attempts.at(-1)?.cacheMissReason ?? null;
-      if (reason !== null && diagnosed(reason)) assert.ok(r.diagnosticsSource === 'client' || r.diagnosticsSource === 'router', `${r.id} reads ${reason} and names ${r.diagnosticsSource}`);
+      // An attempt with no answer files no word, whatever its body carried, while a token count and a request no
+      // attempt served carry no member at all.
+      if (reason === null) {
+        if (r.kind === 'count_tokens' || r.attempts.length === 0) assert.equal(r.diagnosticsSource, null, `${r.id} sent no member and names a source`);
+        continue;
+      }
+      if (diagnosed(reason)) assert.ok(r.diagnosticsSource === 'client' || r.diagnosticsSource === 'router', `${r.id} reads ${reason} and names ${r.diagnosticsSource}`);
       else assert.equal(r.diagnosticsSource, null, `${r.id} reads ${reason} and names a source`);
     }
     assert.deepEqual([...new Set(s.requests.map((r) => r.diagnosticsSource))].filter((v) => v !== null).sort(), ['client', 'router'], 'both sources occur');

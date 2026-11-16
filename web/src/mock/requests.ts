@@ -9,7 +9,7 @@ import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, latencySamples, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, hitUnderReason, latencySamples, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -302,38 +302,58 @@ export const sumSplit = (parts: CostSplit[]): CostSplit => sumEach(parts, { cach
 const missRng = createRng(1_517);
 
 /**
- * What the cache diagnostics beta reported for each attempt of one request.
- * Diagnostics ride on a response body, so an attempt that failed upstream
- * carries none, and the token-count endpoint returns no usage block to compare
- * against.
+ * The keys whose client sends a diagnostics member of its own: the current Claude Code builds on `ci` and `desktop`.
+ * The laptop's older build sends none, and the other keys' rows name no Claude Code client, so none of their own.
  */
-function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
-  return attempts.map((a) => {
-    if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
-    // An API-key account in this fixture answers without the beta, so the client never sees a comparison.
-    if (a.accountKind !== 'oauth') return { ...a, cacheMissReason: 'not_requested' as const };
-    // A failover lands on an account that never saw the turn before this one.
-    if (a.index > 0) return { ...a, cacheMissReason: 'previous_message_not_found' as const };
-    const cacheMissReason = missRng.weighted<CacheMissReason>([
-      { value: 'none', weight: 72 },
-      { value: 'messages_changed', weight: 7 },
-      { value: 'system_changed', weight: 4 },
-      { value: 'tools_changed', weight: 3 },
-      { value: 'model_changed', weight: 2 },
-      { value: 'unavailable', weight: 2 },
-    ]);
-    return { ...a, cacheMissReason };
-  });
+const MEMBER_CLIENT_KEYS: ReadonlySet<string> = new Set(['ci', 'desktop']);
+
+/**
+ * Who put the diagnostics member on a request's serving body, as the relay reads it: the client where its build sends
+ * one, else the router where the pool's `cacheDiagnostics` is on. A token count carries neither, since its schema has
+ * no slot for the member, and a request no attempt served sent no body.
+ */
+function sourceOf(keyId: string | null, poolId: string | null, kind: RequestKind, attempted: boolean): DiagnosticsSource | null {
+  if (kind === 'count_tokens' || !attempted) return null;
+  if (MEMBER_CLIENT_KEYS.has(keyId ?? '')) return 'client';
+  return poolById.get(poolId ?? '')?.cacheDiagnostics === true ? 'router' : null;
 }
 
 /**
- * Who put the diagnostics member on a row's serving body: nobody where the beta compared nothing, the router for the
- * laptop's reduced-shape client, which the relay inserts the member for, and the client itself on the current build.
+ * The word an answered attempt files, as the relay closes it: `not_requested` where its body carried no diagnostics
+ * member, `not_returned` where it carried one and the answer drew no reason, else the reason the upstream `compared`.
+ * An API-key account in this fixture answers without the beta, so it compares nothing, and neither does the upstream
+ * on a probe's body, since the router's member there names no previous message.
  */
-function sourceOf(attempts: Attempt[], keyId: string): DiagnosticsSource | null {
-  const reason = attempts[attempts.length - 1]?.cacheMissReason ?? null;
-  if (reason === null || reason === 'not_requested') return null;
-  return keyId === 'laptop' ? 'router' : 'client';
+function filedReason(compared: CacheMissReason | null, source: DiagnosticsSource | null, kind: RequestKind): CacheMissReason {
+  if (source === null) return 'not_requested';
+  if (compared === null || (kind === 'probe' && source === 'router')) return 'not_returned';
+  return compared;
+}
+
+/**
+ * What each attempt of one request filed for its cache comparison. Diagnostics ride on a response body, so an attempt
+ * that failed upstream carries none, and the token-count endpoint returns no usage block to compare against.
+ */
+function diagnosed(attempts: Attempt[], kind: RequestKind, source: DiagnosticsSource | null): Attempt[] {
+  return attempts.map((a) => {
+    if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
+    // A failover lands on an account that never saw the turn before this one. The draw stands wherever an OAuth
+    // account's first answer stands, whatever word the attempt files, so every later draw keeps its place.
+    const compared =
+      a.accountKind !== 'oauth'
+        ? null
+        : a.index > 0
+          ? 'previous_message_not_found'
+          : missRng.weighted<CacheMissReason>([
+              { value: 'none', weight: 72 },
+              { value: 'messages_changed', weight: 7 },
+              { value: 'system_changed', weight: 4 },
+              { value: 'tools_changed', weight: 3 },
+              { value: 'model_changed', weight: 2 },
+              { value: 'unavailable', weight: 2 },
+            ]);
+    return { ...a, cacheMissReason: filedReason(compared, source, kind) };
+  });
 }
 
 /** The instant the story's reading of secondary's 7-day window first reads over all's ceiling, inside the hour before
@@ -529,6 +549,8 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       issuedDigest: null,
       outcome,
       overageInUse: kind === 'oauth' ? false : null,
+      // Read off the day's rows once each stands as it ends (`handPreviousSizes`).
+      previousInputTokens: null,
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
@@ -641,7 +663,8 @@ function buildRequests(): RequestLog[] {
     const counted = finalStatus === 200 && kind === 'count_tokens' ? rng.int(2_000, 60_000) : null;
     const drawnUsage = finalStatus === 200 && counted === null ? usageFor(modelOn(drawnHead ?? '', drawn), kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     const usage = model.includes('fable') || model.includes('opus') ? drawnUsage : { ...drawnUsage, thinking: 0 };
-    const diagnosis = diagnosed(tried, kind);
+    const source = sourceOf(lane.keyId, lane.poolId, kind, tried.length > 0);
+    const diagnosis = diagnosed(tried, kind, source);
     // The story hour's rows leave below, so the rows the drawer reads land before it.
     const owable = lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 && whole && atMs < STORY_HOUR_FROM;
     const turn = owable ? owed.shift() : undefined;
@@ -693,7 +716,7 @@ function buildRequests(): RequestLog[] {
       durationMs,
       usage,
       costUsd: round(costOf(model, usage, false, atMs), 4),
-      diagnosticsSource: sourceOf(attempts, lane.keyId),
+      diagnosticsSource: source,
       errorCode,
       sessionId,
       agentId: agent.id,
@@ -736,6 +759,7 @@ function buildRequests(): RequestLog[] {
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
       const studio = kindOf('studio');
+      const notebookSource = sourceOf('notebook', 'work', kind, true);
       Object.assign(moved, {
         accountId: 'studio',
         attempts: [
@@ -743,7 +767,7 @@ function buildRequests(): RequestLog[] {
             ...answered,
             accountId: 'studio',
             accountKind: studio,
-            cacheMissReason: answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason,
+            cacheMissReason: filedReason(answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason, notebookSource, kind),
             index: 0,
             overageInUse: studio === 'oauth' ? false : null,
             tier: accountTier('studio'),
@@ -756,6 +780,7 @@ function buildRequests(): RequestLog[] {
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: round(costOf(drawn, moved.usage, false, atMs), 4),
+        diagnosticsSource: notebookSource,
         keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
         keyId: 'notebook',
         model: drawn,
@@ -1165,6 +1190,7 @@ function storyRow(seed: StorySeed): RequestLog {
   // An incomplete stream never reached the message_delta that carries the stop reason either, while the ledger still
   // files its attempt as an upstream error, so the stop reason reads a predicate of its own beside the outcome's.
   const stopless = cut || seed.outcome === 'incomplete';
+  const source = sourceOf(seed.keyId, poolId, kind, seed.attempts.length > 0);
   const attempts = seed.attempts.map((a, index): Attempt => {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
     const oauth = accountById.get(a.accountId)?.kind === 'oauth';
@@ -1176,7 +1202,7 @@ function storyRow(seed: StorySeed): RequestLog {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
       // A failover, and a placement after the session's row expired, land on an account that never saw the turn before.
-      cacheMissReason: !answer || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 || seed.landsAfresh ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none',
+      cacheMissReason: !answer || kind === 'count_tokens' ? null : filedReason(!oauth ? null : index > 0 || seed.landsAfresh ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none', source, kind),
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
@@ -1184,6 +1210,8 @@ function storyRow(seed: StorySeed): RequestLog {
       outcome: cut ? 'canceled' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
       overageInUse: oauth && !usageBased ? false : null,
+      // Read off the day's rows once each stands as it ends (`handPreviousSizes`).
+      previousInputTokens: null,
       response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
@@ -1226,7 +1254,7 @@ function storyRow(seed: StorySeed): RequestLog {
     compaction: null,
     contextCompacted: seed.contextCompacted ?? null,
     costUsd: !answered || freeCall(seed.classifier ?? null, attempts[attempts.length - 1] ?? null) ? 0 : round(costOf(seed.model, usage, fast, seed.at), 4),
-    diagnosticsSource: sourceOf(attempts, seed.keyId),
+    diagnosticsSource: source,
     durationMs,
     errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
     fallbackDigest: null,
@@ -1836,10 +1864,7 @@ export const RENEWED_ON_PIN: ReadonlyMap<string, string> = (() => {
     r.accountId = to;
     // The cache comparison follows the account's kind, since an API key answers without the beta.
     if (kind === head.accountKind) r.attempts = [moved];
-    else {
-      r.attempts = diagnosed([{ ...moved, cacheMissReason: null }], r.kind);
-      r.diagnosticsSource = sourceOf(r.attempts, r.keyId ?? '');
-    }
+    else r.attempts = diagnosed([{ ...moved, cacheMissReason: null }], r.kind, r.diagnosticsSource);
     renewed.set(r.id, head.accountId);
   });
   return renewed;
@@ -2230,7 +2255,8 @@ function seedHolds() {
     const waitedOn = first === undefined ? [] : [first];
     const heldMs = boundOf(atCap);
     keepAttempts(atCap, 0);
-    Object.assign(atCap, { accountId: null, costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: slotHold(null, heldMs, waitedOn) });
+    // No body went upstream, so none carried a diagnostics member.
+    Object.assign(atCap, { accountId: null, costUsd: 0, diagnosticsSource: null, durationMs: heldMs, errorCode: 'accounts_at_cap', held: slotHold(null, heldMs, waitedOn) });
   }
   const heldAt = (r: RequestLog) => {
     const drawnAttempts = drawnPart(r);
@@ -2372,6 +2398,44 @@ function phaseRequests() {
   }
 }
 
+/** The rows oldest first by arrival, the order the router's pins and a session's turns see them in. */
+const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+
+/**
+ * A turn's body names the message its agent's last answer carried, so the first answered turn of an agent in its
+ * session names none, and the upstream draws no reason for a member that names no message: each answered attempt of
+ * such a turn whose body carried the member files `not_returned`, as the relay does. The rows' last fields are read,
+ * since the passes above move arrivals. A probe and a token count are no turns.
+ */
+function fileFirstTurns() {
+  const answered = new Set<string>();
+  for (const r of byArrival()) {
+    if (r.sessionId === null || r.kind !== 'inference' || (servingAttempt(r)?.cacheMissReason ?? null) === null) continue;
+    const agent = `${r.sessionId}|${r.agentId}`;
+    if (answered.has(agent)) continue;
+    answered.add(agent);
+    if (r.diagnosticsSource !== null) for (const a of r.attempts) if (a.cacheMissReason !== null) a.cacheMissReason = 'not_returned';
+  }
+}
+
+/**
+ * Each attempt's previous size as the selection hands it on: the size of the last usage report under the request's pin
+ * key (key, session, agent and canonical model), where the attempt lands on that report's account. None on a compacted
+ * turn, on a pin's first turn, on a pin whose last report was empty, off that account and on a row with no session. A
+ * probe's usage is the keepalive's cost and renews no size, and a token count stores no usage report.
+ */
+function handPreviousSizes() {
+  const reports = new Map<string, { accountId: string; size: number }>();
+  for (const r of byArrival()) {
+    if (r.sessionId === null) continue;
+    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const report = r.contextCompacted === null ? reports.get(key) : undefined;
+    for (const a of r.attempts) a.previousInputTokens = report !== undefined && report.size > 0 && a.accountId === report.accountId ? report.size : null;
+    const serving = servingAttempt(r);
+    if (serving !== null && r.kind !== 'probe' && r.storedTokens.input !== null) reports.set(key, { accountId: serving.accountId, size: promptOf(r.usage) });
+  }
+}
+
 traceRequests();
 seedDrawerBranches();
 seedHolds();
@@ -2379,6 +2443,8 @@ liftCooldowns(REQUESTS);
 identifyRequests();
 phaseRequests();
 traceForks();
+fileFirstTurns();
+handPreviousSizes();
 
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
   const samples = rows.filter((r) => r.status === 200).map((r) => ({ kind: r.kind, ...latencySamples(r) }));
@@ -2541,6 +2607,12 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const ok = served.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
       for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = countOf(cacheMissReasons, a.cacheMissReason) + 1;
+      // A hit counts under the serving attempt's reason, the one the route counts a request's reason on.
+      const cacheMissReasonHits = emptyCounts();
+      for (const r of partRows) {
+        const reason = servingAttempt(r)?.cacheMissReason ?? null;
+        if (reason !== null && hitUnderReason(r)) cacheMissReasonHits[reason] = countOf(cacheMissReasonHits, reason) + 1;
+      }
       const keptHere = partRows.filter((r) => kept.has(r));
       const freed = freedPart({ classifier, funding });
       out.push({
@@ -2596,6 +2668,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
+        cacheMissReasonHits,
         expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
@@ -2766,6 +2839,8 @@ function historicalRollups(): HourlyRollup[] {
         cacheHits: Math.round(ok * h.float(0.6, 0.8)),
         cacheMisses: Math.round(ok * h.float(0.1, 0.25)),
         ...synthesizeMissReasons(hm, ok, lane.keyId !== 'ci'),
+        // The route answers no hit map for an hour folded before it counted one.
+        cacheMissReasonHits: emptyCounts(),
         uncached: Math.max(0, ok - Math.round(ok * 0.85)),
         costUsd: costOf(model, usage, fast, t),
         cost: costSplitOf(model, usage, fast, t),
@@ -2826,6 +2901,7 @@ function historicalRollups(): HourlyRollup[] {
           cacheHits: probes,
           cacheMisses: 0,
           ...synthesizeMissReasons(hm, probes, true),
+          cacheMissReasonHits: emptyCounts(),
           uncached: 0,
           costUsd: probeCost,
           cost: costSplitOf(model, probeUsage, false, t),
@@ -2891,6 +2967,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       cacheHits: 0,
       cacheMisses: 1,
       cacheMissReasons: emptyCacheMissReasons(),
+      cacheMissReasonHits: emptyCounts(),
       expiredBetweenTurns: 0,
       uncached: 0,
       costUsd,

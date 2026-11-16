@@ -8,8 +8,8 @@ test("the misses-by-reason headers read one short word per known reason, the ful
   assert.equal(missLabel('previous_message_not_found'), CACHE_MISS_LABEL.previous_message_not_found, 'the full label stays');
 });
 
-test('a comparison still running reads Pending, listed after the two non-answers', () => {
-  assert.deepEqual(CACHE_MISS_REASONS.slice(-3), ['unavailable', 'not_requested', 'pending']);
+test('a comparison still running reads Pending, listed after the three non-answers', () => {
+  assert.deepEqual(CACHE_MISS_REASONS.slice(-4), ['unavailable', 'not_requested', 'not_returned', 'pending']);
   assert.equal(missLabel('pending'), 'Pending');
   assert.equal(missShort('pending'), 'Pending');
   assert.equal(emptyCacheMissReasons().pending, 0, 'every column draws from zero');

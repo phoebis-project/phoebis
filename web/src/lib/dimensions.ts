@@ -59,8 +59,31 @@ export const foldSpeed = (r: Pick<RequestLog, 'attempts' | 'shape'>): string => 
 /** The serving attempt's cache-miss reason, the one the rollups count a request's reason on. */
 export const servedMissReason = (r: Pick<RequestLog, 'attempts'>): CacheMissReason | null => servingAttempt(r)?.cacheMissReason ?? null;
 
-/** An answer that read no cache though the diagnostics named no change, so its prefix expired between turns. */
-export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'usage'>): boolean => r.usage.cacheRead === 0 && servedMissReason(r) === 'none';
+/** The percent of its prompt a request reads from the cache to count as a hit under its miss reason. */
+export const REASON_HIT_PERCENT = 90;
+/** Whether a request hit under its reason: its cache read against the read, both writes and the uncached input. */
+export const hitUnderReason = (r: Pick<RequestLog, 'usage'>): boolean => {
+  const u = r.usage;
+  return u.cacheRead > 0 && 100 * u.cacheRead >= REASON_HIT_PERCENT * (u.cacheRead + u.cacheWrite5m + u.cacheWrite1h + u.input);
+};
+
+/**
+ * The reasons that leave a short read to the cache's expiry: no divergence, and the relay's own words. A reason the
+ * upstream names says why its comparison missed.
+ */
+const EXPIRY_REASONS: readonly CacheMissReason[] = ['none', 'not_requested', 'not_returned', 'pending'];
+
+/**
+ * Whether a turn found its cache expired: its serving attempt stored a usage report and read under half the size the
+ * pin's last report left on that account, under no reason or one of `EXPIRY_REASONS`. A null previous size counts
+ * nothing, and a probe and a token count are no turns.
+ */
+export const expiredBetweenTurns = (r: Pick<RequestLog, 'attempts' | 'kind' | 'storedTokens' | 'usage'>): boolean => {
+  const previous = servingAttempt(r)?.previousInputTokens ?? null;
+  if (previous === null || r.kind === 'probe' || r.kind === 'count_tokens' || r.storedTokens.input === null) return false;
+  const reason = servedMissReason(r);
+  return 2 * r.usage.cacheRead < previous && (reason === null || EXPIRY_REASONS.includes(reason));
+};
 
 /** The serving attempt's answer, where an attempt served the request. */
 export const servingResponse = (r: Pick<RequestLog, 'attempts'>): AttemptResponse | null => servingAttempt(r)?.response ?? null;
