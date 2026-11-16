@@ -2061,6 +2061,9 @@ async fn a_window_restart_while_a_poll_reads_the_profile_waits_for_it_and_its_re
         (3, 1),
         "the slot's profile read is out, held at the gate"
     );
+    // Room for a second read held at the gate, so a restart that sends its own read while the slot's is out lets the
+    // step settle with the endpoint asked twice.
+    paused.idle.set(paused.idle.get() + 1);
     report_head(&h, "a", SEVEN_DAY, 0.10).await;
     step_to(&h, &up, &paused, secs(902)).await;
     assert_eq!(
@@ -2071,7 +2074,7 @@ async fn a_window_restart_while_a_poll_reads_the_profile_waits_for_it_and_its_re
 
     // The held read answers inside the control client's timeout, and its attempt's end serves the restart.
     up.release();
-    paused.idle.set(paused.idle.get() - 1);
+    paused.idle.set(paused.idle.get() - 2);
     resumed(wait_for(Duration::from_secs(30), || {
         (up.open_connections() <= paused.idle.get()).then_some(())
     }))
