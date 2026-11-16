@@ -17988,6 +17988,8 @@ async fn a_pair_learned_by_a_move_from_the_higher_id_to_the_lower_stands_through
             .0,
         "a"
     );
+    // A purge between a move and its answer keeps the observation while both of its holders stand.
+    handle.reload().await.unwrap();
     handle
         .report(answered(
             session_pin(&handle, "s1").await,
