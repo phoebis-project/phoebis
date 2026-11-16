@@ -163,6 +163,19 @@ mod tests {
         assert_eq!(wide.buckets(), expected);
     }
 
+    /// The narrow record files a sample as the 64-bucket set did: 150,000 ms, which `record` files in bucket 66, lands
+    /// in that set's last bucket, 63, and 1.5 ms keeps its own bucket, 2.
+    #[test]
+    fn a_narrow_record_files_a_sample_past_100_seconds_in_bucket_63_and_a_shorter_one_in_its_own() {
+        let mut narrow = Histogram::new();
+        narrow.record_narrow(150_000.0);
+        narrow.record_narrow(1.5);
+        let mut expected = [0u64; 84];
+        expected[2] = 1;
+        expected[63] = 1;
+        assert_eq!(narrow.buckets(), expected);
+    }
+
     #[test]
     fn percentiles_come_from_merged_buckets_and_round_trip_little_endian() {
         let mut a = Histogram::new();
