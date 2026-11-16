@@ -781,11 +781,36 @@ fn settle_session(
 /// The predicate on a session's key in both tables, bound as `session_binds` binds it.
 const SESSION_KEY: &str = "key_id = ?1 AND key_generation = ?2 AND session_id = ?3";
 
+/// The sums table's primary key in its order: the terms of `SUMS_ROW_KEY` and the row values the retention purge
+/// selects by.
+pub(crate) const SUMS_KEY_COLUMNS: [&str; 16] = [
+    "key_id",
+    "key_generation",
+    "session_id",
+    "agent_id",
+    "probe",
+    "account_id",
+    "canonical_model",
+    "speed",
+    "funding",
+    "band",
+    "tier",
+    "client",
+    "classifier",
+    "request_class",
+    "received_hour",
+    "completed_hour",
+];
+
 /// A sums row's key bound as `row_binds` binds it.
-const SUMS_ROW_KEY: &str = "key_id = ?1 AND key_generation = ?2 AND session_id = ?3 AND agent_id = ?4 \
-    AND probe = ?5 AND account_id = ?6 AND canonical_model = ?7 AND speed = ?8 AND funding = ?9 AND band = ?10 \
-    AND tier = ?11 AND client = ?12 AND classifier = ?13 AND request_class = ?14 AND received_hour = ?15 \
-    AND completed_hour = ?16";
+static SUMS_ROW_KEY: LazyLock<String> = LazyLock::new(|| {
+    SUMS_KEY_COLUMNS
+        .iter()
+        .enumerate()
+        .map(|(i, column)| format!("{column} = ?{}", i + 1))
+        .collect::<Vec<_>>()
+        .join(" AND ")
+});
 
 /// The sums columns past the session's three, in `SumsKey`'s order and then the counts'.
 pub(crate) const SUMS_COLUMNS: &str = "agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, \
@@ -821,15 +846,20 @@ static TAKE_SUMS: LazyLock<String> = LazyLock::new(|| {
          cache_read_tokens = MAX(cache_read_tokens - ?19, 0), \
          cache_write_5m_tokens = MAX(cache_write_5m_tokens - ?20, 0), \
          cache_write_1h_tokens = MAX(cache_write_1h_tokens - ?21, 0), output_tokens = MAX(output_tokens - ?22, 0) \
-         WHERE {SUMS_ROW_KEY}"
+         WHERE {}",
+        *SUMS_ROW_KEY
     )
 });
 
 static DELETE_SUMS: LazyLock<String> =
-    LazyLock::new(|| format!("DELETE FROM session_sums WHERE {SUMS_ROW_KEY}"));
+    LazyLock::new(|| format!("DELETE FROM session_sums WHERE {}", *SUMS_ROW_KEY));
 
-static EMPTIED_SUMS: LazyLock<String> =
-    LazyLock::new(|| format!("DELETE FROM session_sums WHERE {SUMS_ROW_KEY} AND requests = 0"));
+static EMPTIED_SUMS: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "DELETE FROM session_sums WHERE {} AND requests = 0",
+        *SUMS_ROW_KEY
+    )
+});
 
 static READ_SUMS_OF_HOUR: LazyLock<String> = LazyLock::new(|| {
     format!("SELECT {SUMS_COLUMNS} FROM session_sums WHERE {SESSION_KEY} AND received_hour = ?4")

@@ -2805,9 +2805,8 @@ impl PlanSums {
             self.kept_warm_5m_tokens += row.kept_warm_5m_tokens;
             self.kept_warm_1h_tokens += row.kept_warm_1h_tokens;
         }
-        self.equivalent.add_row(row, |usage| {
-            price_equivalent_at(costs, key, SEVEN_DAY, usage)
-        });
+        self.equivalent
+            .add_row(row, |usage| price_equivalent_at(costs, key, usage));
     }
 
     /// Folds one part of a plan-funded row in: its split when `counted`, and its figure as `EquivalentSums` folds it
@@ -2824,7 +2823,7 @@ impl PlanSums {
     ) {
         // Each part prices through `price_equivalent_at` at the row's key, whose classifier rule reads a free call's
         // every part at zero, so a model the cost model cannot price marks nothing unpriced for a charge of nothing.
-        let price = |usage: PinUsage| price_equivalent_at(costs, key, SEVEN_DAY, usage);
+        let price = |usage: PinUsage| price_equivalent_at(costs, key, usage);
         let halves = self
             .equivalent
             .add_priced(row, usage, counted, priced.equivalent, price);

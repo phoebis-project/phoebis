@@ -216,14 +216,14 @@ fn reached(reset_at: i64, observed_at: i64) -> bool {
 pub const SPENT_MARGIN: f64 = 0.02;
 
 /// How far a weekly window's reading has to fall under one reset to read as a used limit reset: a fall of more than
-/// this, read in whole points since a poll reads the endpoint's whole percent. Live samples showed no other weekly fall
-/// of more than 5 points under an unchanged reset. The unused allowance reads a drop's window cleared where the figure
-/// after stands under it.
-pub const WINDOW_DROP_MARGIN: f64 = 0.05;
+/// this many points, read in whole points since a poll reads the endpoint's whole percent. Live samples showed no other
+/// weekly fall of more than 5 points under an unchanged reset. The unused allowance reads a drop's window cleared where
+/// the figure after stands under it.
+pub const WINDOW_DROP_POINTS: i64 = 5;
 
 /// A utilization in whole points. Two figures rounded to the hundredth and then subtracted as floats can read 0.55 to
 /// 0.50 as more than 0.05.
-fn whole_points(utilization: f64) -> i64 {
+pub fn whole_points(utilization: f64) -> i64 {
     (utilization * 100.0).round() as i64
 }
 
@@ -445,7 +445,7 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A weekly window fell by more than `WINDOW_DROP_MARGIN` under the stored reading's reset, the trace a used limit
+    /// A weekly window fell by more than `WINDOW_DROP_POINTS` under the stored reading's reset, the trace a used limit
     /// reset leaves: the stored figure before, the first poll's figure after, the unchanged reset and the stored
     /// reading's plan and tier. Dated at that poll, since a head after a use reads 0.00 before the upstream's own
     /// figure settles.
@@ -5327,7 +5327,7 @@ impl Task {
 
     /// The fall of a weekly window under one reset, read beside `window_edges`. The stored reading has to name a reset
     /// the new reading still stands under, since without one a fall under one reset reads like a new window. A poll
-    /// that reads a fall of more than `WINDOW_DROP_MARGIN` emits `WindowDropped` with its own figure after. A head
+    /// that reads a fall of more than `WINDOW_DROP_POINTS` emits `WindowDropped` with its own figure after. A head
     /// emits nothing, since a head after a use reads 0.00 before the upstream's own figure settles: it keeps the
     /// stored figure, its reset and its pair as the window's pending drop, which a later head leaves as it is. The next
     /// poll under that reset reads the pending figure in place of the stored one and clears it whether it emits or
@@ -5374,7 +5374,7 @@ impl Task {
             }
         };
         if whole_points(before.utilization_before) - whole_points(reading.utilization)
-            <= whole_points(WINDOW_DROP_MARGIN)
+            <= WINDOW_DROP_POINTS
         {
             return false;
         }

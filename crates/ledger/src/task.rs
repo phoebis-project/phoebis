@@ -19,7 +19,7 @@ use crate::assemble::{Assembler, Record};
 use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{
     backfill_serving_slice, begin_write, delete_parked_in, insert_decision_in, insert_event_in,
-    insert_request_in, insert_samples_in, newest_row_at, update_cache_map_in,
+    insert_samples_in, land_request_in, newest_row_at, update_cache_map_in,
 };
 use crate::events::{catalog_changed, spawn_event_mirror, MirrorBaseline};
 use crate::metrics::Metrics;
@@ -1627,19 +1627,13 @@ impl Handles {
                             attempts,
                             bodies,
                         } => {
-                            let previous = insert_request_in(
+                            land_request_in(
                                 &tx,
                                 request,
                                 attempts,
                                 bodies.as_ref(),
                                 clock(),
-                            )?;
-                            let previous = previous.as_ref().map(|(r, a)| (r, a.as_slice()));
-                            crate::rollup::fold_request(
-                                &tx, request, attempts, previous, &revisions,
-                            )?;
-                            crate::session_totals::land(
-                                &tx, request, attempts, previous, &revisions,
+                                &revisions,
                             )?;
                         }
                         Record::Samples { quota, extra, .. } => {

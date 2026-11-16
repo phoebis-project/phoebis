@@ -6,22 +6,18 @@ use std::collections::BTreeMap;
 
 use phoebis_oauth::ClaimOutcome;
 use phoebis_routing::{
-    account_window_id, is_weekly_window, UtilizationSample, WindowReading, WINDOW_DROP_MARGIN,
+    account_window_id, is_weekly_window, whole_points, UtilizationSample, WindowReading, HOUR_MS,
+    WINDOW_DROP_POINTS,
 };
 use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection};
+use rusqlite::{params, params_from_iter, Connection, Statement};
 
 use crate::query::{in_list, LIMIT_RESET_CLAIMED, WINDOW_DROPPED, WINDOW_RESET};
 use crate::LedgerError;
 
 /// How long before a drop a used claim of its account still joins it. The drop is dated at the first poll after the
 /// use, so it stands up to a poll interval behind the claim.
-const CLAIM_JOIN_MS: i64 = 3_600_000;
-
-/// A utilization in whole points, the unit the router reads a drop's margin in.
-fn whole_points(utilization: f64) -> i64 {
-    (utilization * 100.0).round() as i64
-}
+const CLAIM_JOIN_MS: i64 = HOUR_MS;
 
 /// One weekly reset an account met in range, a used limit reset that cleared its window, or its term's end read as a
 /// reset: what the unused allowance route lists.
@@ -82,22 +78,16 @@ pub fn term_end_of(
             pairs: BTreeMap::new(),
         };
     };
-    let mut kept: BTreeMap<String, &WindowReading> = BTreeMap::new();
+    let mut kept: BTreeMap<String, (i64, &WindowReading)> = BTreeMap::new();
     for (window, reading) in &sample.windows {
         if !is_weekly_window(window) || plan_ended_at.is_some_and(|at| reading.observed_at >= at) {
             continue;
         }
-        let key = account_window_id(window).to_string();
-        if kept
-            .get(&key)
-            .is_none_or(|stood| stood.observed_at < reading.observed_at)
-        {
-            kept.insert(key, reading);
-        }
+        keep_newest(&mut kept, window, reading.observed_at, reading);
     }
     let pairs = kept
         .into_iter()
-        .map(|(window, reading)| {
+        .map(|(window, (_, reading))| {
             let pair = TermPair {
                 plan: reading.plan.clone(),
                 tier: reading.tier.clone(),
@@ -106,6 +96,15 @@ pub fn term_end_of(
         })
         .collect();
     TermEnd { end_at, pairs }
+}
+
+/// Keeps `value`, read at `observed_at`, under the `account_window_id` of `window` unless a value read at or after
+/// that instant stands there, so the newer of two windows that fold into one key stands and a tie keeps the first.
+fn keep_newest<T>(kept: &mut BTreeMap<String, (i64, T)>, window: &str, observed_at: i64, value: T) {
+    let key = account_window_id(window).to_string();
+    if kept.get(&key).is_none_or(|(stood, _)| *stood < observed_at) {
+        kept.insert(key, (observed_at, value));
+    }
 }
 
 /// The members of a `window_reset` row's detail the read takes.
@@ -144,27 +143,23 @@ fn share_left(utilization: f64) -> f64 {
     (1.0 - utilization).clamp(0.0, 1.0)
 }
 
-/// The `(account_id, at, detail)` of the listed accounts' events of `kind` whose `at` lies in `[from, to]`, each
-/// account's newest first. A row with no account or no detail is left out.
-fn events_of(
-    conn: &Connection,
+/// The `(account_id, at, detail)` of the events of `kind` whose `at` lies in `[from, to]`, read through `events`, the
+/// statement `unused_allowance` prepares over the listed accounts with `accounts` as its account binds. Each account's
+/// newest stands first, the detail parsed as `T`. A row with no account, no detail or a detail that does not parse is
+/// left out.
+fn events_of<T: serde::de::DeserializeOwned>(
+    events: &mut Statement<'_>,
+    accounts: &[Value],
     kind: &str,
-    accounts: &[String],
     from: i64,
     to: i64,
-) -> Result<Vec<(String, i64, String)>, LedgerError> {
-    let mut binds = vec![
+) -> Result<Vec<(String, i64, T)>, LedgerError> {
+    let range = [
         Value::Integer(from),
         Value::Integer(to),
         Value::Text(kind.into()),
     ];
-    let mut clauses = vec!["kind = ?3 AND at >= ?1 AND at <= ?2".to_string()];
-    in_list("account_id", accounts, &mut binds, &mut clauses);
-    let mut stmt = conn.prepare(&format!(
-        "SELECT account_id, at, detail FROM events WHERE {} ORDER BY account_id, at DESC",
-        clauses.join(" AND ")
-    ))?;
-    let events = stmt.query_map(params_from_iter(binds), |r| {
+    let found = events.query_map(params_from_iter(range.iter().chain(accounts)), |r| {
         Ok((
             r.get::<_, Option<String>>(0)?,
             r.get::<_, i64>(1)?,
@@ -172,9 +167,11 @@ fn events_of(
         ))
     })?;
     let mut rows = Vec::new();
-    for event in events {
+    for event in found {
         if let (Some(account_id), at, Some(detail)) = event? {
-            rows.push((account_id, at, detail));
+            if let Ok(detail) = serde_json::from_str::<T>(&detail) {
+                rows.push((account_id, at, detail));
+            }
         }
     }
     Ok(rows)
@@ -205,19 +202,30 @@ pub fn unused_allowance(
     if accounts.is_empty() {
         return Ok(Vec::new());
     }
+    let left_out = |account_id: &str, window: &str, instant: i64| {
+        !is_weekly_window(window)
+            || term_ends
+                .get(account_id)
+                .is_some_and(|term| instant >= term.end_at)
+    };
+    // Each read binds its span and its kind as `?1` to `?3`, so the accounts' marks start at `?4` and one statement
+    // serves the three kinds.
+    let mut binds = vec![Value::Null; 3];
+    let mut clauses = vec!["kind = ?3 AND at >= ?1 AND at <= ?2".to_string()];
+    in_list("account_id", accounts, &mut binds, &mut clauses);
+    let account_binds = binds.split_off(3);
+    let mut events = conn.prepare(&format!(
+        "SELECT account_id, at, detail FROM events WHERE {} ORDER BY account_id, at DESC",
+        clauses.join(" AND ")
+    ))?;
     let mut rows = Vec::new();
-    for (account_id, at, detail) in events_of(conn, WINDOW_RESET, accounts, from, to)? {
-        let Ok(detail) = serde_json::from_str::<ResetDetail>(&detail) else {
-            continue;
-        };
+    for (account_id, at, detail) in
+        events_of::<ResetDetail>(&mut events, &account_binds, WINDOW_RESET, from, to)?
+    {
         // An ended account's resets are left out by the reset's own instant: a late sample or a clock walk after a
         // restart announces a week that reset before the end only after it, and the week the end cut short is the
         // `term_ended` row's alone.
-        if !is_weekly_window(&detail.window)
-            || term_ends
-                .get(account_id.as_str())
-                .is_some_and(|term| detail.reset_at >= term.end_at)
-        {
+        if left_out(&account_id, &detail.window, detail.reset_at) {
             continue;
         }
         rows.push(AllowanceReset {
@@ -233,28 +241,21 @@ pub fn unused_allowance(
     }
     // A drop at the range's start keeps its join with a claim just before the start.
     let mut claims: BTreeMap<String, Vec<(i64, ClaimDetail)>> = BTreeMap::new();
-    for (account_id, at, detail) in events_of(
-        conn,
+    for (account_id, at, detail) in events_of::<ClaimDetail>(
+        &mut events,
+        &account_binds,
         LIMIT_RESET_CLAIMED,
-        accounts,
         from.saturating_sub(CLAIM_JOIN_MS),
         to,
     )? {
-        if let Ok(detail) = serde_json::from_str::<ClaimDetail>(&detail) {
-            if detail.outcome == ClaimOutcome::Used.as_str() {
-                claims.entry(account_id).or_default().push((at, detail));
-            }
+        if detail.outcome == ClaimOutcome::Used.as_str() {
+            claims.entry(account_id).or_default().push((at, detail));
         }
     }
-    for (account_id, at, detail) in events_of(conn, WINDOW_DROPPED, accounts, from, to)? {
-        let Ok(detail) = serde_json::from_str::<DropDetail>(&detail) else {
-            continue;
-        };
-        if !is_weekly_window(&detail.window)
-            || term_ends
-                .get(account_id.as_str())
-                .is_some_and(|term| at >= term.end_at)
-        {
+    for (account_id, at, detail) in
+        events_of::<DropDetail>(&mut events, &account_binds, WINDOW_DROPPED, from, to)?
+    {
+        if left_out(&account_id, &detail.window, at) {
             continue;
         }
         // Each account's claims stand newest first, so the first inside the span is the newest.
@@ -270,7 +271,7 @@ pub fn unused_allowance(
         // A request between the use and the poll can lift a cleared window off zero, so the test reads the margin.
         let cleared = match answered {
             Some(claim) => claim.cleared.contains(&detail.window),
-            None => whole_points(detail.utilization) < whole_points(WINDOW_DROP_MARGIN),
+            None => whole_points(detail.utilization) < WINDOW_DROP_POINTS,
         };
         if !cleared {
             continue;
@@ -298,7 +299,7 @@ pub fn unused_allowance(
     )?;
     // An end before the range drops the resets after it above, and its own row belongs to a range that holds it.
     for (account_id, term) in term_ends.iter().filter(|(_, term)| term.end_at >= from) {
-        let mut last: BTreeMap<String, (f64, i64)> = BTreeMap::new();
+        let mut last: BTreeMap<String, (i64, f64)> = BTreeMap::new();
         let found = readings.query_map(params![account_id, term.end_at], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -308,17 +309,11 @@ pub fn unused_allowance(
         })?;
         for reading in found {
             let (window, utilization, observed_at) = reading?;
-            let window = account_window_id(&window).to_string();
-            match last.get(&window) {
-                Some(&(_, kept)) if kept >= observed_at => {}
-                _ => {
-                    last.insert(window, (utilization, observed_at));
-                }
-            }
+            keep_newest(&mut last, &window, observed_at, utilization);
         }
         rows.extend(
             last.into_iter()
-                .map(|(window, (utilization, observed_at))| {
+                .map(|(window, (observed_at, utilization))| {
                     let pair = term.pairs.get(&window).cloned().unwrap_or_default();
                     AllowanceReset {
                         account_id: account_id.clone(),

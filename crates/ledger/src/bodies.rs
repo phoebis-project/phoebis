@@ -1,7 +1,7 @@
 //! Captured bodies, kept only for keys whose effective capture window is above zero, and the hourly purge
 //! that enforces every retention window the ledger has, in slices on its own connection.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use phoebis_routing::DAY_MS;
 use rusqlite::types::Value;
@@ -10,6 +10,7 @@ use rusqlite::{params, params_from_iter, Transaction};
 use crate::db::begin_write;
 use crate::pricing::PriceRevisions;
 use crate::query::{bind_all, hour_ceil, period_bounds, BudgetedMember};
+use crate::session_totals::SUMS_KEY_COLUMNS;
 use crate::task::LedgerConfig;
 use crate::{LedgerDb, LedgerError};
 
@@ -256,7 +257,10 @@ pub(crate) const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SE
 /// The sums rows of each receipt hour before `?1`, the hour the requests' cutoff falls in, so every hour the slices
 /// take ends at or before the cutoff. The table holds no rowid, so the slice selects its rows by their primary key
 /// through the receipt-hour index, which holds the key.
-pub(crate) const PURGE_SESSION_SUMS: &str = "DELETE FROM session_sums WHERE (key_id, key_generation, session_id, agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, classifier, request_class, received_hour, completed_hour) IN (SELECT key_id, key_generation, session_id, agent_id, probe, account_id, canonical_model, speed, funding, band, tier, client, classifier, request_class, received_hour, completed_hour FROM session_sums WHERE received_hour < ?1 LIMIT ?2)";
+pub(crate) static PURGE_SESSION_SUMS: LazyLock<String> = LazyLock::new(|| {
+    let key = SUMS_KEY_COLUMNS.join(", ");
+    format!("DELETE FROM session_sums WHERE ({key}) IN (SELECT {key} FROM session_sums WHERE received_hour < ?1 LIMIT ?2)")
+});
 
 /// Under the requests' cutoff and after their family, so a decision leaves in the pass that takes its request, which
 /// was received before it was decided. One whose request never landed leaves at the same age by its own stamp.
@@ -280,8 +284,8 @@ fn purge_slice(
     db.purge_yielding(|conn, waiting| {
         let tx = begin_write(conn)?;
         let slice = PURGE_SLICE as i64;
-        let cut = |sql: &str, counter: &mut usize| -> Result<usize, LedgerError> {
-            let n = tx.execute(sql, params![cutoff, slice])?;
+        let cut = |sql: &str, bound: i64, counter: &mut usize| -> Result<usize, LedgerError> {
+            let n = tx.execute(sql, params![bound, slice])?;
             *counter += n;
             Ok(n)
         };
@@ -309,30 +313,33 @@ fn purge_slice(
                 purged.requests += requests;
                 requests
             }
-            Family::SessionTotals => {
-                let sums =
-                    tx.execute(PURGE_SESSION_SUMS, params![crate::rollup::hour_of(cutoff), slice])?;
-                purged.session_totals += sums;
-                sums
-            }
+            Family::SessionTotals => cut(
+                &PURGE_SESSION_SUMS,
+                crate::rollup::hour_of(cutoff),
+                &mut purged.session_totals,
+            )?,
             // No index leads with the marks' or the samples' cutoff column, so their slices take the first
             // matches the table yields: an `ORDER BY` would read and sort every match under the write lock, once
             // per slice. The rollup tables' primary keys lead with the hour, so theirs come oldest first anyway.
             Family::KeptWarmMarks => cut(
                 "DELETE FROM kept_warm_marks WHERE rowid IN (SELECT rowid FROM kept_warm_marks WHERE marked_at < ?1 LIMIT ?2)",
+                cutoff,
                 &mut purged.requests,
             )?,
             Family::Events => cut(
                 "DELETE FROM events WHERE rowid IN (SELECT rowid FROM events WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)",
+                cutoff,
                 &mut purged.events,
             )?,
-            Family::Decisions => cut(PURGE_DECISIONS, &mut purged.decisions)?,
+            Family::Decisions => cut(PURGE_DECISIONS, cutoff, &mut purged.decisions)?,
             Family::QuotaSamples => cut(
                 "DELETE FROM quota_samples WHERE rowid IN (SELECT rowid FROM quota_samples WHERE bucket < ?1 LIMIT ?2)",
+                cutoff,
                 &mut purged.quota_samples,
             )?,
             Family::ExtraUsageSamples => cut(
                 "DELETE FROM extra_usage_samples WHERE rowid IN (SELECT rowid FROM extra_usage_samples WHERE bucket < ?1 LIMIT ?2)",
+                cutoff,
                 &mut purged.extra_usage_samples,
             )?,
             Family::Rollups => {
@@ -342,6 +349,7 @@ fn purge_slice(
             }
             Family::AccountRollups => cut(
                 "DELETE FROM account_rollups_hourly WHERE rowid IN (SELECT rowid FROM account_rollups_hourly WHERE hour < ?1 LIMIT ?2)",
+                cutoff,
                 &mut purged.rollups,
             )?,
         };
@@ -418,7 +426,7 @@ mod tests {
             (EXPIRED_BODY_BYTES, "INDEX bodies_expires"),
             (PURGE_ATTEMPTS, "INDEX requests_received"),
             (PURGE_REQUESTS, "INDEX requests_received"),
-            (PURGE_SESSION_SUMS, "INDEX session_sums_received_hour"),
+            (&*PURGE_SESSION_SUMS, "INDEX session_sums_received_hour"),
             (PURGE_DECISIONS, "INDEX decisions_at"),
         ] {
             let lines = plan(&db, sql);

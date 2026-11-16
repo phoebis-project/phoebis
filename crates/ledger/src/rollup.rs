@@ -2039,7 +2039,7 @@ fn write_account(tx: &Transaction<'_>, row: &AccountRollupRow) -> Result<(), Led
         row.pins_migrated_in as i64,
         row.pins_migrated_out as i64,
         row.rewrite_tokens as i64,
-        counts_json(&row.migrations),
+        map_json(&row.migrations),
         row.wall_early_ms as i64,
     ])?;
     Ok(())
@@ -2268,8 +2268,8 @@ fn upsert_statement(table: &str, columns: &str, key: &str) -> String {
     )
 }
 
-/// A count map as its column's JSON, a map that does not encode writing as no count.
-fn counts_json(m: &BTreeMap<String, u64>) -> String {
+/// A map as its column's JSON object, a map that does not encode writing as an empty one.
+pub(crate) fn map_json<T: serde::Serialize>(m: &T) -> String {
     serde_json::to_string(m).unwrap_or_else(|_| "{}".into())
 }
 
@@ -2336,7 +2336,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
         r.kept_warm_5m_tokens as i64,
         r.probe_migrated as i64,
         r.wasted_probes as i64,
-        counts_json(&r.wasted_probe_reasons),
+        map_json(&r.wasted_probe_reasons),
         r.probes_skipped as i64,
         r.wasted_input_tokens as i64,
         r.wasted_cache_read_tokens as i64,
@@ -2347,17 +2347,17 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
         r.ttfc_hist.to_le_bytes(),
         r.duration_hist.to_le_bytes(),
         r.output_tps_hist.to_le_bytes(),
-        counts_json(&r.errors),
-        counts_json(&r.cache_miss_reasons),
+        map_json(&r.errors),
+        map_json(&r.cache_miss_reasons),
         r.incomplete as i64,
         r.probes_held as i64,
         r.slow_down_held_ms as i64,
         r.slow_down_held as i64,
         r.kept_warm_1h_tokens as i64,
         r.classifier,
-        counts_json(&r.refusals),
+        map_json(&r.refusals),
         r.client_canceled as i64,
-        counts_json(&r.input_transformations),
+        map_json(&r.input_transformations),
         r.uncacheable as i64,
     ])?;
     Ok(())

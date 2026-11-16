@@ -499,10 +499,7 @@ impl LedgerDb {
     ) -> Result<(), LedgerError> {
         self.write(|conn| {
             let tx = begin_write(conn)?;
-            let previous = insert_request_in(&tx, request, attempts, bodies, 0)?;
-            let previous = previous.as_ref().map(|(r, a)| (r, a.as_slice()));
-            crate::rollup::fold_request(&tx, request, attempts, previous, prices)?;
-            crate::session_totals::land(&tx, request, attempts, previous, prices)?;
+            land_request_in(&tx, request, attempts, bodies, 0, prices)?;
             tx.commit()?;
             Ok(())
         })
@@ -862,14 +859,12 @@ fn serving_values(facts: &ServingFacts) -> [Value; 12] {
         tokens(facts.output_tokens),
         tokens(facts.cache_read_tokens),
         tokens(facts.cache_write_tokens),
-        transformations_json(facts.input_transformations.as_ref()).into(),
+        facts
+            .input_transformations
+            .as_ref()
+            .map(crate::rollup::map_json)
+            .into(),
     ]
-}
-
-/// An answer's dropped blocks as their column's JSON object in the keys' order, `None` as SQL null. Text keys over
-/// two counts cannot fail to encode, so the fallback is unreachable.
-fn transformations_json(map: Option<&BTreeMap<String, InputTransformation>>) -> Option<String> {
-    map.map(|m| serde_json::to_string(m).unwrap_or_else(|_| "{}".into()))
 }
 
 /// The landing's insert, the serving facts' columns last at `?63` to `?74`.
@@ -991,7 +986,7 @@ pub(crate) fn insert_request_in(
             a.stop_reason, a.stop_sequence, a.served_model, a.speed, a.inference_geo,
             a.cleared_input_tokens.map(|n| n as i64), a.refusal_category, a.refusal_recommended_model, a.selection,
             a.upstream_message_id, a.written_at, a.tier, a.usage_based, a.issued_digest,
-            transformations_json(a.input_transformations.as_ref()), a.previous_input_tokens.map(|n| n as i64),
+            a.input_transformations.as_ref().map(crate::rollup::map_json), a.previous_input_tokens.map(|n| n as i64),
         ])?;
     }
     // A new row with no match has no child row to clear, so it pays no statement. A replaced row keeps the delete
@@ -1013,6 +1008,22 @@ pub(crate) fn insert_request_in(
         .execute(params![b.request_id, b.request_body, b.response_body, b.request_len_seen as i64, b.response_len_seen as i64, b.expires_at])?;
     }
     Ok(previous)
+}
+
+/// One request's landing in `tx`: `insert_request_in`, then `rollup::fold_request` and `session_totals::land`, in the
+/// order `land` requires, so both landing paths keep it.
+pub(crate) fn land_request_in(
+    tx: &Transaction<'_>,
+    request: &RequestRecord,
+    attempts: &[AttemptRecord],
+    bodies: Option<&BodyRecord>,
+    now: i64,
+    prices: &PriceRevisions,
+) -> Result<(), LedgerError> {
+    let previous = insert_request_in(tx, request, attempts, bodies, now)?;
+    let previous = previous.as_ref().map(|(r, a)| (r, a.as_slice()));
+    crate::rollup::fold_request(tx, request, attempts, previous, prices)?;
+    crate::session_totals::land(tx, request, attempts, previous, prices)
 }
 
 /// Request rows one slice of the backfill writes at most, the newest first, so the most recent history reads complete
@@ -1098,7 +1109,7 @@ fn fill_serving_slice(
         let mut pending = tx.prepare(
             "SELECT r.id, r.requested_speed, a.account_id, a.upstream_status, a.outcome, a.speed, \
              a.cache_miss_reason, a.stop_reason, a.refusal_category, a.input_tokens, a.output_tokens, \
-             a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
+             a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.input_transformations \
              FROM requests r INDEXED BY requests_serving_pending \
              JOIN attempts a ON a.request_id = r.id \
              AND a.attempt = (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = r.id) \
@@ -1135,6 +1146,7 @@ fn fill_serving_slice(
                             cache_read_tokens: opt_u64(r, 11)?,
                             cache_write_5m_tokens: opt_u64(r, 12)?,
                             cache_write_1h_tokens: opt_u64(r, 13)?,
+                            input_transformations: transformations_at(r, 14)?,
                             ..Default::default()
                         };
                         Ok((request, last))

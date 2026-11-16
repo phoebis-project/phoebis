@@ -207,8 +207,7 @@ pub fn price_row(
                 && std::ptr::eq(in_force, costs.revisions.in_force(key.now))
         })
         .and_then(|shares| shares.get(SEVEN_DAY).copied());
-    let equivalent =
-        unit_week.unwrap_or_else(|| price_equivalent_at(costs, key, SEVEN_DAY, counts));
+    let equivalent = unit_week.unwrap_or_else(|| price_equivalent_at(costs, key, counts));
     Priced {
         usd,
         shares,
@@ -217,21 +216,19 @@ pub fn price_row(
     }
 }
 
-/// A plan key's Pro figure on `window` over `counts`: the Pro-week figure on `SEVEN_DAY`, as `price_row` answers it off
-/// the unit's tier, and the Pro share of the 5-hour window on `FIVE_HOUR`. Zero by rule for a free classifier call,
-/// which reads no weight, else the cost model's share of the anchor tier's window under the key's regime at the key's
-/// instants, its band read at `band_at`, else at `at`.
+/// A plan key's Pro-week figure over `counts`, as `price_row` answers it off the unit's tier. Zero by rule for a free
+/// classifier call, which reads no weight, else the cost model's share of the anchor tier's 7-day window under the
+/// key's regime at the key's instants, its band read at `band_at`, else at `at`.
 pub(crate) fn price_equivalent_at(
     costs: &PlanTables,
     key: &RowKey<'_>,
-    window: &str,
     counts: PinUsage,
 ) -> Option<f64> {
     if key.free() {
         return Some(free_equivalent());
     }
     costs.equivalent_at(
-        window,
+        SEVEN_DAY,
         key.entrypoint,
         key.model,
         counts,

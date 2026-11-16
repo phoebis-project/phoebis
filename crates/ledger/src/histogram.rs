@@ -1,6 +1,8 @@
 //! Fixed log-spaced histograms: 84 buckets from 1, edge 64 at 100,000 and the last edge near 3,652,000, shared by
 //! every latency in milliseconds and by output tokens per second, so any two histograms merge by bucket-wise addition.
 
+use std::sync::LazyLock;
+
 pub const BUCKET_COUNT: usize = 84;
 /// The steps the ratio spans from the first edge to 100,000, so edge 64 keeps that value at any bucket count.
 const RATIO_STEPS: usize = 64;
@@ -12,17 +14,22 @@ fn ratio() -> f64 {
     (MAX / MIN).powf(1.0 / RATIO_STEPS as f64)
 }
 
+static EDGES: LazyLock<[f64; BUCKET_COUNT + 1]> =
+    LazyLock::new(|| std::array::from_fn(|i| MIN * ratio().powi(i as i32)));
+
+static LN_RATIO: LazyLock<f64> = LazyLock::new(|| ratio().ln());
+
 /// The last edge, which is the bound of the last finite bucket.
 pub fn top_edge() -> f64 {
-    edge(BUCKET_COUNT)
+    EDGES[BUCKET_COUNT]
 }
 
 fn edge(i: usize) -> f64 {
-    MIN * ratio().powi(i as i32)
+    EDGES[i]
 }
 
 pub fn bucket_edges() -> [f64; BUCKET_COUNT + 1] {
-    std::array::from_fn(edge)
+    *EDGES
 }
 
 /// The mock's rule exactly: anything at or below the first edge lands in bucket 0, and nothing lands past the
@@ -33,7 +40,7 @@ pub fn bucket_index(value: f64) -> usize {
     if value.partial_cmp(&MIN) != Some(std::cmp::Ordering::Greater) {
         return 0;
     }
-    let i = ((value / MIN).ln() / ratio().ln()).floor();
+    let i = ((value / MIN).ln() / *LN_RATIO).floor();
     (i.max(0.0) as usize).min(BUCKET_COUNT - 1)
 }
 

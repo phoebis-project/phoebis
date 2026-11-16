@@ -31,12 +31,13 @@ use crate::task::Ledger;
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
 
-/// A pin event's row over the four columns its `PinKey` fills.
-fn pin_row(pin: &PinKey) -> EventRecord {
+/// A pin event's row over the four columns its `PinKey` fills and its pool.
+fn pin_row(pin: &PinKey, pool_id: Option<&str>) -> EventRecord {
     EventRecord {
         agent_id: Some(pin.agent_id.clone()),
         key_id: Some(pin.key_id.clone()),
         model: Some(pin.model.clone()),
+        pool_id: pool_id.map(str::to_string),
         session_id: Some(pin.session_id.clone()),
         ..Default::default()
     }
@@ -109,8 +110,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             kind: PIN_CREATED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id, "epoch": epoch }).to_string()),
-            pool_id: pool_id.clone(),
-            ..pin_row(pin)
+            ..pin_row(pin, pool_id.as_deref())
         },
         RouterEvent::PinExpired {
             pin,
@@ -123,8 +123,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             kind: PIN_EXPIRED.into(),
             account_id: Some(account_id.clone()),
             detail: Some(json!({ "agent_id": pin.agent_id, "reasons": reasons }).to_string()),
-            pool_id: pool_id.clone(),
-            ..pin_row(pin)
+            ..pin_row(pin, pool_id.as_deref())
         },
         RouterEvent::PinMigrated {
             pin,
@@ -159,9 +158,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 kind: PIN_MIGRATED.into(),
                 account_id: Some(to_account.clone()),
                 detail: Some(detail.to_string()),
-                pool_id: pool_id.clone(),
                 from_account_id: Some(from_account.clone()),
-                ..pin_row(pin)
+                ..pin_row(pin, pool_id.as_deref())
             }
         }
         RouterEvent::MarkCleared {
@@ -195,8 +193,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 })
                 .to_string(),
             ),
-            pool_id: pool_id.clone(),
-            ..pin_row(pin)
+            ..pin_row(pin, pool_id.as_deref())
         },
         RouterEvent::ReservationExpired {
             account_id,
@@ -234,9 +231,8 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 detail["persisted"] = json!(true);
                 detail.to_string()
             }),
-            pool_id: Some(pool_id.clone()),
             request_id: Some(request_id.clone()),
-            ..pin_row(pin)
+            ..pin_row(pin, Some(pool_id))
         },
         RouterEvent::SlowDownStarted {
             account_id,
