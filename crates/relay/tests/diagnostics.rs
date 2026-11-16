@@ -1258,6 +1258,32 @@ async fn an_adaptive_turn_under_the_thinking_switch_alone_leaves_with_the_thinki
     up.shutdown().await;
 }
 
+/// The cache gate reads the client's tools and markers, and the thinking gate reads neither, so a thinking turn that
+/// carries none of them still takes the beta.
+#[tokio::test]
+async fn an_adaptive_turn_with_no_tools_and_no_cache_marker_leaves_with_the_thinking_beta() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = under_the_thinking_switch(&up, Bus::new()).await;
+    let (parts, body) = thinking_turn("adaptive", "s1").await.into_parts();
+    let native = without_tools(
+        &without_markers(&body.collect().await.unwrap().to_bytes()),
+        false,
+    );
+    assert!(markers(&native).is_empty(), "the client cached nothing");
+    turn(&h, Request::from_parts(parts, Body::from(native))).await;
+    let sent = &up.requests()[0];
+    assert!(
+        carries_the_thinking_beta(sent),
+        "a turn with no tools and no marker still takes the beta: {:?}",
+        beta_header(sent)
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_disabled_turn_under_the_thinking_switch_leaves_without_the_thinking_beta() {
     let up = FakeUpstream::start(vec![Rule {
