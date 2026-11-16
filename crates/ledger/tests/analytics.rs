@@ -11,10 +11,11 @@ use phoebis_ledger::{
     read_account_rollups, read_rollups, refusal_categories, rewrite_series, run_retention_blocking,
     series, series_paged, session_identities, AttemptRecord, BudgetedMember, CostRevisions,
     EventRecord, FoldRules, FundingFilter, GroupBy, GroupRow, Histogram, InputTransformation,
-    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlanTables,
-    PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
+    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, Patterns, PlacementRow,
+    PlanTables, PriceRevisions, PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow,
     RollupSelect, SeriesFilter, SessionSpendKey, Speed, WindowShares, BILLED_FUNDING, FAST_FUNDING,
-    NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED, USAGE_BASED_FUNDING,
+    NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    USAGE_BASED_FUNDING,
 };
 use phoebis_ledger::{RefusalCount, Refusals};
 use phoebis_routing::{
@@ -8231,6 +8232,129 @@ fn placements_apply_the_model_and_client_filter() {
         by_client.iter().map(|r| r.placements).sum::<u64>(),
         1,
         "a client filter narrows placements to that client's own attempts"
+    );
+}
+
+/// A `content` placement at 1,000 ms that promises 500 tokens, its request row keeping the caller's client label and
+/// `User-Agent` header as sent, `None` where the caller sent none.
+fn plant_caller_placement(
+    db: &LedgerDb,
+    id: &str,
+    client: Option<&str>,
+    user_agent: Option<&str>,
+    cache_read_tokens: u64,
+) {
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: 1_000,
+        finished_at: Some(1_500),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        client: client.map(String::from),
+        user_agent: user_agent.map(String::from),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: AccountKind::Oauth,
+        outcome: "succeeded".into(),
+        cache_read_tokens: Some(cache_read_tokens),
+        selection: Some(r#"{"placement":{"rung":"content","depth":1,"prefix_tokens":500}}"#.into()),
+        ..Default::default()
+    };
+    db.insert_request(&request, &[attempt], None).unwrap();
+}
+
+/// The placements over the planted range under the two pattern lists.
+fn placements_under(db: &LedgerDb, clients: &[&str], user_agents: &[&str]) -> Vec<PlacementRow> {
+    let words =
+        |list: &[&str]| Patterns::new(list.iter().map(|w| w.to_string()).collect()).unwrap();
+    let filter = RollupFilter {
+        clients: words(clients),
+        user_agents: words(user_agents),
+        ..Default::default()
+    };
+    db.read_blocking(|c| placements(c, &filter, &LiveKeys::default(), 0, 10_000))
+        .unwrap()
+}
+
+/// Each read's rungs with their placement counts.
+fn placed(rows: &[PlacementRow]) -> Vec<(&str, u64)> {
+    rows.iter()
+        .map(|r| (r.rung.as_str(), r.placements))
+        .collect()
+}
+
+#[test]
+fn placements_match_a_user_agent_pattern_against_the_agents_first_product_token() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_caller_placement(&db, "cli-310", Some("claude-code/cli"), Some(CLI_310), 500);
+    plant_caller_placement(
+        &db,
+        "sdk-310",
+        Some("claude-code/sdk-cli"),
+        Some(SDK_310),
+        100,
+    );
+    plant_caller_placement(&db, "cli-311", Some("claude-code/cli"), Some(CLI_311), 500);
+    plant_caller_placement(&db, "bare", None, None, 500);
+    assert_eq!(
+        placements_under(&db, &[], &["claude-cli/2.1.310"]),
+        vec![PlacementRow {
+            rung: "content".into(),
+            placements: 2,
+            hits: 1,
+            cache_read_tokens: 600,
+            promised_tokens: 1_000,
+        }],
+        "the token spelled in full counts the version's placements under both entrypoints in one row, and none of \
+         2.1.311's"
+    );
+    assert_eq!(
+        placements_under(&db, &[], &[CLI_310]),
+        Vec::new(),
+        "the header with its comment is no token, so it counts nothing, as it names no group of the series"
+    );
+    assert_eq!(
+        placed(&placements_under(&db, &[], &["-"])),
+        vec![("content", 1)],
+        "a row with no user agent reads `-`, as the rollups file it"
+    );
+}
+
+#[test]
+fn placements_match_a_client_pattern_against_the_label_the_rollups_fold() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_caller_placement(&db, "cli", Some("claude-code/cli"), None, 500);
+    // The relay writes an entrypoint of 60 letters into the label whole, past the 64 bytes the rollups keep.
+    plant_caller_placement(
+        &db,
+        "long",
+        Some("claude-code/entrypointentrypointentrypointentrypointentrypointentrypoint"),
+        None,
+        500,
+    );
+    plant_caller_placement(&db, "bare", None, None, 500);
+    assert_eq!(
+        placed(&placements_under(&db, &["claude-code/*"], &[])),
+        vec![("content", 1)],
+        "the wildcard counts `claude-code/cli`, and the label past the bound folds to `other`, which it does not match"
+    );
+    assert_eq!(
+        placed(&placements_under(&db, &["-"], &[])),
+        vec![("content", 1)],
+        "a row with no client reads `-`, as the rollups file it"
+    );
+    assert_eq!(
+        placed(&placements_under(&db, &[OTHER_DIMENSION], &[])),
+        vec![("content", 1)],
+        "the label past the bound reads `other`, as the rollups file it"
     );
 }
 

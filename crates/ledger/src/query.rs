@@ -831,7 +831,12 @@ pub fn refusal_categories(
     let mut fallbacks = 0;
     for group in groups {
         let (model, category, client, user_agent, refused, presented) = group?;
-        if !passes_request_patterns(&filter, client.as_deref(), user_agent.as_deref()) {
+        if !passes_request_patterns(
+            &filter.clients,
+            &filter.user_agents,
+            client.as_deref(),
+            user_agent.as_deref(),
+        ) {
             continue;
         }
         if refused > 0 {
@@ -853,10 +858,11 @@ pub fn refusal_categories(
     Ok(Refusals { rows, fallbacks })
 }
 
-/// Whether a request row passes the filter's `clients` and `user_agents`, each value folded as `deltas_of` keys the
+/// Whether a request row passes the `clients` and `user_agents` patterns, each value folded as `deltas_of` keys the
 /// hour row (`-` for none, the agent to its first product token), so a pattern reads as `passes_patterns` reads it.
 fn passes_request_patterns(
-    filter: &RequestFilter,
+    clients: &[String],
+    user_agents: &[String],
     client: Option<&str>,
     user_agent: Option<&str>,
 ) -> bool {
@@ -867,8 +873,7 @@ fn passes_request_patterns(
         let value = raw.map_or_else(|| UNATTRIBUTED.to_string(), fold);
         patterns.iter().any(|p| crate::pattern::matches(p, &value))
     };
-    passes(&filter.user_agents, user_agent, fold_user_agent)
-        && passes(&filter.clients, client, fold_identifier)
+    passes(user_agents, user_agent, fold_user_agent) && passes(clients, client, fold_identifier)
 }
 
 /// The same three queries `LedgerDb::request` runs, over a connection the caller already holds.
@@ -4688,7 +4693,8 @@ pub struct PlacementRow {
 /// tier's own size is not on the usage and a read is the only fact the upstream gives. Counts the serving
 /// attempt of a placed leg alone: a retry in place, a strip retry, or a 401 replay publishes the same trace on
 /// every earlier pass, and `finish` writes usage onto the serving attempt alone, so a pass with none is not a
-/// placement of its own, let alone a miss.
+/// placement of its own, let alone a miss. The `clients` and `user_agents` patterns match each row's client and agent
+/// folded as the rollups fold them, as `refusal_categories` matches them.
 pub fn placements(
     conn: &Connection,
     filter: &RollupFilter,
@@ -4709,8 +4715,6 @@ pub fn placements(
         &mut clauses,
     );
     in_list("kind", &filter.kinds, &mut args, &mut clauses);
-    pattern_any("user_agent", &filter.user_agents, &mut args, &mut clauses);
-    pattern_any("client", &filter.clients, &mut args, &mut clauses);
     if !filter.probes_counted() {
         clauses.push("kind != 'probe'".into());
     }
@@ -4719,8 +4723,10 @@ pub fn placements(
     } else {
         format!(" AND {}", clauses.join(" AND "))
     };
+    // SQL does not express the fold, so the patterns match each raw pair in memory, grouped first so a pair repeated
+    // across many placements folds once per rung.
     let sql = format!(
-        "SELECT json_extract(a.selection, '$.placement.rung'), COUNT(*), \
+        "SELECT json_extract(a.selection, '$.placement.rung'), r.client, r.user_agent, COUNT(*), \
          SUM(CASE WHEN json_extract(a.selection, '$.placement.rung') = 'content' \
                   THEN CASE WHEN COALESCE(a.cache_read_tokens, 0) >= COALESCE(json_extract(a.selection, '$.placement.prefix_tokens'), 0) THEN 1 ELSE 0 END \
                   ELSE CASE WHEN COALESCE(a.cache_read_tokens, 0) > 0 THEN 1 ELSE 0 END END), \
@@ -4729,19 +4735,43 @@ pub fn placements(
          WHERE json_extract(a.selection, '$.placement') IS NOT NULL \
          AND (a.input_tokens IS NOT NULL OR a.output_tokens IS NOT NULL OR a.cache_read_tokens IS NOT NULL \
               OR a.cache_write_5m_tokens IS NOT NULL OR a.cache_write_1h_tokens IS NOT NULL) \
-         AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1 ORDER BY 1"
+         AND r.received_at >= ?1 AND r.received_at < ?2{extra} GROUP BY 1, 2, 3 ORDER BY 1"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(args), |r| {
-        Ok(PlacementRow {
-            rung: r.get(0)?,
-            placements: r.get::<_, i64>(1)? as u64,
-            hits: r.get::<_, i64>(2)? as u64,
-            cache_read_tokens: r.get::<_, i64>(3)? as u64,
-            promised_tokens: r.get::<_, i64>(4)? as u64,
-        })
+    let groups = stmt.query_map(params_from_iter(args), |r| {
+        Ok((
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+            PlacementRow {
+                rung: r.get(0)?,
+                placements: r.get::<_, i64>(3)? as u64,
+                hits: r.get::<_, i64>(4)? as u64,
+                cache_read_tokens: r.get::<_, i64>(5)? as u64,
+                promised_tokens: r.get::<_, i64>(6)? as u64,
+            },
+        ))
     })?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let mut rows: BTreeMap<String, PlacementRow> = BTreeMap::new();
+    for group in groups {
+        let (client, user_agent, group) = group?;
+        if !passes_request_patterns(
+            &filter.clients,
+            &filter.user_agents,
+            client.as_deref(),
+            user_agent.as_deref(),
+        ) {
+            continue;
+        }
+        rows.entry(group.rung.clone())
+            .and_modify(|row| {
+                row.placements += group.placements;
+                row.hits += group.hits;
+                row.cache_read_tokens += group.cache_read_tokens;
+                row.promised_tokens += group.promised_tokens;
+            })
+            .or_insert(group);
+    }
+    Ok(rows.into_values().collect())
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]

@@ -186,12 +186,12 @@ pub(crate) struct PlacementsQuery {
     pub models: Option<String>,
     /// A comma-separated list.
     pub kinds: Option<String>,
-    /// Newline-separated patterns.
+    /// Newline-separated patterns over the agent's first product token, the grammar the Analytics tag describes.
     pub user_agents: Option<String>,
     /// Newline-separated patterns, held to the bound `/breakdown` holds them to (at most 32 patterns of at most 256
     /// characters, a `400` past it) and grouping nothing here.
     pub user_agent_groups: Option<String>,
-    /// Newline-separated patterns.
+    /// Newline-separated patterns over the client class, the grammar the Analytics tag describes.
     pub clients: Option<String>,
     /// `true` or `false`.
     pub include_probes: Option<bool>,
