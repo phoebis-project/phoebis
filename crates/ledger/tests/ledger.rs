@@ -5836,16 +5836,21 @@ revisions:
 /// A ledger on `LISTING_COSTS` under `dir`, its pool's one member the OAuth account `a`, so a request it serves is
 /// plan-funded.
 async fn on_listing_costs(up: &FakeUpstream, dir: &std::path::Path) -> Harness {
-    on_cost_model(up, dir, LISTING_COSTS).await
+    on_cost_model(up, dir, LISTING_COSTS, &[oauth("a", A, 0)]).await
 }
 
-/// A ledger on the cost model `costs` under `dir`, its pool's one member the OAuth account `a`.
-async fn on_cost_model(up: &FakeUpstream, dir: &std::path::Path, costs: &str) -> Harness {
+/// A ledger on the cost model `costs` under `dir`, its pool's members `accounts`.
+async fn on_cost_model(
+    up: &FakeUpstream,
+    dir: &std::path::Path,
+    costs: &str,
+    accounts: &[Account],
+) -> Harness {
     harness_on_tables(
         fresh_store(),
         Arc::new(LedgerDb::open(&dir.join("ledger.sqlite")).unwrap()),
         up,
-        &[oauth("a", A, 0)],
+        accounts,
         (0, None),
         LedgerConfig::default(),
         false,
@@ -5957,7 +5962,13 @@ async fn a_listed_model_reads_cleared_once_a_revision_weighs_it_and_a_later_list
 ) {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
-    let h = on_cost_model(&up, dir.path(), REVISED_LISTING_COSTS).await;
+    let h = on_cost_model(
+        &up,
+        dir.path(),
+        REVISED_LISTING_COSTS,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+    )
+    .await;
     // The second entry's and the third entry's instants.
     let (weighted_from, unweighted_from) = (3_600_000, 7_200_000);
     let entry = |since| {
@@ -5968,11 +5979,8 @@ async fn a_listed_model_reads_cleared_once_a_revision_weighs_it_and_a_later_list
         }]
     };
     // The read writes, so the reads come in rising order.
-    h.ledger.on_catalog_change(
-        &adding("a", "claude-opus-9-20260101", NOW),
-        Some(AccountKind::Oauth),
-        false,
-    );
+    h.ledger
+        .on_catalog_change(&adding("a", "claude-opus-9-20260101", NOW));
     assert_eq!(
         h.ledger.unpriced_served(NOW),
         entry(Some(NOW)),
@@ -5983,11 +5991,8 @@ async fn a_listed_model_reads_cleared_once_a_revision_weighs_it_and_a_later_list
         entry(None),
         "the revision in force at the read weighs the model, so the entry reads cleared"
     );
-    h.ledger.on_catalog_change(
-        &adding("b", "claude-opus-9-20260101", unweighted_from),
-        Some(AccountKind::Oauth),
-        false,
-    );
+    h.ledger
+        .on_catalog_change(&adding("b", "claude-opus-9-20260101", unweighted_from));
     assert_eq!(
         h.ledger.unpriced_served(unweighted_from),
         entry(Some(unweighted_from)),
@@ -6003,27 +6008,27 @@ async fn a_listed_model_reads_cleared_once_a_revision_weighs_it_and_a_later_list
 async fn a_listing_enters_its_models_only_where_the_accounts_requests_are_plan_funded() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
-    let h = on_listing_costs(&up, dir.path()).await;
-    h.ledger.on_catalog_change(
-        &adding("direct", "claude-haiku-9-20260101", NOW),
-        Some(AccountKind::ApiKey),
-        false,
-    );
-    h.ledger.on_catalog_change(
-        &adding("seat", "claude-sonnet-9-20260101", NOW),
-        Some(AccountKind::Oauth),
-        true,
-    );
-    h.ledger.on_catalog_change(
-        &adding("plan", "claude-opus-9-20260101", NOW),
-        Some(AccountKind::Oauth),
-        false,
-    );
-    h.ledger.on_catalog_change(
-        &adding("unheld", "claude-fable-9-20260101", NOW),
-        None,
-        false,
-    );
+    let h = on_cost_model(
+        &up,
+        dir.path(),
+        LISTING_COSTS,
+        &[
+            api_key("direct", C, 0),
+            oauth("seat", A, 1),
+            oauth("plan", B, 2),
+        ],
+    )
+    .await;
+    set_tier(&h.store, "seat", "default_claude_zero");
+    h.router.reload().await.unwrap();
+    h.ledger
+        .on_catalog_change(&adding("direct", "claude-haiku-9-20260101", NOW));
+    h.ledger
+        .on_catalog_change(&adding("seat", "claude-sonnet-9-20260101", NOW));
+    h.ledger
+        .on_catalog_change(&adding("plan", "claude-opus-9-20260101", NOW));
+    h.ledger
+        .on_catalog_change(&adding("unheld", "claude-fable-9-20260101", NOW));
     assert_eq!(
         h.ledger.unpriced_served(NOW),
         [

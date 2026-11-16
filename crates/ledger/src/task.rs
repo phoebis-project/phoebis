@@ -192,6 +192,8 @@ pub struct Ledger {
     assembler: Arc<SubscriberStats>,
     /// The cost model the writer prices with, so a catalog listing is weighed against the same model a landing is.
     tables: Arc<PlanTables>,
+    /// The router whose snapshot a catalog change reads the listing account's kind and seat flag from.
+    router: RouterHandle,
     unpriced: Unpriced,
     metrics: Arc<Metrics>,
     tx: mpsc::Sender<Record>,
@@ -263,12 +265,12 @@ impl Ledger {
     /// funding, the change's added models the cost model does not weigh enter through `note_listed`, and its
     /// `catalog_changed` row is recorded either way. An account the routing snapshot does not hold passes no kind and
     /// `false`, which reads as plan funding.
-    pub fn on_catalog_change(
-        &self,
-        change: &CatalogChange,
-        account_kind: Option<AccountKind>,
-        usage_based: bool,
-    ) {
+    pub fn on_catalog_change(&self, change: &CatalogChange) {
+        let snapshot = self.router.snapshot();
+        let account_kind = snapshot
+            .account(&change.account_id)
+            .map(|account| account.kind);
+        let usage_based = snapshot.usage_based(&change.account_id);
         // The landing side enters and clears an entry for a plan-funded attempt alone, so a model only an API key or a
         // usage-based seat lists would hold an item that no landing clears.
         if funding_of(account_kind, usage_based, None, Speed::Standard) == Funding::Plan {
@@ -436,6 +438,7 @@ pub fn spawn(
         stats: stats.clone(),
         assembler: subscriber.stats.clone(),
         tables: tables.clone(),
+        router: router.clone(),
         unpriced: unpriced.clone(),
         metrics: metrics.clone(),
         tx,
@@ -1977,11 +1980,20 @@ mod tests {
     fn stalled() -> (Ledger, mpsc::Receiver<Record>) {
         let (tx, rx) = mpsc::channel(1);
         let (stop, _) = watch::channel(false);
+        let store =
+            Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());
+        let router = phoebis_routing::spawn(
+            store,
+            Arc::new(|| 0),
+            phoebis_routing::RouterConfig::default(),
+        )
+        .unwrap();
         let ledger = Ledger {
             db: Arc::new(LedgerDb::open_in_memory().unwrap()),
             stats: Arc::new(LedgerStats::default()),
             assembler: Arc::default(),
             tables: Arc::new(PlanTables::shipped()),
+            router,
             unpriced: Unpriced::default(),
             metrics: Arc::new(Metrics::new()),
             tx,

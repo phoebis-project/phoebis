@@ -16,8 +16,8 @@ use phoebis_ledger::{
 use phoebis_oauth::{grant_states, resets_left, Grant, GrantStatus, LimitResets, UsageService};
 use phoebis_routing::{shed_cap, RegistrySnapshot, RouterHandle, DAY_MS};
 use phoebis_store::{
-    AccountExtras, AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Settled, Store,
-    StoreError,
+    AccountExtras, AccountKind, AccountRow, AccountState, PoolRow, RefreshHistory, ResolvedAttempt,
+    Settled, Store, StoreError,
 };
 use serde_json::json;
 
@@ -430,24 +430,9 @@ fn account_condition(
     }
 }
 
-/// When a state its source records no time for started: the first read that saw it hold. The entry joins `seen`, so
-/// the prune at the end of the read keeps it for as long as the state holds.
-fn since_of(
-    state: &mut ReaderState,
-    seen: &mut HashSet<(Kind, String)>,
-    kind: Kind,
-    id: &str,
-    holds: bool,
-    now: i64,
-) -> Option<i64> {
-    holds.then(|| {
-        let entry = (kind, id.to_string());
-        seen.insert(entry.clone());
-        *state.state_since.entry(entry).or_insert(now)
-    })
-}
-
-/// A condition about a subject that joins no card, dated by `since_of` under the subject's own id.
+/// A condition about a subject that joins no card and whose source records no start time, dated under the subject's
+/// own id by the first read that saw it hold. The entry joins `seen`, so the prune at the end of the read keeps it for
+/// as long as the state holds.
 fn dated_condition(
     state: &mut ReaderState,
     seen: &mut HashSet<(Kind, String)>,
@@ -457,7 +442,11 @@ fn dated_condition(
     now: i64,
     detail: serde_json::Value,
 ) -> Condition {
-    let since = since_of(state, seen, kind, &subject.id, holds, now);
+    let since = holds.then(|| {
+        let entry = (kind, subject.id.clone());
+        seen.insert(entry.clone());
+        *state.state_since.entry(entry).or_insert(now)
+    });
     condition_for(kind, subject, None, holds, since, detail)
 }
 
@@ -493,34 +482,19 @@ fn account_pools(snapshot: &RegistrySnapshot) -> HashMap<String, Vec<String>> {
     pools
 }
 
-pub(crate) struct RefreshFacts {
-    attempts: Vec<ResolvedAttempt>,
-    ends_at: Option<i64>,
-}
-
 /// Each OAuth account's newest settled refresh attempts and its refresh token end as its stored credential holds it,
 /// both read from the store at each read rather than kept here: a run of failures survives a restart, and the later
 /// end a re-pair stores clears the item at the next read.
 pub(crate) fn refresh_facts(
     store: &Store,
     accounts: &[AccountRow],
-) -> Result<HashMap<String, RefreshFacts>, StoreError> {
+) -> Result<HashMap<String, RefreshHistory>, StoreError> {
     let holders: Vec<(&str, u64)> = accounts
         .iter()
         .filter(|account| account.kind == AccountKind::Oauth)
         .map(|account| (account.id.as_str(), account.incarnation))
         .collect();
-    Ok(store
-        .refresh_histories(&holders, REFRESH_RUN_READ)?
-        .into_iter()
-        .map(|(id, history)| {
-            let facts = RefreshFacts {
-                attempts: history.attempts,
-                ends_at: history.refresh_expires_at,
-            };
-            (id, facts)
-        })
-        .collect())
+    store.refresh_histories(&holders, REFRESH_RUN_READ)
 }
 
 /// What the reset condition, the wall's join and the two account states read beside the accounts: each account's
@@ -565,7 +539,7 @@ impl ResetFacts<'_> {
 pub(crate) fn conditions(
     state: &mut ReaderState,
     accounts: &[AccountRow],
-    refresh_facts: &HashMap<String, RefreshFacts>,
+    refresh_facts: &HashMap<String, RefreshHistory>,
     resets: &ResetFacts,
     router: &RouterHandle,
     ledger_degraded: bool,
@@ -771,7 +745,7 @@ pub(crate) fn conditions(
             // The refresh token ends at a fixed instant no refresh moves, so the item rises ahead of the failed
             // refresh that would otherwise be its first sign. Held past the end until a re-pair stores an end more
             // than 3 days away, or the account is disconnected or deleted.
-            if let Some(expires) = refresh.and_then(|facts| facts.ends_at) {
+            if let Some(expires) = refresh.and_then(|facts| facts.refresh_expires_at) {
                 let (expiring, since, days_left) = ahead_of(expires, PAIRING_WARNING_DAYS, now);
                 out.push(condition(
                     Kind::PairingExpiring,

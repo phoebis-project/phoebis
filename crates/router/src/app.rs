@@ -236,7 +236,7 @@ pub async fn run_until(
     }
     let refolded = phoebis_ledger::refold_bands(
         &ledger_db,
-        &pricing.revisions(),
+        &revisions,
         config.stats.retention_days,
         config.stats.rollup_retention_days,
         clock(),
@@ -248,7 +248,7 @@ pub async fn run_until(
             "re-folded the requests whose prompt-length band moved"
         );
     }
-    let unmarked = phoebis_ledger::unmark_rebanded_sessions(&ledger_db, &pricing.revisions())
+    let unmarked = phoebis_ledger::unmark_rebanded_sessions(&ledger_db, &revisions)
         .context("clearing the session totals whose prompt-length band moved")?;
     if unmarked > 0 {
         tracing::info!(
@@ -303,16 +303,7 @@ pub async fn run_until(
     ));
     catalog.set_on_change(Arc::new({
         let ledger = ledger.clone();
-        let router = router_task.clone();
-        move |change| {
-            // The listing account's kind and seat flag tell the ledger whether its requests are plan-funded, the one
-            // funding an unpriced entry counts.
-            let snapshot = router.snapshot();
-            let kind = snapshot
-                .account(&change.account_id)
-                .map(|account| account.kind);
-            ledger.on_catalog_change(&change, kind, snapshot.usage_based(&change.account_id))
-        }
+        move |change| ledger.on_catalog_change(&change)
     }));
     let mark = ShutdownMark::default();
     let relay = Arc::new(
