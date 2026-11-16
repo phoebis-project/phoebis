@@ -1152,11 +1152,13 @@ expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost
 {
   const tiles = [...m.container.querySelectorAll('.stat-grid > .stat')];
   const read = (t) => [t?.querySelector('.stat__label')?.textContent ?? null, t?.querySelector('.stat__value')?.textContent ?? null, t?.querySelector('.stat__note')?.textContent ?? null];
-  const requestsHint = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
-  const rateHint = 'Errors among the requests the router asked an account for, the refused requests left out';
+  const requestsHint = "Requests the router asked an account for. The refused requests are in the Refused tile. The sparkline's last point is the current hour so far.";
+  const rateHint = "Errors among the requests the router asked an account for, the refused requests left out. The sparkline's last point is the current hour so far.";
+  const refusedHint =
+    "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead. The sparkline's last point is the current hour so far.";
   results.push({
     name: "/ the Refused tile reads the story's eight refusals with guardrail_blocked the most common and the three tiles carry their hints, the Refused tile's naming the router's own refusals",
-    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '8', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint && tiles[4]?.getAttribute('title') === REFUSED_TITLE,
+    ok: JSON.stringify(read(tiles[4])) === JSON.stringify(['Refused, 24h', '8', 'Most common: guardrail_blocked']) && tiles[0]?.getAttribute('title') === requestsHint && tiles[3]?.getAttribute('title') === rateHint && tiles[4]?.getAttribute('title') === refusedHint,
     missing: [JSON.stringify(read(tiles[4])), `first tile ${tiles[0]?.getAttribute('title') ?? 'no title'}`, `fourth tile ${tiles[3]?.getAttribute('title') ?? 'no title'}`, `fifth tile ${tiles[4]?.getAttribute('title') ?? 'no title'}`],
   });
 }
@@ -1691,43 +1693,49 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       value: tile?.querySelector('.stat__value')?.textContent ?? '',
     };
   };
-  const native = tileRead(m, 'Estimated cost, 24h');
+  // The pages mount on a frozen clock, so the hours the notes divide by read by hand: at the story's 14:30 they run 24.5
+  // from the day's first point at 14:00 a day back.
+  const unpricedHint = "No subscription request priced: its model has no weight in the cost model. The sparkline's last point is the current hour so far.";
+  const sparkHint = "The sparkline's last point is the current hour so far.";
+  const storyDay = await mount('/', { now: CLOCK_ORIGIN });
+  const native = tileRead(storyDay, 'Estimated cost, 24h');
   results.push({
     name: "/ under native the story's day, which a Sonnet 4.5 request priced nothing on, reads a dash titled why on the Estimated cost, 24h tile's subscription line beside the billed dollars, and its note the billed dollars per hour",
-    ok: shellUnit(m)?.value === 'native' && day.day24h.equivalent === null && day.day24h.billedUsd > 0 && JSON.stringify(native.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && native.note === `${fmtUsd(day.day24h.billedUsd / 24)} billed per hour` && native.title === UNPRICED_TITLE && native.spark,
+    ok: shellUnit(storyDay)?.value === 'native' && day.day24h.equivalent === null && day.day24h.billedUsd > 0 && JSON.stringify(native.lines) === JSON.stringify([['-', 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && native.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} billed per hour` && native.title === unpricedHint && native.spark,
     missing: [JSON.stringify(native), `the day's figure ${day.day24h.equivalent}`],
   });
-  await chooseUnit(m, 'usd');
-  const billed = tileRead(m, 'Billed dollars, 24h');
+  await chooseUnit(storyDay, 'usd');
+  const billed = tileRead(storyDay, 'Billed dollars, 24h');
   results.push({
     name: "/ under Billed dollars the Billed dollars, 24h tile reads the day's billed dollars alone, the native tile's billed line",
-    ok: shellUnit(m)?.value === 'usd' && billed.lines.length === 0 && billed.value === fmtUsd(day.day24h.billedUsd) && billed.value === native.lines[1]?.[0] && billed.note === `${fmtUsd(day.day24h.billedUsd / 24)} per hour` && billed.title === null && billed.spark,
+    ok: shellUnit(storyDay)?.value === 'usd' && billed.lines.length === 0 && billed.value === fmtUsd(day.day24h.billedUsd) && billed.value === native.lines[1]?.[0] && billed.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} per hour` && billed.title === sparkHint && billed.spark,
     missing: [JSON.stringify(billed)],
   });
-  await chooseUnit(m, 'native');
+  await chooseUnit(storyDay, 'native');
   localStorage.removeItem('phoebis.unit');
+  storyDay.unmount();
   // The same day priced: a figure for the day and for each hour but one in the middle, which priced nothing.
   const overviewOf = api.getOverview;
   const hourly = day.hourly.map((h, i) => ({ ...h, equivalent: i === Math.floor(day.hourly.length / 2) ? null : 0.001 }));
   const priced = { ...day, day24h: { ...day.day24h, equivalent: 0.024 }, hourly };
   api.getOverview = async () => priced;
-  const pricedPage = await mount('/');
+  const pricedPage = await mount('/', { now: CLOCK_ORIGIN });
   const pricedRead = tileRead(pricedPage, 'Estimated cost, 24h');
   pricedPage.unmount();
   api.getOverview = async () => ({ ...priced, day24h: { ...priced.day24h, billedUsd: 0 } });
-  const unbilled = await mount('/');
+  const unbilled = await mount('/', { now: CLOCK_ORIGIN });
   const unbilledRead = tileRead(unbilled, 'Estimated cost, 24h');
   unbilled.unmount();
   delete api.getOverview;
   results.push({
     name: "/ under native and the Ultra week a priced day stacks the Estimated cost, 24h tile's figure in that week over subscription above the billed dollars, and its spark leaves an hour that priced nothing a gap",
-    ok: JSON.stringify(pricedRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && /% of an Ultra week$/.test(pricedRead.lines[0]?.[0] ?? '') && pricedRead.note === `${fmtUsd(day.day24h.billedUsd / 24)} billed per hour` && pricedRead.title === null && pricedRead.runs === 2,
+    ok: JSON.stringify(pricedRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription'], [fmtUsd(day.day24h.billedUsd), 'billed']]) && /% of an Ultra week$/.test(pricedRead.lines[0]?.[0] ?? '') && pricedRead.note === `${fmtUsd(day.day24h.billedUsd / 24.5)} billed per hour` && pricedRead.title === sparkHint && pricedRead.runs === 2,
     missing: [JSON.stringify(pricedRead), weekFull(0.024)],
   });
   results.push({
     name: "/ under native a priced day with nothing billed reads the Estimated cost, 24h tile's figure alone, and its note the figure per hour in the Ultra week",
-    ok: JSON.stringify(unbilledRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription']]) && unbilledRead.note === `${weekFull(0.001)} per hour` && unbilledRead.title === null,
-    missing: [JSON.stringify(unbilledRead), weekFull(0.001)],
+    ok: JSON.stringify(unbilledRead.lines) === JSON.stringify([[weekFull(0.024), 'subscription']]) && unbilledRead.note === `${weekFull(0.024 / 24.5)} per hour` && unbilledRead.title === sparkHint,
+    missing: [JSON.stringify(unbilledRead), weekFull(0.024 / 24.5)],
   });
   // With nothing billed the tile's note reads the subscription figure per hour, and the story's day has none: its
   // Sonnet 4.5 rows, which `secondary` serves and the cost model has no weight for, price nothing.
@@ -1735,23 +1743,23 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     const o = await overviewOf.call(api);
     return { ...o, day24h: { ...o.day24h, billedUsd: 0 } };
   };
-  const planOnly = await mount('/');
+  const planOnly = await mount('/', { now: CLOCK_ORIGIN });
   const planRead = tileRead(planOnly, 'Estimated cost, 24h');
   planOnly.unmount();
   delete api.getOverview;
   results.push({
     name: "/ under native the story's day with nothing billed reads a dash titled why on the Estimated cost, 24h tile's subscription line and a dash per hour in its note",
-    ok: JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) && planRead.note === '- per hour' && planRead.title === UNPRICED_TITLE,
+    ok: JSON.stringify(planRead.lines) === JSON.stringify([['-', 'subscription']]) && planRead.note === '- per hour' && planRead.title === unpricedHint,
     missing: [JSON.stringify(planRead)],
   });
   // Under Dollar equivalent the note reads its rate as the two other dollar positions do. The day handed to the page
-  // costs $14.40 at the API price list, $7.20 of it billed, so its subscription requests' $7.20 over 24 hours reads
-  // $0.30 per hour.
+  // costs $14.40 at the API price list, $7.20 of it billed, so its subscription requests' $7.20 over 24.5 hours reads
+  // $0.29 per hour.
   api.getOverview = async () => {
     const o = await overviewOf.call(api);
     return { ...o, day24h: { ...o.day24h, billedUsd: 7.2, cost: 14.4 } };
   };
-  const equivalentPage = await mount('/');
+  const equivalentPage = await mount('/', { now: CLOCK_ORIGIN });
   await chooseUnit(equivalentPage, 'equivalent');
   const equivalentRead = { ...tileRead(equivalentPage, 'Dollar equivalent, 24h'), unit: shellUnit(equivalentPage)?.value ?? null };
   await chooseUnit(equivalentPage, 'native');
@@ -1760,8 +1768,27 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   delete api.getOverview;
   results.push({
     name: "/ under Dollar equivalent the Dollar equivalent, 24h tile's note reads the subscription requests' dollars per hour",
-    ok: equivalentRead.unit === 'equivalent' && equivalentRead.note === '$0.30 per hour',
+    ok: equivalentRead.unit === 'equivalent' && equivalentRead.note === '$0.29 per hour',
     missing: [JSON.stringify(equivalentRead)],
+  });
+  // 25 points from 14:00 a day back, read at 14:34, cover 24 hours and 34 minutes: 737 requests read 30.0 an hour,
+  // where a divisor of 24 reads 30.7 and one of the 25 points 29.5, and a day of $73.70 reads $3.00 an hour, where 24
+  // reads $3.07. Native reads the billed dollars and All in dollars the cost, so the day sets both.
+  const MINUTE = 60_000;
+  const covered = Array.from({ length: 25 }, (_, i) => ({ at: new Date(Date.UTC(2026, 8, 15, 14 + i)).toISOString(), billed: 0, cost: 0, equivalent: 0, errors: 0, refused: 0, requests: 0, tokens: 0 }));
+  api.getOverview = async () => ({ ...day, day24h: { billedUsd: 73.7, cost: 73.7, equivalent: 0 }, hourly: covered, requests24h: 737 });
+  const coveredPage = await mount('/', { now: CLOCK_ORIGIN + 4 * MINUTE });
+  const coveredRead = { native: tileRead(coveredPage, 'Estimated cost, 24h').note, requests: tileRead(coveredPage, 'Requests, 24h').note };
+  await chooseUnit(coveredPage, 'all');
+  coveredRead.all = tileRead(coveredPage, 'Estimated cost, 24h').note;
+  await chooseUnit(coveredPage, 'native');
+  localStorage.removeItem('phoebis.unit');
+  coveredPage.unmount();
+  delete api.getOverview;
+  results.push({
+    name: '/ the per-hour notes divide by the hours the answer covers',
+    ok: coveredRead.requests === '30.0 per hour' && coveredRead.all === '$3.00 per hour' && coveredRead.native === '$3.00 billed per hour',
+    missing: [JSON.stringify(coveredRead)],
   });
 }
 m.unmount();

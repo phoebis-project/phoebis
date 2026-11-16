@@ -1191,7 +1191,8 @@ export class MockApi implements Api {
   }
 
   getOverview() {
-    // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
+    // The route answers its 25 hourly points, the 24 whole hours before the current one and the current hour so far,
+    // over an empty ledger too, at zero, so each spark draws a flat line.
     const last24h = ledger().dayRows;
     const byHour = new Map<number, RequestLog[]>();
     for (const r of last24h) {
@@ -1201,7 +1202,7 @@ export class MockApi implements Api {
       else byHour.set(hour, [r]);
     }
     const hourlyMap = new Map<number, Overview['hourly'][number]>();
-    for (let i = 23; i >= 0; i -= 1) {
+    for (let i = 24; i >= 0; i -= 1) {
       const startMs = startOfHour(NOW - i * HOUR);
       const { billedUsd, equivalent } = requestSidesOf(byHour.get(startMs) ?? []);
       hourlyMap.set(startMs, { at: iso(startMs), billed: billedUsd, cost: 0, equivalent, errors: 0, refused: 0, requests: 0, tokens: 0 });

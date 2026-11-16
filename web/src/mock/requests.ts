@@ -2585,9 +2585,9 @@ function classOfHour(seed: string): string {
 }
 
 /**
- * The first hour the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total,
- * and a pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven
- * days back, as the routes total their rollups.
+ * The first hour the day's held probe is drawn from, the hour 23 hours before the current one. The dashboard's day, an
+ * account's or a pool's day total, and the dashboard's and a pool's 25 hourly points start an hour earlier, on the
+ * hour a full day back, and the week on the hour seven days back, as the routes total their rollups.
  */
 export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
 const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
@@ -3098,8 +3098,8 @@ export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...idleWarmi
 // A probe is the router's own traffic, which the routes count nowhere, but a billed probe draws real dollars, so the
 // day's and the totals' rows hold its row for the cost and billed sums alone, and every count over them skips it.
 const priced = (from: number) => REQUESTS.filter((r) => (r.kind !== 'probe' || !planPaid(r)) && Date.parse(r.at) >= from);
-/** The rows the dashboard reads. */
-export const DAY_ROWS: RequestLog[] = priced(DAY_FROM);
+/** The rows the dashboard's day reads, from the hour a full day back as the day totals below. */
+export const DAY_ROWS: RequestLog[] = priced(TOTALS_FROM);
 /** The rows an account's or a pool's day total reads, and a pool's hourly buckets. */
 const TOTAL_ROWS: RequestLog[] = priced(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');

@@ -25,6 +25,7 @@ import { STATUS_LABEL, STATUS_TONE, accountCooldown, planExtraUsage, slowedOf } 
 import { REFUSED_TITLE, costHeaderTitle, glanceCellOf, requestCostUnit, revisionsTitle } from '@/lib/requests';
 import { ringFigures, ringLine, ringRowTitle, type RingFigures, type RingLeftOut, type RingRow, type RingWindow } from '@/lib/rings';
 import { slowDownChip } from '@/lib/selection';
+import { HOUR } from '@/lib/time';
 import type { UnitPosition, WeekPosition } from '@/lib/unit';
 
 /**
@@ -42,6 +43,15 @@ function asOfLine(reads: [string, Loaded<unknown>][], now: number): { text: stri
   return { text: failed ? `Last refresh of the ${failed[0]} failed: ${failed[1].error}. Showing data as of ${asOf}` : `As of ${asOf}`, title: fmtAbsolute(oldest) };
 }
 
+/**
+ * The hours an overview covers, from its first hourly point to the instant the answer landed, null where either is
+ * missing. The floor keeps the notes finite where the browser's clock runs far behind the router's.
+ */
+const hoursCovered = (o: Pick<Overview, 'hourly'>, fetchedAt: string | null): number | null => {
+  const first = o.hourly[0]?.at;
+  return first === undefined || fetchedAt === null ? null : Math.max(1, (Date.parse(fetchedAt) - Date.parse(first)) / HOUR);
+};
+
 /** The day's cost tile as `StatTile` draws it, a null value and note the skeleton. */
 interface CostTile {
   failure: WeekReading['failure'];
@@ -57,15 +67,16 @@ interface CostTile {
  * request was billed, and its spark leaves an unpriced hour a gap. The figure waits on the scale, so native draws the
  * skeleton while the cost model is out, and the reading's failure as a dash titled with it, noted unpriced where the
  * cost model sizes no chosen week. The dollar positions read their dollars, each with its rate per hour as its note.
+ * Each rate divides by `hours`, the span `hoursCovered` reads, so the note is the skeleton while that is null.
  */
-function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): CostTile {
+function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading, hours: number | null): CostTile {
   const day = o.day24h;
   const tile = sumTileOf(unit, day, reading);
   if (unit !== 'native') {
     const dollars = dollarsUnder(unit, day);
     return {
       ...tile,
-      note: `${fmtUsd(dollars / 24)} per hour`,
+      note: hours === null ? null : `${fmtUsd(dollars / hours)} per hour`,
       spark: o.hourly.map((h) => dollarsUnder(unit, { billedUsd: h.billed, cost: h.cost, equivalent: h.equivalent })),
     };
   }
@@ -79,7 +90,7 @@ function costTileOf(unit: UnitPosition, o: Overview, reading: WeekReading): Cost
   if (scale === null) return { ...tile, note: null, spark: spark(1) };
   return {
     ...tile,
-    note: billed || !plan ? `${fmtUsd(day.billedUsd / 24)} billed per hour` : `${equivalentOrDash(day.equivalent === null ? null : day.equivalent / 24, week, scale)} per hour`,
+    note: hours === null ? null : billed || !plan ? `${fmtUsd(day.billedUsd / hours)} billed per hour` : `${equivalentOrDash(day.equivalent === null ? null : day.equivalent / hours, week, scale)} per hour`,
     spark: spark(scale),
   };
 }
@@ -106,7 +117,8 @@ export function DashboardPage() {
     const hourly = o?.hourly ?? [];
     return { errors: hourly.map((h) => h.errors), refused: hourly.map((h) => h.refused), requests: hourly.map((h) => h.requests), tokens: hourly.map((h) => h.tokens) };
   }, [o]);
-  const costTile = useMemo(() => (o ? costTileOf(unit, o, reading) : null), [o, reading, unit]);
+  const hours = o ? hoursCovered(o, overview.fetchedAt) : null;
+  const costTile = useMemo(() => (o ? costTileOf(unit, o, reading, hours) : null), [hours, o, reading, unit]);
   const accountsFailure = failedFirst(accounts) ? <ErrorState title="Could not load the accounts" body={accounts.error} retry={accounts.reload} /> : null;
   const ringFailure = accountsFailure ?? (failedFirst(settings) ? <ErrorState title="Could not load the settings" body={settings.error} retry={settings.reload} /> : null);
   const ringUnpriced = reading.failure?.unpriced ? reading.failure.text : null;
@@ -135,7 +147,7 @@ export function DashboardPage() {
         <ErrorState title="Could not load the 24-hour figures" body={overview.error} retry={overview.reload} />
       ) : (
         <div className="stat-grid stat-grid--day">
-          <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o ? `${(o.requests24h / 24).toFixed(1)} per hour` : null} spark={sparks.requests} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
+          <StatTile label="Requests, 24h" value={o ? fmtInt(o.requests24h) : null} note={o && hours !== null ? `${(o.requests24h / hours).toFixed(1)} per hour` : null} spark={sparks.requests} title="Requests the router asked an account for. The refused requests are in the Refused tile." color={ink.series[0]} />
           <StatTile label="Tokens, 24h" value={o ? fmtCompact(o.tokens24h) : null} note={o ? `${fmtPct(o.tokens24h ? o.tokensCached24h / o.tokens24h : 0)} served from cache` : null} spark={sparks.tokens} color={ink.series[2]} />
           <StatTile label={`${UNIT_TILE_LABEL[dollarsOf(unit)]}, 24h`} value={costTile?.value ?? null} note={costTile?.note ?? null} spark={costTile?.spark ?? []} title={costTile?.title} failure={costTile?.failure} color={ink.series[1]} />
           <StatTile
@@ -216,10 +228,17 @@ export function DashboardPage() {
   );
 }
 
-/** A failure draws as `Tile` draws one: a dash, its note, and its text in the title. */
+/** The route's last hourly point is the hour still running, so a spark's last point can read low beside whole hours. */
+const SPARK_LAST_POINT = "The sparkline's last point is the current hour so far.";
+
+/**
+ * A failure draws as `Tile` draws one: a dash, its note, and its text alone in the title. Otherwise the title ends with
+ * the sentence on the spark's last point, or is that sentence where the tile has none.
+ */
 function StatTile({ label, value, note, spark, color, failure = null, title }: { color: string; failure?: WeekReading['failure']; label: string; note: string | null; spark: (number | null)[]; title?: string; value: ReactNode }) {
+  const hover = title === undefined ? SPARK_LAST_POINT : `${title}${title.endsWith('.') ? ' ' : '. '}${SPARK_LAST_POINT}`;
   return (
-    <div className="stat" title={failure?.text ?? title}>
+    <div className="stat" title={failure?.text ?? hover}>
       <span className="stat__label">{label}</span>
       <span className="stat__value">{failure ? '-' : (value ?? <Skeleton width={96} height={26} />)}</span>
       <span className="stat__note">{failure ? (failure.unpriced ? 'unpriced' : 'could not load') : (note ?? <Skeleton width={120} />)}</span>

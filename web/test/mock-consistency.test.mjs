@@ -99,9 +99,9 @@ async function storyAt(at) {
   const { requests } = await api.listRequests({ includeProbes: true, limit: 100_000 });
   const events = (await Promise.all(requests.map((r) => api.getRequest(r.id)))).flatMap((detail) => detail?.events ?? []);
   const now = Date.parse(at);
-  // The day the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total, and a
-  // pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven days
-  // back, as the routes total their rollups.
+  // `dayFrom` is the hour 23 hours before the current one. The dashboard's day, an account's or a pool's day total, and
+  // the dashboard's and a pool's 25 hourly buckets start an hour earlier, on the hour a full day back, and the week on
+  // the hour seven days back, as the routes total their rollups.
   const dayFrom = startOfHour(now) - 23 * HOUR;
   const totalsFrom = startOfHour(now) - 24 * HOUR;
   const weekFrom = startOfHour(now) - 7 * DAY;
@@ -713,7 +713,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the dashboard's day and the analytics' day add up from the rows and the rollups, at ${at}`, async () => {
     const s = await story;
-    assert.equal(s.overview.requests24h, s.asked(s.counted).length);
+    assert.equal(s.overview.requests24h, s.asked(s.totalled).length);
     assert.equal(sum(s.overview.hourly, (h) => h.requests), s.overview.requests24h, 'the hourly buckets');
     assert.equal(sum(s.pools, (p) => p.requests24h), s.asked(s.totalled).length, "the pools' days");
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
@@ -790,7 +790,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(burn.points.some((p) => p.group === 'claude-sonnet-4-5' && p.unpriced), 'a bucket of it reads flagged');
     assert.deepEqual([...new Set(burn.points.filter((p) => p.unpriced).map((p) => p.group))], ['claude-sonnet-4-5'], 'and no other model flags one');
     assert.ok(burn.points.every((p) => !p.unpriced || p.equivalent === null), 'a flagged bucket reads null');
-    assert.ok(holds(s.counted), "the dashboard's day holds one");
+    assert.ok(holds(s.totalled), "the dashboard's day holds one");
     assert.equal(s.overview.day24h.equivalent, null, "so the dashboard's day reads null");
     for (const p of s.pools) assert.equal(p.day24h.equivalent === null, holds(s.totalled.filter((r) => r.poolId === p.id && !r.refused)), `${p.id}'s day`);
     for (const k of s.keys) {
@@ -3512,12 +3512,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       const plan = rows.filter((r) => planPaid(s, r));
       return plan.some((r) => requestTokens(r) > 0 && r.costEquivalent === null) ? null : sum(plan, (r) => r.costEquivalent ?? 0);
     };
-    assert.equal(s.overview.day24h.equivalent, figureOf(s.counted), `the day reads ${s.overview.day24h.equivalent}`);
+    assert.equal(s.overview.day24h.equivalent, figureOf(s.totalled), `the day reads ${s.overview.day24h.equivalent}`);
     // The billed rows alone, a billed probe's among them, as the dashboard's route sums its day.
-    const billed = s.requests.filter((r) => Date.parse(r.at) >= s.dayFrom && !planPaid(s, r));
+    const billed = s.requests.filter((r) => Date.parse(r.at) >= s.totalledFrom && !planPaid(s, r));
     assert.ok(near(s.overview.day24h.billedUsd, sum(billed, (r) => r.costUsd)), 'the billed rows alone');
     for (const h of s.overview.hourly) {
-      const rows = s.counted.filter((r) => startOfHour(Date.parse(r.at)) === Date.parse(h.at));
+      const rows = s.totalled.filter((r) => startOfHour(Date.parse(r.at)) === Date.parse(h.at));
       const want = figureOf(rows);
       assert.ok(want === null ? h.equivalent === null : near(h.equivalent, want), `${h.at} reads ${h.equivalent} against ${want}`);
     }
@@ -3977,8 +3977,8 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the_mock_dashboard_leaves_the_refused_rows_out_of_its_counts_and_reads_them_in_the_refused_members at ${at}`, async () => {
     const s = await story;
-    const refused = s.counted.filter((r) => r.refused);
-    const asked = s.asked(s.counted);
+    const refused = s.totalled.filter((r) => r.refused);
+    const asked = s.asked(s.totalled);
     const codesOf = (rows) => {
       const codes = new Map();
       for (const r of rows) if (r.errorCode) codes.set(r.errorCode, (codes.get(r.errorCode) ?? 0) + 1);
@@ -4067,13 +4067,13 @@ test("the story's 14:00 hour counts desktop's turn that marked no cache breakpoi
   assert.deepEqual(desktop && [desktop.uncached, desktop.uncacheable], [3, 2]);
 });
 
-// An instant whose hour a full day back carries traffic before the dashboard's first bucket.
+// An instant whose hour a full day back carries traffic.
 const firstHour = loading.then(() => storyAt('2026-09-16T09:30:00Z'));
 
-test("the hour a full day back counts toward the accounts' and pools' day totals and a pool's first bucket, and toward no dashboard figure", async () => {
+test("the hour a full day back counts toward the accounts' and pools' day totals, a pool's first bucket and the dashboard's day", async () => {
   const s = await firstHour;
   const early = s.totalled.filter((r) => Date.parse(r.at) < s.dayFrom);
-  assert.ok(early.length > 0, "the story has traffic in the hour before the dashboard's first bucket");
+  assert.ok(early.length > 0, 'the story has traffic in the hour a full day back');
   for (const a of s.accounts) {
     const own = (rows) => rows.filter((r) => r.accountId === a.id).length;
     assert.equal(a.requests.last24h, own(s.counted) + own(early), `${a.id}'s first hour`);
@@ -4081,7 +4081,7 @@ test("the hour a full day back counts toward the accounts' and pools' day totals
   for (const p of s.pools) {
     assert.equal(p.traffic24h[0].requests, s.asked(early).filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
   }
-  assert.equal(s.overview.requests24h, s.asked(s.counted).length, "the dashboard's day keeps its own first hour");
+  assert.equal(s.overview.requests24h, s.asked(s.totalled).length, "the dashboard's day counts it too");
 });
 
 test("a paired row's first reading is stamped at the list read that lands it, after the confirm", async () => {

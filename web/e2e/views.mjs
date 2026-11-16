@@ -1089,11 +1089,14 @@ async function dashboardWidestFigure(theme) {
   }
 }
 
-/** The Refused tile's hover. The pass reads no module of the console, so it spells the page's sentence here. */
+/**
+ * The Refused tile's hover, its title and the sentence on the spark's last point. The pass reads no module of the
+ * console, so it spells the page's sentences here.
+ */
 const REFUSED_TITLE =
-  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead.";
+  "Requests refused for the client's or a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable, body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead. The sparkline's last point is the current hour so far.";
 /** The Requests tile's hover, the neighbor the Refused tile's is read beside. */
-const REQUESTS_TITLE = 'Requests the router asked an account for. The refused requests are in the Refused tile.';
+const REQUESTS_TITLE = "Requests the router asked an account for. The refused requests are in the Refused tile. The sparkline's last point is the current hour so far.";
 
 /**
  * The Dashboard's tile words beside their neighbors: the Estimated cost, 24h tile's figure and note under native and
@@ -1130,7 +1133,7 @@ async function dashboardTileWords(theme) {
   if (subscription === undefined) {
     if (billed === undefined) say(`the Estimated cost, 24h tile reads ${JSON.stringify(read.cost.lines)}, neither a subscription line nor the billed line alone`);
   } else if (subscription[0] === '-') {
-    if (read.cost.title !== UNPRICED_TITLE) say(`the Estimated cost, 24h tile's subscription dash is titled ${JSON.stringify(read.cost.title)}, not the unpriced title`);
+    if (read.cost.title !== "No subscription request priced: its model has no weight in the cost model. The sparkline's last point is the current hour so far.") say(`the Estimated cost, 24h tile's subscription dash is titled ${JSON.stringify(read.cost.title)}, not the unpriced title`);
   } else if (!/^(\d[\d.]*% of an Ultra week|0%)$/.test(subscription[0])) say(`the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(subscription)}, not a share of an Ultra week, 0% or the unpriced dash`);
   if (!/^(\d[\d.]*% of an Ultra week|0%|-|\$[\d,.]+ billed) per hour$/.test(read.cost.note ?? '')) say(`the Estimated cost, 24h tile's note reads ${JSON.stringify(read.cost.note)}`);
   if (read.refused.title !== REFUSED_TITLE) say(`the Refused, 24h tile's hover reads ${JSON.stringify(read.refused.title)}`);
@@ -5836,7 +5839,7 @@ async function dashboardUnpricedTile(theme) {
   });
   measurements.push(`${theme} / unpriced cost tile ${JSON.stringify(read)}`);
   if (read.dash?.text !== '-') say(`over the story's day the Estimated cost, 24h tile's subscription line reads ${JSON.stringify(read.dash?.text ?? null)}, not a dash`);
-  if (read.title !== UNPRICED_TITLE) say(`over the story's day the Estimated cost, 24h tile is titled ${JSON.stringify(read.title)}`);
+  if (read.title !== "No subscription request priced: its model has no weight in the cost model. The sparkline's last point is the current hour so far.") say(`over the story's day the Estimated cost, 24h tile is titled ${JSON.stringify(read.title)}`);
   for (const what of compare(read.dash, read.billed, ['color', 'family', 'size', 'weight'], 'the unpriced dash against the billed figure beside it')) say(what);
   for (const what of compare(read.dash, read.neighbour, ['color', 'family', 'weight'], "the unpriced dash against the Tokens, 24h tile's figure")) say(what);
 }
