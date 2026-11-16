@@ -1,5 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
+import { launch } from './launch.mjs';
+import { closingLines, VIEWS } from './parts.mjs';
+
+// Where the run holds several views, this starts one runner of this file per view side by side and ends the process.
+await launch(import.meta.url);
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://127.0.0.1/', pretendToBeVisual: true });
 const { window } = dom;
@@ -121,7 +126,9 @@ function expect(name, text, needles) {
   results.push({ name, ok: missing.length === 0, missing, length: text.length });
 }
 /**
- * A whole run takes 15 to 30 minutes. `SMOKE_ONLY`, a comma-separated list of view paths such as `/keys,/sessions`,
+ * A whole run in one runner takes 15 to 30 minutes. A run that holds several views starts one runner per view side by
+ * side through `launch.mjs`, each under `SMOKE_ONLY` with its one view. `SMOKE_JOBS` caps the runners side by side, and
+ * 1 keeps the run in one process. `SMOKE_ONLY`, a comma-separated list of view paths such as `/keys,/sessions`,
  * runs the blocks of those views and skips the others. A block names every view its checks name or its walk mounts,
  * and also any view whose checks expect what it writes. Each view's shared mount `m` runs as one block with the
  * statements and blocks that read it, down to its unmount, and those lines stay unindented so their blame stays with
@@ -132,12 +139,18 @@ const SMOKE_ONLY = (process.env.SMOKE_ONLY ?? '').split(',').map((p) => p.trim()
 const viewsNamed = new Set();
 let blockCount = 0;
 let skippedBlocks = 0;
+/** The blocks this process ran, each with its place among the calls and the span of results it pushed. */
+const ran = [];
 const forView = async (views, block) => {
   const named = [views].flat();
   for (const path of named) viewsNamed.add(path);
   blockCount += 1;
-  if (SMOKE_ONLY.length === 0 || named.some((path) => SMOKE_ONLY.includes(path))) await block();
-  else skippedBlocks += 1;
+  if (SMOKE_ONLY.length === 0 || named.some((path) => SMOKE_ONLY.includes(path))) {
+    const ordinal = blockCount;
+    const first = results.length;
+    await block();
+    ran.push({ block: ordinal, count: results.length - first, first });
+  } else skippedBlocks += 1;
 };
 /** A grouped dialog's group section by its label; hidden groups stay mounted, so a lookup reaches every one. */
 const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].find((s) => s.getAttribute('aria-label') === label);
@@ -31231,13 +31244,26 @@ await forView('/', async () => {
 for (const path of SMOKE_ONLY.filter((p) => !viewsNamed.has(p))) {
   results.push({ name: `SMOKE_ONLY names ${path}, which no block names`, ok: false, missing: [`the blocks name ${[...viewsNamed].sort().join(' ')}`] });
 }
+for (const path of [...viewsNamed].filter((p) => !VIEWS.includes(p))) {
+  results.push({ name: `a block names ${path}, which the list of views does not hold`, ok: false, missing: [`smoke/parts.mjs lists ${VIEWS.join(' ')}`] });
+}
 const failed = results.filter((r) => !r.ok);
 for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.ok ? '' : `  missing: ${JSON.stringify(r.missing)}`}`);
-console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
-if (SMOKE_ONLY.length > 0) console.log(`SMOKE_ONLY=${SMOKE_ONLY.join(',')}: ${skippedBlocks} of ${blockCount} blocks skipped`);
-console.log(`fixture rows: ${requests.length} requests`);
+// A runner the launcher started leaves the closing lines to the launcher, which prints them once over every runner.
+if (process.send === undefined) {
+  console.log('');
+  for (const line of closingLines({ blocks: blockCount, filter: SMOKE_ONLY, passed: results.length - failed.length, rows: requests.length, skipped: skippedBlocks, total: results.length })) console.log(line);
+}
 if (problems.length) {
   console.log(`\n${problems.length} console problems:`);
   for (const p of [...new Set(problems)].slice(0, 30)) console.log('  ' + p);
 }
-process.exit(failed.length || problems.length ? 1 : 0);
+const status = failed.length || problems.length ? 1 : 0;
+if (process.send === undefined) process.exit(status);
+else {
+  const blockOf = results.map(() => 0);
+  for (const { block, count, first } of ran) blockOf.fill(block, first, first + count);
+  const report = { blocks: blockCount, checks: results.map((r, i) => [blockOf[i], r.ok]), peak: process.resourceUsage().maxRSS, ran: ran.map(({ block }) => block), rows: requests.length };
+  // The exit waits for the send, so the report leaves ahead of the channel's close.
+  process.send(report, () => process.exit(status));
+}

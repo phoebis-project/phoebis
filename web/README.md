@@ -30,7 +30,8 @@ The other scripts:
 - `npm run lint` runs ESLint over the sources, the tests, the smoke checks, the browser pass and the scripts.
 - `npm run smoke` mounts every view in jsdom against the mock and checks what it draws, or only the views listed in
   `SMOKE_ONLY`, a comma-separated list of view paths such as `/keys,/sessions`, and a path that no block names fails the
-  run.
+  run. A run that holds several views starts one runner per view side by side and prints each view's lines together.
+  `SMOKE_JOBS` caps the runners, one per core by default, and `SMOKE_JOBS=1` keeps the run in one process.
 - `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
 - `npm test` builds the test bundle and runs the unit tests under `test/`.
 
