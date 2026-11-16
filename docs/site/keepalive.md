@@ -402,11 +402,9 @@ stopped under `idle_limit` does. An evicted one shows on the wasted counter at o
 reach it at once where their chains have ended and otherwise as their chains' last entries lapse with no real request,
 as the probes of one stopped under `idle_limit` do. A lapse also shows in that log line.
 
-A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is held under
-`retryable_probe_error`: its next attempt waits out that answer's `Retry-After` in place of the ladder's step, whatever
-its length, since a slot frees within seconds, while a quota `429`'s header counts only where it is longer than the
-step. A probe answered `503 accounts_unavailable` because its key moved to another pool while it was in flight is held
-under `retryable_probe_error`: its next attempt admits under the new pool.
+A quota `429`'s `Retry-After` counts only where it is longer than the ladder's step. A probe answered
+`503 accounts_unavailable` because its key moved to another pool while it was in flight is held under
+`retryable_probe_error`: its next attempt admits under the new pool.
 
 A probe the router refused with `503 ledger_behind`, its ledger catching up (see [Refusal
 codes](client.md#refusal-codes)), holds under `ledger_behind` rather than `retryable_probe_error`: its next attempt

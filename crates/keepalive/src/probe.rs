@@ -66,8 +66,8 @@ pub(crate) struct ProbeResult {
     /// revision the probe's request row files under. `None` for an answer the relay never built.
     pub received_at: Option<i64>,
     pub account: Option<String>,
-    /// The relay's own code for an answer it built itself, `accounts_at_cap`, `accounts_exhausted` and
-    /// `accounts_unavailable` among them; `None` for an upstream answer forwarded as it came.
+    /// The relay's own code for an answer it built itself, `accounts_exhausted` and `accounts_unavailable` among them,
+    /// and `None` for an upstream answer forwarded as it came.
     pub error_code: Option<String>,
     /// `None` when the read crossed the usage bound or failed: nothing past it is a usage block.
     pub body: Option<Bytes>,
@@ -143,8 +143,6 @@ pub(crate) struct ProbeRecord {
 pub(crate) enum RetryWait {
     /// No header: the ladder's step.
     Step,
-    /// The `accounts_at_cap` header: a slot frees up in seconds, so the header replaces the step whatever its length.
-    Replace(i64),
     /// The quota `429`'s header: it replaces the step only where it is longer.
     AtLeast(i64),
 }
@@ -611,23 +609,21 @@ impl Inner {
 
     /// The Go `probeErrorLocked`, read from the answer the relay gave. A 429 after failover, or the exhaustion 429
     /// the relay answers when every account is cooled, retries on the ladder under `probe_quota_exhausted`, its
-    /// `Retry-After` replacing the step where it is longer. A pool at its in-flight cap (`accounts_at_cap`) retries
-    /// after the header's wait whatever its length, since a slot there may free up before the next real request
-    /// would. A probe the selector refused on the pinned member's spend budget holds under `budget`
-    /// without a pause, since only a raised budget or the period's end clears it, never a wait. A probe the router
-    /// refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no idle tick. A
-    /// probe the selector answered on its pinned member's standing holds under that standing: `Paused` for the
-    /// operator's pause and for a deleted member or one in a state other than ready, `IneligibleCredential` for a
-    /// subscription that ended between the gate's read and the selection (both read `paused` in the console), a retry
-    /// for a member this probe already tried or for one whose budget the degraded ledger leaves unknown, which the
-    /// ledger's recovery clears without a real request, and `NoPin` for a session that held no pin to renew, paused
-    /// until its next real request. A pinned member's cooldown, credits block, overage or spend cap answers a 429,
-    /// which retries under `probe_quota_exhausted` as above. A pinned member a leg of the probe marked for
-    /// re-authentication pauses under the authentication reason. The untimed exhaustion 503, when every account of the
-    /// pool was unusable at selection, retries under its own reason. A 5xx forwarded from upstream retries. A 403 under
-    /// `client_contract` or `client_drift` refuses the probe's own request shape and pauses as an unsupported probe,
-    /// any other 401 or 403 pauses under the authentication reason, any other 4xx is a shape the upstream refuses, and
-    /// a canceled, timed-out, or lost exchange (status 0) retries as a transport error.
+    /// `Retry-After` replacing the step where it is longer. A probe the selector refused on the pinned member's spend
+    /// budget holds under `budget` without a pause, since only a raised budget or the period's end clears it, never a
+    /// wait. A probe the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure
+    /// and no idle tick. A probe the selector answered on its pinned member's standing holds under that standing:
+    /// `Paused` for the operator's pause and for a deleted member or one in a state other than ready,
+    /// `IneligibleCredential` for a subscription that ended between the gate's read and the selection (both read
+    /// `paused` in the console), a retry for a member this probe already tried or for one whose budget the degraded
+    /// ledger leaves unknown, which the ledger's recovery clears without a real request, and `NoPin` for a session that
+    /// held no pin to renew, paused until its next real request. A pinned member's cooldown, credits block, overage or
+    /// spend cap answers a 429, which retries under `probe_quota_exhausted` as above. A pinned member a leg of the
+    /// probe marked for re-authentication pauses under the authentication reason. The untimed exhaustion 503, when
+    /// every account of the pool was unusable at selection, retries under its own reason. A 5xx forwarded from upstream
+    /// retries. A 403 under `client_contract` or `client_drift` refuses the probe's own request shape and pauses as an
+    /// unsupported probe, any other 401 or 403 pauses under the authentication reason, any other 4xx is a shape the
+    /// upstream refuses, and a canceled, timed-out, or lost exchange (status 0) retries as a transport error.
     pub(crate) fn probe_error(
         &mut self,
         key: &SessionKey,
@@ -645,22 +641,6 @@ impl Inner {
         let retry_after_ms = result
             .and_then(|result| result.retry_after_secs)
             .map(seconds_ms);
-        // Read before the obstacles, which never meet it: a 429 classifies as rate limited and never as exhausted,
-        // and the budget's timed answer carries `accounts_exhausted`.
-        if outcome == ProbeOutcome::RateLimited
-            && error_code == Some(phoebis_relay::ACCOUNTS_AT_CAP)
-        {
-            // The pool is momentarily full and a slot frees up in seconds, so `RetryableProbeError` ("retrying") is
-            // the honest label.
-            self.retry(
-                key,
-                agent_id,
-                Reason::RetryableProbeError,
-                now,
-                retry_after_ms.map_or(RetryWait::Step, RetryWait::Replace),
-            );
-            return;
-        }
         // Every obstacle is named, so one added later fails to build here until it is given its hold.
         match (exhausted, obstacle) {
             (true, Some(ProbeObstacle::Operator)) => {
@@ -789,7 +769,6 @@ impl Inner {
         let step = (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms);
         let delay = match wait {
             RetryWait::Step => step,
-            RetryWait::Replace(ms) => ms,
             RetryWait::AtLeast(ms) => ms.max(step),
         }
         .min(agent.timing.retry_max_ms);
@@ -1086,27 +1065,6 @@ mod tests {
     }
 
     #[test]
-    fn an_accounts_at_cap_429_retries_after_the_header_rather_than_pausing() {
-        let (mut inner, key) = one_agent_inner();
-        inner.probe_error(
-            &key,
-            "main",
-            ProbeOutcome::RateLimited,
-            Some(&answered(429, Some("accounts_at_cap"), None, Some(3))),
-            false,
-            1_000,
-        );
-        let agent = &inner.sessions[&key].agents["main"];
-        assert!(!agent.paused, "retries in place rather than pausing");
-        assert_eq!(
-            agent.retry_at,
-            Some(4_000),
-            "the header's seconds replace the backoff"
-        );
-        assert_eq!(agent.reason, Reason::RetryableProbeError);
-    }
-
-    #[test]
     fn a_quota_429_retries_on_the_first_rung_under_probe_quota_exhausted() {
         let (mut inner, key) = one_agent_inner();
         inner.probe_error(
@@ -1159,22 +1117,6 @@ mod tests {
                 "{code}"
             );
         }
-    }
-
-    #[test]
-    fn accounts_at_cap_without_a_header_falls_back_to_the_usual_backoff() {
-        let (mut inner, key) = one_agent_inner();
-        inner.probe_error(
-            &key,
-            "main",
-            ProbeOutcome::RateLimited,
-            Some(&answered(429, Some("accounts_at_cap"), None, None)),
-            false,
-            1_000,
-        );
-        let agent = &inner.sessions[&key].agents["main"];
-        assert!(!agent.paused);
-        assert_eq!(agent.retry_at, Some(1_000 + agent.timing.retry_ms));
     }
 
     #[test]
