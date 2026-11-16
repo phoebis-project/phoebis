@@ -7172,7 +7172,8 @@ fn moves_by_reason_invents_no_vocabulary_for_a_reason_no_code_names_or_none_at_a
 
 /// A 7-day range from 21:31 on the epoch's first day reads six-hour buckets, whose first edge, 18:00, lies before the
 /// hour that holds the start. The account reads sum the rollups from 21:00 alone, each through its own call, while the
-/// points keep the bucket grid from 18:00: the rows of 20:00 join no point and no move.
+/// points keep the bucket grid from 18:00: the rows of 20:00 join no point and no move, and the rows of the second
+/// day's 00:00 fill the second point, the one at that edge.
 #[test]
 fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bucket_grid() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -7195,6 +7196,15 @@ fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bu
                 account_id: "a".into(),
                 rewrite_tokens: 40,
                 migrations: BTreeMap::from([("shed/fits".to_string(), 1)]),
+                ..Default::default()
+            },
+        )?;
+        fold_account(
+            &tx,
+            &phoebis_ledger::AccountRollupRow {
+                hour: 86_400,
+                account_id: "a".into(),
+                rewrite_tokens: 300,
                 ..Default::default()
             },
         )?;
@@ -7229,9 +7239,10 @@ fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bu
         };
         db.insert_request(&request, &[attempt], None).unwrap();
     };
-    // 20:10 and 21:10, a slow-down wait in each of the two hours.
+    // 20:10, 21:10 and the second day's 00:10, a slow-down wait in each of the three hours.
     held("before", 72_600_000, 7_000);
     held("first-hour", 76_200_000, 2_000);
+    held("second-point", 87_000_000, 3_000);
     let filter = SeriesFilter {
         from: 77_460_000,
         to: 77_460_000 + 7 * DAY_MS,
@@ -7242,7 +7253,7 @@ fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bu
         db.read_blocking(|c| rewrite_series(c, &filter)).unwrap(),
         vec![
             (64_800_000, 40),
-            (86_400_000, 0),
+            (86_400_000, 300),
             (108_000_000, 0),
             (129_600_000, 0),
             (151_200_000, 0),
@@ -7271,7 +7282,8 @@ fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bu
             (648_000_000, 0),
             (669_600_000, 0),
         ],
-        "the first point at the 18:00 edge holds the 21:00 row's tokens alone, the last the bucket that holds the end"
+        "the first point at the 18:00 edge holds the 21:00 row's tokens alone, the second the 00:00 row's, the last the \
+         bucket that holds the end"
     );
     assert_eq!(
         db.read_blocking(|c| phoebis_ledger::moves_by_reason_and_fit(c, &filter))
@@ -7283,9 +7295,9 @@ fn the_account_reads_of_a_range_sum_from_the_hour_that_holds_its_start_on_the_bu
         "the 21:00 row's move alone"
     );
     assert_eq!(
-        db.read_blocking(|c| held_series(c, &filter)).unwrap()[0],
-        (64_800_000, 2_000, 1),
-        "the first point at the 18:00 edge holds the 21:10 wait alone"
+        db.read_blocking(|c| held_series(c, &filter)).unwrap()[..2],
+        [(64_800_000, 2_000, 1), (86_400_000, 3_000, 1)],
+        "the first point at the 18:00 edge holds the 21:10 wait alone, the second the 00:10 wait"
     );
 }
 
