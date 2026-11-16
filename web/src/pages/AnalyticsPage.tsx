@@ -687,8 +687,8 @@ export function AnalyticsPage() {
     window: { exact: sessionId !== null, fromMs: span.fromMs, nowMs: now, toMs: span.toMs },
   };
   const plainLinks = a.clients.length > 1;
-  // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` sets
-  // the exact window and leaves the session and the agent out.
+  // The refusal route reads the page's own key selection, never a session view's key lifetime, and `refusalLink` opens
+  // the whole hours the route counts and leaves the session and the agent out.
   const refusalInput: ReasonLink = { ...linkInput, filters: { ...linkInput.filters, keyIds: filters.keyId } };
   // With no session the page reads the rollups, which carry no agent, so an Agent chip would narrow nothing.
   const disabled: Record<string, string> = sessionId === null ? { agentId: AGENT_NEEDS_SESSION } : {};

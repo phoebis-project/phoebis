@@ -20,15 +20,16 @@ const target = (href) => {
 
 test("a refusal count links its category's refused answers over the counted window alone, with no session", () => {
   const now = at('2026-09-16T14:30:00Z');
-  // A window off the hour, so the hour rounding of the reasons panel would widen it on both sides.
-  const input = { filters: { ...BASE.filters, sessionId: SESSION }, window: { exact: false, fromMs: at('2026-09-16T12:15:00Z'), nowMs: now, toMs: at('2026-09-16T12:45:00Z') } };
+  // A session view's window off the hour, which the page hands on exact: the route counts the request rows of the whole
+  // hours it touches, 12:00 up to 13:00, so the link lists those rows up to a millisecond before the hour ceiling.
+  const input = { filters: { ...BASE.filters, sessionId: SESSION }, window: { exact: true, fromMs: at('2026-09-16T12:15:00Z'), nowMs: now, toMs: at('2026-09-16T12:45:00Z') } };
   const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', 2, 'claude-sonnet-5-5').href, 'http://console.test').searchParams, now);
   // The case's own instants just outside each bound and inside, read against the range the linked list answers.
-  const instants = ['2026-09-16T12:14:59Z', '2026-09-16T12:30:00Z', '2026-09-16T12:45:01Z'];
+  const instants = ['2026-09-16T11:59:59Z', '2026-09-16T12:30:00Z', '2026-09-16T13:00:00Z'];
   const kept = instants.filter((t) => at(t) >= Date.parse(read.range.from) && at(t) <= Date.parse(read.range.to));
   assert.deepEqual(
     { cacheMissReasons: read.cacheMissReasons, kept, range: read.range, refusalCategories: read.refusalCategories, session: read.session, stopReasons: read.stopReasons },
-    { cacheMissReasons: [], kept: ['2026-09-16T12:30:00Z'], range: { from: '2026-09-16T12:15:00.000Z', preset: 'custom', to: '2026-09-16T12:45:00.000Z' }, refusalCategories: ['cyber'], session: '', stopReasons: ['refusal'] },
+    { cacheMissReasons: [], kept: ['2026-09-16T12:30:00Z'], range: { from: '2026-09-16T12:00:00.000Z', preset: 'custom', to: '2026-09-16T12:59:59.999Z' }, refusalCategories: ['cyber'], session: '', stopReasons: ['refusal'] },
   );
   assert.equal(target(d.refusalLink(input, '-', 1, 'claude-sonnet-5-5').href).refusal_categories, '-', 'a refusal with no category links the dash');
 });

@@ -20,7 +20,7 @@ import { matchesPattern as matchesModelPattern, processRules } from '@/lib/patte
 import { MODEL_SCOPE_PREFIX, accountStatusOf, flagOf } from '@/lib/quota';
 import { compareOrderKeys, compareRequests, orderKeyOf, type OrderKey } from '@/lib/requests';
 import { ACCOUNTS, NO_CREDENTIAL, QUOTA_HISTORY, accountById, lastReadingOf, usageOf, withholdsWindows } from './accounts';
-import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf } from './analytics';
+import { RECONCILIATIONS, breakdownOf, burnOf, placementsOf, reconciliationsOf, refusalCategoriesOf, rewritesOf, seriesOf, termEndOf, unusedAllowanceOf, wholeHoursOf } from './analytics';
 import { ATTENTION, pairingExpiringOf } from './attention';
 import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
@@ -1080,17 +1080,19 @@ export class MockApi implements Api {
   }
 
   /**
-   * The counts route over the story's rows: every match in the range, the blocks' captured request bytes, and the name
-   * the registry holds now, none for a guardrail deleted since it matched. The trailing day ends at the story's own
-   * instant, as the dashboard's does.
+   * The counts route over the story's rows: every match in the whole hours the range touches, the blocks' captured
+   * request bytes, and the name the registry holds now, none for a guardrail deleted since it matched. The route turns
+   * the trailing day into two instants, which end at the story's own instant here as the dashboard's day does, counts
+   * the whole hours they touch as it does a custom range's, and echoes both instants.
    */
   getAnalyticsGuardrails(range: GuardrailRange): Promise<GuardrailCounts> {
     const from = range === '24h' ? NOW - DAY : Date.parse(range.from);
     const to = range === '24h' ? NOW : Date.parse(range.to);
+    const hours = wholeHoursOf({ from: iso(from), to: iso(to) });
     const counts = new Map<string, { blocked: number; blockedBytes: number; observed: number }>();
     for (const r of ledger().requests) {
       const at = Date.parse(r.at);
-      if (at < from || at > to) continue;
+      if (at < hours.fromMs || at >= hours.toMs) continue;
       for (const m of r.guardrails) {
         const c = counts.get(m.id) ?? { blocked: 0, blockedBytes: 0, observed: 0 };
         if (m.blocked) {

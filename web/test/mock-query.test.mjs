@@ -80,7 +80,9 @@ test("a refusal bar's link carries the client pattern its count was read under a
   // Three of the laptop's owed turns refused under cyber, every one on the pattern's client.
   const cyber = count.rows.find((r) => r.category === 'cyber');
   assert.equal(cyber?.requests, 3, JSON.stringify(count.rows));
-  const counted = unprobed.filter((r) => Date.parse(r.at) >= from && Date.parse(r.at) <= now && d.matchesPattern(pattern, r.client ?? '-') && r.canonicalModel === cyber.model && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
+  // The route counts the whole hours the day touches, from 14:00 on the 15th up to 15:00 on the 16th.
+  const hours = { from: Date.parse('2026-09-15T14:00:00Z'), to: Date.parse('2026-09-16T15:00:00Z') };
+  const counted = unprobed.filter((r) => Date.parse(r.at) >= hours.from && Date.parse(r.at) < hours.to && d.matchesPattern(pattern, r.client ?? '-') && r.canonicalModel === cyber.model && r.attempts.at(-1)?.response?.stopReason === 'refusal' && r.attempts.at(-1).response.refusalCategory === 'cyber');
   const input = { filters: { accountIds: [], clientPattern: pattern, includeProbes: false, keyIds: [], models: [], poolIds: [], sessionId: null, userAgentPattern: '' }, window: { exact: false, fromMs: from, nowMs: now, toMs: now } };
   // The address read back as the Requests page reads it into its list query.
   const read = d.REQUESTS_CODEC.fromParams(new URL(d.refusalLink(input, 'cyber', cyber.requests, cyber.model).href, 'http://console.test').searchParams, now);

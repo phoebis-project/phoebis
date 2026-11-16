@@ -473,7 +473,7 @@ function bucketsOf(range: Range): { bucketMs: number; slotOf: (ms: number) => nu
  * of the hour that holds the range's start up to the hour ceiling of its end, which the window leaves out. A six-hour
  * or daily bucket can start before the first of these hours and end past the last.
  */
-const wholeHoursOf = (range: Range): { fromMs: number; toMs: number } => ({ fromMs: startOfHour(Date.parse(range.from)), toMs: hourCeil(Date.parse(range.to)) });
+export const wholeHoursOf = (range: Range): { fromMs: number; toMs: number } => ({ fromMs: startOfHour(Date.parse(range.from)), toMs: hourCeil(Date.parse(range.to)) });
 
 const usageOf = (r: HourlyRollup): Usage => ({ cacheRead: r.tokens.cacheRead, cacheWrite1h: r.tokens.cacheWrite1h, cacheWrite5m: r.tokens.cacheWrite5m, input: r.tokens.uncachedInput, output: r.tokens.output });
 
@@ -751,19 +751,21 @@ export function placementsOf(requests: RequestLog[], q: Pick<AnalyticsQuery, 'ac
  * The refused answers by model and category off the request rows, as the route counts them: each request in range
  * whose serving attempt the upstream answered with the stop reason `refusal`, `-` for a refusal with no category, the
  * largest count first and then the model and the category in byte order, where the dash sorts first, and beside them
- * the requests in range that presented a fallback digest. The route narrows by the range, the accounts, the keys, the
- * pools, the models, the kinds, the probes switch and the client and user agent patterns. A pattern matches as the
- * rollups key a row: the client as recorded and the user agent folded to its first product token, each `-` where the
- * request named none. The user agent groups partition the rows and narrow nothing.
+ * the requests in range that presented a fallback digest. The route reads the request rows of the whole hours the range
+ * touches, narrows them by the accounts, the keys, the pools, the models, the kinds, the probes switch and the client
+ * and user agent patterns, and echoes the range as asked. A pattern matches as the rollups key a row: the client as
+ * recorded and the user agent folded to its first product token, each `-` where the request named none. The user agent
+ * groups partition the rows and narrow nothing.
  */
 export function refusalCategoriesOf(requests: RequestLog[], q: AnalyticsQuery): RefusalCategoriesAnswer {
   const fromMs = Date.parse(q.from);
   const toMs = Date.parse(q.to);
+  const hours = wholeHoursOf(q);
   const counts = new Map<string, RefusalCategoryRow>();
   let fallbacks = 0;
   for (const r of requests) {
     const at = Date.parse(r.at);
-    if (at < fromMs || at > toMs) continue;
+    if (at < hours.fromMs || at >= hours.toMs) continue;
     if (!passesRequestFilters(r, q)) continue;
     if (q.keyIds?.length && !q.keyIds.some((selector) => selectsKey(selector, { keyGeneration: r.keyGeneration, keyId: r.keyId ?? '-' }))) continue;
     if (q.poolIds?.length && (r.poolId === null || !q.poolIds.includes(r.poolId))) continue;

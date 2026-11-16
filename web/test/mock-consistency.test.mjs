@@ -285,6 +285,16 @@ test("the rewrites answer counts a move from the hour that holds the range's sta
   assert.deepEqual(answer.moves, { drain: 2 }, 'the moves of 21:10 on the 9th and 21:45 on the 16th');
 });
 
+test("the refusal categories answer counts a refusal from the hour that holds the range's start up to the hour ceiling of its end", async () => {
+  const d = await import('./dist/api.js');
+  // A request whose serving attempt the upstream refused under cyber.
+  const refused = (at) => ({ at, attempts: [{ response: { refusalCategory: 'cyber', stopReason: 'refusal' } }], canonicalModel: 'claude-sonnet-5-5', fallbackDigest: null, kind: 'inference' });
+  // A past range from 21:31 to 23:31: the route reads 21:00 up to midnight, the hour ceiling, which it leaves out.
+  const rows = [refused('2026-09-16T20:59:30.000Z'), refused('2026-09-16T21:10:00.000Z'), refused('2026-09-16T23:45:00.000Z'), refused('2026-09-17T00:00:00.000Z')];
+  const answer = d.refusalCategoriesOf(rows, { from: '2026-09-16T21:31:00.000Z', groupBy: 'all', to: '2026-09-16T23:31:00.000Z' });
+  assert.deepEqual(answer.rows, [{ category: 'cyber', model: 'claude-sonnet-5-5', requests: 2 }], 'the refusals of 21:10 and 23:45');
+});
+
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
 
@@ -3927,7 +3937,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const from = s.now - DAY;
     const counts = await s.api.getAnalyticsGuardrails({ from: iso(from), to: iso(s.now) });
     const want = new Map();
-    for (const r of s.requests.filter((x) => Date.parse(x.at) >= from && Date.parse(x.at) <= s.now)) {
+    for (const r of s.requests.filter((x) => inHours(Date.parse(x.at), from, s.now))) {
       for (const m of r.guardrails) {
         const row = want.get(m.id) ?? { blocked: 0, blockedBytes: 0, observed: 0 };
         if (m.blocked) {
@@ -3944,6 +3954,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(counts.guardrails.map((c) => c.name), counts.guardrails.map((c) => names.get(c.id) ?? null));
     const day = await s.api.getAnalyticsGuardrails('24h');
     assert.deepEqual([day.from, day.to, day.guardrails], [iso(from), iso(s.now), counts.guardrails], "the view's day is the last 24 hours");
+  });
+
+  test(`the guardrails answer counts a match from the hour that holds a custom range's start, at ${at}`, async () => {
+    const s = await story;
+    // The story's four summary forks run from 12:40 to 12:41:30 of its pinned day, inside one hour at either instant,
+    // and the desktop block of 12:52:20 follows them. A range from a minute after the last fork, req_e916a3d7-c42,
+    // reads the forks from the start of their hour, each one observed match beside the block's.
+    const fork = s.requests.find((r) => r.id === 'req_e916a3d7-c42');
+    const counts = await s.api.getAnalyticsGuardrails({ from: iso(Date.parse(fork.at) + 60_000), to: iso(s.now) });
+    assert.deepEqual(counts.guardrails.map((c) => [c.id, c.observed, c.blocked]), [['large-auxiliary', 0, 1], ['subagent-status-summary', 5, 0]]);
   });
 
   test(`the_mock_dashboard_leaves_the_refused_rows_out_of_its_counts_and_reads_them_in_the_refused_members at ${at}`, async () => {

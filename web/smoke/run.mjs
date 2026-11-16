@@ -19803,10 +19803,9 @@ await forView('/analytics', async () => {
 // `cyber` three times on claude-sonnet-5-5, `harmful` once on each of claude-sonnet-4-5 and claude-sonnet-5-5 and one
 // the upstream gave no category on claude-sonnet-4-5, all inside the default day, a bar per model and category as the
 // route counts them, and the story's one request that presented a fallback token, a `claude-code/cli` row, counted in
-// the subtitle. Each bar links the Requests view on its model's and category's refused answers over the page's range to
-// the millisecond, with no session.
+// the subtitle. Each bar links the Requests view on its model's and category's refused answers over the whole hours the
+// route counts, from the hour that holds the page's start up to the clock, with no session.
 await forView('/analytics', async () => {
-  const DAY = 86_400_000;
   const TITLE = 'Refusals by category';
   const SUBTITLE = 'Answers the upstream refused in range, by model and category, each a request that succeeded';
   const served = (r) => r.attempts.at(-1)?.response ?? null;
@@ -19838,12 +19837,13 @@ await forView('/analytics', async () => {
   const rowIds = (page) => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.querySelector('.sub.mono')?.getAttribute('title') ?? null).sort();
 
   const cardCheck =
-    '/analytics the Refusals by category card follows Refusals by code with its subtitle counting the one request that presented a fallback token, a bar per model and category with the short model on its label and the whole id on its hover, cyber first and none for the refusal with no category, each linking its model\'s refused answers over the range to the millisecond with no session';
+    '/analytics the Refusals by category card follows Refusals by code with its subtitle counting the one request that presented a fallback token, a bar per model and category with the short model on its label and the whole id on its hover, cyber first and none for the refusal with no category, each linking its model\'s refused answers over the whole hours the route counts with no session';
   const page = await mount('/analytics', { now: CLOCK_ORIGIN });
   const titles = [...(cardOf(page, 'Refusals by code')?.parentElement?.children ?? [])].map((c) => c.querySelector('.card__title')?.textContent?.trim() ?? null);
   const bars = barsOf(page);
   const links = bars.map((b) => (b.href === null ? null : paramsOf(b.href)));
-  const span = { from: isoAt(CLOCK_ORIGIN - DAY), to: isoAt(CLOCK_ORIGIN) };
+  // The day from 14:30 touches the hours from 14:00, and the link's end stops at the clock.
+  const span = { from: isoAt(Date.UTC(2026, 8, 15, 14)), to: isoAt(CLOCK_ORIGIN) };
   results.push({
     name: cardCheck,
     ok:
@@ -19862,12 +19862,12 @@ await forView('/analytics', async () => {
     missing: [JSON.stringify(titles), subtitleOf(page) ?? 'no subtitle', JSON.stringify(countsOf(page)), JSON.stringify(bars.map((b) => b.title)), JSON.stringify(links)],
   });
 
-  // The bar's address lands on the list of its model's and category's refused answers inside the card's window, and
-  // nothing else.
+  // The bar's address lands on the list of its model's and category's refused answers inside the whole hours the card
+  // counts, 14:00 on the 15th up to 15:00 on the 16th, and nothing else.
   const landingCheck = "/analytics the cyber bar's link opens the Requests view on its model's cyber refusals of the card's window alone";
   const cyberHref = bars.find((b) => b.label === 'sonnet-5-5 · cyber')?.href ?? null;
   page.unmount();
-  const wanted = refused.filter((r) => r.canonicalModel === 'claude-sonnet-5-5' && served(r).refusalCategory === 'cyber' && Date.parse(r.at) >= CLOCK_ORIGIN - DAY && Date.parse(r.at) <= CLOCK_ORIGIN).map((r) => r.id).sort();
+  const wanted = refused.filter((r) => r.canonicalModel === 'claude-sonnet-5-5' && served(r).refusalCategory === 'cyber' && Date.parse(r.at) >= Date.UTC(2026, 8, 15, 14) && Date.parse(r.at) < Date.UTC(2026, 8, 16, 15)).map((r) => r.id).sort();
   if (cyberHref === null) controlMissing(landingCheck, 'the cyber bar');
   else {
     const landed = await mount(cyberHref, { now: CLOCK_ORIGIN });
