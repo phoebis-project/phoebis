@@ -496,7 +496,7 @@ test("the mock files its hourly rows under the speed each hour's answers reporte
   assert.deepEqual(groups.map((g) => g.key), ['fast', 'standard']);
   const fast = d.ALL_ROLLUPS.filter((r) => r.speed === 'fast');
   assert.ok(fast.length > 0 && fast.every((r) => r.keyId === 'desktop' && r.model.includes('opus') && r.kind === 'inference'));
-  const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.incomplete + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown, 0);
+  const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.incomplete + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected, 0);
   assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
 });
 
@@ -627,6 +627,13 @@ test('the session fold keys a model by its canonical id, as the rollups file it 
   const wide = { ...row, id: 'r-wide', canonicalModel: 'claude-sonnet-5', model: 'claude-sonnet-5[1m]' };
   const plain = { ...row, id: 'r-plain', canonicalModel: 'claude-sonnet-5', model: 'claude-sonnet-5' };
   assert.deepEqual(d.foldGroups([wide, plain], 'model').map((g) => [g.key, g.label, g.requests]), [['claude-sonnet-5', 'claude-sonnet-5', 2]]);
+});
+
+test("the session fold counts a client's cancel apart from the failures and the error codes, and a probe's or the router's cut as failed", () => {
+  const [row] = d.decodeRequestPage(fixture('requests')).requests;
+  const cut = (id, errorCode, kind) => ({ ...row, errorCode, id, kind, outcome: 'canceled' });
+  const [folded] = d.foldGroups([cut('r-client', 'client_gone', 'inference'), cut('r-router', 'router_shutdown', 'inference'), cut('r-probe', 'client_gone', 'probe')], 'all');
+  assert.deepEqual([folded.clientCanceled, folded.failed, { ...folded.errors }], [1, 2, { client_gone: 1, router_shutdown: 1 }]);
 });
 
 test('the cooldown move reason reads failed over', () => {
@@ -972,9 +979,15 @@ test('ratioOff marks no row whose priced share sits under the floor the rise rea
   assert.equal(d.ratioOff({ observedRise: 0.3, predictedShare: d.MIN_RISE, ratio: 3 }), true, 'a priced share at the floor counts');
 });
 
-test('the error rate is the requests that did not succeed over the requests', () => {
-  assert.equal(d.errorRateOf({ requests: 10, succeeded: 9 }), 0.1);
-  assert.equal(d.errorRateOf({ requests: 0, succeeded: 0 }), null, 'a group with no request has no rate, which the cells draw as a dash');
+test("the error rate is the requests that did not succeed over the requests, the client's cancels left out", () => {
+  assert.equal(d.errorRateOf({ clientCanceled: 0, requests: 10, succeeded: 9 }), 0.1);
+  assert.equal(d.errorRateOf({ clientCanceled: 0, requests: 0, succeeded: 0 }), null, 'a group with no request has no rate, which the cells draw as a dash');
+  assert.equal(d.errorRateOf({ clientCanceled: 1, requests: 2, succeeded: 0 }), 0.5, 'one failed request and one the client canceled');
+});
+
+test("a sum of groups adds the client's cancels", () => {
+  const group = d.decodeAnalyticsGroup(fixture('analytics_breakdown').rows[0]);
+  assert.equal(d.sumGroups([{ ...group, clientCanceled: 1 }, { ...group, clientCanceled: 2 }]).clientCanceled, 3);
 });
 
 test('sumGroups sums refused and the refusals map', () => {

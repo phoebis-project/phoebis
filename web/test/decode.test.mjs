@@ -1393,6 +1393,12 @@ test('a stream that ended before its end decodes as incomplete and a group reads
   assert.equal(desktop.incomplete, 1, 'the route counts the row in the group\'s own column');
 });
 
+test("a group reads the client's cancels off the route", () => {
+  // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
+  const row = fixture('analytics_breakdown').rows[0];
+  assert.equal(d.decodeAnalyticsGroup({ ...row, client_canceled: 3 }).clientCanceled, 3);
+});
+
 test("a request decodes a count the route never stored as null beside the sum's zero", () => {
   const unstored = d.decodeRequest({ usage: { input: null, output: null } });
   const zero = d.decodeRequest({ usage: { input: 0, output: 0 } });

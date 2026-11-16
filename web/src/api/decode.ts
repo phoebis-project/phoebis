@@ -719,7 +719,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
   return {
     attempts: num(g.attempts), billed: costSplit(g.billed), billedUsd: num(g.billed_usd),
     cacheEquivalent: orNull(g.cache_equivalent, (e) => ({ read: num(e.read), write: num(e.write) })),
-    cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons),
+    cacheHits: num(g.cache_hits), cacheMisses: num(g.cache_misses), cacheMissReasons: missReasons(g.cache_miss_reasons), clientCanceled: num(g.client_canceled),
     cost: costSplit(g.cost), costEquivalent: numOrNull(g.cost_equivalent), costUsd: num(g.cost_usd),
     costShares: orNull(g.cost_shares, nullableNumberMap),
     equivalentSplit: orNull(g.equivalent_split, costSplit),

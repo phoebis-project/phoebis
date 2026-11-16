@@ -68,7 +68,10 @@ export const OUTCOME_SERIES = [
   { key: 'rateLimited', label: 'Rate limited', slot: 3 },
   { key: 'failed', label: 'Failed', slot: 7 },
   { key: 'incomplete', label: 'Incomplete', slot: 2 },
+  { key: 'clientCanceled', label: 'Client canceled', slot: 4 },
   { key: 'exhausted', label: 'Exhausted', slot: 1 },
+  // No account answered a rejected request, so it takes the muted slot and the muted series closes the stack.
+  { key: 'rejected', label: 'Rejected', slot: 8 },
 ] as const;
 
 export const TOKEN_SERIES = [

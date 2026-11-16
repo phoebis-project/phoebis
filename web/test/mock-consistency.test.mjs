@@ -19,7 +19,7 @@ const iso = (ms) => new Date(ms).toISOString();
 const inHours = (ms, fromMs, toMs) => ms >= startOfHour(fromMs) && ms < Math.ceil(toMs / HOUR) * HOUR;
 
 /** A rollup row's requests, as the analytics routes count them. */
-const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown;
+const requestsOf = (r) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected;
 const tokensOf = (r) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
@@ -311,6 +311,15 @@ test("a billed probe's dollars count with probes off", async () => {
   assert.deepEqual(all && [all.costUsd, all.cost, all.billedUsd, all.billed, all.requests], [0.4, split, 0.4, split, 0]);
   // A group of plan probes alone leaves the answer, as the route drops one from a read that does not count probes.
   assert.deepEqual(d.breakdownOf([plan], query), []);
+});
+
+test("the mock counts a probe's cancel under the client's code as failed, as the route keeps the keepalive's own request", async () => {
+  const d = await import('./dist/api.js');
+  const template = d.ALL_ROLLUPS.find((r) => r.kind === 'probe');
+  const requests = { client_gone: 1, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+  const cut = { ...template, errors: { client_gone: 1 }, requests };
+  const [all] = d.breakdownOf([cut], { from: template.hour, groupBy: 'all', includeProbes: true, to: iso(Date.parse(template.hour) + HOUR) });
+  assert.deepEqual(all && [all.clientCanceled, all.failed, { ...all.errors }], [0, 1, { client_gone: 1 }]);
 });
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -3647,7 +3656,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const total = (read) => hours.reduce((n, h) => n + read(h.requests), 0);
     assert.deepEqual([total((r) => r.incomplete), total((r) => r.ok), total((r) => r.undecodable), total((r) => r.upstream_error)], [1, 0, 0, 0], 'the rollups file it under incomplete alone');
     // The ledger counts a request's own code beside its outcome, so the breakdown files the row under the cut's code.
-    assert.deepEqual(hours.map((h) => ({ ...h.incompleteCodes })), [{ stream_undecodable: 1 }], 'its rollup carries the code it ended on');
+    assert.deepEqual(hours.map((h) => ({ ...h.errors })), [{ stream_undecodable: 1 }], 'its rollup carries the code it ended on');
     const groups = await s.api.getAnalyticsBreakdown({ from: iso(s.now - DAY), groupBy: 'account', to: iso(s.now) });
     const filed = s.counted.filter((r) => r.accountId === 'primary' && r.errorCode === 'stream_undecodable').map((r) => r.id);
     assert.deepEqual([filed.includes(row.id), groups.find((g) => g.key === 'primary')?.errors.stream_undecodable], [true, filed.length], "primary's entry counts it");
@@ -3818,16 +3827,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of gone) assert.deepEqual([r.outcome, r.status, r.ttfbMs !== null, r.attempts.every((a) => a.outcome === 'canceled')], ['canceled', 200, true, true], `${r.id} keeps its reading`);
   });
 
-  test(`the default range counts a canceled request as failed under the code its cut files it with, the client's or the router's, at ${at}`, async () => {
+  test(`the default range counts a client's cancel apart from the failures and the error codes, and the router's cuts as failed under their code, at ${at}`, async () => {
     const s = await story;
     const closed = s.requests.filter((r) => r.outcome === 'canceled');
     assert.ok(closed.length > 0, 'the story holds a canceled request');
     for (const r of closed) assert.ok(['client_gone', 'router_shutdown'].includes(r.errorCode), `${r.id} names the code, not ${r.errorCode}`);
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
     const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
-    assert.equal(totals.errors.client_gone ?? 0, rows.filter((r) => r.errorCode === 'client_gone').length, 'the Errors by code panel reads the story');
-    // A canceled request is a cut and no upstream failure, and an undecodable stream files under its own code.
-    const upstreamErrors = rows.filter((r) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529 && r.errorCode !== 'stream_undecodable');
+    const gone = rows.filter((r) => r.errorCode === 'client_gone').length;
+    assert.ok(gone > 0, "the default range holds the client's cancel");
+    assert.deepEqual([totals.clientCanceled, totals.errors.client_gone], [gone, undefined], 'the Client canceled column reads the story, and the Errors by code panel names no client_gone');
+    assert.equal(totals.failed, rows.filter((r) => r.outcome === 'failed' || r.errorCode === 'router_shutdown').length, "and Failed counts the failures and the router's cuts alone");
+    // A canceled request is a cut and no upstream failure, and a failure whose row names a code of its own files under
+    // it: the stream the relay could not decode, the 400 under the type its body names, the bare 502 under its status
+    // and the relay's rejection under its own word.
+    const owned = ['accounts_unavailable', 'invalid_request_error', 'stream_undecodable', 'upstream_502'];
+    const upstreamErrors = rows.filter((r) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529 && !owned.includes(r.errorCode));
     assert.equal(totals.errors.api_error ?? 0, upstreamErrors.length, 'and counts no canceled request as an upstream error');
     assert.equal(totals.errors.router_shutdown, rows.filter((r) => r.errorCode === 'router_shutdown').length, "and the router's own cut beside the client's");
   });
@@ -3836,7 +3851,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const rows = s.asked(s.requests.filter((r) => r.kind !== 'probe' && startOfHour(Date.parse(r.at)) >= startOfHour(s.now - DAY)));
     const [totals] = s.lib.breakdownOf(s.allRollups, { ...defaultRange(s), groupBy: 'all', includeProbes: false });
-    const outcomes = { failed: totals.failed, incomplete: totals.incomplete, rateLimited: totals.rateLimited, succeeded: totals.succeeded };
+    const outcomes = { clientCanceled: totals.clientCanceled, failed: totals.failed, incomplete: totals.incomplete, rateLimited: totals.rateLimited, rejected: totals.rejected, succeeded: totals.succeeded };
     assert.equal(sum(Object.values(outcomes), (n) => n), totals.requests, `the outcomes ${JSON.stringify(outcomes)} against ${totals.requests} requests`);
     assert.equal(totals.requests, rows.length, 'each row counts once');
   });
@@ -3962,12 +3977,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(sum(s.overview.hourly, (h) => h.refused), refused.length, 'the hourly refused too');
     const refusals = codesOf(refused);
     assert.equal(refusals.get(s.overview.topRefusalCode ?? '') ?? 0, Math.max(...refusals.values()), 'the top refusal code is their most frequent');
-    // The ledger's rate: the asked requests less the succeeded ones, so a canceled row answered with a 200 counts.
-    const failed = asked.filter((r) => r.outcome !== 'succeeded');
+    // The ledger's rate: the asked requests less the succeeded ones and the client's cancels, so the router's cut
+    // answered with a 200 counts and a stream its client closed does not.
+    const left = (r) => r.outcome === 'canceled' && r.errorCode === 'client_gone';
+    assert.ok(asked.some(left), 'the day holds a stream its client closed');
+    const failed = asked.filter((r) => r.outcome !== 'succeeded' && !left(r));
     assert.ok(failed.some((r) => r.status === 200), 'the day holds a request that did not succeed behind a 200');
-    assert.equal(s.overview.errorRate24h, failed.length / asked.length, 'the rate is the asked requests that did not succeed over the asked requests');
-    assert.equal(sum(s.overview.hourly, (h) => h.errors), failed.length, 'the hourly errors leave the refused rows out');
-    const codes = codesOf(asked);
+    assert.equal(s.overview.errorRate24h, failed.length / asked.length, "the rate is the asked requests that did not succeed over the asked requests, the client's cancels left out");
+    assert.equal(sum(s.overview.hourly, (h) => h.errors), failed.length, "the hourly errors leave the refused rows and the client's cancels out");
+    const codes = codesOf(asked.filter((r) => !left(r)));
     assert.equal(codes.get(s.overview.topErrorCode ?? '') ?? 0, Math.max(0, ...codes.values()), "the top code is the asked requests' most frequent");
   });
 

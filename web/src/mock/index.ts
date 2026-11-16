@@ -26,7 +26,7 @@ import { CATALOG } from './catalog';
 import { GUARDRAIL_RESERVED_IDS, GUARDRAIL_STALE, GUARDRAIL_TAKEN, GUARDRAILS, PRESETS, boundRefusal, conditionsRefusal, dryRunVerdict, repeatedId, sameConditions, withAttachments } from './guardrails';
 import { KEEPALIVE_OVERVIEW, KEEPALIVE_OVERVIEW_30D, RECIPES, SESSIONS, SETTINGS_WIRE, largestCohort, memberPins, pinsUnderPool, sessionsListedAt } from './operations';
 import { KEYS, POOLS, UNLOADED_MEMBERS, UNTIL_DRAWN, composedFor, resolvedFor, servedFigures, type KeyRow, type PoolRow } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, landedAt, requestById, requestSidesOf } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, clientLeft, landedAt, requestById, requestSidesOf } from './requests';
 import { GUARDRAIL_STORY_IDS } from './requests';
 import { RESET_ANSWERS, RESET_BLOCKS, foldAnswer, grantStates, limitResetsWire, resetsRevision, type MockBlock } from './resets';
 import { createRng } from './rng';
@@ -1212,6 +1212,9 @@ export class MockApi implements Api {
     const errorCodes = new Map<string, number>();
     const refusalCodes = new Map<string, number>();
     const rated = last24h.filter((r) => !r.refused && r.kind !== 'probe');
+    // The ledger's rate: a request that did not succeed is an error, the router's cut answered with a 200 among them,
+    // and a client that hung up is none, so its code leaves "Most common" too.
+    const erred = (r: RequestLog) => r.outcome !== 'succeeded' && !clientLeft(r);
     for (const r of last24h) {
       const bucket = hourlyMap.get(startOfHour(Date.parse(r.at)));
       // The day's rows hold a billed probe for its dollars, and nothing else of it counts, as the route skips a probe
@@ -1234,12 +1237,11 @@ export class MockApi implements Api {
       const total = tokensTotal(r.usage);
       tokens += total;
       cached += r.usage.cacheRead;
-      if (r.errorCode) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
+      if (r.errorCode && !clientLeft(r)) errorCodes.set(r.errorCode, (errorCodes.get(r.errorCode) ?? 0) + 1);
       if (bucket) {
         bucket.requests += 1;
         bucket.tokens += total;
-        // The ledger's rate: a request that did not succeed is an error, a canceled one answered with a 200 among them.
-        if (r.outcome !== 'succeeded') bucket.errors += 1;
+        if (erred(r)) bucket.errors += 1;
       }
     }
     const top = [...errorCodes.entries()].sort((a, b) => b[1] - a[1])[0];
@@ -1249,7 +1251,7 @@ export class MockApi implements Api {
       // Counted off the pools, so the dashboard and the Pools view cannot disagree on the router's pins.
       activePins: this.registry().pools.reduce((n, p) => n + poolPins(p, this.keys), 0),
       day24h: { billedUsd: day.billedUsd, cost, equivalent: day.equivalent },
-      errorRate24h: rated.length ? rated.filter((r) => r.outcome !== 'succeeded').length / rated.length : null,
+      errorRate24h: rated.length ? rated.filter(erred).length / rated.length : null,
       hourly: [...hourlyMap.values()],
       refused24h: last24h.filter((r) => r.refused && r.kind !== 'probe').length,
       requests24h: rated.length,

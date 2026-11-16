@@ -153,9 +153,11 @@ function nativeRatiosOf(totals: AnalyticsGroup, week: WeekPosition, weekFactor: 
 
 /** The native table's columns: Cost, the figure in the chosen week with the billed dollars under it, then the ratios. */
 const NATIVE_COLUMNS = analyticsKeysOf('cost', 'native').slice(1).map((k) => k.label);
-/** The Traffic heads whose count leaves the refused requests out, or counts them alone, say so on hover. */
+/** The Traffic heads whose count leaves the refused requests or the client's cancels out, or counts either alone, say
+ *  so on hover. */
 const TRAFFIC_HEAD_TITLE: Partial<Record<string, string>> = {
-  error_rate: 'The refused requests are left out, see the Refused column',
+  client_canceled: 'Requests the client canceled. They are left out of the error rate',
+  error_rate: "The refused requests and the client's cancels are left out, see the Refused and Client canceled columns",
   refused: REFUSED_TITLE,
   requests: 'The refused requests are left out, see the Refused column',
 };
@@ -806,6 +808,7 @@ export function AnalyticsPage() {
             <GuardrailsCard answer={guardrailCounts.current} error={guardrailCounts.error} inForce={inForce} />
             <BreakdownTable
               title={`Traffic by ${groupLabel.toLowerCase()}`}
+              className="traffic-table"
               loading={loading}
               groupLabel={groupLabel}
               columns={analyticsKeysOf('traffic', unit)
@@ -824,8 +827,8 @@ export function AnalyticsPage() {
                 key: g.key,
                 label: g.label,
                 // Search and Fetch count the server-tool calls the group's answers made, not tokens.
-                cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
-                figures: { error_rate: errorRateOf(g), exhausted: g.exhausted, failed: g.failed, failovers: g.failovers, fetch: g.tokens.webFetch, incomplete: g.incomplete, ok: g.succeeded, rate_limited: g.rateLimited, refused: g.refused, rejected: g.rejected, requests: g.requests, search: g.tokens.webSearch },
+                cells: [fmtInt(g.requests), fmtInt(g.succeeded), fmtInt(g.rateLimited), fmtInt(g.failed), fmtInt(g.incomplete), fmtInt(g.clientCanceled), fmtInt(g.exhausted), fmtInt(g.rejected), fmtInt(g.refused), rateCell(errorRateOf(g)), fmtInt(g.failovers), fmtInt(g.tokens.webSearch), fmtInt(g.tokens.webFetch)],
+                figures: { client_canceled: g.clientCanceled, error_rate: errorRateOf(g), exhausted: g.exhausted, failed: g.failed, failovers: g.failovers, fetch: g.tokens.webFetch, incomplete: g.incomplete, ok: g.succeeded, rate_limited: g.rateLimited, refused: g.refused, rejected: g.rejected, requests: g.requests, search: g.tokens.webSearch },
               }))}
             />
           </Section>

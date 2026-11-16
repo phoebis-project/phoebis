@@ -3017,10 +3017,20 @@
   color: var(--ink-2);
 }
 
-/* The reason headers wrap, a raw reason name after each underscore, so each fit column sizes to its widest word or
-   figure and the group column keeps its room at 1280. The class outranks the fit rule's nowrap. */
-.misses-table th.col-fit {
+/* The headers of these two tables wrap, so each fit column sizes to its widest word or figure and the group column
+   keeps its room at 1280: the reason headers carry a raw reason name after each underscore, and the Traffic table's
+   thirteen count and rate columns pass the card's width on one header line. The class outranks the fit rule's
+   nowrap. */
+.misses-table th.col-fit,
+.traffic-table th.col-fit {
   white-space: normal;
+}
+
+/* The Traffic table sets thirteen figure columns beside its group column at 1280, so each figure column keeps 8 px of
+   padding a side and the room it gives back goes to the key names. */
+.traffic-table .col-fit {
+  padding-right: 8px;
+  padding-left: 8px;
 }
 
 .metric-pair {

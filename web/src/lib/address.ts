@@ -390,6 +390,7 @@ const ANALYTICS_SORT_KEYS: Readonly<Record<'cache' | 'cost_dollars' | 'cost_nati
     column('rate_limited', 'Rate limited'),
     column('failed', 'Failed'),
     column('incomplete', 'Incomplete'),
+    column('client_canceled', 'Client canceled'),
     column('exhausted', 'Exhausted'),
     column('rejected', 'Rejected'),
     column('refused', 'Refused'),

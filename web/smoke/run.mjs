@@ -19879,7 +19879,7 @@ await forView('/analytics', async () => {
 
 await forView('/analytics', async () => {
   // The story's two rows the router's own stop cut, `req_7a2c4e91-d03` and `req_c58d1f3a-e67`, sit inside the default
-  // day, so the card lists their code with its count, apart from the client's `client_gone`.
+  // day, so the card lists their code with its count, while the client's own cancel counts under Client canceled alone.
   const cutCheck = "/analytics the Errors by code card lists the router's own cut under its code";
   const page = await mount('/analytics');
   const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Errors by code');
@@ -20090,15 +20090,29 @@ await forView('/analytics', async () => {
 await forView('/analytics', async () => {
 m = await mount('/analytics');
 // The page opens on Traffic and shows one section at a time, so each list holds the words its own tab draws.
-expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Failed and incomplete responses in range, the refused requests left out', 'Refusals by code', 'rate_limit_error', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
+expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', 'Requests by outcome', 'Failovers', 'Errors by code', 'Failed and incomplete responses in range, the refused requests left out', 'Refusals by code', 'accounts_exhausted', 'Traffic by key', 'Exhausted', 'Rejected', 'Refused', 'desktop', 'laptop', 'in range']);
 {
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
   const hinted = [...(table?.querySelectorAll('thead th') ?? [])].filter((th) => th.querySelector('[title]') !== null).map((th) => [th.textContent?.trim(), th.querySelector('[title]').getAttribute('title')]);
   const hint = 'The refused requests are left out, see the Refused column';
+  const canceled = 'Requests the client canceled. They are left out of the error rate';
+  const rate = "The refused requests and the client's cancels are left out, see the Refused and Client canceled columns";
   results.push({
-    name: "/analytics the Requests and Error rate headers of the Traffic table say the refused requests are left out, and the Refused header names the router's own refusals",
-    ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Refused', REFUSED_TITLE], ['Error rate', hint]]),
+    name: "/analytics the Traffic table's Requests header leaves the refused requests out, the Refused header names the router's own refusals, and the Client canceled and Error rate headers leave the client's cancels out of the rate",
+    ok: JSON.stringify(hinted) === JSON.stringify([['Requests', hint], ['Client canceled', canceled], ['Refused', REFUSED_TITLE], ['Error rate', rate]]),
     missing: hinted.length ? hinted.map((h) => h.join(': ')) : ['no header carries a hint'],
+  });
+}
+{
+  // The day holds one stream its client closed, the drawn `req_52f62e67-839` on ci, and one request the relay rejected
+  // on the account it chose, `req_4c1e8b27-d93` on laptop.
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Requests by outcome');
+  const legend = [...(card?.querySelectorAll('.legend li') ?? [])].map((li) => [[...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join(''), li.querySelector('.legend__value')?.textContent?.trim() ?? '']);
+  const count = Object.fromEntries(legend);
+  results.push({
+    name: "/analytics the Requests by outcome legend lists seven outcomes, the client's cancels after Incomplete and Rejected last, each with its count",
+    ok: JSON.stringify(legend.map(([label]) => label)) === JSON.stringify(['OK', 'Rate limited', 'Failed', 'Incomplete', 'Client canceled', 'Exhausted', 'Rejected']) && count['Client canceled'] === '1' && count.Rejected === '1',
+    missing: legend.length ? legend.map((entry) => entry.join(' ')) : ['no legend'],
   });
 }
 {
@@ -20113,6 +20127,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // `req_5f2a9c64-b18` and `req_c7e41d93-a26`, the two subagent turns the laptop session's classifier calls judge,
   // `req_a5e17c42-d19` and `req_d8f3b6e0-a74`, and the first turn of the subagent f2c8, `req_f2c8d417-a60`, each
   // answered. Desktop's Failed and the line's errors count the turn the upstream answered 400, `req_c1e40a95-b28`.
+  // Laptop's Failed and the line's errors count the bare 502 of the range's first hour, `req_8f5a2d16-c47`, and the
+  // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. Ci's Failed and the line's
+  // errors leave out the stream its client closed, the drawn `req_52f62e67-839`, which counts under Client canceled.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -20123,9 +20140,9 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   results.push({
     name: "/analytics the Refused and Failed cells by key, the Refusals by code card and the Traffic line read the story's refusals apart from the counts",
     ok:
-      JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '1', '3'], ['laptop', '6', '2']]) &&
+      JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '232 requests, 16.4% errors',
+      line === '234 requests, 16.7% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -22552,12 +22569,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const rows = [...(traffic('model')?.querySelectorAll('tbody tr') ?? [])];
       const at = rows.findIndex((tr) => tr.children[0]?.textContent?.trim() === 'no model');
       const row = at < 0 ? [] : [...rows[at].children].map((td) => td.textContent?.trim() ?? '');
-      const dash = at < 0 ? null : rows[at].children[9]?.querySelector('.muted');
-      const neighbour = rows[at === 0 ? 1 : at - 1]?.children[9]?.textContent?.trim() ?? null;
+      const dash = at < 0 ? null : rows[at].children[10]?.querySelector('.muted');
+      const neighbour = rows[at === 0 ? 1 : at - 1]?.children[10]?.textContent?.trim() ?? null;
       const figure = (i) => Number((row[i] ?? '').replace(/,/g, ''));
       results.push({
         name: '/analytics grouped by model the Traffic table names the request refused before it resolved a model "no model", under Refused alone, its Error rate a muted dash',
-        ok: row.length === 13 && figure(1) === 0 && figure(2) === 0 && row[8] === '3' && row[9] === '-' && dash?.textContent === '-' && /^\d[\d.]*%$/.test(neighbour ?? ''),
+        ok: row.length === 14 && figure(1) === 0 && figure(2) === 0 && row[9] === '3' && row[10] === '-' && dash?.textContent === '-' && /^\d[\d.]*%$/.test(neighbour ?? ''),
         missing: row.length ? [...row, `dash ${dash?.outerHTML ?? 'not muted'}`, `neighbour ${neighbour}`] : trafficRows('model').map((cells) => JSON.stringify(cells[0])),
       });
     }
@@ -23217,11 +23234,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const sums = want.get(r.canonicalModel) ?? [0, 0];
       want.set(r.canonicalModel, [sums[0] + r.usage.webSearch, sums[1] + r.usage.webFetch]);
     }
-    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[11]) !== sums[0] || num(row[12]) !== sums[1]; });
+    const wrong = perModel.filter((row) => { const sums = want.get(row[0]) ?? [0, 0]; return num(row[12]) !== sums[0] || num(row[13]) !== sums[1]; });
     results.push({
       name: '/analytics a session sums the server-tool calls per model the way the routes sum them',
       ok: perModel.length > 0 && wrong.length === 0,
-      missing: wrong.map((row) => `${row[0]} ${row[11]}/${row[12]} against ${(want.get(row[0]) ?? []).join('/')}`),
+      missing: wrong.map((row) => `${row[0]} ${row[12]}/${row[13]} against ${(want.get(row[0]) ?? []).join('/')}`),
     });
 
     const agentFold = '/analytics a user agent pattern nothing matches empties the session fold';
@@ -23947,8 +23964,9 @@ await forView('/analytics', async () => {
     const low = read(page, 'Traffic by model');
     page.unmount();
     const ZERO = ['claude-opus-5', 'claude-sonnet-4-6', 'claude-sonnet-5'];
-    // The day's Sonnet 5.5 rows fail 8 of 65, the turn the upstream answered 400 among them, and its Sonnet 4.5 rows 8
-    // of 74.
+    // The day's Sonnet 5.5 rows fail 10 of 67, the turn the upstream answered 400, the bare 502 and the rejection beside
+    // it among them, and its Sonnet 4.5 rows 8 of 74. The Haiku rows fail 7 of 41 with the stream its client closed
+    // left out, still above Opus 5.5's 1 of 6.
     const want = {
       high: shown('down', ['claude-fable-5-1', 'claude-haiku-4-5-20251001', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-4-5', ...ZERO, 'no model'], '?by=model&sort=error_rate', 'Error rate', 'descending'),
       low: shown('up', [...ZERO, 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-4-5-20251001', 'claude-fable-5-1', 'no model'], '?by=model&sort=error_rate&dir=asc', 'Error rate', 'ascending'),
@@ -25131,7 +25149,9 @@ await forView('/keys', async () => {
   again.unmount();
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'from-pool', 'fleet', 'bench', 'ci', 'notebook', 'laptop', 'desktop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
-  const weeks = ['226 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // Laptop's week holds the rejection and the bare 502 of the log's first hour, `req_4c1e8b27-d93` and
+  // `req_8f5a2d16-c47`, each a request the rollups count.
+  const weeks = ['228 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },

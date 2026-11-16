@@ -995,6 +995,8 @@ interface StorySeed {
   /** The client's own auto-mode classifier call, which the class header and the beta mark: `client` on the account and
    * incarnation its judged turn ended on, `client_off` off them. */
   classifier?: NonNullable<RequestLog['classifier']>;
+  /** The account the relay chose for a request it rejected before any attempt, which the row names. */
+  chosen?: string;
   /** The label the ledger wrote, where it is not the lane's. */
   client?: string | null;
   /** The item a contract refusal named. */
@@ -1121,6 +1123,13 @@ const CAUSED_MOVE_ID = 'req_c7e41d93-a26';
  */
 const CLIENT_ERROR_TURN_ID = 'req_c1e40a95-b28';
 const CLIENT_ERROR_SESSION_ID = 'f40a2c7e-9b31-4d58-8e06-1a7c3b5d9e24';
+/**
+ * A laptop turn of the day before that the relay rejected on secondary, the account it chose, since it could not write
+ * the account's id into the body. No attempt went upstream.
+ */
+const UNAVAILABLE_TURN_ID = 'req_4c1e8b27-d93';
+/** A laptop turn of the day before whose upstream answered 502 with a body that names no error type. */
+const BARE_502_TURN_ID = 'req_8f5a2d16-c47';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
@@ -1202,7 +1211,7 @@ function storyRow(seed: StorySeed): RequestLog {
   return {
     ...REQUEST_SAMPLE,
     // The account whose answer the request ended on, a refusal's as much as a success's, as a drawn row reads it.
-    accountId: last?.accountId ?? null,
+    accountId: last?.accountId ?? seed.chosen ?? null,
     agentId: seed.agentId,
     agentType: seed.agentId === null || seed.agentId === 'main' ? null : (storyAgentsOf(sessionId).find((a) => a.id === seed.agentId)?.type ?? 'general-purpose'),
     at: iso(seed.at),
@@ -1256,6 +1265,7 @@ function storyRow(seed: StorySeed): RequestLog {
  */
 function storySeeds(): StorySeed[] {
   const t = clock;
+  const firstHour = startOfHour(NOW) - 24 * HOUR;
   const rateLimited = (until: number) => ({ reason: '429 on 5h window', until });
   // A 429 whose head rejects no plan window cools its account for the retry-after alone.
   const retryAfter = (answeredAt: number) => ({ reason: '429, retry after 20 s', until: answeredAt + 20_000 });
@@ -1635,6 +1645,11 @@ function storySeeds(): StorySeed[] {
     // five minutes after it. The pin is live and younger than all's return dwell, so no rule moves it. The workspace
     // is out of the eligible set, so the placement moves the pin to primary and writes the conversation's prefix there.
     { agentId: 'main', at: t(11, 31, 10), attempts: [{ accountId: 'primary', at: t(11, 31, 10), ms: 8_600, status: 200 }], id: CAUSED_MOVE_ID, keyId: 'desktop', landsAfresh: true, model: 'claude-sonnet-5-5', requestClass: 'main', session: LAPSED_SESSION_ID, unseeded: true, usage: { cacheWrite1h: 38_200, input: 1_600, output: 940 } },
+    // Two laptop turns in the request log's first hour, which the Dashboard's day leaves out. The relay answers the
+    // rejection with the 503 it raises on the chosen account's body, and the router files the bare 502 under its status,
+    // since the body names no error type.
+    { agentId: 'main', at: firstHour + 20 * MINUTE, attempts: [], capturedBodies: false, chosen: 'secondary', errorCode: 'accounts_unavailable', id: UNAVAILABLE_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', outcome: 'rejected', requestClass: 'main', session: 'b3e8f14c-6a27-4d95-8c10-7e2a5d9f3b61', status: 503 },
+    { agentId: 'main', at: firstHour + 35 * MINUTE, attempts: [{ accountId: 'primary', at: firstHour + 35 * MINUTE, ms: 1_200, status: 502 }], capturedBodies: false, errorCode: 'upstream_502', id: BARE_502_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'e5c27a9d-1f48-4b63-a0d7-9c3e6b2f8a15', unseeded: true },
   ];
 }
 const storyRequests = () => storySeeds().map(storyRow);
@@ -1709,6 +1724,9 @@ const FORK_IDS: ReadonlySet<string> = new Set(guardrailSeeds().filter((s) => s.f
 // Seeded by hand as the routing log's rows are, so the draws after the rows leave them as the story wrote them, and the
 // routing log derives no decision for them: a block is refused before any selection.
 for (const id of GUARDRAIL_STORY_IDS) STORY_IDS.add(id);
+// The rejection is written whole too, so the draws after the rows leave it as the story wrote it. The routing log
+// derives the record of a request no attempt reached as an exhaustion, which this one is not, so it derives none.
+STORY_IDS.add(UNAVAILABLE_TURN_ID);
 export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
 /** The story's rows whose stream ended before the answer reported its output count. */
 const OUTPUT_UNREPORTED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.outputUnreported).map((s) => s.id));
@@ -2467,12 +2485,11 @@ function hourShares(accountId: string, model: string, client: string | null, pri
 // counts once, under its code.
 const upstreamFailed = (r: RequestLog) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529;
 
-/** The incomplete requests of a part by the code each ended on, as the ledger counts a request's code. */
-function incompleteCodesOf(rows: RequestLog[]): Record<string, number> {
-  const codes = emptyCounts();
-  for (const r of rows) if (r.outcome === 'incomplete' && r.errorCode !== null) codes[r.errorCode] = countOf(codes, r.errorCode) + 1;
-  return codes;
-}
+/**
+ * A client that left before its answer ended, which the ledger counts apart from the failures and files under no error
+ * code. A probe is the keepalive's own request, whose cancel stays a failure.
+ */
+export const clientLeft = (r: Pick<RequestLog, 'errorCode' | 'kind' | 'outcome'>): boolean => r.outcome === 'canceled' && r.errorCode === 'client_gone' && r.kind !== 'probe';
 
 export function rollups(rows: RequestLog[]): HourlyRollup[] {
   const h = createRng(4_242);
@@ -2522,6 +2539,11 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
       const refused = partRows.filter((r) => r.refused);
       const refusals = emptyCounts();
       for (const r of refused) if (r.errorCode !== null) refusals[r.errorCode] = countOf(refusals, r.errorCode) + 1;
+      // The ledger counts a served request's own code whatever its outcome, a client's cancel aside.
+      const errors = emptyCounts();
+      for (const r of served) if (r.errorCode !== null && !clientLeft(r)) errors[r.errorCode] = countOf(errors, r.errorCode) + 1;
+      // A rejected request counts under its outcome, so the counts by status leave it out and each request counts once.
+      const byStatus = served.filter((r) => r.outcome !== 'rejected');
       const ok = served.filter((r) => r.status === 200);
       const cacheMissReasons = emptyCacheMissReasons();
       for (const r of partRows) for (const a of r.attempts) if (a.cacheMissReason) cacheMissReasons[a.cacheMissReason] = countOf(cacheMissReasons, a.cacheMissReason) + 1;
@@ -2547,18 +2569,20 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
           // A stream that ended short committed its 200 and still is no success, so it counts on its own.
           incomplete: served.filter((r) => r.outcome === 'incomplete').length,
           ok: ok.filter((r) => r.outcome === 'succeeded').length,
-          rate_limited: served.filter((r) => r.status === 429).length,
+          rate_limited: byStatus.filter((r) => r.status === 429).length,
           // A stream that failed after its 200 head is a failure, as the ledger files it, under the error it carried.
-          overloaded: served.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
+          overloaded: byStatus.filter((r) => r.status === 529 || (r.status === 200 && r.errorCode === 'overloaded_error')).length,
           // A stream the relay could not decode is an upstream error of its own, counted inside `upstream_error` under
-          // the same status filter, so the error split that subtracts it never reads negative.
-          undecodable: served.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
-          upstream_error: served.filter(upstreamFailed).length,
-          // The ledger files a stream the client closed, and one the router's own stop cut, as failed, each under the
-          // code the relay gave it.
+          // the same status filter.
+          undecodable: byStatus.filter((r) => upstreamFailed(r) && r.errorCode === 'stream_undecodable').length,
+          upstream_error: byStatus.filter(upstreamFailed).length,
+          rejected: served.filter((r) => r.outcome === 'rejected').length,
+          // The ledger files a stream the client closed, and one the router's own stop cut, under the canceled outcome,
+          // each under the code the relay gave it.
           client_gone: served.filter((r) => r.errorCode === 'client_gone').length,
           router_shutdown: served.filter((r) => r.errorCode === 'router_shutdown').length,
         },
+        errors,
         refusals,
         // Every attempt but the last one moved the request to another member.
         failovers: sumOf(served, (r) => Math.max(0, r.attempts.length - 1)),
@@ -2578,7 +2602,6 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
         cacheMissReasons,
-        incompleteCodes: incompleteCodesOf(partRows),
         expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
         uncached: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h === 0).length,
         costUsd: sumOf(partRows, (r) => r.costUsd),
@@ -2640,6 +2663,24 @@ function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean)
 
 // The smoke run reads the holder's day and the mock consistency tests read the cap raise through this module.
 export { DELETED_HOLDER_DAY, NIGHTLY_CAP_RAISED } from './time';
+
+/**
+ * A synthesized hour's error codes, which no request row carries: each count under the word the relay files it with. A
+ * client's cancel files under no code on a row that is no probe, as the ledger leaves it out.
+ */
+function synthesizedErrors(kind: RequestKind, o: HourlyRollup['requests']): Record<string, number> {
+  const errors = emptyCounts();
+  const words: [string, number][] = [
+    ['rate_limit_error', o.rate_limited],
+    ['overloaded_error', o.overloaded],
+    ['api_error', o.upstream_error - o.undecodable],
+    ['stream_undecodable', o.undecodable],
+    ['router_shutdown', o.router_shutdown],
+    ['client_gone', kind === 'probe' ? o.client_gone : 0],
+  ];
+  for (const [code, n] of words) if (n > 0) errors[code] = n;
+  return errors;
+}
 
 function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
@@ -2705,6 +2746,7 @@ function historicalRollups(): HourlyRollup[] {
       const takesMaxEffort = lane.keyId === 'laptop' && maxEffortOwed && t >= startOfHour(NOW) - 6 * DAY;
       if (takesMaxEffort) maxEffortOwed = false;
       const fast = fastTurn(lane.keyId, model, 'inference') && hf.chance(0.5);
+      const outcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
       const inference: HourlyRollup = {
         hour: iso(t),
         client: CLIENTS[lane.keyId] ?? '-',
@@ -2721,7 +2763,8 @@ function historicalRollups(): HourlyRollup[] {
         sessionId,
         funding: kindOf(accountId) === 'api_key' ? 'billed' : fast ? 'fast' : 'plan',
         speed: fast ? 'fast' : 'standard',
-        requests: { client_gone: 0, incomplete: 0, ok, rate_limited: err > 0 && h.chance(0.6) ? err : 0, overloaded: err > 0 && h.chance(0.3) ? 1 : 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 },
+        requests: outcomes,
+        errors: synthesizedErrors('inference', outcomes),
         refusals: {},
         failovers: err > 0 ? h.int(1, 3) : h.chance(0.12) ? 1 : 0,
         migrations: h.chance(0.08) ? 1 : 0,
@@ -2763,6 +2806,7 @@ function historicalRollups(): HourlyRollup[] {
         const failed = h.chance(0.08) ? 1 : 0;
         const probeUsage: Usage = { input: 0, cacheRead: probes * h.int(30_000, 80_000), cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS };
         const probeCost = costOf(model, probeUsage, false, t);
+        const probeOutcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: failed };
         out.push({
           hour: iso(t),
           client: CLIENTS[lane.keyId] ?? '-',
@@ -2779,7 +2823,8 @@ function historicalRollups(): HourlyRollup[] {
           sessionId,
           funding: kindOf(accountId) === 'api_key' ? 'billed' : 'plan',
           speed: 'standard',
-          requests: { client_gone: 0, incomplete: 0, ok: probes, rate_limited: 0, overloaded: 0, router_shutdown: 0, undecodable: 0, upstream_error: failed },
+          requests: probeOutcomes,
+          errors: synthesizedErrors('probe', probeOutcomes),
           refusals: {},
           failovers: 0,
           migrations: 0,
@@ -2825,6 +2870,7 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
   const costUsd = costOf(r.model, usage, false, at);
   const wastedProbeReasons = emptyWastedProbeReasons();
   wastedProbeReasons.idle_limit = 1;
+  const outcomes: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
   return [
     {
       hour: iso(startOfHour(at)),
@@ -2842,7 +2888,8 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       sessionId: r.sessionId ?? '-',
       funding: kindOf(r.accountId) === 'api_key' ? 'billed' : 'plan',
       speed: 'standard',
-      requests: { client_gone: 0, incomplete: 0, ok: 1, overloaded: 0, rate_limited: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 },
+      requests: outcomes,
+      errors: synthesizedErrors('probe', outcomes),
       refusals: {},
       failovers: 0,
       migrations: 0,
@@ -2920,7 +2967,7 @@ export const requestSidesOf = (rows: RequestLog[]): Pick<TrafficBucket, 'billedU
     equivalent: plan.some((r) => tokensTotal(r.usage) > 0 && r.costEquivalent === null) ? null : sumOf(plan, (r) => r.costEquivalent ?? 0),
   };
 };
-export const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown;
+export const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error + r.requests.client_gone + r.requests.router_shutdown + r.requests.rejected;
 export const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
 const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
 
@@ -2970,7 +3017,8 @@ function deriveFigures() {
       const bucket = traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
       bucket.costUsd += r.costUsd;
       if (r.kind === 'probe') continue;
-      bucket.failed += r.outcome === 'succeeded' ? 0 : 1;
+      // A client that hangs up is no failure of the pool, as the route's count reads it.
+      bucket.failed += r.outcome === 'succeeded' || clientLeft(r) ? 0 : 1;
       bucket.requests += 1;
       bucket.tokens += tokensTotal(r.usage);
     }

@@ -313,11 +313,10 @@ export function oneAccountShares(groups: AnalyticsGroup[], required: (g: Analyti
  * group that carries no plan count has plan rows where its Pro-week figure is not zero, as `sidesOf` reads it.
  */
 export const planRowsRequired = (g: AnalyticsGroup): boolean => (g.planRequests === null ? g.costEquivalent !== 0 : g.planRequests > 0 && g.planOutputTokens !== 0);
-/**
- * The failed share of a group's requests, null for a group with no request, which the cells draw as a dash. The refused
- * requests are in neither count, since the fold never counted them.
- */
-export const errorRateOf = (g: Pick<AnalyticsGroup, 'requests' | 'succeeded'>): number | null => (g.requests > 0 ? (g.requests - g.succeeded) / g.requests : null);
+/** The failed share of a group's requests, null for a group with no request. The refused requests are in neither
+ *  count, and the client's cancels leave the failures, since a client that hangs up is no fault of the route. */
+export const errorRateOf = (g: Pick<AnalyticsGroup, 'clientCanceled' | 'requests' | 'succeeded'>): number | null =>
+  g.requests > 0 ? (g.requests - g.succeeded - g.clientCanceled) / g.requests : null;
 /**
  * The answered and the failed probes, the count a side's probe cost latches on and the Cache warming notes print as
  * the probes sent. The wire's `failed` count also holds the exhausted and rejected probes the relay refuses itself. A

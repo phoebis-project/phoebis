@@ -23,6 +23,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   cacheHits: 0,
   cacheMisses: 0,
   cacheMissReasons: emptyCacheMissReasons(),
+  clientCanceled: 0,
   cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
   costEquivalent: 0,
   costShares: null,
@@ -272,13 +273,17 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     }
     entry.rows.push(r);
     g.requests += 1;
+    // A client that hangs up is no failure of the route, whatever status the row holds, so its cancel counts apart and
+    // its code stays out of the errors. A probe's cancel and the router's own fall to the arms below.
+    const clientLeft = r.outcome === 'canceled' && r.errorCode === 'client_gone' && r.kind !== 'probe';
     if (r.outcome === 'succeeded') g.succeeded += 1;
     else if (r.outcome === 'exhausted') g.exhausted += 1;
     else if (r.outcome === 'rejected') g.rejected += 1;
     else if (r.outcome === 'incomplete') g.incomplete += 1;
+    else if (clientLeft) g.clientCanceled += 1;
     else if (r.status === 429) g.rateLimited += 1;
     else g.failed += 1;
-    if (r.errorCode) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
+    if (r.errorCode && !clientLeft) g.errors[r.errorCode] = countOf(g.errors, r.errorCode) + 1;
     g.attempts += r.attempts.length;
     // A failover is an account change between adjacent attempts, as the ledger's delta_of counts it; a retry
     // on the same account is none.
@@ -384,7 +389,7 @@ const plusBoth = <K extends string>(a: Record<K, number> | null, b: Record<K, nu
 export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
   const out = empty('all');
   for (const g of groups) {
-    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
+    for (const k of ['attempts', 'billedUsd', 'cacheHits', 'cacheMisses', 'clientCanceled', 'costUsd', 'exhausted', 'expiredBetweenTurns', 'failed', 'failovers', 'incomplete', 'probeCostUsd', 'rateLimited', 'refused', 'rejected', 'requests', 'savingUsd', 'succeeded', 'uncached', 'wastedProbeUsd', 'wastedProbes'] as const) out[k] += g[k];
     out.cost = plusSplit(out.cost, g.cost);
     out.billed = plusSplit(out.billed, g.billed);
     out.costEquivalent = plus(out.costEquivalent, g.costEquivalent);

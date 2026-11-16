@@ -1603,6 +1603,9 @@ export interface AnalyticsGroup {
   cacheMisses: number;
   /** The eight known reasons always, beside any other name the route answered. */
   cacheMissReasons: Record<CacheMissReason, number>;
+  /** The requests a client left before their answer ended, counted in `requests` and in neither `failed` nor `errors`,
+   *  since a client that hangs up is no fault of the route. */
+  clientCanceled: number;
   /** The cache read and write costs are null on a group folded from request rows, which carry one total. */
   cost: Omit<CostSplit, 'cacheRead' | 'cacheWrite'> & { cacheRead: number | null; cacheWrite: number | null };
   /**

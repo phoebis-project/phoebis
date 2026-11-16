@@ -49,6 +49,11 @@ export interface HourlyRollup {
    *  tokens priced nothing. */
   equivalent: number | null;
   /**
+   * The hour's served requests by the code each carries, as the ledger's errors map counts them: a refused request
+   * files under `refusals`, and a client's cancel of a request that is no probe under no code.
+   */
+  errors: Record<string, number>;
+  /**
    * Requests that diagnosed no divergence yet read no cache, so the entry
    * expired between turns. The reason counts cannot be split this way once
    * summed, which is why the ledger carries it.
@@ -64,8 +69,6 @@ export interface HourlyRollup {
   funding: 'billed' | 'fast' | 'overage' | 'plan' | 'usage_based';
   histograms: LatencyHistograms;
   hour: string;
-  /** The incomplete requests by the code each ended on, which the ledger counts beside the outcome. */
-  incompleteCodes?: Record<string, number>;
   /** Requests whose cache read was kept alive by a probe, and the tokens they read under each TTL. */
   keptWarm: { requests: number; tokens1h: number; tokens5m: number };
   keyId: string;
@@ -86,8 +89,9 @@ export interface HourlyRollup {
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
   /** `client_gone` counts the streams the client closed and `router_shutdown` the requests the router's own stop cut,
-   *  with or without a head, both filed under the canceled outcome as the ledger files them. */
-  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; router_shutdown: number; undecodable: number; upstream_error: number };
+   *  with or without a head, both filed under the canceled outcome as the ledger files them. `rejected` counts the
+   *  requests the relay rejected after it chose an account, which the counts by status leave out. */
+  requests: { client_gone: number; incomplete: number; ok: number; overloaded: number; rate_limited: number; rejected: number; router_shutdown: number; undecodable: number; upstream_error: number };
   /** The kept-warm requests' saving in dollars, each priced at the cells its own prompt selects. */
   savingUsd: number;
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
@@ -288,7 +292,7 @@ const shareAccountOf = (key: string, groupBy: AnalyticsGroupBy | BurnGroup, acco
 
 // The zeros a group's member-wise sums start from, the token one in the key order the answer carries.
 const ZERO_KEPT: HourlyRollup['keptWarm'] = { requests: 0, tokens1h: 0, tokens5m: 0 };
-const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
+const ZERO_OUTCOMES: HourlyRollup['requests'] = { client_gone: 0, incomplete: 0, ok: 0, overloaded: 0, rate_limited: 0, rejected: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 };
 const ZERO_PROBES: HourlyRollup['probes'] = { failed: 0, held: 0, ok: 0, skipped: 0 };
 const ZERO_TOKENS: HourlyRollup['tokens'] = { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, thinking: 0, uncachedInput: 0, webFetch: 0, webSearch: 0 };
 
@@ -323,18 +327,13 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
   const histograms: LatencyHistograms = { durationMs: merged('durationMs'), outputTps: merged('outputTps'), ttfbMs: merged('ttfbMs'), ttftMs: merged('ttftMs') };
 
   const outcomes = sumEach(counted.map((r) => r.requests), ZERO_OUTCOMES);
+  // A client that hangs up is no failure of the route, so the cancels on the rows that are no probe count apart. A
+  // probe is the keepalive's own request, whose cancel stays a failure.
+  const clientCanceled = sumOf(counted.filter((r) => r.kind !== 'probe'), (r) => r.requests.client_gone);
   const requests = sumOf(counted, requestsIn);
   const failovers = sumOf(counted, (r) => r.failovers);
   const errors = emptyCounts();
-  if (outcomes.rate_limited) errors.rate_limit_error = outcomes.rate_limited;
-  if (outcomes.overloaded) errors.overloaded_error = outcomes.overloaded;
-  // A stream the relay could not decode counts under its own code, apart from the upstream's errors around it.
-  if (outcomes.upstream_error - outcomes.undecodable) errors.api_error = outcomes.upstream_error - outcomes.undecodable;
-  if (outcomes.undecodable) errors.stream_undecodable = outcomes.undecodable;
-  if (outcomes.client_gone) errors.client_gone = outcomes.client_gone;
-  if (outcomes.router_shutdown) errors.router_shutdown = outcomes.router_shutdown;
-  // The ledger counts a request's own code beside its outcome, so an incomplete one files under the code it ended on.
-  for (const r of counted) for (const [code, n] of Object.entries(r.incompleteCodes ?? {})) errors[code] = countOf(errors, code) + n;
+  for (const r of counted) for (const [code, n] of Object.entries(r.errors)) errors[code] = countOf(errors, code) + n;
 
   const kept = sumEach(counted.map((r) => r.keptWarm), ZERO_KEPT);
   const planKept = sumEach(countedPlan.map((r) => r.keptWarm), ZERO_KEPT);
@@ -349,15 +348,15 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     cacheHits: sumOf(counted, (r) => r.cacheHits),
     cacheMisses: sumOf(counted, (r) => r.cacheMisses),
     cacheMissReasons,
+    clientCanceled,
     cost: sumSplit(priced.map((r) => r.cost)),
     costShares,
     costUsd: sumOf(priced, (r) => r.costUsd),
     errors,
-    // The fixture ledger records no exhausted pool, and its refused requests file under the refusals map and never
-    // under Rejected.
+    // The fixture ledger records no exhausted pool.
     exhausted: 0,
     expiredBetweenTurns: sumOf(counted, (r) => r.expiredBetweenTurns),
-    failed: outcomes.overloaded + outcomes.upstream_error + outcomes.client_gone + outcomes.router_shutdown,
+    failed: outcomes.overloaded + outcomes.upstream_error + outcomes.router_shutdown + outcomes.client_gone - clientCanceled,
     failovers,
     histograms,
     incomplete: outcomes.incomplete,
@@ -375,7 +374,9 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     rateLimited: outcomes.rate_limited,
     refusals,
     refused: Object.values(refusals).reduce((n, c) => n + c, 0),
-    rejected: 0,
+    // A refused request files under the refusals map alone, so Rejected counts the requests the relay rejected after it
+    // chose an account.
+    rejected: outcomes.rejected,
     requests,
     savingUsd: sumOf(counted, (r) => r.savingUsd),
     succeeded: outcomes.ok,
