@@ -46,10 +46,10 @@ status and outcome (`canceled`, which counts apart from the failures where the c
 `incomplete` for a 200 answer whose body ended before its end, `rejected`, `succeeded`), and the error code
 (`stream_cut`, `stream_incomplete`, `stream_stalled` or `stream_undecodable` under `incomplete`, and `stream_cut`,
 `stream_stalled` or `stream_undecodable` under `failed` for a forwarded answer of another status whose body was cut,
-went silent or did not decode). Any other forwarded answer of 400 or more files the upstream's `error.type` as its code,
-or `upstream_<status>` where the body names none the router takes, and a forwarded failure an earlier version stored has
-no code. It carries the time to first byte and to first token, the duration, the bytes sent and received, whether the
-response was served kept warm, and whether its body was captured. It names the client's user agent and class
+went silent or did not decode). Any other forwarded answer of 400 or more files the upstream's `error.type` as its code
+where that type is an identifier of at most 64 bytes, else `upstream_<status>`, and such an answer an earlier version
+stored has no code. It carries the time to first byte and to first token, the duration, the bytes sent and received,
+whether the response was served kept warm, and whether its body was captured. It names the client's user agent and class
 (`claude-code/<entrypoint>` or `other`), the gateway hints it sent (the agent type, the compaction and context-compacted
 markers, and the summed tool durations of the turn before), the turn origin off its attribution line, and its auto-mode
 standing as admission read it: a server-side check asked for under an on setting, the `safeguards` member carried under
@@ -97,7 +97,7 @@ every account at its cap, by any request's landing on another agent's pin of its
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
 day and the current month: an API-key member's rows whole, a subscription member's metered rows alone (`overage` and
 `fast`, and `usage_based` for a usage-based seat). A keepalive probe's cost counts toward it the same as any other
-request's, since a probe on an API-key member still draws real money. The other rollup reads count a billed probe's
+request's, since a probe on an API-key member still draws real money. Five other rollup reads count a billed probe's
 dollars too: the analytics breakdown and series, the Dashboard's day, a key's totals and a pool's traffic add the
 dollars of a probe the plan did not fund to their cost and billed dollars, even where they count no probe as a request.
 There its request, its tokens and its failure stay out, and a probe the plan funded adds nothing. A member's spend is
@@ -148,11 +148,7 @@ block, the Requests view and a session's request list, and in `phoebis_refusals_
 guardrail block (kind `guardrail`, code `guardrail_blocked`), a client drift, a missing contract item, and a key or
 model refusal the router makes at selection, for a request admitted under an older registry, each also write a `refused`
 decision row beside the request row, which the routing log lists ([Routing log](console.md#routing-log)), and every
-other refusal above stays on the request row alone, the relay's own `model_not_allowed` among them. The first start
-after the upgrade sets the flag on the stored rows and moves each one's share out of its hour's counts into the map, in
-pages, resumed after a stopped start, and an hour whose rows the retention purge already removed keeps its old counts.
-With `stats.retention_days` at 0, which keeps the requests for good, the move starts at the first hour
-`stats.rollup_retention_days` keeps, so a refusal in an hour the rollup purge removed writes no row into it.
+other refusal above stays on the request row alone, the relay's own `model_not_allowed` among them.
 
 An upstream's refusal is a served request: the serving attempt records the answer's `stop_reason` `refusal` with the
 `refusal_category` and the recommended model its `stop_details` named, the request's outcome stays `succeeded`, and the
@@ -261,9 +257,9 @@ as sent, the router's `outcome` (`refused`, `unsettled` or `used`), the windows 
 left, the cooldown's end and the weekly reset instant where the answer names them, and the HTTP status or the transport
 error. A `window_cleared` after a use ([The windows the router works
 from](routing.md#the-windows-the-router-works-from)) therefore has its cause in the routing log. A use the router
-refused, or whose request never left, writes no event. An account's grant shows the newest use whose event names the
-account row's `incarnation`, or names none and is not older than the row, so an account deleted and created again under
-the same id does not show the earlier holder's use.
+refused, or whose request never left, writes no event. Only an account's grant with no reset left shows a use, the
+newest whose event carries the outcome `used` and names the account row's `incarnation`, or names none and is not older
+than the row, so an account deleted and created again under the same id does not show the earlier holder's use.
 
 ## Pricing
 
@@ -339,13 +335,13 @@ and its text, and when two entries take effect at one instant, naming both entri
 
 ## Plan meter
 
-A subscription account's plan-side figures read as one Pro-week figure, the share of a Pro 7-day window the same tokens
-would spend, which the console shows in the week the week control names, and where one account is named the figure's
-hint gives the request's shares of that account's own windows, each a percent with the window named, over the windows
-the account's window set holds ([The windows the router works from](routing.md#the-windows-the-router-works-from)). An
-API-key account, and a subscription account in overage, read dollars, and an overage request adds to no window share. A
-usage-based seat reads dollars at the API rates with no window share, since its spend is billed against its cap and
-draws no plan window.
+A subscription account's plan-side figures read as one Pro-week figure on every route but the burn's, which answers its
+figures once per plan tier: the share of a Pro 7-day window the same tokens would spend, which the console shows in the
+week the week control names, and where one account is named the figure's hint gives the request's shares of that
+account's own windows, each a percent with the window named, over the windows the account's window set holds ([The
+windows the router works from](routing.md#the-windows-the-router-works-from)). An API-key account, and a subscription
+account in overage, read dollars, and an overage request adds to no window share. A usage-based seat reads dollars at
+the API rates with no window share, since its spend is billed against its cap and draws no plan window.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, the projection, or the burn a shedding
 round ranks by. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which
@@ -533,10 +529,10 @@ its cost. While a batch is under retry the ledger is degraded: the system page s
 `phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
 the spend is read again. On `GET /admin/system`, `ledger.write_retries` counts one per try the file refused, and
 `ledger.write_failures` counts the batches a panicking write lost, whose records also count in `ledger.dropped`.
-`ledger.last_gap_at` reads the instant of the writer's newest `ledger_gap`, or null while the writer has recorded none
-since the start. The same answer's `keepalive.sessions` counts the sessions that hold a slot under `max_sessions`, the
-count `GET /admin/keepalive/overview` answers beside the cap, and `keepalive.session_entries` counts every session entry
-the keepalive engine holds, an ended session's among them until its expiry.
+`ledger.last_gap_at` reads the instant of the writer's newest `ledger_gap` of dropped records, or null while the writer
+has recorded none since the start. The same answer's `keepalive.sessions` counts the sessions that hold a slot under
+`max_sessions`, the count `GET /admin/keepalive/overview` answers beside the cap, and `keepalive.session_entries` counts
+every session entry the keepalive engine holds, an ended session's among them until its expiry.
 
 The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
 row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole
@@ -578,9 +574,10 @@ the account view reads, and each key id's newest create and delete, which tell a
 budgeted member's hourly rows stay from its period's start on, so a retention shorter than the period never reopens an
 exhausted member.
 
-The analytics, the burn chart and the dashboard read the hourly rollups in pages of a day, each page its own read, so a
-400-day range holds one day of rows in memory and a reader connection is free between pages. The pool cards' traffic
-reads the bounded day it charts in one statement on one reader, so a day with several pools reads the table once.
+The analytics and the burn chart read the hourly rollups in pages of a day, each page its own read, so a 400-day range
+holds one day of rows in memory and a reader connection is free between pages. The dashboard reads its day in one
+statement on one reader, as the pool cards' traffic does. That traffic read covers the bounded day the cards chart, so a
+day with several pools reads the table once.
 
 A prompt-length threshold that moves re-folds the hours whose attempts the ledger still holds at the next start, and the
 older hours keep their split. Where the request retention is 0 the re-fold reads every request, and a request received

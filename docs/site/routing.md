@@ -166,11 +166,11 @@ model. Off by default.
 
 The pool's `thinking_diagnostics`, a switch in a group of its own after Cache diagnostics in the pool dialog's expert
 view, turns the thinking-binding report on for this pool's requests: where thinking is on and the client sent no
-`thinking-binding-controls-2026-08-01` token, the router adds it ([The betas](relay.md#the-betas)), and the upstream's
-answer then lists in `input_transformations` each thinking block it dropped or let pass. The token changes nothing the
-model receives, and the router never sets `thinking.block_binding`. A `400` naming the token strips it for one retry and
-latches it off for the account, apart from the cache diagnostics' latch. How the router reads the report on a move is
-under [What a move drops](#what-a-move-drops). Off by default.
+`thinking-binding-controls-2026-08-01` token, the router adds it ([The betas](relay.md#the-betas)), never to a token
+count, and the upstream's answer then lists in `input_transformations` each thinking block it dropped or let pass. The
+token changes nothing the model receives, and the router never sets `thinking.block_binding`. A `400` naming the token
+strips it for one retry and latches it off for the account, apart from the cache diagnostics' latch. How the router
+reads the report on a move is under [What a move drops](#what-a-move-drops). Off by default.
 
 `auto_mode_server` is whether a Claude Code session's server-side auto mode checks travel to the upstream, on by
 default, and a key's own `auto_mode_server` overrides the pool's ([Keys](#keys)). What the router cuts under the off
@@ -404,12 +404,12 @@ runway reads across priorities, so an account of a lower priority with the longe
 API-key account whose bucket is full ranks at zero on the third rung. Where the walk holds an account, the decision
 record names the rung in the partitions line's `ladder` fact (`fits`, `rewrite_only`, `least_bad`, `ending` or `every`),
 and an account that reads `least_bad` states its runway to 1 on its row. An account winding down toward its subscription
-end (see **Subscription end**, below) is passed over while an account stands on a rung above it. A fresh session's fit
-reads the relay's estimate of the body's tokens as its rewrite and the median burn of the pool's warm sessions as its
-burn, each warm session's rate at the pace it would run unheld, and reads the account's own burn as the burn the
-sessions already on it would make unheld, so an account calm only because the slow-down holds its sessions reads as full
-(see **The demand**, below). A window the account has not read counts as untouched, and an account inside
-`wind_down_minutes` of its subscription end never fits.
+end (see **Subscription end**, below) is passed over while an account stands on a rung above it, and on the last rung
+while an account outside its wind-down stands beside it. A fresh session's fit reads the relay's estimate of the body's
+tokens as its rewrite and the median burn of the pool's warm sessions as its burn, each warm session's rate at the pace
+it would run unheld, and reads the account's own burn as the burn the sessions already on it would make unheld, so an
+account calm only because the slow-down holds its sessions reads as full (see **The demand**, below). A window the
+account has not read counts as untouched, and an account inside `wind_down_minutes` of its subscription end never fits.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then API key. Within a group, or across the whole set with the flag off, tiers order by priority
@@ -587,7 +587,8 @@ the wait ends at once when the first request ends without a head.
 
 A live pin on a portable request moves only when its session sends a request, and only by one of five rules, checked in
 this order: spent, overage, return to plan, drain and shed. The first rule that finds a destination moves the pin and
-names the move after itself. A pin on an account past its subscription end reaches none of them: the
+names the move after itself. A keepalive probe reaches none of the five rules, as a token count reaches none, and the
+move waits for the session's next real request. A pin on an account past its subscription end reaches none of them: the
 `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent fast takes
 neither the spent nor the overage rule, since it draws usage credits and no plan window. What a move drops of a
 session's thinking, and how a move and a shedding round weigh it, is under [What a move drops](#what-a-move-drops).
@@ -865,10 +866,10 @@ the session as a failover's landing does: `pin_migrated` with the reason `delete
 request's `moved` and the decision's rule `deleted`, and the deleted account as `from_account_id`. That move stays open
 until the pool's affinity TTL has passed since the pin's last use, or until the key is replaced or an account is created
 again under the deleted account's id. Then the router records `pin_expired` with `deleted` at the next purge tick or
-reload, or at the session's next request where that comes first, and the session is placed afresh. The router keeps that
-pin in memory only, so after a restart the session's next request is a fresh placement too. A pin whose key was
-replaced, or whose account was deleted and created again under its id, before the reload records `pin_expired` with
-`deleted` at the reload, and its session's next placement names no source.
+reload, or at the session's next selection that lands a pin where that comes first, and the session is placed afresh.
+The router keeps that pin in memory only, so after a restart the session's next request is a fresh placement too. A pin
+whose key was replaced, or whose account was deleted and created again under its id, before the reload records
+`pin_expired` with `deleted` at the reload, and its session's next placement names no source.
 
 #### What a move drops
 
@@ -1360,12 +1361,12 @@ empty for a running plan, and the operator types the date the provider's billing
 A trial end still ahead counts as an end the same way, even on an account nobody has canceled.
 
 Inside `wind_down_minutes` (default 30) of its end, an account is no destination for any move, leaves the set a fresh
-placement keeps for its fit, takes a fresh session only where no account stands on a rung above it, and a cold pin moves
-off it once another account can serve ([Moves](#moves)). A warm session stays (the **Drain** rule of [Moves](#moves)).
-With `wind_down_minutes` at 0 nothing happens before the end, apart from the keepalive, which holds a probe whose
-interval passes the end ([Keepalive](keepalive.md)). Past the end, a canceled account is the obstacle
-`subscription_ended`, and the upstream refuses the dead credential, so the session's next request fails over to a
-sibling.
+placement keeps for its fit, takes a fresh session only where no account stands on a rung above it and, on the last
+rung, none outside its wind-down stands beside it, and a cold pin moves off it once another account can serve
+([Moves](#moves)). A warm session stays (the **Drain** rule of [Moves](#moves)). With `wind_down_minutes` at 0 nothing
+happens before the end, apart from the keepalive, which holds a probe whose interval passes the end
+([Keepalive](keepalive.md)). Past the end, a canceled account is the obstacle `subscription_ended`, and the upstream
+refuses the dead credential, so the session's next request fails over to a sibling.
 
 An end that falls before a window's horizon becomes that horizon ([The windows the router works
 from](#the-windows-the-router-works-from)). Such a window sheds only once the account's projection at the end passes the

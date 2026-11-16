@@ -28,16 +28,17 @@ no request asked for. The agent then reads `budget` at a spend budget, `paused` 
 a deleted account and on one in a state other than ready that the probe did not try, `ineligible_credential` past the
 subscription's end, `retryable_probe_error` on a member this probe already tried or on one with a budget while the
 ledger is degraded (`budget_unknown`), and `probe_quota_exhausted` under a cooldown, a credits block, overage under
-`never` or a seat at its spend cap, with the wait the answer names. A probe whose session holds no pin, because the pin
-idled out or its account left the pool, places nothing either, and the recipe pauses under `no_pin` until the next real
-request lands. A probe's own 429 cools the account and leaves the pin, which the session's next real request then moves.
-A probe whose pinned account was deleted is held as `paused` before it is sent, as one on a disabled account is. A probe
-whose pinned account's subscription ended is held before it is sent too, and so is one due nearer to the end than its
-own interval, the entry's TTL less the lead. The agent reads `ineligible_credential` under that hold as well, and the
-hold is a live one: it ends when the term clears, and the recipe leaves as `expired` once its entry has expired. That
-last interval falls inside the pool's wind-down, or reaches before it where the interval is longer than
-`wind_down_minutes`, so no probe writes a cache the end discards and the pin turns cold at the end ([Subscription
-end](routing.md#subscription-end)).
+`never` or a seat at its spend cap, with the wait the answer names. With no eligible sibling the probe gets the pool's
+own answer ([When nothing can serve](routing.md#when-nothing-can-serve)), and the wait that answer names holds up to the
+ladder's `retry_max_ms`. A probe whose session holds no pin, because the pin idled out or its account left the pool,
+places nothing either, and the recipe pauses under `no_pin` until the next real request lands. A probe's own 429 cools
+the account and leaves the pin, which the session's next real request then moves. A probe whose pinned account was
+deleted is held as `paused` before it is sent, as one on a disabled account is. A probe whose pinned account's
+subscription ended is held before it is sent too, and so is one due nearer to the end than its own interval, the entry's
+TTL less the lead. The agent reads `ineligible_credential` under that hold as well, and the hold is a live one: it ends
+when the term clears, and the recipe leaves as `expired` once its entry has expired. That last interval falls inside the
+pool's wind-down, or reaches before it where the interval is longer than `wind_down_minutes`, so no probe writes a cache
+the end discards and the pin turns cold at the end ([Subscription end](routing.md#subscription-end)).
 
 A usage-based Enterprise seat's probes hold under its member budget as an API-key member's do, and never for overage:
 the router reads no overage on such a seat ([Overage](routing.md#overage)).
@@ -282,9 +283,9 @@ the main conversation, a request on a new conversation and the session's end clo
 report leaves an open window open, so a return typed after a long gap counts at the gap's age. After a request that
 continued or restarted the conversation, the next window starts at the request's own instant, except on a main
 conversation reported `unknown`, where the request moves no start. After any other close, the next window opens only
-once its start moves past the one in force at that close, at a park's end, a presence report, a prompt, a request or the
-session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session opens
-none.
+once its start moves past the one in force at that close, at an `agent_start` of a released main, a park's end, a
+presence report, a prompt, a request or the session's revival. A busy report pauses the count without closing the
+window, and a subagent or a silent session opens none.
 
 No rule reads the counters: the idle window is the pool's `max_idle_seconds`, taken as set. The pool dialog shows them
 by bucket.

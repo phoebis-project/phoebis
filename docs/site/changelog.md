@@ -10,34 +10,33 @@ the body and header edits [The relay](relay.md) lists. The billing fields a redu
 each only when absent ([The restoration](relay.md#the-restoration)), two drift checks refuse a client build the router
 is not pinned to with `403` `client_drift` before any account is chosen ([Client drift](relay.md#client-drift)), and
 every upstream response head is classified before a byte reaches the client, so a rate limit fails over to a sibling
-([How a head is classified](relay.md#how-a-head-is-classified)). A request whose client leaves before the head lands in
-the ledger as a canceled request with the code `client_gone`, keeping the attempts it reached
-([Statistics](statistics.md#the-ledger)). The router's own reading of a stream holds at most 512 KiB of one event while
-that event is still arriving: an event that outgrows the bound before its end is skipped and counted on the request's
-completion, the events after it still reach the ledger, and an event that arrives whole in one decoded piece is parsed
-whatever its size ([How a head is classified](relay.md#how-a-head-is-classified)). A stream cut, stalled or undecodable
-after the head, or ended by the account's cancel, logs one warning with the error's words and lands as a
+([How a head is classified](relay.md#how-a-head-is-classified)). A request whose client leaves before the head or while
+its answer streams lands in the ledger as a canceled request with the code `client_gone`, keeping the attempts it
+reached ([Statistics](statistics.md#the-ledger)). The router's own reading of a stream holds at most 512 KiB of one
+event while that event is still arriving: an event that outgrows the bound before its end is skipped and counted on the
+request's completion, the events after it still reach the ledger, and an event that arrives whole in one decoded piece
+is parsed whatever its size ([How a head is classified](relay.md#how-a-head-is-classified)). A stream cut, stalled or
+undecodable after the head, or ended by the account's cancel, logs one warning with the error's words and lands as a
 `stream_interrupted` event on the request ([How a head is classified](relay.md#how-a-head-is-classified)). Every coded
 answer is decoded and forwarded as identity with `content-encoding` dropped, the four codings gzip, deflate, brotli and
-zstd, and any other coding answers `502` `upstream_undecodable` before any byte reaches the client
-([The edits toward the client](relay.md#the-edits-toward-the-client)). A resumed conversation's version suffix
-reproduces over the empty prompt the client stamps, and a refusal on a resumed conversation names the resume
-([Client drift](relay.md#client-drift)). A billing line the strict decoder refuses for a lone surrogate escape is
-checked for its version suffix on the tolerant read and refused as `version_suffix` drift when the suffix does not
-reproduce ([Client drift](relay.md#client-drift)). A session that switches model between its turns names no previous
-message in its cache diagnostics on its first request to another account, like any move
-([The body edits](relay.md#the-body-edits)). A billing line the strict decoder refuses for a lone surrogate escape is
-refused for its shape as `400` `body_shape` on a request whose line the relay restores
-([The body edits](relay.md#the-body-edits), [Refusal codes](client.md#refusal-codes)).
-A body carrying a fallback credit token from a refusal is placed on the account that issued it, the relay keeping the
-issuer under the token's digest in memory for an hour ([Admission](relay.md#admission)).
-The router requires the session header, the class header, the attribution line, `metadata.user_id` and the agent and
-compaction headers of a Claude Code request and refuses the rest `403` `client_contract` ([The required
-set](client.md#the-required-set)), restores `cc_prompt_id` from the client's prompt-id header and `cc_prev_req` by
-class, blanks the account uuid on an API-key leg, prices the client's auto-mode classifier calls that carry the
-classifier marker at no share of a plan window and, where the plan pays for the call, no dollars, and sends each of
-them, best effort and without a pin, to the account its judged turn ended on where it can, because the upstream charges
-a classifier call that lands on another account than the turn it judges ([Auto mode behind the
+zstd, and any other coding answers `502` `upstream_undecodable` before any byte reaches the client ([The edits toward
+the client](relay.md#the-edits-toward-the-client)). A resumed conversation's version suffix reproduces over the empty
+prompt the client stamps, and a refusal on a resumed conversation names the resume ([Client
+drift](relay.md#client-drift)). A billing line the strict decoder refuses for a lone surrogate escape is checked for its
+version suffix on the tolerant read and refused as `version_suffix` drift when the suffix does not reproduce ([Client
+drift](relay.md#client-drift)). A session that switches model between its turns names no previous message in its cache
+diagnostics on its first request to another account, like any move ([The body edits](relay.md#the-body-edits)). A
+billing line the strict decoder refuses for a lone surrogate escape is refused for its shape as `400` `body_shape` on a
+request whose line the relay restores ([The body edits](relay.md#the-body-edits), [Refusal
+codes](client.md#refusal-codes)). A body carrying a fallback credit token from a refusal is placed on the account that
+issued it, the relay keeping the issuer under the token's digest in memory for an hour
+([Admission](relay.md#admission)). The router requires the session header, the class header, the attribution line,
+`metadata.user_id` and the agent and compaction headers of a Claude Code request and refuses the rest `403`
+`client_contract` ([The required set](client.md#the-required-set)), restores `cc_prompt_id` from the client's prompt-id
+header and `cc_prev_req` by class, blanks the account uuid on an API-key leg, prices the client's auto-mode classifier
+calls that carry the classifier marker at no share of a plan window and, where the plan pays for the call, no dollars,
+and sends each of them, best effort and without a pin, to the account its judged turn ended on where it can, because the
+upstream charges a classifier call that lands on another account than the turn it judges ([Auto mode behind the
 router](relay.md#auto-mode-behind-the-router)). Every caller-credential refusal (`auth_ambiguous`, `auth_malformed`,
 `auth_missing` and `auth_unknown`, the registry's key refusal among them) carries `x-should-retry: false` on every route
 that answers it, so the client does not resend it ([Refusal codes](client.md#refusal-codes)). The router is measured
@@ -533,8 +532,9 @@ key edit, or a guardrail create or edit, that would also take a list past 64 gua
 missing id or its refused member before the bound ([Pools](routing.md#pools), [Keys](routing.md#keys)). The Dashboard's
 account cards and the Accounts list keep a slot for a window the account's poll does not carry, "none" muted in the
 share's place with the window's words on hover, "no 5-hour window" on an approved Ultra account, the Quota cards keep
-the window's row with the same words muted, and an account whose poll has read no window reads "Not read yet" on the
-Dashboard's cards and the Accounts list ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts),
+the window's row with the same words muted, and on the Dashboard's cards and the Accounts list a subscription account
+whose poll has read no window reads "Not read yet", or its state, "Not paired, no window" or "Needs re-auth, no window",
+where it is not paired or needs re-auth ([Dashboard](console.md#dashboard), [Accounts](console.md#accounts),
 [Quota](console.md#quota)). The top bar's Week control reads a subscription figure as a share of the Pro, Max or Ultra
 week, Ultra week until you pick one, stored in the browser beside the unit position, mirrored on the Settings view's
 Unit row and disabled under the dollar positions ([The shell](console.md#the-shell), [Settings](console.md#settings)). A
@@ -547,50 +547,51 @@ and frees the next tick ([The console](console.md)). The Dashboard's attention l
 its previous read still out, so a slow read lands and the next tick reads again ([Dashboard](console.md#dashboard)). On
 Requests and the Routing log auto reload also waits while the list for the view's filters is still loading, unless its
 last read failed ([The console](console.md)). Auto reload's read at once, when a wait ends or the interval changes a
-full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick
-([The console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not
-know in the mono face and Whole account, Fast mode and Fast mode credits in the text face
-([Accounts](console.md#accounts)). The Routing log draws an id that links to its account, key, model or pool in the mono
-face where the chip asks for it, as it draws a session's or a request's link, so a decision's Request facts read the Key
-row's id in the face of the Session row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at
-each opening, so a picker's search text starts empty ([The shell](console.md#the-shell)). The login screen's session
-read fails after a minute with no answer, as a view's read does, so a router that never answers it brings the card that
-says the router did not answer ([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit,
-whichever account opens, and the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The
-Analytics view reads the account list with the window: when a new bucket moves a preset's end, on Refresh and Try again,
-and at each interval under a custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view
-reads the sessions and the keepalive overview its pool dialog draws when the dialog opens on a saved pool and again
-after a key write from it, the overview also when the return rate's range is picked, and the Guardrails view reads the
-pools and keys its dialog lists once per visit and again after a write, a dialog close and Refresh, neither at the
-interval ([Pools](console.md#pools), [Guardrails](console.md#guardrails)). An account's catalog dialog draws a failed
-Refresh's failure over the list it kept, until a read answers ([Accounts](console.md#accounts)).
+full interval after the last answer, also waits for a read still in flight and leaves the read to the next tick ([The
+console](console.md)). An account's Cooling down table draws a model scope's id and a scope the console does not know in
+the mono face and Whole account, Fast mode and Fast mode credits in the text face ([Accounts](console.md#accounts)). The
+Routing log draws an id that links to its account, key, model or pool in the mono face where the chip asks for it, as it
+draws a session's or a request's link, so a decision's Request facts read the Key row's id in the face of the Session
+row's ([Routing log](console.md#routing-log)). A dialog draws its fields afresh at each opening, so a picker's search
+text starts empty ([The shell](console.md#the-shell)). The login screen's session read fails after a minute with no
+answer, as a view's read does, so a router that never answers it brings the card that says the router did not answer
+([The shell](console.md#the-shell)). The Accounts view reads the settings once per visit, whichever account opens, and
+the allowance card's Try again reads them again ([Accounts](console.md#accounts)). The Analytics view reads the account
+list with the window: when a new bucket moves a preset's end, on Refresh and Try again, and at each interval under a
+custom range whose end has not passed ([Analytics](console.md#analytics)). The Pools view reads the sessions and the
+keepalive overview its pool dialog draws when the dialog opens on a saved pool and again after a key write from it, the
+overview also when the return rate's range is picked, and the Guardrails view reads the pools and keys its dialog lists
+once per visit and again after a write, a dialog close and Refresh, neither at the interval ([Pools](console.md#pools),
+[Guardrails](console.md#guardrails)). An account's catalog dialog draws a failed Refresh's failure over the list it
+kept, until a read answers ([Accounts](console.md#accounts)).
 
 Every finished request lands in the ledger as one row for the client request, one per attempt and one per routing
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
 carries its token counts and the tier the router prices by, which a page or a route prices when it reads them, so a free
 organization's and a usage-based seat's requests read unpriced in every figure ([Pricing](statistics.md#pricing), [Plan
-meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as one Pro-week figure, the share of
-a Pro 7-day window the same tokens would spend, with the request's shares of its own account's windows as the hint where
-one account is named, bounded by the windows the account's poll carries ([Plan meter](statistics.md#plan-meter)). The
-metrics listener serves `/metrics` in Prometheus text format ([Metrics](statistics.md#metrics)), and the
-`phoebis_attention` gauge carries what needs an operator ([Conditions and gauges](statistics.md#conditions-and-gauges)).
-A failed credential refresh raises `refresh_failed` in the serious tone. A plan-side figure prices under the regime of
-the client's entrypoint, the interactive regime (the desktop app, the IDE extension, the terminal and the third-party
-desktop) at twice the 5-hour and 1.25 times the weekly capacity of the headless client and without the band, the relay
-reads the entrypoint in its position in the user agent, and the ledger reconciles each account's completed windows
-against the meter every hour. Both retention keys default to 365 days, `stats.retention_days` for the requests, the
-samples and the routing log and `stats.rollup_retention_days` for the rollups, and the Settings view's About card shows
-the two as the file sets them ([Retention](statistics.md#retention), [Settings](console.md#settings)). Each request row
-carries the instant the ledger wrote it, `GET /admin/requests` reads the rows written after `landed_after` and answers
-the newest stamp among the rows its filters admit as `landed_through`, at most a time-bounded read's end unless the read
-passes `fixed_end`. The Requests view's auto reload polls by that stamp, and its live poll of a preset range reads to
-the router's clock, so a long request that finishes below rows already shown lands between them in the same tint on the
-next read ([Statistics](statistics.md#the-ledger), [Requests](console.md#requests)). A request log read over a fixed
-range passes `fixed_end`, so its `landed_through` may pass the range's end and a row that landed after it is read once
-([The ledger](statistics.md#the-ledger)). A reconciled window splits at a fall and sums its parts, a slid window writes
-no row, the drift holds only where the rise and the priced share both reach 5%, and a window's two ends are its first
-and last readings whatever their source ([Statistics](statistics.md#conditions-and-gauges)). The drift condition reads
-the windows that ended inside the last eight days, so an account that serves nothing leaves it within eight days of its
+meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as one Pro-week figure on every route
+but the burn's, which answers its figures once per plan tier: the share of a Pro 7-day window the same tokens would
+spend, with the request's shares of its own account's windows as the hint where one account is named, bounded by the
+windows the account's poll carries ([Plan meter](statistics.md#plan-meter)). The metrics listener serves `/metrics` in
+Prometheus text format ([Metrics](statistics.md#metrics)), and the `phoebis_attention` gauge carries what needs an
+operator ([Conditions and gauges](statistics.md#conditions-and-gauges)). A failed credential refresh raises
+`refresh_failed` in the serious tone. A plan-side figure prices under the regime of the client's entrypoint, the
+interactive regime (the desktop app, the IDE extension, the terminal and the third-party desktop) at twice the 5-hour
+and 1.25 times the weekly capacity of the headless client and without the band, the relay reads the entrypoint in its
+position in the user agent, and the ledger reconciles each account's completed windows against the meter every hour.
+Both retention keys default to 365 days, `stats.retention_days` for the requests, the samples and the routing log and
+`stats.rollup_retention_days` for the rollups, and the Settings view's About card shows the two as the file sets them
+([Retention](statistics.md#retention), [Settings](console.md#settings)). Each request row carries the instant the ledger
+wrote it, `GET /admin/requests` reads the rows written after `landed_after` and answers the newest stamp among the rows
+its filters admit as `landed_through`, at most a time-bounded read's end unless the read passes `fixed_end`. The
+Requests view's auto reload polls by that stamp, and its live poll of a preset range reads to the router's clock, so a
+long request that finishes below rows already shown lands between them in the same tint on the next read
+([Statistics](statistics.md#the-ledger), [Requests](console.md#requests)). A request log read over a fixed range passes
+`fixed_end`, so its `landed_through` may pass the range's end and a row that landed after it is read once ([The
+ledger](statistics.md#the-ledger)). A reconciled window splits at a fall and sums its parts, a slid window writes no
+row, the drift holds only where the rise and the priced share both reach 5%, and a window's two ends are its first and
+last readings whatever their source ([Statistics](statistics.md#conditions-and-gauges)). The drift condition reads the
+windows that ended inside the last eight days, so an account that serves nothing leaves it within eight days of its
 newest window's end ([Statistics](statistics.md#conditions-and-gauges)). The hourly purge frees captured bodies in
 slices of about 32 MiB, a larger body going alone in a slice of its own, so the ledger's writer waits behind one slice
 at most, well inside its timeout ([Statistics](statistics.md#retention)). The usage poll reads a usage-based Enterprise
@@ -722,7 +723,6 @@ the hourly figures count such a request in a refusals map by code and nowhere el
 ([Refused requests](statistics.md#refused-requests)).
 The refused requests show in a Refused tile on the Dashboard, a Refused column and a "Refusals by code" card on the
 Analytics view and a `phoebis_refusals_total` counter.
-The first start after the upgrade moves the stored refusals out of the counts into the map.
 An attachment written from either dialog stamps every row whose list it changes, so a pool, key or guardrail save
 opened before it is refused as stale.
 The Attach box of the pool and key dialogs stays open while the operator picks.
