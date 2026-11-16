@@ -20161,6 +20161,11 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
 }
 await tab(m, 'Latency');
 expect('/analytics latency tab', m.text(), ['Latency', 'Time to first byte', 'Time to first content token', 'Total duration', 'Output tokens per second', 'Distribution', 'samples', 'p50', 'p90', 'p95', 'p99', 'Latency by key']);
+{
+  // With no session the percentiles come from the rollups' merged histograms, and the head names that source.
+  const meta = m.container.querySelector('#latency .analytics-section__meta')?.textContent ?? '';
+  results.push({ name: "/analytics the Latency head names the merged histograms and the slow-down's hold left out", ok: meta === "Percentiles read from merged per-hour histograms. The slow-down's hold is left out", missing: [meta] });
+}
 await tab(m, 'Cache');
 expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share', 'Write cost vs read cost', 'Misses by reason', 'expired between turns', 'From the cache diagnostics beta: why the prefix did not hit, for requests that asked. No divergence with zero cache reads means the entry expired between turns.', 'Misses by reason by key', 'Expired between turns', 'Cache by model', 'Writes 5m', 'Writes 1h']);
 {
@@ -20678,7 +20683,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     });
     {
       // A session view's head folds the request log, which the page reads with the toggle, so with Include probes off
-      // its figure holds no probe and the line ends at the position's word.
+      // its figure holds no probe, and the position's word runs straight into the sentence that names the source.
       const row = requests.find((r) => r.kind !== 'probe' && r.sessionId !== null && !r.refused);
       localStorage.removeItem('phoebis.unit');
       const session = await mount(`/analytics?session=${encodeURIComponent(row.sessionId)}&key=${encodeURIComponent(`${row.keyId}@${row.keyGeneration}`)}&unit=usd#cost`);
@@ -20687,8 +20692,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       session.unmount();
       localStorage.removeItem('phoebis.unit');
       results.push({
-        name: "/analytics a session view under Billed dollars with Include probes off ends the Cost head's line at the position's word",
-        ok: /^\$[\d,.]+ in range, billed$/.test(meta),
+        name: "/analytics a session view under Billed dollars with Include probes off follows the Cost head's position word with the request log as its source, and no probe note",
+        ok: /^\$[\d,.]+ in range, billed\. From the request log, since rollups carry no session$/.test(meta),
         missing: [`${row.sessionId} on ${row.keyId}: ${meta}`],
       });
     }
@@ -21085,7 +21090,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         ok:
           keyPair.length === 2 && JSON.stringify(pairTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(pairMeta) && !pairRings.includes('subscription') &&
           pairProbed.length === 2 && JSON.stringify(pairProbe[0]) === JSON.stringify(['-', 'subscription']) &&
-          sessionRow !== undefined && JSON.stringify(sessionTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range$/.test(sessionMeta),
+          sessionRow !== undefined && JSON.stringify(sessionTile[0]) === JSON.stringify(['-', 'subscription']) && /^- (and \$[\d,.]+ )?in range\. From the request log, since rollups carry no session$/.test(sessionMeta),
         missing: [`${keyPair.length} priced plan keys`, JSON.stringify(pairTile), pairMeta, JSON.stringify(pairRings), `answered probes ${JSON.stringify(pairProbed)}`, JSON.stringify(pairProbe), `session ${sessionRow?.sessionId}`, JSON.stringify(sessionTile), sessionMeta],
       });
     }
@@ -23151,8 +23156,18 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const want = { chips: 1, remove: 'Remove session filter', text: `session: ${laptopRow.sessionId.slice(0, 8)}…`, title: `${laptopRow.sessionId} under the key laptop@${laptopRow.keyGeneration}` };
       results.push({ name: '/analytics the session chip reads the id cut at eight characters with the key lifetime in its title', ok: JSON.stringify(read) === JSON.stringify(want), missing: [JSON.stringify(read), JSON.stringify(want)] });
     }
+    {
+      // A session view folds the request log, so the Traffic head keeps its figures and names that source after them.
+      const meta = m.container.querySelector('#traffic .analytics-section__meta')?.textContent ?? '';
+      results.push({ name: "/analytics a session view's Traffic head names the request log after its figures", ok: /^[\d,]+ requests, \S+ errors\. From the request log, since rollups carry no session$/.test(meta), missing: [`${laptopRow.sessionId}: ${meta}`] });
+    }
     await tab(m, 'Latency');
     results.push({ name: '/analytics a tab change keeps the session query', ok: m.location().hash === '#latency' && m.location().search.includes('session=') && m.location().search.includes('key=laptop'), missing: [JSON.stringify(m.location())] });
+    {
+      // A session view's percentiles come from its request log, which the Latency head names in place of the histograms.
+      const meta = m.container.querySelector('#latency .analytics-section__meta')?.textContent ?? '';
+      results.push({ name: "/analytics a session view's Latency head names the request log and the slow-down's hold left out", ok: meta === "From the request log, since rollups carry no session. The slow-down's hold is left out", missing: [`${laptopRow.sessionId}: ${meta}`] });
+    }
     await tab(m, 'Cache warming');
     await removeChip(m, 'session');
     results.push({ name: '/analytics removing a session chip clears the query and keeps the tab', ok: JSON.stringify(m.location()) === JSON.stringify({ hash: '#cache-warming', pathname: '/analytics', search: '' }) && mounted() === 'cache-warming' && chipOf(m, 'session') === undefined, missing: [JSON.stringify(m.location()), mounted()] });
@@ -23186,7 +23201,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       else await removeChip(m, 'session');
       await m.settle(200);
     };
-    // Cache warming is the section whose meta names the request log as a session view's source.
+    // Each head of a session view names the request log as its source, so the Cache warming meta tells the two views
+    // apart.
     await tab(m, 'Cache warming');
     await commit(requests.find((r) => r.sessionId !== null).sessionId);
     const entered = m.text().includes('From the request log');

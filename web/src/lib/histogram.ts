@@ -1,10 +1,12 @@
-// One shared edge set (64 log-spaced buckets from 1 to 100,000) covers every
-// latency metric in milliseconds and output tokens per second, so histograms
-// from different hours and metrics merge without re-bucketing.
-export const BUCKET_COUNT = 64;
+// One shared edge set (84 log-spaced buckets from 1, edge 64 at 100,000 and the last edge near 3,652,000) covers every
+// latency metric in milliseconds and output tokens per second, so histograms from different hours and metrics merge
+// without re-bucketing.
+export const BUCKET_COUNT = 84;
 const MIN = 1;
 const MAX = 100_000;
-const RATIO = Math.pow(MAX / MIN, 1 / BUCKET_COUNT);
+// The ratio is fixed by the 64 steps from 1 to 100,000. The 20 buckets past them keep it and reach about 61 minutes.
+const BASE_STEPS = 64;
+const RATIO = Math.pow(MAX / MIN, 1 / BASE_STEPS);
 
 export const BUCKET_EDGES: readonly number[] = Array.from({ length: BUCKET_COUNT + 1 }, (_, i) => MIN * Math.pow(RATIO, i));
 

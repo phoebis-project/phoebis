@@ -9,7 +9,7 @@ import { emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
 import { equivalentIn, fundingOf, inBand, modelWeeks, pricedWindow, shareIn, tierCapacity, weightOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, servingAttempt, servingResponse } from '@/lib/dimensions';
+import { NO_CLASS, NO_EFFORT, expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, latencySamples, servingAttempt, servingResponse } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
 import { fnv1a } from '@/lib/hash';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
@@ -2380,20 +2380,14 @@ identifyRequests();
 phaseRequests();
 traceForks();
 
-const outputTps = (r: RequestLog): number | null => {
-  if (r.status !== 200 || r.kind !== 'inference' || r.ttftMs === null) return null;
-  const streaming = Math.max(50, (r.durationMs ?? 0) - r.ttftMs);
-  return (r.usage.output / streaming) * 1000;
-};
-
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
-  const okRows = rows.filter((r) => r.status === 200);
-  const pick = (f: (r: RequestLog) => number | null) => histogramOf(okRows.map(f).filter((v): v is number => v !== null && v > 0));
+  const samples = rows.filter((r) => r.status === 200).map((r) => ({ kind: r.kind, ...latencySamples(r) }));
+  const pick = (f: (s: (typeof samples)[number]) => number | null) => histogramOf(samples.map(f).filter((v): v is number => v !== null && v > 0));
   return {
-    durationMs: pick((r) => (r.kind === 'count_tokens' ? null : r.durationMs)),
-    outputTps: pick(outputTps),
-    ttfbMs: pick((r) => r.ttfbMs),
-    ttftMs: pick((r) => r.ttftMs),
+    durationMs: pick((s) => (s.kind === 'count_tokens' ? null : s.durationMs)),
+    outputTps: pick((s) => s.outputTps),
+    ttfbMs: pick((s) => s.ttfbMs),
+    ttftMs: pick((s) => s.ttftMs),
   };
 }
 

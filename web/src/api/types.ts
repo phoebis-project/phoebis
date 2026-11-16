@@ -1700,7 +1700,7 @@ export interface CostSplit {
   output: number;
 }
 
-/** Counts per bucket; the 64 log-spaced edges are defined in src/lib/histogram.ts. */
+/** Counts per bucket, one for each of the 84 log-spaced buckets src/lib/histogram.ts defines. */
 export interface LatencyHistograms {
   durationMs: number[];
   outputTps: number[];

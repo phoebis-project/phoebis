@@ -68,7 +68,9 @@ const DIM_GROUP: Record<QueryDim | PatternDim, GroupBy> = { accountId: 'account'
 /** A session view pages through the session's rows, and both bounds together are the note's figure. */
 const SESSION_PAGE_SIZE = 500;
 const SESSION_PAGE_LIMIT = 20;
-const SESSION_SOURCE_NOTE = 'From the request log, since rollups carry no session. Cache warming figures are unavailable per session';
+const SESSION_SOURCE = 'From the request log, since rollups carry no session';
+const SESSION_SOURCE_NOTE = `${SESSION_SOURCE}. Cache warming figures are unavailable per session`;
+const HOLD_LEFT_OUT = "The slow-down's hold is left out";
 const SESSION_COST_NOTE = 'Cost split is not available for a session view.';
 const AGENT_NEEDS_SESSION = "An agent narrows one session's view, so pick a session first.";
 // The rings' centers read bare, so the subtitle names the week the subscription ring's percents are of.
@@ -587,6 +589,8 @@ export function AnalyticsPage() {
   // A session view folds the request log, which the page reads with the toggle, so its figure holds no probe while the
   // toggle is off. Dollar equivalent reads the plan rows, which hold no billed probe.
   const costHead = costHeadOf(unit, costTotals, week, scale, !includeProbes && sessionId === null && unit !== 'equivalent');
+  // A session view's figures come from the request log, so a head that draws them names that source after them.
+  const sourced = (meta: string | undefined): string | undefined => (meta === undefined || sessionId === null ? meta : sentences([meta, SESSION_SOURCE]));
   const nativeRatios = scale === null ? null : nativeRatiosOf(costTotals, week, scale);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);
@@ -740,7 +744,7 @@ export function AnalyticsPage() {
         {empty && <div className="empty">No traffic in this range.</div>}
 
         {tab === 'traffic' && (
-          <Section id="traffic" shown={shown} title="Traffic" meta={loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`}>
+          <Section id="traffic" shown={shown} title="Traffic" meta={sourced(loading ? undefined : `${fmtInt(totals.requests)} requests, ${pctOrDash(errorRateOf(totals))} errors`)}>
             <div className="grid-2 traffic-grid">
               <ChartCard title="Requests by outcome" subtitle={noted('Per bucket, stacked', partial)} loading={loading} legend={OUTCOME_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtInt(totals[s.key]) }))}>
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
@@ -859,7 +863,7 @@ export function AnalyticsPage() {
         )}
 
         {tab === 'latency' && (
-          <Section id="latency" shown={shown} title="Latency" meta="Percentiles read from merged per-hour histograms">
+          <Section id="latency" shown={shown} title="Latency" meta={sentences([sessionId === null ? 'Percentiles read from merged per-hour histograms' : SESSION_SOURCE, HOLD_LEFT_OUT])}>
             <div className="stack">
               {LATENCY_METRICS.map((m) => (
                 <LatencyRow key={m.key} metric={m} series={buckets} totals={totals} loading={loading} axis={axis} />
@@ -889,7 +893,7 @@ export function AnalyticsPage() {
         )}
 
         {tab === 'cache' && (
-          <Section id="cache" shown={shown} title="Cache" meta={loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`}>
+          <Section id="cache" shown={shown} title="Cache" meta={sourced(loading ? undefined : `${fmtPct(hitRatioOf(totals) ?? 0)} hit ratio, ${fmtInt(totals.expiredBetweenTurns)} expired between turns, ${fmtPct(cachedShareOf(totals) ?? 0)} of input read from cache`)}>
             <div className="grid-2">
               <ChartCard title="Tokens" subtitle="Per bucket, stacked by kind" loading={loading} legend={TOKEN_SERIES.map((s) => ({ color: ink.series[s.slot], label: s.label, value: fmtCompact(totals.tokens[s.key]) }))}>
                 <BarChart data={buckets} margin={CHART_MARGIN} barCategoryGap={BAR_GAP}>
@@ -1006,7 +1010,7 @@ export function AnalyticsPage() {
         )}
 
         {tab === 'cost' && (
-          <Section id="cost" shown={shown} title="Cost" meta={figureLoading || figureFailure !== null || costHead === null ? undefined : costHead.meta} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
+          <Section id="cost" shown={shown} title="Cost" meta={sourced(figureLoading || figureFailure !== null || costHead === null ? undefined : costHead.meta)} metaTitle={costHead?.unpriced ? UNPRICED_TITLE : undefined}>
             <div className="tiles-row">
               <Tile label={costHead?.tile.label ?? 'Cost'} value={figureLoading || costHead === null ? null : figuresValue(costHead.tile.figures)} note={costHead?.tile.note ?? NATIVE_SUBSET} title={costHead?.unpriced ? UNPRICED_TITLE : unit === 'native' ? (tileHint ?? undefined) : undefined} failure={figureFailure} />
               {unit === 'native' ? (

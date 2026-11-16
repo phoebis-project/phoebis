@@ -1522,9 +1522,11 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(earlier.keyCreatedAt, 1_791_720_940_000);
   assert.equal(desktop.keyId, 'desktop');
   assert.equal(desktop.keyCreatedAt, null, 'the live key carries no creation instant');
-  assert.equal(desktop.histograms.ttfbMs.length, 64);
+  assert.equal(desktop.histograms.ttfbMs.length, 84);
   assert.equal(typeof desktop.percentiles.ttfbMs.p50, 'number');
   const desktopWire = fixture('analytics_breakdown').rows.find((g) => g.key === 'desktop');
+  assert.ok(desktopWire.histograms.ttfb_ms.some((n) => n > 0), 'the stem holds a time to first byte sample');
+  assert.deepEqual(desktop.histograms.ttfbMs, desktopWire.histograms.ttfb_ms, 'the decoder keeps the counts the route answered');
   assert.equal(desktop.cacheMissReasons.none, desktopWire.cache_miss_reasons.none);
   assert.equal(desktop.tokens.thinking, desktopWire.tokens.thinking);
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
@@ -1934,6 +1936,40 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   const [m] = d.foldGroups([apiKey], 'all');
   assert.deepEqual([m.cacheHits, m.cacheMisses, m.uncached], [0, 1, 0]);
   assert.equal(m.cacheMissReasons.none, 0, 'the reason breakdown stays its own count');
+});
+
+test('a value past 100 seconds reads in its own bucket', () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const p99 = (ttfbMs) => d.foldGroups([{ ...base, held: null, ttfbMs }], 'all')[0].percentiles.ttfbMs.p99;
+  // 150 s lies in bucket 66 of the shared edges, from 10^(5 * 66 / 64) = 143,301 ms to 10^(5 * 67 / 64) = 171,544 ms.
+  const long = p99(150_000);
+  assert.ok(long > 143_301 && long < 171_544, `p99 ${long} reads inside the bucket holding 150,000`);
+  // Edge 64 stands at 100,000, so a value on either side of it reads on that side.
+  const under = p99(99_999);
+  const over = p99(100_001);
+  assert.ok(under < 100_000, `p99 ${under} of 99,999 reads under edge 64`);
+  assert.ok(over > 100_000, `p99 ${over} of 100,001 reads over edge 64`);
+});
+
+test('a tok/s sample needs half a second of output', () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  // The first content lands at 300 ms, so the duration sets the span from it to the end.
+  const samples = (durationMs) => d.foldGroups([{ ...base, durationMs, held: null, ttftMs: 300, usage: { ...base.usage, output: 100 } }], 'all')[0].histograms.outputTps.reduce((a, b) => a + b, 0);
+  assert.equal(samples(799), 0, 'a span of 499 ms records no sample');
+  assert.equal(samples(800), 1, 'a span of 500 ms records one');
+});
+
+test("a latency sample leaves the slow-down's hold out", () => {
+  const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
+  const hold = (reason, heldMs) => ({ cohort: null, heldMs, waitedOn: ['studio'], waits: [{ heldMs, reason }] });
+  // Each timing less the 119,991 ms hold: 1,327 ms in bucket 39 (1,114 to 1,334 ms), 2,000 ms in bucket 42 (1,911 to
+  // 2,288 ms) and 10,000 ms in bucket 51 (9,647 to 11,548 ms).
+  const [slowed] = d.foldGroups([{ ...base, durationMs: 129_991, held: hold('slow_down', 119_991), ttfbMs: 121_318, ttftMs: 121_991 }], 'all');
+  assert.deepEqual([slowed.histograms.ttfbMs[39], slowed.histograms.ttftMs[42], slowed.histograms.durationMs[51]], [1, 1, 1], 'each timing reads less the hold');
+  // A reset wait stays in: 31,000 and 32,000 ms in bucket 57 (28,387 to 33,982 ms) and 40,000 ms in bucket 58 (33,982
+  // to 40,679 ms).
+  const [reset] = d.foldGroups([{ ...base, durationMs: 40_000, held: hold('reset', 30_000), ttfbMs: 31_000, ttftMs: 32_000 }], 'all');
+  assert.deepEqual([reset.histograms.ttfbMs[57], reset.histograms.ttftMs[57], reset.histograms.durationMs[58]], [1, 1, 1], 'each timing keeps the reset wait');
 });
 
 test('a cache-miss reason the console does not know keeps its own name on the attempt and in every sum', () => {

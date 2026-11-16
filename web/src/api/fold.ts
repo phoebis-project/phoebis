@@ -1,7 +1,7 @@
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { fundingOf } from '@/lib/costs';
 import { countOf, emptyCounts } from '@/lib/counts';
-import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingAttempt } from '@/lib/dimensions';
+import { expiredBetweenTurns, foldClassifier, foldEffort, foldRequestClass, foldSpeed, latencySamples, servedMissReason, servingAttempt } from '@/lib/dimensions';
 import { earlierHolderLabel, keyLifetime, tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf, mergeHistograms, quartet } from '@/lib/histogram';
 import { matchesPattern } from '@/lib/pattern';
@@ -161,9 +161,6 @@ function labelOf(r: RequestLog, key: string, by: AnalyticsGroupBy, latest: Map<s
   return latest.get(r.keyId) === r.keyGeneration ? r.keyId : earlierHolderLabel(r.keyId, r.keyGeneration);
 }
 
-/** Throughput is measured after the first content token, as the ledger measures it; without both timings there is no sample. */
-const outputTps = (r: RequestLog): number | null => (r.durationMs !== null && r.ttftMs !== null && r.durationMs - r.ttftMs > 0 && r.usage.output > 0 ? r.usage.output / ((r.durationMs - r.ttftMs) / 1000) : null);
-
 /**
  * Who paid for a request: its serving attempt's side. A row no attempt served files under `plan`, the ledger's filing,
  * which `onSide` reads off the empty trail, so the `api_key` answer here only keeps such a row out of the plan shares
@@ -317,8 +314,9 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
     if (expiredBetweenTurns(r)) g.expiredBetweenTurns += 1;
   }
   for (const { group: g, rows: list } of groups.values()) {
-    const pick = (read: (r: RequestLog) => number | null) => list.map(read).filter((v): v is number => v !== null);
-    g.histograms = { durationMs: histogramOf(pick((r) => r.durationMs)), outputTps: histogramOf(pick(outputTps)), ttfbMs: histogramOf(pick((r) => r.ttfbMs)), ttftMs: histogramOf(pick((r) => r.ttftMs)) };
+    const samples = list.map(latencySamples);
+    const pick = (m: (typeof METRICS)[number]) => histogramOf(samples.map((s) => s[m]).filter((v): v is number => v !== null));
+    g.histograms = { durationMs: pick('durationMs'), outputTps: pick('outputTps'), ttfbMs: pick('ttfbMs'), ttftMs: pick('ttftMs') };
     for (const m of METRICS) g.percentiles[m] = quartet(g.histograms[m]);
     // Shares of one account's windows add, and a group of any other dimension spans accounts, whose windows do not.
     if (by === 'account') foldShares(g, list);

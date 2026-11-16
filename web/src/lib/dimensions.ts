@@ -36,6 +36,20 @@ export const foldClassifier = (value: string | null): string => value ?? NO_CLAS
 /** The attempt whose answer the request ended on, the last, null for a request no attempt served. */
 export const servingAttempt = (r: Pick<RequestLog, 'attempts'>): Attempt | null => r.attempts[r.attempts.length - 1] ?? null;
 
+/** The least span from the first content to the end that makes a tok/s sample. */
+const TPS_MIN_SPAN_MS = 500;
+
+/** A row's four latency samples as the rollup keeps them: each timing less the row's slow-down waits, never under
+ *  zero, and a tok/s sample only over a span of TPS_MIN_SPAN_MS or more. A cap, reset or rewrite wait stays in. */
+export function latencySamples(r: Pick<RequestLog, 'durationMs' | 'held' | 'ttfbMs' | 'ttftMs' | 'usage'>): { durationMs: number | null; outputTps: number | null; ttfbMs: number | null; ttftMs: number | null } {
+  const hold = (r.held?.waits ?? []).reduce((sum, w) => (w.reason === 'slow_down' ? sum + w.heldMs : sum), 0);
+  const lessHold = (ms: number | null) => (ms === null ? null : Math.max(0, ms - hold));
+  // The hold stands in both timings, so the span between them needs no subtraction.
+  const span = r.durationMs === null || r.ttftMs === null ? null : r.durationMs - r.ttftMs;
+  const outputTps = span !== null && span >= TPS_MIN_SPAN_MS && r.usage.output > 0 ? r.usage.output / (span / 1000) : null;
+  return { durationMs: lessHold(r.durationMs), outputTps, ttfbMs: lessHold(r.ttfbMs), ttftMs: lessHold(r.ttftMs) };
+}
+
 /**
  * A request's speed as the rollups file it: its serving answer's, else fast where it asked for fast, since a fast
  * request refused before any attempt served still asked for fast, else standard.
