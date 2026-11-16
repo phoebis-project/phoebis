@@ -80,7 +80,8 @@ pub(crate) struct ProbeResult {
     /// and the settlement file beside it even when the account leaves the registry while the probe is in flight. The
     /// default for an answer the relay built before any selection.
     pub funding: AttemptFunding,
-    /// The `Retry-After` header's seconds, on a pool-at-its-cap 429; `None` otherwise.
+    /// The `Retry-After` header's seconds: the wait of a quota `429` and of a `ledger_behind` hold. `None` for a
+    /// missing header or one that does not parse.
     pub retry_after_secs: Option<u64>,
     /// The relay's `RelayOutcome::obstacle`, the standing the agent holds on rather than pausing as an exhausted
     /// pool.

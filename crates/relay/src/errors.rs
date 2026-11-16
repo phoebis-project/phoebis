@@ -189,7 +189,7 @@ pub(crate) fn key_body_reads() -> Failure {
 }
 
 /// The error code of a pool whose every account was held at its in-flight cap until the hold ran out.
-pub const ACCOUNTS_AT_CAP: &str = "accounts_at_cap";
+const ACCOUNTS_AT_CAP: &str = "accounts_at_cap";
 /// The error code of a pool whose every account is rate limited until a known deadline.
 pub const ACCOUNTS_EXHAUSTED: &str = "accounts_exhausted";
 /// The error code of a pool with no account that can serve requests, and of a bound account that cannot.

@@ -46,8 +46,8 @@ pub use chains::Chains;
 pub use classify::{Cooldown, Verdict, SPEND_CAP_REASON};
 pub use drift::DriftKind;
 pub use errors::{
-    anthropic_error, no_store, no_store_answer, ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED,
-    ACCOUNTS_UNAVAILABLE, BODY_OVER_BUDGET, CLIENT_GONE_CODE, ERROR_CODE_HEADER, LEDGER_BEHIND,
+    anthropic_error, no_store, no_store_answer, ACCOUNTS_EXHAUSTED, ACCOUNTS_UNAVAILABLE,
+    BODY_OVER_BUDGET, CLIENT_GONE_CODE, ERROR_CODE_HEADER, LEDGER_BEHIND,
 };
 pub use hold::INSPECT_BUFFER;
 pub use identity::{identifier_byte, is_filed_word, is_valid_id, MAX_FILED_WORD_LEN};
