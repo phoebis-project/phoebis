@@ -1361,8 +1361,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "incomplete",
             )
         },
-        // The session's prefix stands warm on business since the failover's answer, so this answer read nearly all of
-        // its prompt back and counts as a hit under its reason.
+        // The answer read 9,000 of its 9,100 prompt tokens back from the cache, past the hit share, so it counts as a
+        // hit under its reason.
         attempts: vec![AttemptRecord {
             input_tokens: Some(100),
             cache_read_tokens: Some(9_000),

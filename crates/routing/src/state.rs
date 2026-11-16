@@ -936,8 +936,8 @@ pub const BURN_DECAY_CUTOFF_AVERAGES: i64 = 30;
 
 /// A burn average decayed from its last fold to `now` with time constant `window_ms`, and zero once that fold lies
 /// more than `BURN_DECAY_CUTOFF_AVERAGES` time constants back, since the factor alone reaches zero only after about
-/// 745 and an idle pin would hold for days a burn that no reader can act on. An average never folded has nothing to
-/// decay and reads as stored.
+/// 745 of them, so an idle pin would hold for days a burn that no reader can act on. An average never folded has
+/// nothing to decay and reads as stored.
 pub fn burn_decayed(burn: f64, burn_at: Option<i64>, now: i64, window_ms: i64) -> f64 {
     match burn_at {
         None => burn,
@@ -2014,12 +2014,12 @@ impl RoutingState {
     }
 
     /// The live rate-limit rows on the account that `sample` shows recovered: the window the row answers for (a
-    /// model row's is the model's own week) has allowance again, read from a sample taken after the rejection that
-    /// set the row. A window the sample never read is not evidence, and neither is a row no usage window answers
-    /// for. A claim on a shared window the account's set lacks recovers as an unnamed claim does, once every shared
-    /// window the set still has reads under 1.0. A row already past its deadline is left to the purge tick, which says
-    /// so. Only an OAuth account is ever sampled, which is what keeps an api-key account's rows out of here without a
-    /// registry lookup.
+    /// model row's is the model's own week, or the shared week for a model with no week of its own) has allowance
+    /// again, read from a sample taken after the rejection that set the row. A window the sample never read is not
+    /// evidence, and neither is a row no usage window answers for. A claim on a shared window the account's set lacks
+    /// recovers as an unnamed claim does, once every shared window the set still has reads under 1.0. A row already
+    /// past its deadline is left to the purge tick, which says so. Only an OAuth account is ever sampled, which is what
+    /// keeps an api-key account's rows out of here without a registry lookup.
     pub fn recovered_cooldowns(
         &self,
         account_id: &str,
@@ -3994,7 +3994,8 @@ impl RoutingState {
         }
         // A booking names its pin by key, and the suppression in `burn_shares` matches that key against the live
         // row, so the reference follows the row under the dated id or the pin would count beside its booking. The
-        // booking's own model follows the same way, with or without a pin, so its test and its pin's read one id.
+        // booking's own model follows the same way, with or without a pin, so `demand_shares_and_off_model_weeks`
+        // reads a booking and its pin under one id.
         for reservation in self.reservations.values_mut() {
             if let Some(pin) = reservation.pin.as_mut().filter(|pin| pin.model == spelling) {
                 pin.model = dated_id.to_string();

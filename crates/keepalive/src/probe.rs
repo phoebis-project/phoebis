@@ -47,7 +47,7 @@ pub(crate) struct ProbeJob {
     /// was sent with even when the agent observes another before it lands.
     pub entrypoint: Option<String>,
     /// The observation's client label at dispatch, taken beside `entrypoint` for the same reason: the probe's own
-    /// request row keys the client of the headers it replays, and its mark and its settlement key that client too.
+    /// request row keys the client of the headers it replays, and its settlement keys that client too.
     pub client_label: Option<String>,
     pub recipe: Recipe,
     pub expected: u64,
@@ -179,8 +179,8 @@ fn settled_unit(
     unit
 }
 
-/// The `Retry-After` seconds a pool-at-its-cap 429 or a `ledger_behind` 503 carries, `None` for a missing header or
-/// one that does not parse.
+/// The `Retry-After` seconds a quota 429 or a `ledger_behind` 503 carries, `None` for a missing header or one that does
+/// not parse.
 fn retry_after_secs(headers: &axum::http::HeaderMap) -> Option<u64> {
     headers
         .get(header::RETRY_AFTER)

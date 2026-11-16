@@ -23,8 +23,8 @@ use crate::{LedgerDb, LedgerError, PriceRevisions, Pricing};
 
 pub const USAGE_PATH: &str = "/v1/usage";
 
-/// One window of a key's own usage, summed from the hourly rollups filed under its `(key_id, key_generation)`;
-/// probe rows are left out as the key list's totals leave them out.
+/// One window of a key's own usage, summed from the hourly rollups filed under its `(key_id, key_generation)`. The
+/// usage route leaves each probe row out, its dollars among them.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct KeyUsageWindow {
     pub from: i64,
@@ -79,7 +79,7 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 /// Each row's dollars price from its parts as `row_parts` answers them, once for both windows: a row of an hour no
 /// price entry splits at the revision in force at the end of its hour, and a request of a boundary hour at the
 /// revision in force when it arrived, from the sides loaded ahead of the rows. A client classifier call the plan paid
-/// adds zero, and probe rows are left out as the key list's totals leave them out.
+/// adds zero, and each probe row is left out, its dollars among them.
 pub fn key_usage_windows(
     conn: &Connection,
     key_id: &str,

@@ -254,7 +254,9 @@ pub struct Condition {
     pub kind: Kind,
     pub subject: Subject,
     pub holds: bool,
-    /// When the condition started, in Unix milliseconds; `None` while it does not hold.
+    /// When the condition started, in Unix milliseconds. `None` while it does not hold, and for an account state that
+    /// holds on the one read where its account left between the reader's read of the accounts and its read of their
+    /// extras.
     pub since: Option<i64>,
     /// The pools the condition belongs to, so a pool card filters the same list the dashboard reads.
     pub pools: Vec<String>,

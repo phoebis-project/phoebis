@@ -229,8 +229,8 @@ pub struct RollupRow {
     pub kind: String,
     /// The `User-Agent` of the request the row folded, `UNATTRIBUTED` for a request that sent none.
     pub user_agent: String,
-    /// The class of the request the row folded, `UNATTRIBUTED` for a row folded before the column existed. A
-    /// dimension, so it sits in the key.
+    /// The class of the request the row folded, `UNATTRIBUTED` for a row folded before the column existed and for a
+    /// keepalive delta that carries no client. A dimension, so it sits in the key.
     pub client: String,
     /// The request's effort as the drawer shows it (the last per-turn control entry's level, else the top-level
     /// `output_config.effort`), `NO_EFFORT` when it sent none; a dimension, so it sits in the key.
@@ -1564,8 +1564,8 @@ struct Held {
 
 /// The five routing conditions, written whole into `routing_conditions`. Four read the trailing 24 hours of events:
 /// `shed_no_runway` per pool from its rounds that marked nothing for want of a destination with runway, each until a
-/// later event on its account refunds its window: a `window_reset`, `window_cleared` or `window_dropped` naming that
-/// window, or a `limit_reset_claimed` whose `cleared` lists it,
+/// later event on its account refunds its window (a `window_reset`, `window_cleared` or `window_dropped` naming that
+/// window, or a `limit_reset_claimed` whose `cleared` lists it),
 /// `destination_spent` per account from the moves onto it that a spent window of any source followed within the hour,
 /// with no `window_cleared` on that account and window after it,
 /// `wall_reached` per account from its spent windows of any source, a predicted wall among them, and `slowed_long` per

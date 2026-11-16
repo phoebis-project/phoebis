@@ -96,8 +96,8 @@ enum Life {
     },
     /// As long as `trace_stands` holds: the session of a deleted account keeps its move until its pool's affinity TTL
     /// has passed since its last use, its key is replaced or gone, its pool is gone, or an account is created again
-    /// under the id. The purge's sweep or the session's next selection, whichever meets the lapse first, writes the
-    /// expiry the purge held back.
+    /// under the id. The purge's sweep or the session's next selection that lands a pin, whichever meets the lapse
+    /// first, writes the expiry the purge held back.
     Pin,
 }
 
@@ -217,8 +217,8 @@ pub const SPENT_MARGIN: f64 = 0.02;
 
 /// How far a weekly window's reading has to fall under one reset to read as a used limit reset: a fall of more than
 /// this many points, read in whole points since a poll reads the endpoint's whole percent. Live samples showed no other
-/// weekly fall of more than 5 points under an unchanged reset. The unused allowance reads a drop's window cleared where
-/// the figure after stands under it.
+/// weekly fall of more than 5 points under an unchanged reset. Where no parsed claim decides, the unused allowance
+/// reads a drop's window cleared where the figure after stands under it.
 pub const WINDOW_DROP_POINTS: i64 = 5;
 
 /// A utilization in whole points. Two figures rounded to the hundredth and then subtracted as floats can read 0.55 to
@@ -1464,9 +1464,10 @@ pub struct AccountProjection {
     pub obstacle: Option<Obstacle>,
     /// The worst word over the member's shared plan windows, by the order `fits`, `rewrite_only`, `least_bad`,
     /// `ending`, `spent`, for a request that prices no rewrite on a model with no week of its own: `spent` where a
-    /// shared window's prediction stands at 1.0 or past it, else `ending` inside the account's wind-down. A paid
-    /// source, a member with no priced tier and a member with no reading of a shared window read the verdict of the
-    /// fit read itself, `fits` or `least_bad` for the first two.
+    /// shared window's prediction stands at 1.0 or past it, else `ending` inside the account's wind-down and past its
+    /// end. The word stands whatever `obstacle` holds. A paid source, a member with no priced tier and a member with
+    /// no reading of a shared window read the verdict of the fit read itself: `fits` or `least_bad` for an api_key
+    /// member, and `fits` for a usage-based seat and for a member with no priced tier.
     pub fit: &'static str,
     /// The runway the ladder ranks the member's rung by, over the shared windows: to the ceiling under `fits` and
     /// `rewrite_only`, to 1.0 under `least_bad`, where a paid source with a full bucket reads 0. None for an unbounded
@@ -1527,8 +1528,8 @@ pub struct WindowProjection {
 }
 
 /// A pin with its burn decayed to now and its runway on its account: the time until the account's projection reaches
-/// the ceiling on the window that binds among those the pin's model draws. A window whose runway reaches the earlier of
-/// its reset and the account's end binds nothing, since the quota resets or the account ends first.
+/// the ceiling on the window that binds among those the pin's model draws. A window whose runway reaches the earliest
+/// of its reset and the account's end that lies ahead binds nothing, since the quota resets or the account ends first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PinStanding {
     /// The pin with its four burn copies decayed with its pool's burn average and `burn_at` the instant they are
@@ -1539,8 +1540,9 @@ pub struct PinStanding {
     pub burn_unit: BurnUnit,
     pub runway_ms: Option<i64>,
     /// `None` where the pin's account has no projection on any window the model draws (`runway_ms` null too),
-    /// `Some(false)` for an unbounded runway, one no burn bounds or one that reaches the earlier of its window's reset
-    /// and the account's end on every window (`runway_ms` null), `Some(true)` for a bounded one (`runway_ms` set).
+    /// `Some(false)` for an unbounded runway, one no burn bounds or one that reaches the earliest of its window's reset
+    /// and the account's end that lies ahead on every window (`runway_ms` null), `Some(true)` for a bounded one
+    /// (`runway_ms` set).
     pub runway_bounded: Option<bool>,
     /// The window the runway reads, `None` unless it is bounded.
     pub binding: Option<String>,
@@ -3205,10 +3207,10 @@ fn decayed(pin: PinRow, now: i64, average_ms: i64) -> PinRow {
 /// to the window's ceiling, the rule a window of the projections reads too. Its burn already holds the pin, so neither
 /// the pin's burn nor a rewrite is added again (that is `fit_of`'s arithmetic for a destination). `Some(0)` where
 /// `predicted` already reaches the ceiling, an unbounded runway (`None` with no binding window) where on every drawn
-/// window the account's burn is zero or the runway reaches the earlier of the window's reset and the account's end,
-/// since the quota resets or the account ends before the ceiling is reached, and the binding window the shortest of the
-/// rest. The outer `None` where the account projects none of the drawn windows: an api_key account, or one with no
-/// reading of them.
+/// window the account's burn is zero or the runway reaches the earliest of the window's reset and the account's end
+/// that lies ahead, since the quota resets or the account ends before the ceiling is reached, and the binding window
+/// the shortest of the rest. The outer `None` where the account projects none of the drawn windows: an api_key
+/// account, or one with no reading of them.
 fn standing_runway(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,

@@ -657,8 +657,9 @@ pub(crate) struct Agent {
     pub idle_episode: Option<IdleEpisode>,
     /// The start of main's last closed idle window. The next opens only from a start past it, so a close that leaves
     /// the start in place, a foreign request or a lapse a registration adopts again, never reopens the same window.
-    /// An event that moves the next window's start on purpose (a park's end, a presence report, a request, a revival)
-    /// clears it: the floor orders starts, and a clock that stepped back before that event is no ordering.
+    /// An event that moves the next window's start on purpose (an `agent_start` of a released main, a park's end, a
+    /// presence report, a request, a revival) clears it: the floor orders starts, and a clock that stepped back before
+    /// that event is no ordering.
     pub idle_window_floor: Option<i64>,
     /// The anchor of main's last admitted request, retained or not, which the next idle window judges a return against
     /// and the chain watch reads the next request's chain against.
@@ -1214,8 +1215,8 @@ pub(crate) struct Observation {
     /// whether that attempt's head reported overage in use, the fact the request's own row files under, so a skip and a
     /// kept-warm credit file under the funding this request ran under whatever the registry holds by then.
     pub funding: AttemptFunding,
-    /// The request's client label, whole. Its kept-warm credit keys it, a probe takes it at dispatch for its mark and
-    /// its settlement, and a skip reads it, since a probe replays this request's headers.
+    /// The request's client label, whole. Its kept-warm credit keys it, a probe takes it at dispatch for its
+    /// settlement, and a skip reads it, since a probe replays this request's headers.
     pub client_label: Option<String>,
 }
 
@@ -3109,10 +3110,10 @@ impl Engine {
         session.last_real_at = Some(now);
         let slotted = session.slotted;
         inner.touch_session(&key);
-        // A session takes its slots at its first real request, so both caps are read here, the session cap first as a
-        // registration reads them, and the session's agents join the agent count only where they all fit. A first
-        // request over either cap is refused the slot as a registration over it is: it keeps nothing and leaves
-        // `slotted` false, so the session's next request reads the caps again.
+        // A session takes its slots at the first real request the caps admit, so both caps are read here at each of
+        // its requests until then, the session cap first as a registration reads them, and the session's agents join
+        // the agent count only where they all fit. A request over either cap is refused the slot as a registration
+        // over it is: it keeps nothing and leaves `slotted` false, so the session's next request reads the caps again.
         if !slotted {
             let joining = inner.sessions[&key].agents.len();
             let refused = if inner.live_sessions() >= inner.limits.max_sessions {

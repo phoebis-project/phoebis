@@ -28,8 +28,8 @@ pub(crate) struct Failure {
     /// The `Retry-After` the answer carries, in seconds.
     pub retry_after: Option<u64>,
     /// Writes `x-should-retry: false`, so a client that retries its 4xx answers resends none of the refusals that no
-    /// resend heals: a refused credential, what a guardrail, the contract or the drift check refused, and a body above
-    /// the whole body budget.
+    /// resend heals: a refused credential, what the client gate (`client_not_allowed`), the contract, the drift check
+    /// or a guardrail refused, and a body above the whole body budget.
     pub no_retry: bool,
     /// The outcome the ledger files the request under, carried by the answer itself so no reader infers it from the
     /// code.

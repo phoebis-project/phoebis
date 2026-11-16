@@ -652,8 +652,9 @@ fn window_json(s: &HourlyWindowSample, term: Option<&SubscriptionTerm>) -> Windo
     }
 }
 
-/// Raises the peak of `window` on an account's hour or sum to `utilization` where that reads higher. Both names of the
-/// Fable week raise its one peak, and a window with no peak of its own raises nothing.
+/// Raises the peak of `window` on an account's hour or sum to `utilization` where that reads higher. Each of the three
+/// spellings of the Fable week (`fable`, `seven_day_fable` and `seven_day_overage_included`) raises its one peak, and
+/// a window with no peak of its own raises nothing.
 fn raise_peak(row: &mut AccountRollupRow, window: &str, utilization: f64) {
     let peak = match account_window_id(window) {
         FIVE_HOUR => &mut row.utilization_5h_max,
@@ -959,7 +960,8 @@ pub(crate) struct BurnPoint {
     /// tier's entry where such a row's revision gives that tier no capacity on the week.
     pub fable_equivalent_by_tier: BTreeMap<String, Option<f64>>,
     /// True for a bucket holding a plan-funded row with tokens whose model has no weight on the 7-day window, so a
-    /// null entry with the flag false is an idle bucket or a tier a row's revision does not size.
+    /// null entry with the flag false is an idle bucket, a tier a row's revision does not size, or an entry of the
+    /// 5-hour or the Fable map on a model whose override weighs the 7-day window alone.
     pub unpriced: bool,
     pub cached_tokens: u64,
     /// Every token of the bucket, uncached input, cache reads, both cache writes and output. Zero for a bucket

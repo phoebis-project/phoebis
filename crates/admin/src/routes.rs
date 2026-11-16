@@ -875,7 +875,8 @@ const NOT_USABLE: &str = "this reset is not usable now";
 /// Sends the usage read in the client's shape now, under the account's hold and the usage reads' permits, and two
 /// callers at once share one request. The Quota view's dialog calls it before it opens. The answer is the account's
 /// `limit_resets` member as it stands after the read: where the read failed or the hold refused it, the stored member
-/// with the read's error beside it, and where the account's plan ended, null with the poll's sentence beside it.
+/// with the read's error beside it, and where the account's plan ended during the call, null with the poll's sentence
+/// beside it.
 #[utoipa::path(
     post,
     path = "/admin/accounts/{id}/limit-resets/read",
@@ -1983,7 +1984,7 @@ pub(crate) struct LedgerStats {
     pub dropped: u64,
     /// The batches lost since start because the write panicked, their records counted in `dropped`.
     pub write_failures: u64,
-    /// The tries the ledger file refused since start, each one's records kept by the writer for its next try.
+    /// The tries the ledger file refused since start.
     pub write_retries: u64,
     /// The cache-map writes whose decision row the ledger never stored, counted and never retried.
     pub cache_map_orphans: u64,
@@ -1991,7 +1992,7 @@ pub(crate) struct LedgerStats {
     /// never written.
     pub mirror_lagged: u64,
     pub gaps: u64,
-    /// The instant of the writer's newest gap, null while it has recorded none since the start.
+    /// The instant of the writer's newest gap of dropped records, null while it has recorded none since the start.
     pub last_gap_at: Option<i64>,
     pub channel_depth: usize,
     /// The records waiting in the writer channel now.
@@ -2843,8 +2844,9 @@ pub(crate) struct AccountLimitResetGrant {
     /// `blocked`, `cooldown`, `ended`, `paused`, `usable`, `used` or `waiting`.
     pub state: String,
     /// Epoch milliseconds: the use through this router, null on a grant with a reset left and on one used elsewhere.
-    /// The use is the newest `limit_reset_claimed` row whose `incarnation` is the account row's, or that carries no
-    /// `incarnation` and is not older than the account row, so a use by an earlier holder of the id does not show.
+    /// The use is the newest `limit_reset_claimed` row with the outcome `used` whose `incarnation` is the account
+    /// row's, or that carries no `incarnation` and is not older than the account row, so a use by an earlier holder of
+    /// the id does not show.
     pub used_at: Option<i64>,
 }
 

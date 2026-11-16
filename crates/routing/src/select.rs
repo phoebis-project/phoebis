@@ -114,8 +114,9 @@ pub struct SelectRequest {
     /// facts into the next selection, so the attempt that follows a hold names it.
     pub holds: Vec<HoldFacts>,
     /// The pin a failover took off its account inside the migration window, or the pin of an account the registry no
-    /// longer holds while the pool's affinity TTL still holds its last use, which the routing task hands to the
-    /// selection that lands the session again, `None` for every other request.
+    /// longer holds while its key stands under the generation the pin names and the pool's affinity TTL still holds
+    /// its last use, which the routing task hands to the selection that lands the session again, `None` for every
+    /// other request.
     pub failed_over: Option<FailedOver>,
     /// Whether a leg of this request was already dispatched, as the relay reads it: true once a selection placed a
     /// leg, whether or not that leg reached the wire. `attempted` cannot stand in for it, since an account whose hold
@@ -3965,7 +3966,8 @@ fn fit_read(
 /// The fit a fresh placement reads on `candidate` at `now` for a request on `model` that prices no rewrite, over the
 /// pool's fresh prior `prior` (`fresh_prior`'s rows, read once for the pool): what the pools route answers for a
 /// member. The request carries no pin, no body, no failover entry, no classifier, probe, count or fast mark and no
-/// candidates, so the read is the gate's own for a fresh session on the windows `model` draws.
+/// candidates, so the read is the gate's own for a fresh session on the windows `model` draws. It names no entrypoint,
+/// so the prior prices under the base regime.
 pub(crate) fn fresh_fit(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -5800,9 +5802,11 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
     }
 }
 
-/// The request a standing pin is read by outside a round, shaped from the pin's own facts as `pin_request` shapes
-/// another pin of a round: its key, its model, its lane with the lane's speed and its entrypoint. No request stands
-/// behind a standing, so it holds no body estimate and no candidates, and every other member reads empty.
+/// The request a standing pin is read by outside a round, shaped from the pin's own facts: its key and generation, its
+/// agent and session, its model, its lane with the lane's speed and its entrypoint. `pin_request` takes the same model,
+/// lane and entrypoint for another pin of a round and keeps the round request's key, generation, agent and session. No
+/// request stands behind a standing, so it holds no body estimate and no candidates, and every other member reads
+/// empty.
 fn standing_request(pin: &PinRow) -> SelectRequest {
     // Every member is written out, so a member the type gains states its value for a standing too.
     SelectRequest {
@@ -7642,9 +7646,9 @@ fn pace_figures(
 /// The share of a member's 7-day room Pace holds back on a `seven_day` request for the member's expected use of the
 /// Fable week until the score's deadline: the pricer's `week_factor` times the smaller of the Fable room and the
 /// stronger of two rates over the score's `hours`, the peak hour of the member's record among the clock hours that
-/// ended within as many hours back as the score looks ahead, the hour still running at its sum so far, and `live`, the
-/// pins' demand on the week, each in share of the week per hour. `None` on a request on a model week, on a member with
-/// no Fable reading and where the pricer answers no factor.
+/// ended within as many hours back as the score looks ahead (the hour still running counts at its sum so far) and
+/// `live`, the pins' demand on the week, each in share of the week per hour. `None` on a request on a model week, on a
+/// member with no Fable reading and where the pricer answers no factor.
 fn fable_reservation_of(
     state: &RoutingState,
     id: &str,

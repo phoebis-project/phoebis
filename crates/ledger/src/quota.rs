@@ -552,9 +552,11 @@ impl QuotaPoll {
                                             if answered {
                                                 slot.polls = 1;
                                             }
-                                            // The usage reading is seconds old, so a hold that ends ahead of the
-                                            // slot's time brings no poll forward. One that ends past it moves the
-                                            // slot, since the service refuses a read under the hold.
+                                            // A 429 on a profile read is no cause to poll the usage endpoint ahead
+                                            // of its cadence right after the endpoint asked for a pause, so a hold
+                                            // that ends ahead of the slot's time brings no poll forward. One that
+                                            // ends past it moves the slot, since the service refuses a read under
+                                            // the hold.
                                             if let Some(wait) = done.held {
                                                 slot.at = slot.at.max(Instant::now() + wait);
                                             }

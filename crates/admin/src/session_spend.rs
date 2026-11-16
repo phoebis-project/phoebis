@@ -69,14 +69,14 @@ impl Default for SessionDay {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentRequests {
     pub agent_id: String,
-    /// The canonical model of the agent's newest client request, or of its newest probe where the ledger holds no
-    /// client request of the agent.
+    /// The canonical model of the agent's newest served client request, or of its newest served probe where the ledger
+    /// holds no served client request of the agent.
     pub model: String,
     /// The newest request's agent type.
     pub agent_type: Option<String>,
-    /// The newest client request's serving account.
+    /// The newest served client request's serving account.
     pub account_id: Option<String>,
-    /// The newest client request.
+    /// The newest served client request.
     pub last_request_at: Option<i64>,
     /// The agent's first client request over the session's life, refused ones included, null where the ledger holds
     /// no request of the agent that is no probe. It moves when the purge removes the first requests.

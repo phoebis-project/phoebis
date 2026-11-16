@@ -43,7 +43,9 @@ pub(crate) struct AttentionItem {
     /// for `wall_reached`, `destination_spent` and `shed_no_runway`, the own start of the oldest slow-down span counted
     /// for `slowed_long`, which can predate the day for a span open from before it, for the two account states the
     /// instant the registry recorded for the change to that state, or for a degraded writer, `keepalive_bus_gaps`,
-    /// `keepalive_cap` and `expired_between_turns` the first read of this process that saw the state.
+    /// `keepalive_cap` and `expired_between_turns` the first read of this process that saw the state. Null for one of
+    /// the two account states on the one read where its account left between the reader's read of the accounts and
+    /// its read of their extras.
     pub since: Option<i64>,
     /// `account` and `label`, or `account`, `failures`, `last_error` and `outcome`, or `account`, `backoff_since`,
     /// `next_attempt_at` and `rate_limited_in_a_row`, or `pool` and `key`, or `client_version`, `trigger` and `key`, or

@@ -6618,7 +6618,8 @@ fn an_api_key_account_s_attempt_folds_under_billed_whatever_its_speed_or_overage
 }
 
 /// A selection on a usage-based seat lands its class on the attempt row, the row folds under the seat's own funding
-/// word and its counts price in dollars at the API rates with no share and no equivalent.
+/// word and its counts price in dollars at the API rates with no share, and the seat's group, which holds no plan row,
+/// reads the Pro-week figure 0.
 #[tokio::test]
 async fn a_usage_based_seats_attempt_stores_its_class_folds_under_usage_based_and_prices_in_dollars_alone(
 ) {

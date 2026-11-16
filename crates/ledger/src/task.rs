@@ -104,7 +104,7 @@ pub struct LedgerStats {
     /// Batches lost since start because the write panicked, each of their records counted in `dropped`.
     pub write_failures: AtomicU64,
     /// Tries the file refused since start, one for a batch's first try, each retry in place and each record of a
-    /// replay or a hold. The writer keeps a refused try's records for the next one.
+    /// replay or a hold.
     pub write_retries: AtomicU64,
     pub gaps: AtomicU64,
     pub last_gap_at: AtomicI64,
@@ -230,8 +230,8 @@ impl Ledger {
 
     /// Every model the cost model does not weigh that a plan-funded listing added or a plan-funded landing served since
     /// the start, by undated model id. An entry whose run opened at or before `at` and whose model the revision in
-    /// force at `at` weighs, or that a later landing found weighted, reads with no `since` and no requests. Empty at
-    /// each start.
+    /// force at `at` weighs, or that a later landing found weighted, reads with no `since` and no requests, a clear the
+    /// read writes into the set. Empty at each start.
     pub fn unpriced_served(&self, at: i64) -> Vec<UnpricedModel> {
         let costs = self.tables.revisions.in_force(at);
         let mut served = self.unpriced.lock().expect(UNPRICED_POISONED);
@@ -1934,7 +1934,8 @@ async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usi
 /// The fill of the sessions no landing marked, one session per blocking call, so a shutdown's abort lands between two
 /// sessions and a due purge pass waits for one session at most. Every exit leaves the purge's tick taken, and the
 /// answer says whether the fill goes on behind the pass: a call that finds no session left ends it until the next
-/// start, and a call the ledger refused leaves the run to go on from the cursor.
+/// start, and a call the ledger refused leaves the run to go on from the cursor, or from the top where that pass
+/// dropped it.
 async fn fill_sessions(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,

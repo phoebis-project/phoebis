@@ -1149,16 +1149,17 @@ pub(crate) struct PoolMemberView {
     pub eligible: String,
     /// The fit a fresh session's first request reads on the member, for a model with no week of its own: the worst
     /// word over its 5-hour and 7-day windows in the order `fits`, `rewrite_only`, `least_bad`, `ending` (inside the
-    /// pool's wind-down before the subscription's end) and `spent` (a shared plan window at 1.0 or past it), the
-    /// order the router lands a fresh session by. A model week moves no member's word. An api_key member and a
-    /// usage-based seat read `fits` with room and `least_bad` without, and a member with no priced tier reads `fits`.
-    /// Null while the router does not answer.
+    /// pool's wind-down before the subscription's end, and past that end) and `spent` (a shared plan window at 1.0 or
+    /// past it), the order the router lands a fresh session by. A shared window outside the account's set reads
+    /// `spent` at 1.0 too, while a request on a model with no week of its own still lands on the member. The word
+    /// stands whatever `eligible` reads, and a model week moves no member's word. An api_key member reads `fits` with
+    /// room and `least_bad` without, and a usage-based seat, which reads no bucket, and a member with no priced tier
+    /// read `fits`. Null while the router does not answer.
     #[schema(example = "rewrite_only")]
     pub fit: Option<String>,
     /// The runway in milliseconds the router ranks the member by among the members of its word: to the pool's
-    /// ceiling under `fits` and `rewrite_only`, to 1.0 under `least_bad`, 0 for an api_key member or a usage-based
-    /// seat with no room. Null for an unbounded runway, under `ending` and `spent`, and while the router does not
-    /// answer.
+    /// ceiling under `fits` and `rewrite_only`, to 1.0 under `least_bad`, 0 for an api_key member with no room. Null
+    /// for an unbounded runway, under `ending` and `spent`, and while the router does not answer.
     pub runway_ms: Option<i64>,
     /// The account's `oauth` or `api_key`.
     #[schema(example = "oauth")]
@@ -1190,7 +1191,8 @@ pub(crate) struct PoolMemberView {
     pub burn: Option<f64>,
     /// The account's factor under the slow-down, the projection's `slow_down.factor`, null where `slow_down` is.
     pub factor: Option<f64>,
-    /// The speed the holds realized inside a slow-down span, from 0 to 1, null where `factor` is and outside a span.
+    /// The speed the holds realized inside a slow-down span, from 0 to 1, null where `factor` is null and outside a
+    /// span.
     pub speed: Option<f64>,
 }
 

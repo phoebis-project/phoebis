@@ -123,7 +123,8 @@ pub(crate) struct RequestSummary {
     pub outcome: String,
     /// Under `incomplete` one of `stream_cut`, `stream_incomplete`, `stream_stalled`, `stream_undecodable`: the
     /// body ended before its end. A cut, a stall or a body that did not decode on a non-200 answer sits under
-    /// `failed`.
+    /// `failed`. Any other forwarded answer of 400 or more carries the upstream's `error.type`, or
+    /// `upstream_<status>` where the body names none the router takes.
     #[schema(example = "stream_cut")]
     pub error_code: Option<String>,
     pub client_drift: Option<String>,

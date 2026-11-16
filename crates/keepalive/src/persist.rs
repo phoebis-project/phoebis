@@ -1204,8 +1204,8 @@ impl Inner {
                 continue;
             }
             let mut session = payload.restore(now);
-            // A session that has sent no real request holds no slot of either cap, so it passes both bounds and counts
-            // toward neither.
+            // A session that has sent no real request the caps admit holds no slot of either cap, so it passes both
+            // bounds and counts toward neither.
             let holds_slot = session.holds_slot();
             let over = if !holds_slot {
                 None

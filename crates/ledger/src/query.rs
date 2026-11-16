@@ -1217,13 +1217,12 @@ pub struct RoutingLogFilter {
 pub struct LogKinds {
     pub decisions: Vec<String>,
     pub events: Vec<String>,
-    /// `PROBE_KIND` was named: a probe decision of any kind.
+    /// `probe` was named: a probe decision of any kind.
     pub probes: bool,
 }
 
 impl LogKinds {
-    /// The names sorted by the statement that reads them, the error the first name no kind and no `PROBE_KIND`
-    /// answers to.
+    /// The names sorted by the statement that reads them, the error the first name no kind and no `probe` answers to.
     pub fn parse(names: &[String]) -> Result<LogKinds, String> {
         let mut kinds = LogKinds::default();
         for name in names {
@@ -2647,8 +2646,9 @@ struct EquivalentSums {
 
 impl EquivalentSums {
     /// Folds the figures of one plan row that no request row splits, its wasted counts and its kept-warm counts, each
-    /// priced through `price` at the row's hour's end. A credit's row carries no request token, since it keys the
-    /// reserved agent, class and effort apart from its request's own row, so its saving joins whatever the row's parts.
+    /// priced through `price` at the row's hour's end. A credit keys its request's user agent and client under no
+    /// effort and no class, so one whose request sent neither lands on that request's own row, and its saving joins
+    /// whatever the row's parts.
     fn add_row(&mut self, row: &RollupRow, price: impl Fn(PinUsage) -> Option<f64>) {
         if row.kind == Kind::Probe.as_str() {
             let wasted = row.wasted_usage();
@@ -5193,7 +5193,8 @@ pub struct BurnPoint {
     /// where a Fable-week row's revision does not size that tier's week.
     pub fable_equivalent_by_tier: BTreeMap<String, Option<f64>>,
     /// True for a bucket holding a plan row with tokens whose model has no weight on the 7-day window, so a `None`
-    /// entry with the flag false is an idle bucket or a tier a row's revision does not size.
+    /// entry with the flag false is an idle bucket, a tier a row's revision does not size, or an entry of the 5-hour or
+    /// the Fable map on a model whose override weighs the 7-day window alone.
     pub unpriced: bool,
 }
 

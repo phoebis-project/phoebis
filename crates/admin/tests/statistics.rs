@@ -993,7 +993,7 @@ async fn the_accounts_route_lists_and_sums_no_hour_after_the_current_one() {
             1_500,
             vec![(MIDNIGHT + 19 * HOUR, 900), (MIDNIGHT + 20 * HOUR, 600)]
         ),
-        "the hours the cooldown booked past 21:00 are neither listed nor summed"
+        "the hours the cooldown booked after 20:00 are neither listed nor summed"
     );
 }
 

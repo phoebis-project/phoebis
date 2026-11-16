@@ -723,9 +723,9 @@ impl Inner {
             .get(&key)
             .is_some_and(|s| s.key_generation == key_generation);
         // An ended session keeps its entry until the expiry and holds no slot, and a registered one holds none
-        // until its first real request, so a session that has sent nothing never fills the count. The bound is met
-        // by every start that brings a session to life, an instance replacement included. A same-instance recovery
-        // of a live session consumes nothing.
+        // until the first real request the caps admit, so a session that has sent nothing never fills the count. The
+        // bound is met by every start that brings a session to life, an instance replacement included. A
+        // same-instance recovery of a live session consumes nothing.
         let becomes_live = self.sessions.get(&key).is_none_or(|s| s.ended);
         if becomes_live {
             let live = self.live_sessions();

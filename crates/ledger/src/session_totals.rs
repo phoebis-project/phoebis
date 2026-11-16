@@ -532,7 +532,9 @@ fn leave(
     Ok(())
 }
 
-/// The last request row a walk of the fill examined, in `(received_at, rowid)` order, newest first.
+/// The last request row a walk of the fill examined, in `(received_at, rowid)` order, newest first. A ledger keeps the
+/// stored cursor from one build to the next, and the fill and the purge's requests slice both read it, so a member that
+/// joins later takes a `serde` default or a store step.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct FillCursor {
     received_at: i64,

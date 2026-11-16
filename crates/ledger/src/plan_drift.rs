@@ -1,10 +1,12 @@
 //! The pinned plans under statistics shaped like a live file's: one key holding nearly every row, many sessions
-//! holding few, a few accounts. Every statement whose plan a test pins without statistics runs here against an
-//! analyzed file, so a plan the statistics move is caught before a live file moves it. The session identities read, the
-//! top sessions read and the extra usage reads are the exceptions: each of their table references names its index,
-//! seeks the primary key on its leading column or reads by rowid, so no statistics move their plans. Each keeps its own
-//! test in `query.rs`, and the session identities test's planted statistics catch a dropped hint. The session attempts
-//! read names its index too and keeps its case here, since its read under a named key is the one a dropped hint fails.
+//! holding few, a few accounts. A statement whose plan a test pins without statistics runs here against an analyzed
+//! file, so a plan the statistics move is caught before a live file moves it, with the exceptions below. The held
+//! series read of `query.rs` and the readings read of `reconcile.rs` keep their plan tests on an unanalyzed file alone,
+//! so no case here catches a plan the statistics move for either. The session identities read, the top sessions read
+//! and the extra usage reads are exceptions too: each of their table references names its index, seeks the primary key
+//! on its leading column or reads by rowid, so no statistics move their plans. Each keeps its own test in `query.rs`,
+//! and the session identities test's planted statistics catch a dropped hint. The session attempts read names its
+//! index too and keeps its case here, since its read under a named key is the one a dropped hint fails.
 //!
 //! The file is seeded and analyzed once per process and each test opens its own copy of the bytes, since the seed is
 //! most of a second's writes and every test reads the same file. A copy per test keeps the tests independent of each

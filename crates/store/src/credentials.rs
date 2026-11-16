@@ -701,7 +701,8 @@ impl Store {
         Ok(())
     }
 
-    /// The body both commits share, inside the caller's transaction, which the caller commits; `now` stamps the
+    /// The body of the three credential commits, `commit_credentials`, `commit_pairing` and `create_paired_account`,
+    /// inside the caller's transaction, which the caller commits. `kind` names the commit, and `now` stamps the
     /// credential row and every attempt it settles.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn commit_credentials_in(

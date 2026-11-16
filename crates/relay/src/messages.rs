@@ -569,7 +569,8 @@ impl Relay {
     }
 
     /// A keepalive probe: the recipe's headers and body, run through the same admission, selection, edit, and
-    /// failover loop a real request takes, so the pin follows, renews, and migrates as it would for one.
+    /// failover loop a real request takes, so the probe follows its pin and renews it as a real request would, and
+    /// never moves it.
     pub async fn probe(&self, probe: Probe, mut request: Request) -> Response {
         request.extensions_mut().insert(probe);
         self.handle(request).await
@@ -832,10 +833,10 @@ impl Trace {
     }
 
     /// The last event of a request. `status` is what the client was answered with, which is the upstream's
-    /// only for a forwarded answer; `end` overrides the outcome derived from the `RelayOutcome` for a body that
-    /// ended other than cleanly, and `error` names the cause when the override has one. `upstream` is a forwarded
-    /// failure's own word (`upstream_code`), the code only where the override and the outcome name none. It stays
-    /// off `outcome`, whose code the keepalive reads for the relay's own words.
+    /// only for a forwarded answer. `end` overrides the outcome derived from the `RelayOutcome` for a body that
+    /// ended other than cleanly, with the code that names its cause. `upstream` is a forwarded failure's own word
+    /// (`upstream_code`), the code only where the override and the outcome name none. It stays off `outcome`, whose
+    /// code the keepalive reads for the relay's own words.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn complete(
         &self,
