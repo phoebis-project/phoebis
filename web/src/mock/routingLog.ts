@@ -8,14 +8,14 @@ import { lookup } from '@/lib/counts';
 import { placementHit } from '@/lib/format';
 import { SHED_MARK_SHARE } from '@/lib/presets';
 import { MODEL_SCOPE_PREFIX, endOf, flagOf, isPaidSource, readWindows, windowOf } from '@/lib/quota';
-import { compareRows } from '@/lib/routingLog';
+import { compareRows, movedFrom } from '@/lib/routingLog';
 import { WINDOW_KEY, hoursOfKey } from '@/lib/windows';
 import { ACCOUNTS, LEGACY_FIVE_HOUR_SPENT_AT, LEGACY_LAPSED_AT, SHARED_WINDOWS, SUNSET_WEEK_RESETS_IN, accountById, lastReadingOf, rankTier } from './accounts';
 import { promptOf } from './catalog';
 import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
-import { KEY_REVOKED_AT, WORST_BUCKET, poolById, type PoolSeed } from './pools';
+import { KEY_REVOKED_AT, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
@@ -2358,6 +2358,7 @@ function expiries(): EventSeed[] {
       keyId: r.keyId,
       kind: 'warm_prefix_expired',
       model: r.canonicalModel,
+      poolId: r.poolId,
       sessionId: r.sessionId,
     },
   ];
@@ -2530,7 +2531,7 @@ function markCleared(): EventSeed[] {
     const m = record.outcome.markCleared;
     if (m === null) return [];
     const detail = { agent_id: record.request.agentId, limit: null, marked_at: Date.parse(m.markedAt), marked_on: m.markedOn, marked_window: m.markedWindow, projection: m.projection, reason: m.reason };
-    return [{ accountId: m.markedOn, agentId: record.request.agentId, at: record.request.at, detail, keyId: record.request.keyId, kind: 'mark_cleared', model: record.request.canonicalModel, sessionId: record.request.sessionId }];
+    return [{ accountId: m.markedOn, agentId: record.request.agentId, at: record.request.at, detail, keyId: record.request.keyId, kind: 'mark_cleared', model: record.request.canonicalModel, poolId: record.request.poolId, sessionId: record.request.sessionId }];
   });
 }
 
@@ -2554,11 +2555,11 @@ function slowDownSpans(): EventSeed[] {
     const close = (at: number, end: number) => {
       if (span === null) return;
       const since = span.since;
-      const heldMs = REQUESTS.filter((r) => r.poolId === poolId && r.accountId === accountId && Date.parse(r.at) >= since && Date.parse(r.at) < end)
+      const waits = REQUESTS.filter((r) => r.poolId === poolId && r.accountId === accountId && Date.parse(r.at) >= since && Date.parse(r.at) < end)
         .flatMap((r) => r.held?.waits ?? [])
-        .filter((w) => w.reason === 'slow_down')
-        .reduce((n, w) => n + w.heldMs, 0);
-      seeds.push({ accountId, at: iso(at), detail: { duration_ms: end - since, factor_min: span.factorMin, held_ms: heldMs, since }, kind: 'slow_down_ended', poolId });
+        .filter((w) => w.reason === 'slow_down');
+      const heldMs = waits.reduce((n, w) => n + w.heldMs, 0);
+      seeds.push({ accountId, at: iso(at), detail: { duration_ms: end - since, factor_min: span.factorMin, held_ms: heldMs, holds: waits.length, since }, kind: 'slow_down_ended', poolId });
       span = null;
       clearSince = null;
     };
@@ -2834,16 +2835,17 @@ export const WEEKLY_RESETS: EventSeed[] = [
 function buildEvents(): RoutingEvent[] {
   const t = clock;
   const seeds: EventSeed[] = [];
-  for (const events of REQUEST_EVENTS.values()) {
+  for (const [id, events] of REQUEST_EVENTS) {
+    const poolId = requestById.get(id)?.poolId ?? null;
     for (const e of events) {
       const detail = e.detail ?? {};
-      seeds.push({ accountId: e.accountId, agentId: typeof detail.agent_id === 'string' ? detail.agent_id : null, at: e.at, detail, keyId: e.keyId, kind: e.kind, model: e.model, requestId: typeof detail.source_request_id === 'string' ? detail.source_request_id : null, sessionId: e.sessionId });
+      seeds.push({ accountId: e.accountId, agentId: typeof detail.agent_id === 'string' ? detail.agent_id : null, at: e.at, detail, keyId: e.keyId, kind: e.kind, model: e.model, poolId, requestId: typeof detail.source_request_id === 'string' ? detail.source_request_id : null, sessionId: e.sessionId });
     }
   }
   for (const s of SUMMARIES) {
     const record = DECISIONS.get(`${s.requestId}/${s.seq}`);
     if (!record?.outcome.pinEvents.some((e) => e.kind === 'pin_created')) continue;
-    seeds.push({ accountId: s.accountId, agentId: s.agentId, at: s.at, detail: { agent_id: s.agentId, epoch: record.outcome.pinWritten?.epoch ?? null }, keyId: s.keyId, kind: 'pin_created', model: s.model, sessionId: s.sessionId });
+    seeds.push({ accountId: s.accountId, agentId: s.agentId, at: s.at, detail: { agent_id: s.agentId, epoch: record.outcome.pinWritten?.epoch ?? null }, keyId: s.keyId, kind: 'pin_created', model: s.model, poolId: s.poolId, sessionId: s.sessionId });
   }
   const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: attemptEnd(a), r }))).sort((x, y) => x.at - y.at);
   // The story's own spent edge, which the poll read before any answer's head: nightly's 5-hour window at its limit
@@ -2967,6 +2969,7 @@ function buildEvents(): RoutingEvent[] {
       keyId: undecodable.keyId,
       kind: 'stream_interrupted',
       model: undecodable.canonicalModel,
+      poolId: undecodable.poolId,
       requestId: undecodable.id,
       sessionId: undecodable.sessionId,
     },
@@ -3023,7 +3026,8 @@ function buildEvents(): RoutingEvent[] {
     { accountId: 'primary', at: iso(t(9, 0, 41)), detail: { added: ['claude-opus-5-5'], count: 12, removed: [] }, kind: 'catalog_changed' },
     { accountId: null, at: iso(t(6, 12, 40)), detail: { affinity_entries_loaded: 34, down_since: t(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, kind: 'router_started' },
     // Once each outside the hour.
-    { accountId: 'primary', agentId: 'main', at: iso(t(13, 13, 40)), detail: { agent_id: 'main', reasons: ['expired'] }, keyId: 'laptop', kind: 'pin_expired', model: HAIKU, sessionId: sessionId('5eeed6ce') },
+    // The sweep's expiry names no request, so it reads its pool off its key.
+    { accountId: 'primary', agentId: 'main', at: iso(t(13, 13, 40)), detail: { agent_id: 'main', reasons: ['expired'] }, keyId: 'laptop', kind: 'pin_expired', model: HAIKU, poolId: keyById.get('laptop')?.poolId ?? null, sessionId: sessionId('5eeed6ce') },
     { accountId: 'nightly', actor: 'admin', agentId: 'e90b', at: iso(t(12, 40, 5)), detail: { agent_id: 'e90b' }, keyId: 'desktop', kind: 'pin_released', model: 'claude-sonnet-5-5', sessionId: sessionId('407dd39b') },
     { accountId: 'primary', at: iso(Date.parse('2026-09-12T20:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW), detail: { since: Date.parse('2026-09-11T16:10:00Z') - Date.parse('2026-09-16T14:30:00Z') + NOW }, kind: 'overage_ended' },
     { accountId: 'legacy', at: iso(LEGACY_LAPSED_AT), detail: { cause: 'refresh_failed', detail: 'refresh_token rejected: invalid_grant', from: 'ready', to: 'reauth_required' }, kind: 'account_state_changed' },
@@ -3140,7 +3144,8 @@ export function listRoutingLog(query: RoutingLogQuery, now: number, rows: { even
     inList(query.keyIds, e.keyId) &&
     inList(query.poolIds, e.poolId) &&
     inList(query.models, e.model) &&
-    inList(query.accountIds, e.accountId) &&
+    // A move lists under the account it left too, as a decision does under its source.
+    (inList(query.accountIds, e.accountId) || inList(query.accountIds, movedFrom(e))) &&
     (kinds === undefined || kinds.includes(e.kind));
   const events = [...rows.events.filter(keep), ...rows.written.filter(keep)];
   const dir = query.dir ?? 'desc';

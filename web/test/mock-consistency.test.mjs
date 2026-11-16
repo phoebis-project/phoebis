@@ -1941,6 +1941,16 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`each event of the eight kinds names its pool, at ${at}`, async () => {
+    const s = await story;
+    // The router reads the pool of a pin event off its key and of a request's event off the request, so the Pool
+    // filter keeps each of them.
+    const kinds = ['mark_cleared', 'model_permitted', 'model_rejected', 'pin_created', 'pin_expired', 'pin_migrated', 'stream_interrupted', 'warm_prefix_expired'];
+    const events = (await logOf(s)).filter((x) => x.type === 'event' && kinds.includes(x.kind));
+    assert.deepEqual(kinds.filter((kind) => !events.some((e) => e.kind === kind)), [], 'the story holds each kind');
+    assert.deepEqual(events.filter((e) => e.poolId === null).map((e) => `${e.kind} ${e.id}`), []);
+  });
+
   test(`the refused records carry their codes, at ${at}`, async () => {
     const s = await story;
     const summaries = (await logOf(s)).filter((x) => x.type === 'decision' && x.kind === 'refused');

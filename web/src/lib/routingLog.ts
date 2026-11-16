@@ -158,9 +158,11 @@ const EVENT_TONE: Record<string, 'critical' | 'serious' | 'warning'> = {
   window_spent: 'warning',
 };
 
-/** An event reads neutral unless it reports trouble. */
-export function eventTone(kind: string): 'critical' | 'neutral' | 'serious' | 'warning' {
-  return lookup(EVENT_TONE, kind) ?? 'neutral';
+/** An event reads neutral unless it reports trouble. A state change reads by the state it reached, so an account's
+ *  return to ready reports none. */
+export function eventTone(row: RoutingEvent): 'critical' | 'neutral' | 'serious' | 'warning' {
+  if (row.kind === 'account_state_changed' && str(row.detail.to) === 'ready') return 'neutral';
+  return lookup(EVENT_TONE, row.kind) ?? 'neutral';
 }
 
 /** The record's walk steps in the console's words, keyed by the step the engine names. */
@@ -216,6 +218,9 @@ export const words = (name: string) => name.replace(/_/g, ' ');
 export const wordOf = (map: Record<string, string>, name: string) => lookup(map, name) ?? words(name);
 /** A window's tag, or the key's words where the console does not know the window. */
 const windowTagWord = (key: string): string => windowTagOf(key) ?? words(key);
+/** A cooldown's window id. The relay files a Fable week's cooldown under a key of its own, which the window
+ *  table leaves to this module and to the quota history's decoder. */
+const cooldownWindow = (window: string): string => (window === 'seven_day_overage_included' ? 'seven_day_fable' : window);
 /** The window whose trigger set a shedding mark, as the Pin fold and the Sessions view word it. */
 export const triggerPhrase = (window: string): string => `by the ${windowTagWord(window)} trigger`;
 /** A no-return stamp's origin. A failover's landing stamps the pin as a round's move does, so the reason picks it. */
@@ -418,18 +423,23 @@ const registryDiff = (diff: unknown): { entries: [string, unknown][]; secret: bo
   return { entries: Object.entries(rest), secret: secret === true };
 };
 
+/**
+ * A cooldown's By words. The relay files a Fable model's 429 on its own week and an API key's retry-after under the
+ * model's scope, so a 429 reads by its window whatever its scope, and a model's scope names its 404 otherwise.
+ */
 function cooldownBy(e: RoutingEvent): string {
   const d = e.detail;
   const scope = str(d.scope) ?? '';
   if (scope === 'fast') return 'fast lane 429';
-  const model = scopeModel(scope);
-  if (model !== null) return `404 on ${shortModel(model)}`;
   const reason = str(d.reason) ?? '';
   const window = str(d.window) ?? '';
-  if (reason !== 'rate_limit') return words(reason);
-  const word = windowTagOf(window);
-  if (word !== undefined) return `429 on ${word}`;
-  return window === 'retry_after' ? '429 retry-after' : '429';
+  if (reason === 'rate_limit') {
+    const word = windowTagOf(cooldownWindow(window));
+    if (word !== undefined) return `429 on ${word}`;
+    return window === 'retry_after' ? '429 retry-after' : '429';
+  }
+  const model = scopeModel(scope);
+  return model === null ? words(reason) : `404 on ${shortModel(model)}`;
 }
 
 /** The decisions of one rows array that a pin's By and a failover's answer read. */
@@ -485,6 +495,14 @@ const movedLabel = (d: Record<string, unknown>): string => {
 
 const reasonChips = (d: Record<string, unknown>): Chip[] => list(d.reasons).map((r) => plain(releaseLabel(String(r))));
 
+/** A failed poll's answer, for its By chip and its panel's Status. A transport failure answered no status, so the
+ *  words say what failed in its place. */
+const pollStatus = (d: Record<string, unknown>): string | null => {
+  if (d.transport === true) return 'transport failure';
+  const status = num(d.status);
+  return status === null ? null : String(status);
+};
+
 function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
   const d = e.detail;
   switch (e.kind) {
@@ -511,6 +529,8 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     // The router names the class, so the chip never reads the upstream's word for it.
     case 'limit_reset_claimed':
       return { value: resetOutcome(d.outcome) ?? words(e.kind) };
+    case 'mark_cleared':
+      return { value: words(str(d.reason) ?? e.kind) };
     case 'model_permitted':
       return { value: list(d.rejected_by).length > 0 ? 'after 404' : 'permitted' };
     case 'model_rejected':
@@ -539,6 +559,8 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     // The usage service opens a backoff on a rate limit alone, so the kind decides the word.
     case 'poll_backoff_started':
       return { value: POLL_OUTCOME_LABEL.rate_limited };
+    case 'poll_failed':
+      return { value: pollStatus(d) ?? words(e.kind) };
     case 'refresh_failed':
       return { value: 'refresh failed' };
     case 'refresh_succeeded':
@@ -557,6 +579,11 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     case 'slow_down_ended':
     case 'slow_down_started':
       return { value: LABELS.slow_down };
+    // The Kind column already names the interruption, so a cut's code drops its stream stem to fit the By column.
+    case 'stream_interrupted': {
+      const code = str(d.code);
+      return { value: code === null ? words(e.kind) : words(code.replace(/^stream_/, '')) };
+    }
     case 'warm_prefix_expired': {
       const ttl = num(rec(d.deepest).ttl_ms);
       return { value: ttl === null ? 'expired' : `${span(ttl)} tier` };
@@ -571,8 +598,12 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
     }
     case 'window_reset':
       return { value: `${windowTagWord(str(d.window) ?? '')} reset` };
-    case 'window_spent':
-      return { value: `${str(d.source) === 'poll' ? 'poll' : 'head'} on ${windowTagWord(str(d.window) ?? '')}` };
+    // A row that names no source draws none, since any word would name a source the row does not hold.
+    case 'window_spent': {
+      const source = str(d.source);
+      const window = windowTagWord(str(d.window) ?? '');
+      return { value: source === null ? `on ${window}` : `${lookup(SOURCE_CHIP_WORD, source) ?? source} on ${window}` };
+    }
     default:
       return { value: words(e.kind) };
   }
@@ -709,7 +740,12 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
 const SPEED_KEYS = new Set(['factor', 'factor_min', 'speed']);
 
 function decisionFacts(row: DecisionSummary, now: number): FactPair[] {
-  const value = (f: DecisionSummary['fact'][number]) => (SPEED_KEYS.has(f.key) && typeof f.value === 'number' ? speedWord(f.value) : formatFact(f.value, f.unit, now));
+  const value = (f: DecisionSummary['fact'][number]) => {
+    if (SPEED_KEYS.has(f.key) && typeof f.value === 'number') return speedWord(f.value);
+    // A cause is the engine's word, which reads as the card words it. An id under any other key keeps its underscores.
+    if (f.key === 'cause' && typeof f.value === 'string') return wordOf(WARMTH_CAUSE_WORD, f.value);
+    return formatFact(f.value, f.unit, now);
+  };
   // A key the console has no label for is dropped rather than drawn under a guessed one.
   return row.fact.flatMap((f) => {
     const label = lookup(LABELS, f.key);
@@ -1320,7 +1356,7 @@ function cooledWords(reason: string | null, window: string | null): string {
   if (r === 'model_rejected' || window === 'model_rejection') return 'model 404';
   if (r === 'fast_rate_limit' || window === 'fast') return 'fast lane 429';
   if (r === 'rate_limit') {
-    const word = window === null ? undefined : windowTagOf(window);
+    const word = window === null ? undefined : windowTagOf(cooldownWindow(window));
     return word === undefined ? '429' : `429 on ${word}`;
   }
   return words(r || 'cooldown');
@@ -1759,7 +1795,7 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     rows.push({
       chips: [
         plain(String(ranOut ? 429 : (lookup(EXHAUSTION_STATUS, x.kind) ?? 503)), 'status'),
-        ...(x.window !== null ? [plain(windowTagWord(x.window), 'window')] : []),
+        ...(x.window !== null ? [plain(windowTagWord(cooldownWindow(x.window)), 'window')] : []),
         ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
         plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),
       ],
@@ -1815,6 +1851,8 @@ const GAP_MEANING: Record<string, string> = {
 };
 const PLAN_SOURCE_WORD: Record<string, string> = { pairing: 'pairing confirm', profile: 'profile read', usage_403: 'usage 403' };
 const SOURCE_WORD: Record<string, string> = { clock: 'the clock walk', head: 'the response head', poll: 'the poll', predicted: 'the prediction', sample: 'the usage sample' };
+/** A spent window's source as its chip words it. A source outside the map prints as sent. */
+const SOURCE_CHIP_WORD: Record<string, string> = { head: 'head', poll: 'poll', predicted: 'prediction' };
 /**
  * A share of a window per hour as an event's detail reads one. A shedding round's rates read so on every account,
  * whichever table the round's order read.
@@ -1917,7 +1955,7 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
         break;
       }
       add('Reason', text(d.reason));
-      add('Window', window === null ? null : plain(windowTagWord(window)));
+      add('Window', window === null ? null : plain(windowTagWord(cooldownWindow(window))));
       add('Until', time(d.until));
       add('Set by', request);
       break;
@@ -2053,9 +2091,9 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
       add('Effect', plain("decisions read this account's windows from response heads alone"));
       break;
     case 'poll_failed': {
-      const status = num(d.status);
+      const status = pollStatus(d);
       add('Endpoint', text(d.endpoint));
-      add('Status', d.transport === true ? plain('transport failure') : status === null ? null : plain(String(status)));
+      add('Status', status === null ? null : plain(status));
       add('Error', text(d.error));
       break;
     }
@@ -2242,7 +2280,8 @@ export function detailPairs(row: RoutingEvent, now: number, rows: readonly Routi
     case 'slow_down_ended': {
       add('Lasted', figure(d.duration_ms, span));
       add('Slowest', figure(d.factor_min, speedWord));
-      add('Held', figure(d.held_ms, span));
+      // Held sums the waits of the span's holds, which can overlap and pass Lasted, so the count says how many it sums.
+      add('Held', figure(d.held_ms, span), figure(d.holds, fmtInt, 'holds'));
       add('Effect', plain("requests of the account's sessions pass unheld again"));
       break;
     }

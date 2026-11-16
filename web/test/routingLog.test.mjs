@@ -291,8 +291,8 @@ test('an event kind reads its own words, and a kind without a tone of its own re
   assert.deepEqual([d.EVENT_KIND_LABEL.slow_down_started, d.EVENT_KIND_LABEL.slow_down_ended], ['slow-down started', 'slow-down ended']);
   // A window read under its limit again reports no trouble, as its reset does, so both read neutral.
   assert.deepEqual([d.EVENT_KIND_LABEL.window_cleared, d.EVENT_KIND_LABEL.window_reset], ['window cleared', 'window reset']);
-  assert.equal(d.eventTone('a_kind_added_later'), 'neutral');
-  assert.equal(d.eventTone('reauth_required'), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
+  assert.equal(d.eventTone(event('a_kind_added_later', {})), 'neutral');
+  assert.equal(d.eventTone(event('reauth_required', {})), 'neutral', 'the ledger folds the kind into the state change, so it has no tone of its own');
 });
 
 test("the eligible step's none reads critical where another step's reads neutral, and a verdict the console does not know reads neutral", () => {
@@ -1286,12 +1286,49 @@ test("a stream cut's code prints in the mono face, as the request drawer's Error
   assert.deepEqual(code.map((c) => [c.value, c.mono === true]), [['stream_stalled', true]]);
 });
 
+test("a cut stream's chip reads its code without the stream stem", () => {
+  const cut = (code) => read(event('stream_interrupted', { attempt: 1, bytes_relayed: 846, code, text: 'no chunk for 30 s', upstream_request_id: null }, { requestId: 'req_5e2f7a19-b03' })).by;
+  assert.deepEqual([cut('stream_stalled'), cut('account_canceled')], ['stalled', 'account canceled']);
+});
+
+test("a cooldown under the relay's Fable key reads the Fable week", () => {
+  const fable = (scope) => event('cooldown_set', { reason: 'rate_limit', scope, until: ms(15, 42), window: 'seven_day_overage_included' });
+  // The relay files a Fable model's 429 on its own week under the model's scope, and a shared status's under the
+  // account, so both read the 429 where the model's other cooldowns read its 404.
+  assert.deepEqual([read(fable('account')).by, read(fable('model:claude-fable-5-1')).by], ['429 on Fable', '429 on Fable']);
+  assert.equal(read(event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-fable-5-1', until: ms(15, 24), window: 'model_rejection' })).by, '404 on fable-5-1');
+  const window = d.detailPairs(fable('account'), NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Window');
+  assert.deepEqual(texts(window.chips), ['Fable']);
+  const moved = event('pin_migrated', { agent_id: 'main', cause: { reason: 'rate_limit', scope: 'account', window: 'seven_day_overage_included' }, epoch: 54, from_account: 'secondary', reason: 'cooldown' });
+  assert.deepEqual(texts(d.detailPairs(moved, NOW, [], PRO, NO_TIERS).find((p) => p.label === 'Cause').chips), ['429 on Fable']);
+});
+
+test("a spent window's chip names its source", () => {
+  const spent = (source) => read(event('window_spent', { reset: ms(15, 42), source, utilization: 1, window: 'five_hour' })).by;
+  assert.deepEqual([spent('predicted'), spent('stored')], ['prediction on 5h', 'stored on 5h']);
+});
+
+test('Fact words a cause and leaves an id as stored', () => {
+  const row = decision({ kind: 'renewed', fact: [fact('cause', 'class_auxiliary', 'text'), fact('over', 'team_a', null, { id: 'team_a', kind: 'account' })] });
+  assert.deepEqual(read(row).facts, ['cause auxiliary class', 'over team_a']);
+});
+
+test("a cleared mark's chip reads its reason", () => {
+  assert.equal(read(event('mark_cleared', { agent_id: 'main', limit: null, marked_at: ms(13, 0), marked_on: 'primary', marked_window: 'five_hour', projection: null, reason: 'moved' })).by, 'moved');
+});
+
+test("an account's return to ready is neutral", () => {
+  const ready = event('account_state_changed', { cause: 'funding_retry', detail: null, from: 'funding_required', to: 'ready' });
+  const refused = event('account_state_changed', { cause: 'auth_failed', detail: null, from: 'ready', to: 'reauth_required' });
+  assert.deepEqual([d.eventTone(ready), d.eventTone(refused)], ['neutral', 'serious']);
+});
+
 test("an ended plan and its return read their words, their preset and the read's source with the profile's three members", () => {
   assert.deepEqual([d.EVENT_KIND_LABEL.plan_ended, d.EVENT_KIND_LABEL.plan_restored], ['plan ended', 'plan restored']);
   const presetOf = (kind) => d.KIND_PRESETS.find((p) => p.members.includes(kind))?.label;
   assert.deepEqual([presetOf('plan_ended'), presetOf('plan_restored')], ['account state and windows', 'account state and windows']);
   // Neither reports trouble the tones name, so both read neutral.
-  assert.deepEqual([d.eventTone('plan_ended'), d.eventTone('plan_restored')], ['neutral', 'neutral']);
+  assert.deepEqual([d.eventTone(event('plan_ended', {})), d.eventTone(event('plan_restored', {}))], ['neutral', 'neutral']);
   // The router's two rows on the fixture's account, as the routing log route answers them.
   const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
   const rowOf = (kind) => fixture.rows.find((r) => r.type === 'event' && r.kind === kind);

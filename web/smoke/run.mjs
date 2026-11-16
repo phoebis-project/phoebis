@@ -18490,8 +18490,9 @@ await forView('/routing-log', async () => {
       reservation_expired: (e) => ({ Cause: [e.detail.cause.replace(/_/g, ' ')], Reserved: Object.entries(e.detail.shares).map(([w, v]) => `${{ five_hour: '5h', seven_day: '7d', seven_day_fable: 'Fable' }[w]} ${fmtShare(v)}`) }),
       // The newest round, primary's of the afternoon, fired at its 5-hour reset, a horizon whose line is the wall.
       shedding_round: (e) => ({ 'Fired by': ['the projection'], Outcome: ['nothing to mark: no runway'], Trigger: [`5h projection ${fmtPct(e.detail.projection)} at ${hhmm(e.detail.horizon)} over the wall`] }),
-      // The closed span of 09:12 drains its row at 10:40:36, and the open span starts at 13:48 under the threshold.
-      slow_down_ended: (e) => ({ Effect: ["requests of the account's sessions pass unheld again"], Held: ['36 s'], Lasted: ['1 h 26 min'], Slowest: [`${e.detail.factor_min}x`] }),
+      // The closed span of 09:12 drains its row at 10:40:36, and the open span starts at 13:48 under the threshold. The
+      // closed span holds one wait for the slow-down, the 36 s of `req_8e1c4a6d-b52` in `web/src/mock/requests.ts`.
+      slow_down_ended: (e) => ({ Effect: ["requests of the account's sessions pass unheld again"], Held: ['36 s', 'holds 1'], Lasted: ['1 h 26 min'], Slowest: [`${e.detail.factor_min}x`] }),
       slow_down_started: (e) => ({
         Demand: [`${(e.detail.demand * 100).toFixed(1)} %/h`],
         Effect: ["requests of the account's sessions wait their cycle times the slow-down up to the hold"],
@@ -18644,6 +18645,37 @@ await forView('/routing-log', async () => {
           JSON.stringify(read) === JSON.stringify({ accounts: ['/accounts/overflow', '/accounts/primary'], by: 'funding required', kind: 'pin moved' }) &&
           JSON.stringify([pairs.Reason, pairs.Reasons, pairs['Moved by']]) === JSON.stringify([['funding required'], ['funding required'], ["the account's state"]]),
         missing: [`${forced.length} moves with a list`, JSON.stringify(read), JSON.stringify([pairs.Reason, pairs.Reasons, pairs['Moved by']])],
+      });
+    }
+    {
+      // The story's forced move lists under the account it left, the Overflow workspace, as its decision does.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: ['pin_migrated'], limit: 200, to: iso(CLOCK_ORIGIN) })).rows;
+      const e = listed.find((r) => Array.isArray(r.detail.reasons));
+      const at = e === undefined ? CLOCK_ORIGIN : Date.parse(e.at);
+      const page = await mount(`/routing-log?kinds=pin_migrated&accounts=overflow&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+      const drawn = [...page.container.querySelectorAll('.routing-log__table tbody tr.routing-log__row')].map((tr) => tr.getAttribute('data-row'));
+      page.unmount();
+      results.push({
+        name: '/routing-log a move lists under an Account filter on the account it left',
+        ok: e !== undefined && e.accountId === 'primary' && e.detail.from_account === 'overflow' && drawn.includes(`event/${e.id}`),
+        missing: [JSON.stringify(e === undefined ? null : [e.id, e.accountId, e.detail.from_account]), JSON.stringify(drawn)],
+      });
+    }
+    {
+      // A pin event carries the pool its key routes through, so the Pool filter keeps it: the fresh placement's pin on
+      // primary at 14:09:41, under the laptop key's pool all, found by its session in the placement's second.
+      const record = await api.getDecision('req_ef099b34-453', 1);
+      const at = record === null ? CLOCK_ORIGIN : Date.parse(record.request.at);
+      const created = (await api.listRoutingLog({ from: iso(at - MINUTE), kinds: ['pin_created'], limit: 25, to: iso(at + MINUTE) })).rows.find((r) => r.sessionId === record?.request.sessionId && r.at === record?.request.at);
+      const page = await mount(`/routing-log?kinds=pin_created&pools=all&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+      const panel = created === undefined ? null : await openRow(page, `event/${created.id}`);
+      const pool = kvRows(panel?.querySelector('.event-detail > .kv')).find((p) => p.label === 'Pool');
+      const read = { link: pool?.dd?.querySelector('a')?.getAttribute('href') ?? null, listed: panel !== null, pool: pool?.dd?.textContent ?? null };
+      page.unmount();
+      results.push({
+        name: "/routing-log a pin event lists under a Pool filter on its key's pool, and its panel names the pool with its link",
+        ok: created !== undefined && JSON.stringify(read) === JSON.stringify({ link: '/pools#all', listed: true, pool: 'all' }),
+        missing: [JSON.stringify(created === undefined ? null : [created.id, created.accountId, created.keyId]), JSON.stringify(read)],
       });
     }
     {

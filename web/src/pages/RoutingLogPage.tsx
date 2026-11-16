@@ -287,7 +287,7 @@ function LogRow({ isNew, now, onToggle, open, row, rows }: { isNew: boolean; now
         )}
       </td>
       <td className="routing-log__kind">
-        {row.type === 'decision' ? <Badge tone={DECISION_KIND_TONE[row.kind]}>{DECISION_KIND_LABEL[row.kind]}</Badge> : <span className={`badge badge--${eventTone(row.kind)} routing-log__outline`}>{EVENT_KIND_LABEL[row.kind] ?? words(row.kind)}</span>}
+        {row.type === 'decision' ? <Badge tone={DECISION_KIND_TONE[row.kind]}>{DECISION_KIND_LABEL[row.kind]}</Badge> : <span className={`badge badge--${eventTone(row)} routing-log__outline`}>{EVENT_KIND_LABEL[row.kind] ?? words(row.kind)}</span>}
         {/* An exhaustion after a failed attempt counts one past the request's attempts, so it draws no marker. */}
         {row.type === 'decision' && row.attempt > 1 && (row.attemptCount === null || row.attempt <= row.attemptCount) && <span className="sub">{row.attemptCount === null ? `attempt ${row.attempt}` : `attempt ${row.attempt}/${row.attemptCount}`}</span>}
       </td>
