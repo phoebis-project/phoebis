@@ -516,17 +516,6 @@ pub struct DroppedBlocks {
     pub first_message: u64,
 }
 
-/// What the engine learned of a model's thinking blocks between two accounts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Binding {
-    /// The account a session moves to drops the blocks the other produced.
-    Bound,
-    /// The account a session moves to keeps them.
-    Kept,
-    /// No move of the model has shown either.
-    Unobserved,
-}
-
 /// The share of an account's own window a completed request consumed, priced through the ledger's tables, which
 /// this crate cannot name; the default prices nothing, so a task spawned without one predicts from readings alone.
 #[derive(Clone)]
@@ -1062,7 +1051,8 @@ pub struct Reservation {
     /// The pin the selection wrote, `None` for a request that pins nothing and still lands its body.
     pub pin: Option<PinKey>,
     /// The canonical model `burn` was priced for: the request's at a placement and the moved pin's at a move.
-    /// `demand_shares_off_model_weeks` reads its model week to leave out the bookings a Fable reservation stands for.
+    /// `demand_shares_and_off_model_weeks` reads its model week to leave out the bookings a Fable reservation stands
+    /// for.
     pub model: String,
     /// The entrypoint `burn` was priced under at `booked_at` (the pin's own for a pin's move, the failed-over row's for
     /// a failover's landing, the request's for a fresh session's median), which a reader that weighs the burn over a
@@ -1119,6 +1109,16 @@ impl SlowDownState {
     pub(crate) fn closed_at(&self, now: i64) -> Option<i64> {
         self.clear_since
             .filter(|clear| now - clear >= SLOW_DOWN_WAIT_MS)
+    }
+
+    fn ended(&self, since: i64, end: i64) -> SlowDownEdge {
+        SlowDownEdge::Ended {
+            since,
+            duration_ms: end - since,
+            factor_min: self.factor_min,
+            held_ms: self.held_ms,
+            holds: self.holds,
+        }
     }
 }
 
@@ -1497,7 +1497,13 @@ pub(crate) fn trace_stands(snapshot: &RegistrySnapshot, pin: &PinRow, now: i64) 
         && snapshot
             .key_pool(&pin.key_id)
             .map(affinity_ttl_ms)
-            .is_some_and(|ttl| ttl > 0 && now - pin.last_used_at <= ttl)
+            .is_some_and(|ttl| within_ttl(ttl, pin.last_used_at, now))
+}
+
+/// Whether a row last used at `last_used_at` stands inside the affinity TTL `ttl_ms` at `now`. A zero affinity is a TTL
+/// every row is past: the pool keeps no session on an account.
+fn within_ttl(ttl_ms: i64, last_used_at: i64, now: i64) -> bool {
+    ttl_ms > 0 && now - last_used_at <= ttl_ms
 }
 
 /// The loaded rounds by pool and account: each row's time, what the dwell between rounds reads.
@@ -1932,12 +1938,6 @@ impl RoutingState {
         }
     }
 
-    /// The pin's warmth under its own flag, the read every selector path takes. `pin` is a row read from this state, so
-    /// its flag is the stored one.
-    pub fn pin_warm(&self, pin: &PinRow, now: i64) -> bool {
-        warm(pin, now)
-    }
-
     pub(crate) fn remove_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let key = self.canonical_key(key);
         self.take_pin(&key)
@@ -2329,19 +2329,18 @@ impl RoutingState {
         }
     }
 
-    /// What the engine learned of `model`'s thinking blocks between two accounts: the pair's own row, else bound
-    /// where the model holds a bound row for another pair, else unobserved.
-    pub fn binding(&self, model: &str, account: &str, other: &str) -> Binding {
+    /// Whether the engine learned that a move of `model`'s session between two accounts drops the blocks the other
+    /// account produced: the pair's own row, else whether the model holds a bound row for another pair, `false` for a
+    /// model with no rows.
+    pub fn bound(&self, model: &str, account: &str, other: &str) -> bool {
         let Some(pairs) = self.thinking_bindings.get(model) else {
-            return Binding::Unobserved;
+            return false;
         };
         match pairs.get(&pair(account, other)) {
-            Some(true) => Binding::Bound,
-            Some(false) => Binding::Kept,
+            Some(bound) => *bound,
             // One drop says the upstream binds the model's blocks to the account that produced them, which reaches
             // every pair until the pair's own move shows otherwise.
-            None if pairs.values().any(|bound| *bound) => Binding::Bound,
-            None => Binding::Unobserved,
+            None => pairs.values().any(|bound| *bound),
         }
     }
 
@@ -2715,11 +2714,7 @@ impl RoutingState {
     /// its own. `None` while the account holds no reading of the window.
     pub fn predicted(&self, account_id: &str, window: &str, now: i64) -> Option<WindowReading> {
         let reading = self.samples.get(account_id)?.reading(window)?;
-        let charges = self
-            .charges
-            .get(account_id)
-            .map_or(&[][..], |c| c.of(window));
-        let since = |after: i64| charged_between(charges, after, i64::MAX);
+        let since = |after: i64| self.charged_between(account_id, window, after, i64::MAX);
         // A booking counts whatever the reading's age: no reading carries a charge that has not happened.
         let reserved = self.reserved(account_id, window);
         match reading.reset {
@@ -3044,13 +3039,7 @@ impl RoutingState {
                 if let (true, Some(since), Some(clear)) =
                     (slowed, entry.slowed_since, entry.closed_at(now))
                 {
-                    ended = Some(SlowDownEdge::Ended {
-                        since,
-                        duration_ms: clear - since,
-                        factor_min: entry.factor_min,
-                        held_ms: entry.held_ms,
-                        holds: entry.holds,
-                    });
+                    ended = Some(entry.ended(since, clear));
                     entry.slowed_since = None;
                 }
                 match (slowed, entry.slowed_since) {
@@ -3121,13 +3110,7 @@ impl RoutingState {
             .filter_map(|((pool_id, account_id), entry)| {
                 let since = entry.slowed_since?;
                 let clear = entry.closed_at(now)?;
-                let edge = SlowDownEdge::Ended {
-                    since,
-                    duration_ms: clear - since,
-                    factor_min: entry.factor_min,
-                    held_ms: entry.held_ms,
-                    holds: entry.holds,
-                };
+                let edge = entry.ended(since, clear);
                 entry.slowed_since = None;
                 entry.factor_min = 1.0;
                 entry.held_ms = 0;
@@ -3461,9 +3444,11 @@ impl RoutingState {
         self.shares(account_id, keep, &|_| true, tier, now, average_ms, speed)
     }
 
-    /// `demand_shares` with every pin whose model draws a model week and every live booking whose model draws one left
-    /// out: the burn Pace subtracts beside a Fable reservation, which stands for those pins and bookings alone.
-    pub(crate) fn demand_shares_off_model_weeks(
+    /// `demand_shares`, and beside it the same sums with every pin whose model draws a model week and every live
+    /// booking whose model draws one left out: the burn Pace subtracts beside a Fable reservation, which stands for
+    /// those pins and bookings alone. One pass over the pins fills both, and each map takes its additions in the order
+    /// its own pass would, so the floating-point sums match a pass per map.
+    pub(crate) fn demand_shares_and_off_model_weeks(
         &self,
         account_id: &str,
         keep: &dyn Fn(&PinRow) -> bool,
@@ -3471,16 +3456,40 @@ impl RoutingState {
         now: i64,
         average_ms: i64,
         speed: f64,
-    ) -> BTreeMap<String, f64> {
-        self.shares(
+    ) -> (BTreeMap<String, f64>, BTreeMap<String, f64>) {
+        let mut demand = BTreeMap::new();
+        let mut off_model_weeks = BTreeMap::new();
+        self.pin_rates(
             account_id,
-            &|pin| keep(pin) && model_week(&pin.model).is_none(),
-            &|booking| model_week(&booking.model).is_none(),
+            keep,
             tier,
             now,
             average_ms,
-            speed,
-        )
+            &mut |window, _, rate, draws_week| {
+                *demand.entry(window.to_string()).or_insert(0.0) += rate;
+                if !draws_week {
+                    *off_model_weeks.entry(window.to_string()).or_insert(0.0) += rate;
+                }
+            },
+        );
+        for share in demand.values_mut().chain(off_model_weeks.values_mut()) {
+            *share /= speed;
+        }
+        // As in `shares`: a booking made before a poll dropped a window still names it.
+        for reservation in self.live_bookings(account_id) {
+            let draws_week = model_week(&reservation.model).is_some();
+            for (window, burn) in reservation
+                .burn
+                .iter()
+                .filter(|(window, _)| self.has_window(account_id, window))
+            {
+                *demand.entry(window.clone()).or_insert(0.0) += burn;
+                if !draws_week {
+                    *off_model_weeks.entry(window.clone()).or_insert(0.0) += burn;
+                }
+            }
+        }
+        (demand, off_model_weeks)
     }
 
     /// Adds `share` to the clock hour of `at` in the account's record of `window` for the holder of `incarnation`,
@@ -3559,7 +3568,7 @@ impl RoutingState {
             tier,
             now,
             average_ms,
-            &mut |window, entrypoint, rate| match rates
+            &mut |window, entrypoint, rate, _| match rates
                 .iter_mut()
                 .find(|(w, e, _)| *w == window && *e == entrypoint)
             {
@@ -3622,7 +3631,7 @@ impl RoutingState {
             tier,
             now,
             average_ms,
-            &mut |window, _, rate| {
+            &mut |window, _, rate, _| {
                 *shares.entry(window.to_string()).or_insert(0.0) += rate;
             },
         );
@@ -3643,10 +3652,11 @@ impl RoutingState {
     }
 
     /// Folds `add` over each kept pin's decayed rate at `now` on every plan window its model draws that the account's
-    /// set has, with the pin's entrypoint, in the pin map's order, so every fold over it names the set's windows
-    /// alone. A priced pin alone reaches `add`. `keep` decides which rows count, beside the skip of a row a live
-    /// booking names, with no idle test: a row idle past the TTL stands until its placement replaces it or the purge
-    /// takes it, and a placement's own reads leave the request's own row out through `keep`.
+    /// set has, with the pin's entrypoint and whether its model draws a model week, in the pin map's order, so every
+    /// fold over it names the set's windows alone. A priced pin alone reaches `add`. `keep` decides which rows count,
+    /// beside the skip of a row a live booking names, with no idle test: a row idle past the TTL stands until its
+    /// placement replaces it or the purge takes it, and a placement's own reads leave the request's own row out
+    /// through `keep`.
     fn pin_rates<'a>(
         &'a self,
         account_id: &str,
@@ -3654,7 +3664,7 @@ impl RoutingState {
         tier: &str,
         now: i64,
         average_ms: i64,
-        add: &mut dyn FnMut(&'static str, Option<&'a str>, f64),
+        add: &mut dyn FnMut(&'static str, Option<&'a str>, f64, bool),
     ) {
         // A pin a live booking on this account names counts through the booking's burn alone, so a moved pin counts
         // once while its move is in flight. The booking is matched on the account and the pin row, never on the key
@@ -3672,6 +3682,7 @@ impl RoutingState {
             if reserved.contains(&pin.key_parts()) {
                 continue;
             }
+            let draws_week = model_week(&pin.model).is_some();
             for window in self.plan_windows_held(account_id, &pin.model) {
                 // The plain average, since the banded copy weighs past renewals' bands and the rate reads the band
                 // of now. Every type decays by one factor, so decaying the share equals pricing the decayed rates.
@@ -3687,6 +3698,7 @@ impl RoutingState {
                         window,
                         pin.entrypoint.as_deref(),
                         burn_decayed(rate, pin.burn_at, now, average_ms),
+                        draws_week,
                     );
                 }
             }
@@ -4188,9 +4200,9 @@ impl RoutingState {
                 match ttl {
                     // No key or no pool: nothing serves the pin any more.
                     None => Some((k.clone(), "unserved")),
-                    // A zero affinity is a TTL every pin is past: the pool keeps no session on an account.
-                    Some(0) => Some((k.clone(), "expired")),
-                    Some(ttl) if now - p.last_used_at > ttl => Some((k.clone(), "expired")),
+                    Some(ttl) if !within_ttl(ttl, p.last_used_at, now) => {
+                        Some((k.clone(), "expired"))
+                    }
                     Some(_) => None,
                 }
             })
@@ -4200,6 +4212,16 @@ impl RoutingState {
             .filter_map(|(key, reason)| self.take_pin(&key).map(|row| (row, reason)))
             .partition(|(row, reason)| *reason == "deleted" && trace_stands(snapshot, row, now));
         let traced = traced.into_iter().map(|(row, _)| row).collect();
+        // Both purges below ask of every entry whether its account holds a pin of its pool, so the pins are read once.
+        let mut pinned: HashMap<String, HashSet<String>> = HashMap::new();
+        for pin in self.pins.values() {
+            if let Some(key) = snapshot.key(&pin.key_id) {
+                pinned
+                    .entry(key.pool_id.clone())
+                    .or_default()
+                    .insert(pin.account_id.clone());
+            }
+        }
         // A move writes the key again within the selection that took the row, so a key no pin holds at the tick
         // belongs to a session that ended, to a failover or to a deleted account's trace: the task takes that row and
         // the landing comes on a later selection, so a tick between the two drops the pace and the landed pin starts a
@@ -4207,8 +4229,8 @@ impl RoutingState {
         let held = &self.pins;
         self.pin_paces.retain(|key, _| held.contains_key(key));
         self.turn_ends.retain(|_, end| held.contains_key(&end.key));
-        let slow_downs = self.purge_slow_downs(snapshot, now);
-        self.purge_projection_over(snapshot);
+        let slow_downs = self.purge_slow_downs(snapshot, now, &pinned);
+        self.purge_projection_over(snapshot, &pinned);
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window and credits rows cascade too and
         // the purge tick drops one of another incarnation, and charges and round-robin cursors are held in memory
@@ -4277,24 +4299,22 @@ impl RoutingState {
     /// order: an entry whose account holds no pin of the pool, one no selection wrote for `IN_FLIGHT_RECLAIM_MS`, the
     /// backstop the reservations use, one read before its window's passed reset, which every reader already reads as
     /// cleared and whose account's pins lose their deadlines with it, and every entry of a pool whose slow-down is off
-    /// or that left the registry, so a quiet account reads unslowed again without a selection.
+    /// or that left the registry, so a quiet account reads unslowed again without a selection. `pinned` holds the
+    /// accounts a pin of each pool sits on.
     fn purge_slow_downs(
         &mut self,
         snapshot: &RegistrySnapshot,
         now: i64,
+        pinned: &HashMap<String, HashSet<String>>,
     ) -> Vec<((String, String), SlowDownState)> {
-        let pins = &self.pins;
         let mut gone: Vec<(String, String)> = self
             .slow_downs
             .iter()
             .filter(|((pool_id, account_id), entry)| {
                 let pool = snapshot.pool(pool_id).filter(|pool| slow_down(pool));
-                let pinned = pins.values().any(|pin| {
-                    pin.account_id == *account_id
-                        && snapshot
-                            .key(&pin.key_id)
-                            .is_some_and(|key| key.pool_id == *pool_id)
-                });
+                let pinned = pinned
+                    .get(pool_id)
+                    .is_some_and(|accounts| accounts.contains(account_id));
                 pool.is_none()
                     || !pinned
                     || now - entry.read_at >= IN_FLIGHT_RECLAIM_MS
@@ -4324,17 +4344,8 @@ impl RoutingState {
         // window it slowed for where that reset dropped it, or at the last read where the factor never returned.
         if let Some(since) = entry.slowed_since {
             let end = span_end(entry, self.stale_reset(&key.1, entry, now));
-            self.slow_down_edges.push((
-                key.0.clone(),
-                key.1.clone(),
-                SlowDownEdge::Ended {
-                    since,
-                    duration_ms: end - since,
-                    factor_min: entry.factor_min,
-                    held_ms: entry.held_ms,
-                    holds: entry.holds,
-                },
-            ));
+            self.slow_down_edges
+                .push((key.0.clone(), key.1.clone(), entry.ended(since, end)));
         }
     }
 
@@ -4343,16 +4354,17 @@ impl RoutingState {
     /// holds no pin of the pool, so a flipped switch or a quiet account starts its wait afresh. No age drops a stamp,
     /// since a window that reads over for hours keeps the stamp of its first reading over and the round after the
     /// dwell waits no second time. The Fable reservation's stamps leave on the same terms, a pool that does not shed
-    /// on the reservation counting as one whose shedding is off.
-    fn purge_projection_over(&mut self, snapshot: &RegistrySnapshot) {
-        let pins = &self.pins;
+    /// on the reservation counting as one whose shedding is off. `pinned` holds the accounts a pin of each pool sits
+    /// on.
+    fn purge_projection_over(
+        &mut self,
+        snapshot: &RegistrySnapshot,
+        pinned: &HashMap<String, HashSet<String>>,
+    ) {
         let pinned = |pool_id: &str, account_id: &str| {
-            pins.values().any(|pin| {
-                pin.account_id == account_id
-                    && snapshot
-                        .key(&pin.key_id)
-                        .is_some_and(|key| key.pool_id == pool_id)
-            })
+            pinned
+                .get(pool_id)
+                .is_some_and(|accounts| accounts.contains(account_id))
         };
         self.projection_over
             .retain(|(pool_id, account_id, window), _| {
@@ -6694,7 +6706,7 @@ mod tests {
             state.write_slow_down("p", "a", &read_of(factor), 1.0, at, 1_800_000);
         }
         // The pool left the registry, so the purge drops the entry before the wait closes the span.
-        state.purge_slow_downs(&no_pools(), 100_000);
+        state.purge_slow_downs(&no_pools(), 100_000, &HashMap::new());
         let ended: Vec<SlowDownEdge> = state
             .take_slow_down_edges(100_000)
             .into_iter()
@@ -6720,7 +6732,7 @@ mod tests {
         for (at, factor) in [(0, 0.6), (30_000, 0.5)] {
             state.write_slow_down("p", "a", &read_of(factor), 1.0, at, 1_800_000);
         }
-        state.purge_slow_downs(&no_pools(), 40_000);
+        state.purge_slow_downs(&no_pools(), 40_000, &HashMap::new());
         let ended: Vec<SlowDownEdge> = state
             .take_slow_down_edges(40_000)
             .into_iter()

@@ -27,7 +27,7 @@ use crate::state::{
     all_plan_windows, budget_reached, burn_average_ms, burn_decayed, ceiling, keeps_off,
     load_shedding, mark_holds, plan_windows, reservation_shedding, return_to_plan_dwell_ms,
     round_in_dwell, shed_cap, shed_dwell_ms, slow_down, slow_down_hold_ms, slow_down_stretch_ms,
-    standing_mark, warm, BandSegment, Binding, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
+    standing_mark, warm, BandSegment, BurnUnit, MemberSpend, PinPace, PinRef, PinUsage,
     Reservation, RoutingState, StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR,
     HOUR_MS, IN_FLIGHT_RECLAIM_MS, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
@@ -978,9 +978,7 @@ fn bound_destination<'a>(
 ) -> Option<&'a str> {
     destination
         .filter(|destination| *destination != pin.account_id)
-        .filter(|destination| {
-            state.binding(&pin.model, &pin.account_id, destination) == Binding::Bound
-        })
+        .filter(|destination| state.bound(&pin.model, &pin.account_id, destination))
 }
 
 /// Whether the selection sets the session's thinking sums to zero: a compacted request's prompt holds no earlier
@@ -1178,7 +1176,7 @@ pub(crate) fn fresh_prior(
     let kept = in_pool(snapshot, pool);
     state
         .pin_rows()
-        .filter(|p| members.contains(p.account_id.as_str()) && kept(p) && state.pin_warm(p, now))
+        .filter(|p| members.contains(p.account_id.as_str()) && kept(p) && warm(p, now))
         .cloned()
         .collect()
 }
@@ -1218,15 +1216,20 @@ fn holds_allowance(
     if snapshot.usage_based(account_id) {
         return true;
     }
-    allowance_windows(window).all(|name| !window_spent(state, account_id, name, now))
+    allowance_windows(window).all(|name| spent_reading(state, account_id, name, now).is_none())
 }
 
-/// Whether the account's prediction on the plan window `window` stands at 1.0 or past it, so the window has no
+/// The account's prediction on the plan window `window` where it stands at 1.0 or past it, so the window has no
 /// allowance left.
-fn window_spent(state: &RoutingState, account_id: &str, window: &str, now: i64) -> bool {
+fn spent_reading(
+    state: &RoutingState,
+    account_id: &str,
+    window: &str,
+    now: i64,
+) -> Option<WindowReading> {
     state
         .predicted(account_id, window, now)
-        .is_some_and(|r| r.utilization >= 1.0)
+        .filter(|r| r.utilization >= 1.0)
 }
 
 /// The plan windows `holds_allowance` reads for a request judged in `window`: the model's own week where `window` is
@@ -1251,12 +1254,7 @@ fn spent_windows<'a>(
     let usage_based = snapshot.usage_based(account_id);
     allowance_windows(window)
         .filter(|_| !usage_based)
-        .filter_map(|name| {
-            state
-                .predicted(account_id, name, now)
-                .filter(|r| r.utilization >= 1.0)
-                .map(|r| (r.reset, name))
-        })
+        .filter_map(|name| spent_reading(state, account_id, name, now).map(|r| (r.reset, name)))
         .chain(spend_spent(state, snapshot, account_id, now).map(|reset| (Some(reset), "spend")))
         .collect()
 }
@@ -1785,6 +1783,7 @@ fn run(
     // The account of the row step 1 read, with the size it hands on, whatever its `found`: a turn after an idle expiry
     // that lands back on the account reads its cache against that size.
     let mut row_size: Option<(String, u64)> = None;
+    let mut row_warmth: Option<(Warmth, WarmthCause)> = None;
     if let Some(session) = session {
         let key = request.pin_key();
         // A slot wait ends at the admission, the request's dispatch, which the relay names as the cap hold's end, so
@@ -1860,13 +1859,15 @@ fn run(
                     }
                 }
             }
-            // Judged apart from the live pin's verdict below, which a row that idled out or left its pool never gets.
-            let (_, cause) = warmth_of(
+            // Judged for every row, though only a live pin's verdict reaches the record and the rules below: a row that
+            // idled out or left its pool never gets one.
+            let judged = warmth_of(
                 &current,
                 request,
                 &state.affinity().read().expect("affinity lock poisoned"),
             );
-            row_size = handed_size(current.last_input_tokens, cause)
+            row_warmth = Some(judged);
+            row_size = handed_size(current.last_input_tokens, judged.1)
                 .map(|size| (current.account_id.clone(), size));
             // The row's own key, never `key`: the pace and the head mark read a key as the row spells it.
             let current_key = current.key();
@@ -1920,16 +1921,10 @@ fn run(
     // The fast answer names the pinned account's credits reason first, whatever becomes of the pin below.
     let pinned_account = pin.as_ref().map(|(p, _)| p.account_id.clone());
 
-    // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
+    // What the request says about the pin's cache, judged once on the row step 1 read: every rule below that reads
     // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
-    // Judged for a live pin alone, so the arms below that hold the pin hold its warmth too.
-    let warmth = pin.as_ref().map(|(current, _)| {
-        warmth_of(
-            current,
-            request,
-            &state.affinity().read().expect("affinity lock poisoned"),
-        )
-    });
+    // Kept for a live pin alone, so the arms below that hold the pin hold its warmth too.
+    let warmth = pin.as_ref().and(row_warmth);
     let verdict = warmth.map_or(Warmth::Untouched, |(verdict, _)| verdict);
     match rec.pin.as_mut() {
         Some(facts) => {
@@ -2147,9 +2142,13 @@ fn run(
     if let Some((mut current, current_key)) = pin.take() {
         // The move rules, the booking and the row a move takes off read the session's thinking sums as this selection
         // writes them, so a compacted request prices no drop of blocks its prompt no longer holds.
-        let as_written = |row: PinRow| PinRow {
-            thinking_sums: handed_sums(&row, request),
-            ..row
+        let as_written = |mut row: PinRow| {
+            if zeroes_sums(request) {
+                for sum in row.thinking_sums.values_mut() {
+                    *sum = 0;
+                }
+            }
+            row
         };
         current = as_written(current);
         let mut moved_off = false;
@@ -2190,12 +2189,8 @@ fn run(
             }
         } else {
             // The account's pace, read and written once ahead of the rules, so the shed rule and the hold read one
-            // figure. A probe replays a recipe and says nothing of the session's pace, so it reads none.
-            let slowed = if request.probe {
-                None
-            } else {
-                slow_down_read(state, snapshot, pool, &current.account_id, request.now)
-            };
+            // figure.
+            let slowed = slow_down_read(state, snapshot, pool, &current.account_id, request.now);
             let cold = !warm_on(&current, verdict, request.now);
             // The lane the pin carries once this request renews it: a request that leaves the pin alone stamps
             // none.
@@ -2345,16 +2340,21 @@ fn run(
     // itself, never on whether a preference below narrowed the wider set around it.
     let allowed: Vec<&Candidate> = selection_set.clone();
     // The allowance and fit reads, each by account, which the placement's rungs start from rather than reading the
-    // same state again. The allowance is read for every request, since the fit's ladder orders its last rungs by it.
-    let allowances: Vec<(&str, bool)> = selection_set
-        .iter()
-        .copied()
-        .map(|c| {
-            let holds = holds_allowance(state, snapshot, &c.account_id, window, request.now);
-            (c.account_id.as_str(), holds)
-        })
-        .collect();
-    let mut verdicts: Vec<(&str, &'static str)> = Vec::new();
+    // same state again. The spent partition reads every allowance off `seven_day`, so the build runs there alone. The
+    // fit's ladder orders its last rungs by the allowance and reads one the build left out on demand.
+    let allowances: Vec<(&str, bool)> = if window != SEVEN_DAY {
+        selection_set
+            .iter()
+            .copied()
+            .map(|c| {
+                let holds = holds_allowance(state, snapshot, &c.account_id, window, request.now);
+                (c.account_id.as_str(), holds)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut verdicts: Vec<(&str, FitWord)> = Vec::new();
     let mut partitions = Vec::with_capacity(5);
     if window != SEVEN_DAY {
         let mut left: Vec<&Candidate> = Vec::new();
@@ -2472,41 +2472,54 @@ fn run(
                 own_key.as_ref(),
             );
             // A `least_bad` row states the runway to 1.0, the one its rung ranks by.
-            let (runway_ms, binding) = if read.verdict == "least_bad" {
+            let (runway_ms, binding) = if read.verdict == FitWord::LeastBad {
                 (read.wall_shown_ms, read.wall_binding.clone())
             } else {
                 (read.runway_ms, read.binding.clone())
             };
             if let Some(member) = rec.candidate_mut(&c.account_id) {
                 member.runway_ms = runway_ms;
-                member.fit = Some(read.verdict);
+                member.fit = Some(read.verdict.as_str());
                 member.binding = binding;
             }
             verdicts.push((&c.account_id, read.verdict));
-            let holds = read_of(&allowances, &c.account_id) == Some(true);
+            let holds = || {
+                read_of(&allowances, &c.account_id).unwrap_or_else(|| {
+                    holds_allowance(state, snapshot, &c.account_id, window, request.now)
+                })
+            };
             match read.verdict {
-                "fits" => {
+                FitWord::Fits => {
                     fitting.push(c);
                     reads.push((c.account_id.clone(), read));
                 }
-                "rewrite_only" => rewrite_only.push((c, read)),
-                "least_bad" if holds => least_bad.push((c, read)),
-                "ending" if holds => ending.push(c),
+                FitWord::RewriteOnly => rewrite_only.push((c, read)),
+                FitWord::LeastBad if holds() => least_bad.push((c, read)),
+                FitWord::Ending if holds() => ending.push(c),
                 _ => {}
             }
         }
+        fn longest_of<'a>(
+            rung: &[(&'a Candidate, FitRead)],
+            runway: impl Fn(&FitRead) -> Option<i64>,
+        ) -> Vec<&'a Candidate> {
+            let rung = rung.iter().map(|(c, read)| (*c, read)).collect();
+            longest(rung, runway).into_iter().map(|(c, _)| c).collect()
+        }
         let (rung, kept) = if !fitting.is_empty() {
-            ("fits", fitting)
+            (FitWord::Fits.as_str(), fitting)
         } else if !rewrite_only.is_empty() {
-            let rung = rewrite_only.iter().map(|(c, read)| (*c, read)).collect();
-            let kept = longest(rung, |read| read.rank_runway_ms);
-            ("rewrite_only", kept.into_iter().map(|(c, _)| c).collect())
+            (
+                FitWord::RewriteOnly.as_str(),
+                longest_of(&rewrite_only, |read| read.rank_runway_ms),
+            )
         } else if !least_bad.is_empty() {
-            let rung = least_bad.iter().map(|(c, read)| (*c, read)).collect();
-            let kept = longest(rung, |read| read.wall_runway_ms);
-            ("least_bad", kept.into_iter().map(|(c, _)| c).collect())
+            (
+                FitWord::LeastBad.as_str(),
+                longest_of(&least_bad, |read| read.wall_runway_ms),
+            )
         } else if !ending.is_empty() {
-            ("ending", ending)
+            (FitWord::Ending.as_str(), ending)
         } else {
             ("every", Vec::new())
         };
@@ -2957,18 +2970,12 @@ fn fenced(
     account_id: &str,
     rec: &mut Recorder,
 ) -> Exhaustion {
-    let blocking = state.blocking_cooldown(
-        account_id,
-        &request.canonical_model,
-        request.now,
-        request.fast,
-    );
-    let own = obstacle(
+    let own = obstacle_on(
         state,
         snapshot,
         pool,
         account_id,
-        blocking,
+        &request.canonical_model,
         &[],
         request.now,
         request.fallback_ms,
@@ -3605,10 +3612,32 @@ pub(crate) fn slowable(request: &SelectRequest, kind: Option<AccountKind>) -> bo
         && kind != Some(AccountKind::ApiKey)
 }
 
+/// A fit's word, from best to worst: the order the ladder lands a fresh session by.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum FitWord {
+    Fits,
+    RewriteOnly,
+    LeastBad,
+    Ending,
+    Spent,
+}
+
+impl FitWord {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            FitWord::Fits => "fits",
+            FitWord::RewriteOnly => "rewrite_only",
+            FitWord::LeastBad => "least_bad",
+            FitWord::Ending => "ending",
+            FitWord::Spent => "spent",
+        }
+    }
+}
+
 /// What the gate read for one candidate: the verdict and the figures the `fit` step and the candidate table state.
 pub(crate) struct FitRead {
-    /// `ending`, `fits`, `least_bad` or `rewrite_only`.
-    pub verdict: &'static str,
+    /// `Ending`, `Fits`, `LeastBad` or `RewriteOnly`.
+    pub verdict: FitWord,
     /// The runway on the binding window: `None` for an unbounded one (no burn on it, or a runway past its window's
     /// reset on every window), `Some(0)` when the rewrite alone reaches the ceiling.
     pub runway_ms: Option<i64>,
@@ -3635,8 +3664,8 @@ pub(crate) struct FitRead {
     /// holds included, by three tests in order: `spent` at a prediction of 1.0 or more, `ending` inside the account's
     /// wind-down, else `fits`, `rewrite_only` or `least_bad` on the window's own runway. A window outside the set has
     /// no runway read, so the third test reads `fits` there. A paid source and, on a placement, an untiered account
-    /// give each window the read's verdict.
-    pub words: BTreeMap<String, &'static str>,
+    /// give each window the read's verdict. Only `fresh_fit`'s read, which the pools route answers from, fills it.
+    pub words: BTreeMap<String, FitWord>,
 }
 
 /// How `fit_of` reads a window with no reading and an account with no tier. `Move` reads either gap as least bad: a
@@ -3669,8 +3698,28 @@ pub(crate) fn fit_of(
     judge: Judge,
     own: Option<&PinKey>,
 ) -> FitRead {
+    fit_read(
+        state, snapshot, pool, request, figures, candidate, planned, now, judge, own, false,
+    )
+}
+
+/// `fit_of`'s read, with each window's word in `words` where `words` is set.
+#[allow(clippy::too_many_arguments)]
+fn fit_read(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    request: &SelectRequest,
+    figures: Figures<'_>,
+    candidate: &str,
+    planned: &[Reservation],
+    now: i64,
+    judge: Judge,
+    own: Option<&PinKey>,
+    words: bool,
+) -> FitRead {
     let mut read = FitRead {
-        verdict: "least_bad",
+        verdict: FitWord::LeastBad,
         runway_ms: None,
         binding: None,
         rank_runway_ms: None,
@@ -3690,22 +3739,27 @@ pub(crate) fn fit_of(
         plan_windows(&request.canonical_model)
             .filter(move |window| state.predicted(candidate, window, now).is_some())
     };
+    let spent_or = |window: &str, word: FitWord| {
+        if spent_reading(state, candidate, window, now).is_some() {
+            FitWord::Spent
+        } else {
+            word
+        }
+    };
+    let every = |word: FitWord| -> BTreeMap<String, FitWord> {
+        held().map(|window| (window.to_string(), word)).collect()
+    };
     // An account inside the wind-down is no destination: the operator's `wind_down_minutes` is the one rule before
     // the end, and the same test keeps a fresh session off the account and drains its cold pins.
     if winding_down(snapshot, pool, candidate, now) {
         read.end = account_end(snapshot, candidate, now);
-        read.verdict = "ending";
+        read.verdict = FitWord::Ending;
         // A spent window reads `spent` ahead of the wind-down, so the member ranks behind the ones that only end.
-        read.words = held()
-            .map(|window| {
-                let word = if window_spent(state, candidate, window, now) {
-                    "spent"
-                } else {
-                    "ending"
-                };
-                (window.to_string(), word)
-            })
-            .collect();
+        if words {
+            read.words = held()
+                .map(|window| (window.to_string(), spent_or(window, FitWord::Ending)))
+                .collect();
+        }
         return read;
     }
     if paid_source(snapshot, candidate) {
@@ -3715,25 +3769,29 @@ pub(crate) fn fit_of(
             .sample(candidate)
             .and_then(|s| s.worst_bucket(now))
             .is_none_or(|r| r.utilization < 1.0);
-        read.verdict = if room { "fits" } else { "least_bad" };
+        read.verdict = if room {
+            FitWord::Fits
+        } else {
+            FitWord::LeastBad
+        };
         // The full bucket refuses the request at this instant, so the third rung ranks the source behind any room.
         if !room {
             read.wall_runway_ms = Some(0);
             read.wall_shown_ms = Some(0);
         }
-        read.words = held()
-            .map(|window| (window.to_string(), read.verdict))
-            .collect();
+        if words {
+            read.words = every(read.verdict);
+        }
         return read;
     }
     // An unnamed tier, or a plan the cost model does not price, prices neither the rewrite nor the burn, so for a move
     // the figures are the prediction alone and the verdict stays least bad.
     let tier = snapshot.priced_tier(candidate);
     if tier.is_none() && judge == Judge::Placement {
-        read.verdict = "fits";
-        read.words = held()
-            .map(|window| (window.to_string(), read.verdict))
-            .collect();
+        read.verdict = FitWord::Fits;
+        if words {
+            read.words = every(read.verdict);
+        }
         return read;
     }
     let (rewrite, pin_burn, pin_regime) = tier
@@ -3818,69 +3876,74 @@ pub(crate) fn fit_of(
         if !lands {
             rewrite_lands = false;
         }
+        let push = |all: &mut Vec<(&'static str, i64, bool)>,
+                    shown: &mut Vec<(&'static str, i64, bool)>,
+                    ms: i64| {
+            let short = ms < span;
+            all.push((window, ms, short));
+            if !passes_reset(ms, projection.reset, now) {
+                shown.push((window, ms, short));
+            }
+            short
+        };
         // `time_to` answers zero where the prediction with the rewrite already stands at or past 1.0.
         if let Some(wall_ms) = burn.time_to(1.0 - predicted - rewrite) {
-            let short = wall_ms < span;
-            walls.push((window, wall_ms, short));
-            if !passes_reset(wall_ms, projection.reset, now) {
-                walls_shown.push((window, wall_ms, short));
-            }
+            push(&mut walls, &mut walls_shown, wall_ms);
         }
         let runway_ms = if !lands {
             Some(0)
         } else {
             burn.time_to(line - predicted - rewrite)
         };
-        let word = if window_spent(state, candidate, window, now) {
-            "spent"
-        } else if !lands {
-            "least_bad"
-        } else if runway_ms.is_some_and(|runway_ms| runway_ms < span) {
-            "rewrite_only"
-        } else {
-            "fits"
-        };
-        read.words.insert(window.to_string(), word);
+        if words {
+            let word = if !lands {
+                FitWord::LeastBad
+            } else if runway_ms.is_some_and(|runway_ms| runway_ms < span) {
+                FitWord::RewriteOnly
+            } else {
+                FitWord::Fits
+            };
+            read.words
+                .insert(window.to_string(), spent_or(window, word));
+        }
         let Some(runway_ms) = runway_ms else {
             continue;
         };
-        let short = runway_ms < span;
-        if short {
+        if push(&mut bounded, &mut shown, runway_ms) {
             every_fits = false;
-        }
-        bounded.push((window, runway_ms, short));
-        if !passes_reset(runway_ms, projection.reset, now) {
-            shown.push((window, runway_ms, short));
         }
     }
     // The loop walks the set's windows alone, so the verdict and the runways never read a window outside it.
-    for window in held() {
-        read.words.entry(window.to_string()).or_insert_with(|| {
-            if window_spent(state, candidate, window, now) {
-                "spent"
-            } else {
-                "fits"
-            }
-        });
+    if words {
+        for window in held() {
+            read.words
+                .entry(window.to_string())
+                .or_insert_with(|| spent_or(window, FitWord::Fits));
+        }
     }
-    read.rank_runway_ms = binding_of(&bounded).map(|(_, runway_ms)| runway_ms);
-    if let Some((window, runway_ms)) = binding_of(&shown) {
+    let readout = |all: &[(&'static str, i64, bool)], shown: &[(&'static str, i64, bool)]| {
+        (binding_of(all).map(|(_, ms)| ms), binding_of(shown))
+    };
+    let (rank_runway_ms, binding) = readout(&bounded, &shown);
+    read.rank_runway_ms = rank_runway_ms;
+    if let Some((window, runway_ms)) = binding {
         read.binding = Some(window.to_string());
         read.runway_ms = Some(runway_ms);
     }
-    read.wall_runway_ms = binding_of(&walls).map(|(_, wall_ms)| wall_ms);
-    if let Some((window, wall_ms)) = binding_of(&walls_shown) {
+    let (wall_runway_ms, wall_binding) = readout(&walls, &walls_shown);
+    read.wall_runway_ms = wall_runway_ms;
+    if let Some((window, wall_ms)) = wall_binding {
         read.wall_binding = Some(window.to_string());
         read.wall_shown_ms = Some(wall_ms);
     }
     read.verdict = if tier.is_none() || unread {
-        "least_bad"
+        FitWord::LeastBad
     } else if every_fits {
-        "fits"
+        FitWord::Fits
     } else if rewrite_lands {
-        "rewrite_only"
+        FitWord::RewriteOnly
     } else {
-        "least_bad"
+        FitWord::LeastBad
     };
     read
 }
@@ -3937,7 +4000,7 @@ pub(crate) fn fresh_fit(
         body_tokens: 0,
         effort: None,
     };
-    fit_of(
+    fit_read(
         state,
         snapshot,
         pool,
@@ -3948,6 +4011,7 @@ pub(crate) fn fresh_fit(
         now,
         Judge::Placement,
         None,
+        true,
     )
 }
 
@@ -4025,7 +4089,7 @@ pub(crate) fn fit_step(reads: &[(String, FitRead)], verdict: &'static str) -> Wa
         if let Some(end) = read.end {
             row.push(Fact::int("end", end).unit("time"));
         }
-        row.push(Fact::text("verdict", read.verdict));
+        row.push(Fact::text("verdict", read.verdict.as_str()));
         facts.extend(row.into_iter().map(|fact| fact.about(account_id)));
     }
     WalkStep {
@@ -4158,7 +4222,7 @@ struct Gate<'a> {
 fn order<'a, 'r>(
     set: &[&'a Candidate],
     reads: &'r [(String, FitRead)],
-    verdict: &str,
+    verdict: FitWord,
 ) -> Vec<(&'a Candidate, &'r FitRead)> {
     set.iter()
         .zip(reads)
@@ -4239,16 +4303,16 @@ fn gate<'a>(
     for (account_id, read) in &reads {
         if let Some(member) = rec.candidate_mut(account_id) {
             member.runway_ms = read.runway_ms;
-            member.fit = Some(read.verdict);
+            member.fit = Some(read.verdict.as_str());
             member.binding = read.binding.clone();
         }
     }
     let free = |(c, _): &(&Candidate, &FitRead)| under_cap(state, pool, &c.account_id);
-    let fits: Vec<_> = order(&set, &reads, "fits")
+    let fits: Vec<_> = order(&set, &reads, FitWord::Fits)
         .into_iter()
         .filter(free)
         .collect();
-    let rewrite_only: Vec<_> = order(&set, &reads, "rewrite_only")
+    let rewrite_only: Vec<_> = order(&set, &reads, FitWord::RewriteOnly)
         .into_iter()
         .filter(free)
         .collect();
@@ -4256,7 +4320,7 @@ fn gate<'a>(
         .iter()
         .copied()
         .zip(&reads)
-        .filter(|(_, (_, read))| read.verdict != "ending")
+        .filter(|(_, (_, read))| read.verdict != FitWord::Ending)
         .map(|(c, _)| c)
         .collect();
     let chosen = |candidates: Vec<(&'a Candidate, &FitRead)>| -> Vec<&'a Candidate> {
@@ -4278,7 +4342,7 @@ fn gate<'a>(
     };
     let ending = reads
         .iter()
-        .filter(|(_, read)| read.verdict == "ending")
+        .filter(|(_, read)| read.verdict == FitWord::Ending)
         .map(|(account_id, _)| account_id.clone())
         .collect();
     let step = fit_step(&reads, verdict);
@@ -4310,13 +4374,8 @@ fn move_of<'a>(
     rec: &mut Recorder,
 ) -> MoveVerdict<'a> {
     let (now, fallback_ms) = (request.now, request.fallback_ms);
-    // Every shed line below carries the account's pace whichever rule answered. A probe reads no pace, so its line
-    // carries none of it.
-    let slow_down_facts = if request.probe {
-        Vec::new()
-    } else {
-        slow_down_facts(state, pool, &current.account_id, slowed)
-    };
+    // Every shed line below carries the account's pace whichever rule answered.
+    let slow_down_facts = slow_down_facts(state, pool, &current.account_id, slowed);
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let plan_funded = |state: &RoutingState, c: &Candidate| {
@@ -4751,8 +4810,8 @@ fn move_of<'a>(
     rec.trigger_windows = windows;
     if let Some(trigger) = trigger {
         facts.push(Fact::text("trigger", trigger.window));
-        facts.push(Fact::text("fired_by", trigger.source));
-        if let Some(excess) = trigger.excess {
+        facts.push(Fact::text("fired_by", trigger.source.as_str()));
+        if let Some(excess) = trigger.source.excess() {
             facts.push(Fact::number("excess", excess * 3_600.0).unit("percent_per_hour"));
         }
         if state
@@ -5254,7 +5313,7 @@ pub(crate) fn burn_unit(
 }
 
 /// What fired a round: the first plan window, in the trigger's order, whose test read over past its wait, else the
-/// Fable reservation's test past its wait on `seven_day`. `excess` is share per second on `window`.
+/// Fable reservation's test past its wait on `seven_day`.
 pub(crate) struct Trigger {
     pub window: &'static str,
     /// The prediction at the round's instant.
@@ -5264,20 +5323,67 @@ pub(crate) struct Trigger {
     /// The limit the test read: the wall where the projection's horizon is the account's end or the window's own
     /// reset, the window's ceiling at the five-hour bound and under the stretch.
     pub ceiling: f64,
-    /// `None` under the Fable reservation, whose test reads a room and no rate, so its round's target is the shed
-    /// cap's share of the walked burn alone.
-    pub excess: Option<f64>,
-    /// `projection` when the projection at the window's horizon fired the round, `slow_down` when the stretch did,
-    /// `fable_reservation` when the account's 7-day room read under its Fable reservation.
-    pub source: &'static str,
-    /// The account's Fable reservation, under `fable_reservation`.
-    pub fable_reservation: Option<f64>,
-    /// The account's stretch and the pool's threshold, under `slow_down`.
-    pub stretch_ms: Option<i64>,
-    pub threshold_ms: Option<i64>,
+    pub source: TriggerSource,
     /// The account's factor and the speed its demand was read at, where the account has a slow-down read.
     pub factor: Option<f64>,
     pub speed: Option<f64>,
+}
+
+/// The test that fired a round, with the figures that test alone reads. `excess` is share per second on the trigger's
+/// window.
+#[derive(Clone, Copy)]
+pub(crate) enum TriggerSource {
+    /// The account's 7-day room read under its Fable reservation. The test reads a room and no rate, so its round's
+    /// target is the shed cap's share of the walked burn alone.
+    FableReservation { reservation: f64 },
+    /// The projection at the window's horizon.
+    Projection { excess: f64 },
+    /// The stretch, with the account's stretch and the pool's threshold.
+    SlowDown {
+        excess: f64,
+        stretch_ms: i64,
+        threshold_ms: i64,
+    },
+}
+
+impl TriggerSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            TriggerSource::FableReservation { .. } => "fable_reservation",
+            TriggerSource::Projection { .. } => "projection",
+            TriggerSource::SlowDown { .. } => "slow_down",
+        }
+    }
+
+    pub(crate) fn excess(self) -> Option<f64> {
+        match self {
+            TriggerSource::FableReservation { .. } => None,
+            TriggerSource::Projection { excess } | TriggerSource::SlowDown { excess, .. } => {
+                Some(excess)
+            }
+        }
+    }
+
+    pub(crate) fn fable_reservation(self) -> Option<f64> {
+        match self {
+            TriggerSource::FableReservation { reservation } => Some(reservation),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn stretch_ms(self) -> Option<i64> {
+        match self {
+            TriggerSource::SlowDown { stretch_ms, .. } => Some(stretch_ms),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn threshold_ms(self) -> Option<i64> {
+        match self {
+            TriggerSource::SlowDown { threshold_ms, .. } => Some(threshold_ms),
+            _ => None,
+        }
+    }
 }
 
 /// A mark the round made: the key of the pin it marked.
@@ -5408,11 +5514,11 @@ fn trigger_of(
                 projection,
                 horizon,
                 ceiling: limit,
-                excess: Some((projection - limit) / to_horizon.max(1.0)),
-                source: "slow_down",
-                fable_reservation: None,
-                stretch_ms: Some(read.stretch_ms),
-                threshold_ms: Some(read.threshold_ms),
+                source: TriggerSource::SlowDown {
+                    excess: (projection - limit) / to_horizon.max(1.0),
+                    stretch_ms: read.stretch_ms,
+                    threshold_ms: read.threshold_ms,
+                },
                 factor: Some(read.factor),
                 speed: Some(read.speed),
             });
@@ -5420,37 +5526,17 @@ fn trigger_of(
         let projection = projections
             .get(window)
             .filter(|projection| projection.at_horizon > projection.limit)?;
-        let limit = projection.limit;
-        // The shed rule stamped every window over the ceiling before the test, so a missing stamp starts the wait now.
-        let since = stamp(window).unwrap_or(now);
-        let cap = burn_average_ms(pool).saturating_mul(2);
-        let wait_ms =
-            wall_of(projection, now).map_or(cap, |wall| (wall.saturating_sub(since) / 4).min(cap));
-        if now - since < wait_ms {
-            waiting.push(Waiting {
-                window,
-                over_since: since,
-                wait_ms,
-            });
+        if let Some(waits) = inside_wait(pool, window, stamp(window), wall_of(projection, now), now)
+        {
+            waiting.push(waits);
             return None;
         }
-        Some(Trigger {
-            window,
-            utilization: projection.predicted,
-            projection: projection.at_horizon,
-            horizon: projection.horizon,
-            ceiling: limit,
+        let source = TriggerSource::Projection {
             // A horizon at `now` would divide by nothing: the excess then reads the whole overrun as one second's.
-            excess: Some(
-                (projection.at_horizon - limit) / seconds(projection.horizon - now).max(1.0),
-            ),
-            source: "projection",
-            fable_reservation: None,
-            stretch_ms: None,
-            threshold_ms: None,
-            factor: read.map(|read| read.factor),
-            speed: read.map(|read| read.speed),
-        })
+            excess: (projection.at_horizon - projection.limit)
+                / seconds(projection.horizon - now).max(1.0),
+        };
+        Some(projection_trigger(window, projection, source, read))
     };
     // The hold on the 5-hour round sits after the window's test so the line names the wait beside the age where both
     // hold. A window younger than twice the pool's burn average fires under neither source and yields to the next
@@ -5459,6 +5545,46 @@ fn trigger_of(
         .iter()
         .find_map(|window| test(window).filter(|_| !(*window == FIVE_HOUR && young.is_some())));
     TriggerRead { fired, waiting }
+}
+
+/// The wait of a test that has read over since `stamp`, `min((wall - stamp) / 4, 2 * burn_average_ms)`, the cap alone
+/// where no `wall` is named: `Some` while `now` reads inside it.
+fn inside_wait(
+    pool: &PoolRow,
+    window: &'static str,
+    stamp: Option<i64>,
+    wall: Option<i64>,
+    now: i64,
+) -> Option<Waiting> {
+    // The shed rule stamps a test before it runs, so a missing stamp starts the wait now.
+    let since = stamp.unwrap_or(now);
+    let cap = burn_average_ms(pool).saturating_mul(2);
+    let wait_ms = wall.map_or(cap, |wall| (wall.saturating_sub(since) / 4).min(cap));
+    (now - since < wait_ms).then_some(Waiting {
+        window,
+        over_since: since,
+        wait_ms,
+    })
+}
+
+/// The round `source` fires on `window`, its figures read off the window's projection and the slow-down's factor and
+/// speed where the account has a read.
+fn projection_trigger(
+    window: &'static str,
+    projection: &Projection,
+    source: TriggerSource,
+    slowed: Option<&SlowDownRead>,
+) -> Trigger {
+    Trigger {
+        window,
+        utilization: projection.predicted,
+        projection: projection.at_horizon,
+        horizon: projection.horizon,
+        ceiling: projection.limit,
+        source,
+        factor: slowed.map(|read| read.factor),
+        speed: slowed.map(|read| read.speed),
+    }
 }
 
 /// The Fable reservation's test on an account: its 7-day room and the reservation Pace holds back from that room for a
@@ -5485,14 +5611,16 @@ fn reservation_read(
     account_id: &str,
     now: i64,
 ) -> Option<ReservationRead> {
-    let candidate = Candidate {
-        account_id: account_id.to_string(),
-        incarnation: snapshot.incarnation(account_id).unwrap_or(0),
-        // Pace's figures read the account and its holder and never the member's priority.
-        priority: 0,
-        upstream_model: String::new(),
-    };
-    let pace = pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None);
+    let pace = pace_of(
+        state,
+        snapshot,
+        pool,
+        account_id,
+        snapshot.incarnation(account_id).unwrap_or(0),
+        SEVEN_DAY,
+        now,
+        None,
+    );
     pace.fable_reservation.map(|reservation| ReservationRead {
         room: pace.remaining,
         reservation,
@@ -5517,35 +5645,16 @@ fn reservation_trigger(
     else {
         return (None, None);
     };
-    // The shed rule stamped the test before it ran, so a missing stamp starts the wait now.
-    let since = since.unwrap_or(now);
-    let cap = burn_average_ms(pool).saturating_mul(2);
-    let wait_ms = projection
-        .reset
-        .map_or(cap, |reset| (reset.saturating_sub(since) / 4).min(cap));
-    if now - since < wait_ms {
-        let waits = Waiting {
-            window: SEVEN_DAY,
-            over_since: since,
-            wait_ms,
-        };
+    if let Some(waits) = inside_wait(pool, SEVEN_DAY, since, projection.reset, now) {
         return (None, Some(waits));
     }
-    let fired = Trigger {
-        window: SEVEN_DAY,
-        utilization: projection.predicted,
-        projection: projection.at_horizon,
-        horizon: projection.horizon,
-        ceiling: projection.limit,
-        excess: None,
-        source: "fable_reservation",
-        fable_reservation: Some(read.reservation),
-        stretch_ms: None,
-        threshold_ms: None,
-        factor: slowed.map(|read| read.factor),
-        speed: slowed.map(|read| read.speed),
+    let source = TriggerSource::FableReservation {
+        reservation: read.reservation,
     };
-    (Some(fired), None)
+    (
+        Some(projection_trigger(SEVEN_DAY, projection, source, slowed)),
+        None,
+    )
 }
 
 /// What the heal check read when it cleared a mark: the healing projection, with the stretch and the threshold where
@@ -5783,11 +5892,10 @@ pub(crate) fn move_read(
         });
     let drop_size = weighed.map(|(size, _)| size);
     let drop_cost = weighed.map(|(_, cost)| cost);
-    let size = (prompt_size(state, pin, req, None) > 0).then(|| {
-        (prompt_size(state, pin, req, destination) as f64 + drop_size.unwrap_or(0.0)).max(1.0)
-    });
-    let write =
-        share(rewrite_write(state, req, Some(pin), destination)).filter(|share| *share > 0.0);
+    let sized = prompt_size(state, pin, req, destination);
+    let size = (prompt_size(state, pin, req, None) > 0)
+        .then(|| (sized as f64 + drop_size.unwrap_or(0.0)).max(1.0));
+    let write = share(cache_write(sized, pin.cache_ttl_ms)).filter(|share| *share > 0.0);
     let cost = match (write, drop_cost) {
         (None, None) => None,
         (write, drop) => Some(write.unwrap_or(0.0) + drop.unwrap_or(0.0)),
@@ -5850,7 +5958,7 @@ fn destination_of(
             )
         })
         .collect();
-    let fits: Vec<&Candidate> = order(&set, &reads, "fits")
+    let fits: Vec<&Candidate> = order(&set, &reads, FitWord::Fits)
         .into_iter()
         .map(|(c, _)| c)
         .collect();
@@ -5870,49 +5978,92 @@ fn destination_of(
     reads.into_iter().find(|(id, _)| *id == chosen)
 }
 
-/// A standing pin's `move_read` at the destination a round's order reads for it now: among the members of `pool` that
-/// no obstacle holds off for the pin's own model and its lane's speed, with no account attempted, the set `run` builds
-/// for the pin's own next request at its first attempt, and with no booking planned. No request stands behind a
+/// `destination_of`'s destination for `pin` with the `move_read` at it, or with none where it finds none.
+#[allow(clippy::too_many_arguments)]
+fn move_at(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    req: &SelectRequest,
+    eligible: &[&Candidate],
+    pin: &PinRow,
+    planned: &[Reservation],
+    now: i64,
+    fallback_ms: i64,
+) -> (Option<(String, FitRead)>, MoveRead) {
+    let found = destination_of(
+        state,
+        snapshot,
+        pool,
+        req,
+        eligible,
+        pin,
+        planned,
+        now,
+        fallback_ms,
+    );
+    let read = move_read(
+        state,
+        req,
+        pin,
+        now,
+        found.as_ref().map(|(id, _)| id.as_str()),
+    );
+    (found, read)
+}
+
+/// The members of `pool` that no obstacle holds off for `model` at the lane speed `fast` names, with no account
+/// attempted: the set `run` builds for a pin's own next request at its first attempt. No request stands behind a
 /// standing, so the instant and the fallback are the read's own.
+pub(crate) fn standing_eligible(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    model: &str,
+    fast: bool,
+    now: i64,
+    fallback_ms: i64,
+) -> Vec<Candidate> {
+    snapshot
+        .members(&pool.id)
+        .iter()
+        .filter(|member| {
+            obstacle_on(
+                state,
+                snapshot,
+                pool,
+                &member.account_id,
+                model,
+                &[],
+                now,
+                fallback_ms,
+                fast,
+            )
+            .is_none()
+        })
+        .map(|member| Candidate {
+            account_id: member.account_id.clone(),
+            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
+            priority: member.priority,
+            upstream_model: model.to_string(),
+        })
+        .collect()
+}
+
+/// A standing pin's `move_read` at the destination a round's order reads for it now among `eligible`, the set
+/// `standing_eligible` answers for the pin's pool, model and lane speed, with no booking planned.
 pub(crate) fn standing_move_read(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
+    eligible: &[Candidate],
     pin: &PinRow,
     now: i64,
     fallback_ms: i64,
 ) -> MoveRead {
     let request = standing_request(pin);
-    let members: Vec<Candidate> = snapshot
-        .members(&pool.id)
-        .iter()
-        .map(|member| Candidate {
-            account_id: member.account_id.clone(),
-            incarnation: snapshot.incarnation(&member.account_id).unwrap_or(0),
-            priority: member.priority,
-            upstream_model: pin.model.clone(),
-        })
-        .collect();
-    let eligible: Vec<&Candidate> = members
-        .iter()
-        .filter(|member| {
-            let blocking =
-                state.blocking_cooldown(&member.account_id, &pin.model, now, request.fast);
-            obstacle(
-                state,
-                snapshot,
-                pool,
-                &member.account_id,
-                blocking,
-                &[],
-                now,
-                fallback_ms,
-                request.fast,
-            )
-            .is_none()
-        })
-        .collect();
-    let destination = destination_of(
+    let eligible: Vec<&Candidate> = eligible.iter().collect();
+    let (_, read) = move_at(
         state,
         snapshot,
         pool,
@@ -5922,9 +6073,8 @@ pub(crate) fn standing_move_read(
         &[],
         now,
         fallback_ms,
-    )
-    .map(|(account_id, _)| account_id);
-    move_read(state, &request, pin, now, destination.as_deref())
+    );
+    read
 }
 
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
@@ -5992,7 +6142,7 @@ fn shed_round(
         if is_current(p) {
             current_cold
         } else {
-            !state.pin_warm(p, now)
+            !warm(p, now)
         }
     };
     // The only place a left-out pin's skip word is written, so the record and the strip read one spelling.
@@ -6021,7 +6171,7 @@ fn shed_round(
     pins = leave_out(pins, "off_window", &off_window);
     // A round the Fable reservation fired sheds the 7-day room that the account's Fable use is expected to need, so a
     // pin whose model draws a model week is that use and stays, though it draws the 7-day window too.
-    if trigger.fable_reservation.is_some() {
+    if matches!(trigger.source, TriggerSource::FableReservation { .. }) {
         pins = leave_out(pins, "fable_model", &|p: &PinRow| {
             model_week(&p.model).is_some()
         });
@@ -6043,18 +6193,19 @@ fn shed_round(
     let tier = snapshot.priced_tier(account_id).unwrap_or_default();
     let speed = trigger
         .speed
-        .filter(|speed| trigger.source == "slow_down" && *speed > 0.0)
+        .filter(|speed| matches!(trigger.source, TriggerSource::SlowDown { .. }) && *speed > 0.0)
         .unwrap_or(1.0);
     let horizon = trigger.horizon.max(now.saturating_add(1_000));
-    // A walked pin beside its figures: `burn` the order sorts by, `share` the walk's figure and `read` its move at the
-    // destination its own next request would take.
+    // A walked pin beside its figures: `burn` the order sorts by, `share` the walk's figure, `read` its move at the
+    // destination its own next request would take, and `destination` that account with its fit's runway.
     struct RoundPin {
         row: PinRow,
         burn: Option<f64>,
         share: Option<f64>,
         read: MoveRead,
+        destination: Option<(String, Option<i64>)>,
     }
-    let pins: Vec<RoundPin> = pins
+    let pins: Vec<(PinRow, Option<f64>, Option<f64>)> = pins
         .into_iter()
         .map(|(p, burn)| {
             let share = state
@@ -6087,38 +6238,33 @@ fn shed_round(
             } else {
                 burn
             };
-            RoundPin {
-                row: p,
-                burn,
-                share,
-                read: MoveRead::default(),
-            }
+            (p, burn, share)
         })
         .collect();
     // A pin with no priced burn on the window has nothing to shed, so it leaves before the order and the burn guard as
     // an off-window pin does. An unpriced pin stays walked, since its burn is unknown rather than none.
     let (burnless, pins): (Vec<_>, Vec<_>) = pins
         .into_iter()
-        .partition(|p| p.share.is_some_and(|share| share == 0.0));
-    left_out.extend(burnless.into_iter().map(|p| (p.row, "no_burn")));
+        .partition(|(_, _, share)| share.is_some_and(|share| share == 0.0));
+    left_out.extend(burnless.into_iter().map(|(p, _, _)| (p, "no_burn")));
     // The order reads each walked pin's move where the pin's own next request would land it, with no booking planned,
     // since what a move rewrites and drops depends on the destination.
     let pins: Vec<RoundPin> = pins
         .into_iter()
-        .map(|p| {
+        .map(|(p, burn, share)| {
             // The request's own row holds its sums as the caller handed them, which this selection writes, so the
             // order, the pick, the plan and the record read one row.
-            let current_row = is_current(&p.row);
+            let current_row = is_current(&p);
             let row = if current_row {
                 PinRow {
                     thinking_sums: current.thinking_sums.clone(),
-                    ..p.row
+                    ..p
                 }
             } else {
-                p.row
+                p
             };
             let req = pin_request(request, &row, current_row);
-            let destination = destination_of(
+            let (found, read) = move_at(
                 state,
                 snapshot,
                 pool,
@@ -6128,13 +6274,13 @@ fn shed_round(
                 &[],
                 now,
                 fallback_ms,
-            )
-            .map(|(account_id, _)| account_id);
+            );
             RoundPin {
-                read: move_read(state, &req, &row, now, destination.as_deref()),
                 row,
-                burn: p.burn,
-                share: p.share,
+                burn,
+                share,
+                read,
+                destination: found.map(|(destination, fit)| (destination, fit.runway_ms)),
             }
         })
         .collect();
@@ -6183,7 +6329,8 @@ fn shed_round(
     let burn_sum: f64 = ordered.iter().filter_map(|p| p.share).sum();
     let cap = shed_cap(pool);
     let target = trigger
-        .excess
+        .source
+        .excess()
         .map_or(cap * burn_sum, |excess| excess.min(cap * burn_sum));
     let dwell_ms = shed_dwell_ms(pool);
     // The round never takes nearly all of an account's burn: a mark is refused where the other unmarked priced pins
@@ -6221,32 +6368,37 @@ fn shed_round(
     let mut destinations: Vec<Option<String>> = vec![None; ordered.len()];
     let past_the_cold =
         |index: usize| pool.shedding.warm_sessions == WarmSessions::Never && index >= cold_count;
-    // The destination `p`'s own move would take beside the round's earlier marks, the figures the record shows of it,
-    // and the booking a mark plans there: `no_runway` where nothing fits.
-    let plan_of = |p: &PinRow, planned: &[Reservation]| {
+    // The destination the walked pin's own move would take beside the round's earlier marks, the figures the record
+    // shows of it, and the booking a mark plans there: `no_runway` where nothing fits.
+    let plan_of = |walked: &RoundPin, planned: &[Reservation]| {
+        let p = &walked.row;
         let req = pin_request(request, p, is_current(p));
-        let found = destination_of(
-            state,
-            snapshot,
-            pool,
-            &req,
-            eligible,
-            p,
-            planned,
-            now,
-            fallback_ms,
-        );
-        let mut read = PinRead {
-            moved: Some(move_read(
+        // The round reads the state without writing it, so with nothing planned the order's read is the one a read
+        // here would answer.
+        let (found, moved) = if planned.is_empty() {
+            (walked.destination.clone(), walked.read)
+        } else {
+            let (found, moved) = move_at(
                 state,
+                snapshot,
+                pool,
                 &req,
+                eligible,
                 p,
+                planned,
                 now,
-                found.as_ref().map(|(destination, _)| destination.as_str()),
-            )),
+                fallback_ms,
+            );
+            (
+                found.map(|(destination, fit)| (destination, fit.runway_ms)),
+                moved,
+            )
+        };
+        let mut read = PinRead {
+            moved: Some(moved),
             ..PinRead::default()
         };
-        let Some((destination, fit)) = found else {
+        let Some((destination, runway_ms)) = found else {
             read.skip = Some("no_runway");
             return (read, None);
         };
@@ -6260,7 +6412,7 @@ fn shed_round(
             destination_tier,
             now,
         );
-        read.runway_ms = fit.runway_ms;
+        read.runway_ms = runway_ms;
         let model = req.canonical_model.as_str();
         // The record shows the Pro-week figure of the write alone, one unit for every pin.
         let write = rewrite_write(state, &req, Some(p), Some(&destination));
@@ -6318,11 +6470,11 @@ fn shed_round(
             // for, the one whose move costs the least, the first in the order among equals, and the target is met.
             let rest = target - removed;
             let mut pick: Option<(f64, usize, &PinRow, f64, Reservation)> = None;
-            for (offset, q) in ordered[index..].iter().enumerate() {
-                let Some(covers) = q.share.filter(|covers| *covers >= rest) else {
+            for (offset, covering) in ordered[index..].iter().enumerate() {
+                let Some(covers) = covering.share.filter(|covers| *covers >= rest) else {
                     continue;
                 };
-                let q = &q.row;
+                let q = &covering.row;
                 if mark_holds(q) || past_the_cold(index + offset) {
                     continue;
                 }
@@ -6335,7 +6487,7 @@ fn shed_round(
                     };
                     continue;
                 }
-                let (q_read, booking) = plan_of(q, &planned);
+                let (q_read, booking) = plan_of(covering, &planned);
                 let cost = cost_of(q, &q_read);
                 if let Some(booking) = booking {
                     if pick.as_ref().is_none_or(|(least, ..)| cost < *least) {
@@ -6362,7 +6514,7 @@ fn shed_round(
                 // No covering pin has a destination, so the order marks this pin where its own gate finds one. A
                 // covering pin here already reads what the pick's loop found, the guard's `last_pin` or its gate's
                 // `no_runway`.
-                let (own, booking) = plan_of(p, &planned);
+                let (own, booking) = plan_of(walked, &planned);
                 read = own;
                 if let Some(booking) = booking {
                     marks.push(Mark { key: p.key() });
@@ -6472,10 +6624,10 @@ fn shed_round(
         projection: trigger.projection,
         horizon: trigger.horizon,
         ceiling: trigger.ceiling,
-        trigger: trigger.source,
-        stretch_ms: trigger.stretch_ms,
-        threshold_ms: trigger.threshold_ms,
-        fable_reservation: trigger.fable_reservation,
+        trigger: trigger.source.as_str(),
+        stretch_ms: trigger.source.stretch_ms(),
+        threshold_ms: trigger.source.threshold_ms(),
+        fable_reservation: trigger.source.fable_reservation(),
         factor: trigger.factor,
         unit: unit.as_str(),
         rewrite_unit: "pro_week",
@@ -6483,7 +6635,7 @@ fn shed_round(
         shed_cap: cap,
         burn_sum: per_hour(burn_sum),
         // The reservation's test names no rate, and every pin the round walked spends the reserved room.
-        excess: per_hour(trigger.excess.unwrap_or(burn_sum)),
+        excess: per_hour(trigger.source.excess().unwrap_or(burn_sum)),
         target: per_hour(target),
         mark_share: SHED_MARK_SHARE,
         removed: per_hour(removed),
@@ -6600,6 +6752,32 @@ pub(crate) fn obstacle(
     None
 }
 
+/// `obstacle` over the account's blocking cooldown for `model`, for a caller that reads the cooldown for nothing else.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn obstacle_on(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool: &PoolRow,
+    account_id: &str,
+    model: &str,
+    attempted: &[String],
+    now: i64,
+    fallback_ms: i64,
+    fast: bool,
+) -> Option<Obstacle> {
+    obstacle(
+        state,
+        snapshot,
+        pool,
+        account_id,
+        state.blocking_cooldown(account_id, model, now, fast),
+        attempted,
+        now,
+        fallback_ms,
+        fast,
+    )
+}
+
 /// The account's live fast-credits row, which refuses a fast request whatever later row stands beside it.
 fn fast_credits_row<'a>(
     state: &'a RoutingState,
@@ -6659,7 +6837,11 @@ fn renew(
     if !request.probe {
         renewed.entrypoint.clone_from(&request.entrypoint);
     }
-    renewed.thinking_sums = handed_sums(renewed, request);
+    if zeroes_sums(request) {
+        for sum in renewed.thinking_sums.values_mut() {
+            *sum = 0;
+        }
+    }
     let renewed = renewed.clone();
     let handed = pin_ref(&renewed);
     let (refresh_stamped, hashes_stamped) = (
@@ -6832,7 +7014,7 @@ fn blocked(
     figures: Figures<'_>,
     account_id: &str,
     own: Option<&PinKey>,
-    verdict: Option<&'static str>,
+    verdict: Option<FitWord>,
 ) -> Option<&'static str> {
     let now = request.now;
     if !under_cap(state, pool, account_id) {
@@ -6851,7 +7033,7 @@ fn blocked(
             own,
         )
         .verdict
-    }) != "fits"
+    }) != FitWord::Fits
     {
         Some("no_fit")
     } else {
@@ -7005,7 +7187,7 @@ fn placement_of<'a>(
     window: &str,
     own: Option<&PinKey>,
     allowances: &[(&str, bool)],
-    verdicts: &[(&str, &'static str)],
+    verdicts: &[(&str, FitWord)],
     rec: &mut Recorder,
 ) -> Option<(&'a Candidate, Placement)> {
     let none = |rec: &mut Recorder, rung: &'static str, reason: &'static str| {
@@ -7321,16 +7503,28 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 /// draws no model week, since the Fable ones stand in the reservation. `choose` ranks by this score and the record
 /// carries the rest, so the two cannot disagree. `own` is the request's pin key on a placement's own score, whose row
 /// the demand leaves out as the placement's fit does, and `None` on every other read.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn pace_of(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
-    candidate: &Candidate,
+    account_id: &str,
+    incarnation: u64,
     window: &str,
     now: i64,
     own: Option<&PinKey>,
 ) -> PaceFacts {
-    pace_figures(state, snapshot, pool, candidate, window, now, own, true)
+    pace_figures(
+        state,
+        snapshot,
+        pool,
+        account_id,
+        incarnation,
+        window,
+        now,
+        own,
+        true,
+    )
 }
 
 /// `pace_of`'s figures, with the Fable reservation where `reserve` is set and the score and burn of no reservation
@@ -7340,14 +7534,15 @@ fn pace_figures(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool: &PoolRow,
-    candidate: &Candidate,
+    id: &str,
+    incarnation: u64,
     window: &str,
     now: i64,
     own: Option<&PinKey>,
     reserve: bool,
 ) -> PaceFacts {
-    let (remaining, reset) = remaining(state, &candidate.account_id, window, now);
-    if paid_source(snapshot, &candidate.account_id) {
+    let (remaining, reset) = remaining(state, id, window, now);
+    if paid_source(snapshot, id) {
         return PaceFacts {
             remaining,
             reset,
@@ -7360,12 +7555,11 @@ fn pace_figures(
             fable_reservation: None,
         };
     }
-    let end = account_end(snapshot, &candidate.account_id, now);
+    let end = account_end(snapshot, id, now);
     let deadline = reset.into_iter().chain(end).min();
     let hours = deadline
         .map(|d| ((d - now) as f64 / HOUR_MS as f64).max(1.0 / 60.0))
         .unwrap_or(WEEK_HOURS);
-    let id = candidate.account_id.as_str();
     let keep = in_pool_without(snapshot, pool, own);
     let tier = snapshot.priced_tier(id);
     let per_hour = |shares: &BTreeMap<String, f64>, window: &str| {
@@ -7373,13 +7567,30 @@ fn pace_figures(
     };
     // A slowed account's calm is its holds' work, so the score reads what its sessions would spend unslowed.
     let speed = || state.slow_down_speed(pool, id, now);
-    let demand = tier
-        .map(|tier| state.demand_shares(id, &keep, tier, now, burn_average_ms(pool), speed()))
-        .unwrap_or_default();
+    // A reservation applies on `seven_day` alone, so the pass there also sums the burn the score subtracts beside one.
+    let (demand, off_model_weeks) = match tier {
+        Some(tier) if reserve && window == SEVEN_DAY => {
+            let (demand, off_model_weeks) = state.demand_shares_and_off_model_weeks(
+                id,
+                &keep,
+                tier,
+                now,
+                burn_average_ms(pool),
+                speed(),
+            );
+            (demand, Some(off_model_weeks))
+        }
+        Some(tier) => (
+            state.demand_shares(id, &keep, tier, now, burn_average_ms(pool), speed()),
+            None,
+        ),
+        None => (BTreeMap::new(), None),
+    };
     let fable_reservation = if reserve {
         fable_reservation_of(
             state,
-            candidate,
+            id,
+            incarnation,
             window,
             now,
             hours,
@@ -7388,18 +7599,8 @@ fn pace_figures(
     } else {
         None
     };
-    let burn = match (fable_reservation, tier) {
-        (Some(_), Some(tier)) => per_hour(
-            &state.demand_shares_off_model_weeks(
-                id,
-                &keep,
-                tier,
-                now,
-                burn_average_ms(pool),
-                speed(),
-            ),
-            window,
-        ),
+    let burn = match (fable_reservation, &off_model_weeks) {
+        (Some(_), Some(off_model_weeks)) => per_hour(off_model_weeks, window),
         _ => per_hour(&demand, window),
     };
     PaceFacts {
@@ -7423,20 +7624,21 @@ fn pace_figures(
 /// no Fable reading and where the pricer answers no factor.
 fn fable_reservation_of(
     state: &RoutingState,
-    candidate: &Candidate,
+    id: &str,
+    incarnation: u64,
     window: &str,
     now: i64,
     hours: f64,
     live: f64,
 ) -> Option<f64> {
-    let id = candidate.account_id.as_str();
-    if window != SEVEN_DAY || state.predicted(id, SEVEN_DAY_FABLE, now).is_none() {
+    if window != SEVEN_DAY {
         return None;
     }
+    let reading = state.predicted(id, SEVEN_DAY_FABLE, now)?;
     let factor = state.share().week_factor(SEVEN_DAY_FABLE, now)?;
-    let (room, _) = remaining(state, id, SEVEN_DAY_FABLE, now);
+    let room = (1.0 - reading.utilization).max(0.0);
     let since = now as f64 - hours * HOUR_MS as f64;
-    let peak = state.week_peak(id, candidate.incarnation, SEVEN_DAY_FABLE, since);
+    let peak = state.week_peak(id, incarnation, SEVEN_DAY_FABLE, since);
     Some(factor * room.min(peak.max(live) * hours))
 }
 
@@ -7527,7 +7729,18 @@ fn rank<'a>(
         Strategy::Pace => {
             let paces: Vec<PaceFacts> = members
                 .iter()
-                .map(|c| pace_of(state, snapshot, pool, c, window, now, own))
+                .map(|c| {
+                    pace_of(
+                        state,
+                        snapshot,
+                        pool,
+                        &c.account_id,
+                        c.incarnation,
+                        window,
+                        now,
+                        own,
+                    )
+                })
                 .collect();
             let scores: Vec<Score> = members
                 .iter()
@@ -8228,8 +8441,19 @@ fn candidate_facts(
         windows,
         allowance_known: allowance_known(state, snapshot, id, window, now),
         // No reservation outside the first tier, whose members `choose` gives the figures they ranked by.
-        pace: (pool.strategy == Strategy::Pace)
-            .then(|| pace_figures(state, snapshot, pool, candidate, window, now, own, false)),
+        pace: (pool.strategy == Strategy::Pace).then(|| {
+            pace_figures(
+                state,
+                snapshot,
+                pool,
+                id,
+                candidate.incarnation,
+                window,
+                now,
+                own,
+                false,
+            )
+        }),
         budget,
         cooldowns,
         credits,
@@ -9376,7 +9600,7 @@ mod banded_tests {
 mod runway_tests {
     use std::collections::BTreeMap;
 
-    use super::{runway_ties, Candidate, FitRead};
+    use super::{runway_ties, Candidate, FitRead, FitWord};
 
     fn candidate(account_id: &str) -> Candidate {
         Candidate {
@@ -9389,7 +9613,7 @@ mod runway_tests {
 
     fn fits(runway_ms: i64) -> FitRead {
         FitRead {
-            verdict: "fits",
+            verdict: FitWord::Fits,
             runway_ms: Some(runway_ms),
             binding: None,
             rank_runway_ms: Some(runway_ms),

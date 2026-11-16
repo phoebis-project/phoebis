@@ -10904,11 +10904,11 @@ fn a_pin_only_auxiliary_requests_use_reads_warm_by_its_last_use_and_cold_one_ttl
         "no auxiliary request refreshed the pin"
     );
     assert!(
-        st.pin_warm(&pin, now + 299_999),
+        warm(&pin, now + 299_999),
         "a millisecond short of one TTL after the last use, the pin is warm"
     );
     assert!(
-        !st.pin_warm(&pin, now + 300_000),
+        !warm(&pin, now + 300_000),
         "one TTL after the last use, the pin is cold"
     );
 }
@@ -10939,11 +10939,11 @@ fn a_main_turn_on_a_pin_only_auxiliary_requests_used_clears_its_flag_and_it_read
         (T + 250_000, T + 500_000)
     );
     assert!(
-        st.pin_warm(&pin, T + 549_999),
+        warm(&pin, T + 549_999),
         "a millisecond short of one TTL after the main turn, the pin is warm"
     );
     assert!(
-        !st.pin_warm(&pin, T + 550_000),
+        !warm(&pin, T + 550_000),
         "one TTL after the main turn the pin is cold, though an auxiliary request used it since"
     );
 }
@@ -11146,11 +11146,11 @@ fn a_main_turn_on_another_lane_keeps_the_flag_of_a_pin_only_auxiliary_requests_u
         "a lane change keeps the flag"
     );
     assert!(
-        st.pin_warm(&pin, T + 399_999),
+        warm(&pin, T + 399_999),
         "a millisecond short of one TTL after the last use, the pin is warm"
     );
     assert!(
-        !st.pin_warm(&pin, T + 400_000),
+        !warm(&pin, T + 400_000),
         "one TTL after the last use, the pin is cold"
     );
 }
@@ -11179,11 +11179,11 @@ fn a_loaded_pin_whose_last_refresh_is_its_creation_reads_as_a_conversation_pin_u
         "the row carries the flag"
     );
     assert!(
-        !st.pin_warm(&pinned(&st, "s1"), T),
+        !warm(&pinned(&st, "s1"), T),
         "refreshed an hour ago, the conversation pin is cold"
     );
     assert!(
-        st.pin_warm(&pinned(&st, "s2"), T),
+        warm(&pinned(&st, "s2"), T),
         "used a second ago, the flagged pin is warm"
     );
 }

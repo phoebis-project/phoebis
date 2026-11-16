@@ -26,10 +26,10 @@ use crate::record::{
 };
 use crate::select::{
     account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, handed_sums,
-    lane_is_fast, mark_cleared_of, move_read, obstacle, pace_of, projection_of, projections_of,
-    runway, slow_down_ramp, standing_move_read, standing_request, zeroes_sums, BurnRead, Decided,
-    FailedOver, FitRead, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest,
-    SelectResult, RATE_LIMIT_REASON,
+    lane_is_fast, mark_cleared_of, move_read, obstacle_on, pace_of, projection_of, projections_of,
+    runway, slow_down_ramp, standing_eligible, standing_move_read, standing_request, zeroes_sums,
+    BurnRead, Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead, Obstacle,
+    Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -2889,23 +2889,18 @@ fn projections(
     let Some(pool) = snapshot.pool(pool_id) else {
         return Vec::new();
     };
-    let mut members: Vec<(&str, u32)> = snapshot
+    let mut members: Vec<&str> = snapshot
         .members(pool_id)
         .iter()
-        .map(|m| (m.account_id.as_str(), m.priority))
+        .map(|m| m.account_id.as_str())
         .collect();
     members.sort();
-    members.dedup_by(|a, b| a.0 == b.0);
+    members.dedup();
     let prior = fresh_prior(state, snapshot, pool, now);
     members
         .into_iter()
-        .map(|(account_id, priority)| {
-            let candidate = Candidate {
-                account_id: account_id.to_string(),
-                incarnation: snapshot.incarnation(account_id).unwrap_or(0),
-                priority,
-                upstream_model: String::new(),
-            };
+        .map(|account_id| {
+            let incarnation = snapshot.incarnation(account_id).unwrap_or(0);
             let tier = snapshot.priced_tier(account_id).unwrap_or_default();
             let end = account_end(snapshot, account_id, now);
             let achieved = projections_of(
@@ -2933,8 +2928,8 @@ fn projections(
             let shared = fresh_fit(state, snapshot, pool, &prior, account_id, "", now);
             let fit = member_fit(&shared);
             let runway_ms = match fit {
-                "fits" | "rewrite_only" => shared.rank_runway_ms,
-                "least_bad" => shared.wall_runway_ms,
+                FitWord::Fits | FitWord::RewriteOnly => shared.rank_runway_ms,
+                FitWord::LeastBad => shared.wall_runway_ms,
                 _ => None,
             };
             let mut words = shared.words;
@@ -2953,7 +2948,16 @@ fn projections(
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
                     let word = words.get(window).copied()?;
-                    let pace = pace_of(state, snapshot, pool, &candidate, window, now, None);
+                    let pace = pace_of(
+                        state,
+                        snapshot,
+                        pool,
+                        account_id,
+                        incarnation,
+                        window,
+                        now,
+                        None,
+                    );
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -2971,12 +2975,21 @@ fn projections(
                                 projection.reset,
                                 end,
                             ),
-                            fit: word,
+                            fit: word.as_str(),
                         },
                     ))
                 })
                 .collect();
-            let pace = pace_of(state, snapshot, pool, &candidate, SEVEN_DAY, now, None);
+            let pace = pace_of(
+                state,
+                snapshot,
+                pool,
+                account_id,
+                incarnation,
+                SEVEN_DAY,
+                now,
+                None,
+            );
             AccountProjection {
                 account_id: account_id.to_string(),
                 windows,
@@ -2995,18 +3008,18 @@ fn projections(
                         threshold_ms: entry.threshold_ms,
                         hold_ms: slow_down_hold_ms(pool),
                     }),
-                obstacle: obstacle(
+                obstacle: obstacle_on(
                     state,
                     snapshot,
                     pool,
                     account_id,
-                    state.blocking_cooldown(account_id, "", now, false),
+                    "",
                     &[],
                     now,
                     fallback_ms,
                     false,
                 ),
-                fit,
+                fit: fit.as_str(),
                 runway_ms,
                 budget: budget_facts(state, snapshot, pool_id, account_id),
             }
@@ -3014,16 +3027,14 @@ fn projections(
         .collect()
 }
 
-/// The fit words from best to worst, the order the ladder lands a fresh session by.
-const FIT_ORDER: [&str; 5] = ["fits", "rewrite_only", "least_bad", "ending", "spent"];
-
-/// A member's word: the worst word of its shared windows by `FIT_ORDER`, else the read's own verdict, which a member
-/// with no reading of a shared window answers. A paid source and an untiered member give each window that verdict.
-fn member_fit(read: &FitRead) -> &'static str {
+/// A member's word: the worst word of its shared windows in `FitWord`'s order, else the read's own verdict, which a
+/// member with no reading of a shared window answers. A paid source and an untiered member give each window that
+/// verdict.
+fn member_fit(read: &FitRead) -> FitWord {
     [FIVE_HOUR, SEVEN_DAY]
         .into_iter()
         .filter_map(|window| read.words.get(window).copied())
-        .max_by_key(|word| FIT_ORDER.iter().position(|w| w == word))
+        .max()
         .unwrap_or(read.verdict)
 }
 
@@ -3033,7 +3044,9 @@ fn member_fit(read: &FitRead) -> &'static str {
 /// those windows there reads the same runway. Each pin reads its account's factor and realized speed from the slow-down
 /// entry in force under that pool and its cycle from its pace. Its burn unit is the selector's read of its account, an
 /// overage whose evidence names no reset standing for `fallback_ms` past its observation. The unit and the slow-down
-/// entry depend on the account and the pool alone, so each is read once beside the runway.
+/// entry depend on the account and the pool alone, so each is read once beside the runway. The set a pin's move read
+/// plans among depends on the pool, the pin's model and its lane's speed alone, so `standing_eligible` builds it once
+/// per pool, model and speed.
 fn pins_standing(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3044,6 +3057,7 @@ fn pins_standing(
     type Runway = Option<(Option<i64>, Option<String>)>;
     type AccountRead = (Runway, BurnUnit, Option<PinSlowDown>);
     let mut runways: HashMap<(String, String, Vec<&'static str>), AccountRead> = HashMap::new();
+    let mut eligible_sets: HashMap<(String, String, bool), Vec<Candidate>> = HashMap::new();
     pins.into_iter()
         .map(|pin| {
             let pool = snapshot.key_pool(&pin.key_id);
@@ -3090,7 +3104,22 @@ fn pins_standing(
             let fast = lane_is_fast(&pin.lane);
             // A pin whose pool left the registry has no siblings to plan a move among.
             let read = match pool {
-                Some(pool) => standing_move_read(state, snapshot, pool, &pin, now, fallback_ms),
+                Some(pool) => {
+                    let eligible = eligible_sets
+                        .entry((pool.id.clone(), pin.model.clone(), fast))
+                        .or_insert_with(|| {
+                            standing_eligible(
+                                state,
+                                snapshot,
+                                pool,
+                                &pin.model,
+                                fast,
+                                now,
+                                fallback_ms,
+                            )
+                        });
+                    standing_move_read(state, snapshot, pool, eligible, &pin, now, fallback_ms)
+                }
                 None => move_read(state, &standing_request(&pin), &pin, now, None),
             };
             PinStanding {
