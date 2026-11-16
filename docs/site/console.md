@@ -151,14 +151,15 @@ still out is skipped, so a slow read lands and the next tick reads again.
 
 Five tiles follow, each reading the 24 whole hours before the current hour and the current hour so far, which its
 sparkline draws as the last point, and a note per hour under a tile reads over the hours covered: "Requests, 24h" with
-`{n} per hour`, "Tokens, 24h" with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, "Error rate,
-24h" with "No requests", `Most common: {code}` or "No errors", and "Refused, 24h" with `Most common: {code}` or "None",
-which counts the requests the router refused before any account was asked. "Requests, 24h" and the error rate leave
-those out and say so on hover, "Requests the router asked an account for. The refused requests are in the Refused tile."
-on the first and "Errors among the requests the router asked an account for, the refused requests left out" on the
-second. The error rate and its most common code also leave out the requests whose client left before its answer ended.
-The Refused tile's hover names the refusals it counts apart from the router's own, "Requests refused for the client's or
-a policy's cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable,
+`{n} per hour`, "Tokens, 24h" with `{pct} served from cache`, "Estimated cost, 24h" in the top bar's unit, headed
+"Dollar equivalent, 24h" under Dollar equivalent and "Billed dollars, 24h" under Billed dollars, "Error rate, 24h" with
+"No requests", `Most common: {code}` or "No errors", and "Refused, 24h" with `Most common: {code}` or "None", which
+counts the requests the router refused before any account was asked. "Requests, 24h" and the error rate leave those out
+and say so on hover, "Requests the router asked an account for. The refused requests are in the Refused tile." on the
+first and "Errors among the requests the router asked an account for, the refused requests left out" on the second. The
+error rate and its most common code also leave out the requests whose client left before its answer ended. The Refused
+tile's hover names the refusals it counts apart from the router's own, "Requests refused for the client's or a policy's
+cause before any account was asked. The router's own refusals, account_canceled, accounts_unavailable,
 body_budget_exhausted, key_body_reads, ledger_behind and router_unavailable, count as requests instead." Under Native
 the cost tile reads the subscription traffic's figure in the chosen week over the billed dollars, a side with no traffic
 left out, with `{usd} billed per hour` under them, or the figure per hour while no request was billed. Where a
@@ -220,16 +221,16 @@ card it scrolls inside it.
 does, the sessions the router lists that have not finished: Agents counts each session's agents less the released ones,
 main among them where no line names it, and Busy, Idle and Parked count them by lifecycle word, a registered, unknown or
 unreported agent in none of the three. Under the grid, "Keepalive engine" reads the engine's three caps as `{n} of
-{max}`: Sessions, Agent records, whose hover says that a released record keeps its slot for one cache TTL after the
-release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's probes by
-outcome (ok, migrated, held, skipped and failed), where ok is the answered probes less the migrated ones, which draw as
-their own part, and a line reads `expired between turns {n} · bus gaps {n}`. The expired part takes the warning ink
-while the attention item `expired_between_turns` holds, which counts the expiries on pools that warm caches under keys
-the keepalive may probe for, so the part's own count, the keepalive overview's over every pool, can stand above zero in
-the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the last gap's instant on hover. Where
-the keepalive overview's first read fails, the caps, the probes and the line read a dash each under `Could not load the
-keepalive overview: {error}` and a "Try again" button. A failed recipes read draws in the card as a failed keepalive
-overview does, under a notice of its own. What each figure means is on [Statistics](statistics.md).
+{max}`: Sessions, Agent records, whose hover says that a released record that held a slot keeps it for one cache TTL
+after the release, and Retained in MiB. "Cache probes, 24h" reads `{ok} ok ({pct}) of {total}` over a bar of the day's
+probes by outcome (ok, migrated, held, skipped and failed), where ok is the answered probes less the migrated ones,
+which draw as their own part, and a line reads `expired between turns {n} · bus gaps {n}`. The expired part takes the
+warning ink while the attention item `expired_between_turns` holds, which counts the expiries on pools that warm caches
+under keys the keepalive may probe for, so the part's own count, the keepalive overview's over every pool, can stand
+above zero in the plain ink. The bus gaps part takes the ink while `keepalive_bus_gaps` holds, the last gap's instant on
+hover. Where the keepalive overview's first read fails, the caps, the probes and the line read a dash each under `Could
+not load the keepalive overview: {error}` and a "Try again" button. A failed recipes read draws in the card as a failed
+keepalive overview does, under a notice of its own. What each figure means is on [Statistics](statistics.md).
 
 ## Quota
 
@@ -529,16 +530,17 @@ The view opens on its bar, the Sort control with Name (ascending by default), St
 dollars figure) and Active pins (descending), then "Create pool" with the split Refresh button and the count `{n} pools`
 at the right edge, then "A pool groups accounts behind a set of keys. Requests pick a member by priority, stick to it
 per session, and fail over when a member hits a rate limit." on a line of its own, then the tiles Pools, Accounts in
-pools, Keys, "Requests, 24h" and "Cost, 24h". The sort and its direction live in the page's address, and a card's links
-into the pool dialog keep them, so the dialog closes onto the same order. A card's member rows keep the selection order
-whatever the sort. Auto reload starts at 5 s and waits while the pool dialog or the Delete pool confirm is open. The
-sessions and the keepalive overview the pool dialog draws are read when it opens on a saved pool and again after a key
-write from it, the overview also when the return rate's range is picked, never at the interval. "Cost, 24h" and each
-card's Cost 24h read in the top bar's unit: under Native the day's subscription traffic as its figure in the chosen week
-over its billed dollars, a side with no traffic left out and the subscription side a dash with the Dashboard's hover
-where a request of the day priced nothing. The billed dollars count a billed keepalive probe's, while the request counts
-leave the probes out. A pool sums its members' accounts, so its figure carries no hint. Every field's meaning is on
-[Pools, keys and routing](routing.md#pools).
+pools, Keys, "Requests, 24h" and "Cost, 24h". The cost tile's label names the position under Dollar equivalent and
+Billed dollars, as the Dashboard's cost tile does, and so does each card's Cost 24h row. The sort and its direction live
+in the page's address, and a card's links into the pool dialog keep them, so the dialog closes onto the same order. A
+card's member rows keep the selection order whatever the sort. Auto reload starts at 5 s and waits while the pool dialog
+or the Delete pool confirm is open. The sessions and the keepalive overview the pool dialog draws are read when it opens
+on a saved pool and again after a key write from it, the overview also when the return rate's range is picked, never at
+the interval. "Cost, 24h" and each card's Cost 24h read in the top bar's unit: under Native the day's subscription
+traffic as its figure in the chosen week over its billed dollars, a side with no traffic left out and the subscription
+side a dash with the Dashboard's hover where a request of the day priced nothing. The billed dollars count a billed
+keepalive probe's, while the request counts leave the probes out. A pool sums its members' accounts, so its figure
+carries no hint. Every field's meaning is on [Pools, keys and routing](routing.md#pools).
 
 Each card carries the pool's name, its status badge (active, degraded, disabled or exhausted), its keys as a link ("No
 keys yet", "1 key", `{n} keys`, or "Keys unavailable" when the keys read failed), an edit button and "Delete". The edit
@@ -655,8 +657,11 @@ up to the shed cap.", and closes on a "Preview" line, the round's dry run as the
 under Windows and `Migrate when spent` under Failover, which opens on "How long a request waits out a throttle on its
 member, how many requests one member serves at once, and whether a spent window moves the session at once." The Preview
 replays the trigger from the projections the accounts route serves for each member and window and from the sessions'
-served burn, an estimate of what the router reads. It leaves the line of an agent that ended out of its round, as the
-router's walk does, and the Sessions view keeps drawing that line.
+served burn, an estimate of what the router reads. It walks each conversation pin of a session, as the router's round
+does, leaves out a pin on the fast lane and a pin whose row or line reads ended, and orders the rest and picks among the
+pins that cover what the round's target still asks by the figures the router's own round reads for each pin's move, its
+size and its cost, while the Sessions view keeps drawing an ended agent's line. The figures are those of a round that
+the pin's own next request fires, so a round that another session's request fires can order the pins another way.
 
 With the switch off the Preview opens on `Load shedding is off: no round runs.` and names the projection alone. It reads
 `No member projects over the ceiling on any window: the closest is {label}, {window} {p} {horizon}.` while no member's
@@ -666,11 +671,12 @@ and otherwise `1 member projects over the ceiling: {label}.` or
 `A round there would mark {k} sessions ({warm} warm), {excess} of the excess, to move to a sibling with runway.`
 (`1 session (1 warm)` for one), by `No sibling has runway for them, so nothing would be marked.` where no sibling has
 runway for the sessions a round would mark, or by `A round there would mark no session:` with the reason it marks none,
-`none is priced.` where the members over the ceiling hold no priced session, `each is its member's last.` where every
-priced session is the last on its member, which a round never marks, `each is warm.` where Warm sessions is never and
-every priced session is warm, or `none burns.` where the round's target is zero. With `Fable reservation shedding` on,
-under the Pace strategy and with load shedding on, the line adds
-`1 member holds less 7-day room than its Fable reservation: {label}.` or
+`none is priced.` where the members over the ceiling hold no priced session, `each is too small to move.` where a
+session the walk reached is a sliver under the round's mark share, `each would leave its member too little burn.` where
+none is a sliver and the round's guard keeps one, `the sessions already marked cover it.` where neither holds and a
+session stands under a mark already, `each is warm.` where Warm sessions is never and every priced session is warm, or
+`none burns.` where the round's target is zero. With `Fable reservation shedding` on, under the Pace strategy and with
+load shedding on, the line adds `1 member holds less 7-day room than its Fable reservation: {label}.` or
 `{n} members hold less 7-day room than their Fable reservation: {list}.`, followed by
 `A round there would mark {k} non-Fable sessions ({warm} warm), to move to a sibling with runway.`
 (`1 non-Fable session (1 warm)` for one) or by `A round there would mark no non-Fable session.` Otherwise the line says
@@ -777,7 +783,8 @@ picked each row reads `created {date}` (the time on hover) or `{n} requests, 7d`
 table alone, and the card's bars keep their order by cost. Auto reload starts at 5 s and waits while a dialog or a row's
 menu is open. The tiles Keys, Active, Lifetime requests and Lifetime cost follow, and the card "Lifetime cost by key"
 ("Relative spend across all keys, in dollars at the API price list" under Native and "Relative spend across all keys"
-under a dollar position), a bar per key. The lifetime tiles and the card's bars count their rows older than the week
+under a dollar position), a bar per key. The cost tile's label names the position under Dollar equivalent and Billed
+dollars, as the Dashboard's cost tile does. The lifetime tiles and the card's bars count their rows older than the week
 from a read made once an hour, so a request older than a week that lands late joins them within the hour. Lifetime cost,
 each bar's figure and the cost line under a key's "Usage, 7d" read in the top bar's unit: under Native the tile stacks
 the subscription traffic's figure in the chosen week over the billed traffic's dollars, and a bar's figure and a cost
@@ -935,30 +942,31 @@ The table offers sixteen columns, Time, Key, Pool, Account, Model, Client, Kind,
 Duration, Tokens, Uncached input, Output tokens and Cost, with Duration, Kind, Output tokens, Pool, Transport and
 Uncached input hidden until the Columns control turns them on, and shows Time, Model, Status and Attempts alone while
 the drawer is open. Uncached input and Output tokens read the serving attempt's counts, and a row whose serving attempt
-answered no 200 reads a dash in both. The Sort control orders the table by Time (descending at rest), Attempts,
-Duration, TTFB, Uncached input or Output tokens (each descending when picked), a request without the figure last under
-either direction, the read paging by the key, so each page holds the next rows in the order, and a change of the key or
-the direction returns to the first page. Every column but Time is as wide as its widest value, and Time takes the card's
-free width: the request id under the time is cut by the room with an ellipsis, whole on hover, and reads whole where the
-card holds it, on a wide screen or beside the drawer. Time keeps room for the widest time the clock draws, so a time
-never cuts, and under the 12-hour clock, whose times run wider, the default columns can run past the card at 1280 px and
-scroll inside it, as any set of columns wider than the card does. Time reads the date and the clock time with seconds,
-`Nov 5 13:11:05`, whatever the row's age, so a row of any range reads its date without the hover. The model column reads
-the family and version with the whole id on hover, and a dash for a request the router refused before it resolved a
-model. The client column reads the class the router derived from the user agent (`claude-code/<entrypoint>` or `other`),
-whole on hover, with the agent type beneath it on a subagent's turn. The drawer's Client row names a session that
-branched from another conversation, `fork of {base} at 3`, with the base's whole id on hover. Status reads the code, a
-warning badge with the refusal's category where the upstream refused the answer (`none` where it gave no category, its
-hover "The upstream refused this answer. Open the request for the stop reason and the recommended model.", the request
-having succeeded), an info badge `fallback` where the request presented a fallback credit token (its hover "A fallback
-token issued by {account}" naming the account of the refused attempt that issued the token where the table holds the
-issuing request, and "A fallback token presented with this request" otherwise), and the outcome word beside it where the
-request did not succeed (`canceled`, `exhausted`, `failed`, `incomplete` or `rejected`). One row is one client request
-however many attempts it took: Attempts reads `2 attempts` with the trail of account and status on hover, nothing for a
-request of one attempt, and a `waited 42 s` badge for a request that waited through a hold, for a slot while every
-account was at its cap, for a reset, for the slow-down or for the rewrite in flight, whose hover names each wait with
-its reason in the row's order and the account it waited on, `waited for the slow-down 42 s, for a slot 3 s on {account}`
-or `waited for the rewrite in flight 2 s on {account}`, or each with its own account where the waits span two,
+stored no count reads a dash in both, with the reason on hover. The Sort control orders the table by Time (descending at
+rest), Attempts, Duration, TTFB, Uncached input or Output tokens (each descending when picked), a request without the
+figure last under either direction, the read paging by the key, so each page holds the next rows in the order, and a
+change of the key or the direction returns to the first page. Every column but Time is as wide as its widest value, and
+Time takes the card's free width: the request id under the time is cut by the room with an ellipsis, whole on hover, and
+reads whole where the card holds it, on a wide screen or beside the drawer. Time keeps room for the widest time the
+clock draws, so a time never cuts, and under the 12-hour clock, whose times run wider, the default columns can run past
+the card at 1280 px and scroll inside it, as any set of columns wider than the card does. Time reads the date and the
+clock time with seconds, `Nov 5 13:11:05`, whatever the row's age, so a row of any range reads its date without the
+hover. The model column reads the family and version with the whole id on hover, and a dash for a request the router
+refused before it resolved a model. The client column reads the class the router derived from the user agent
+(`claude-code/<entrypoint>` or `other`), whole on hover, with the agent type beneath it on a subagent's turn. The
+drawer's Client row names a session that branched from another conversation, `fork of {base} at 3`, with the base's
+whole id on hover. Status reads the code, a warning badge with the refusal's category where the upstream refused the
+answer (`none` where it gave no category, its hover "The upstream refused this answer. Open the request for the stop
+reason and the recommended model.", the request having succeeded), an info badge `fallback` where the request presented
+a fallback credit token (its hover "A fallback token issued by {account}" naming the account of the refused attempt that
+issued the token where the table holds the issuing request, and "A fallback token presented with this request"
+otherwise), and the outcome word beside it where the request did not succeed (`canceled`, `exhausted`, `failed`,
+`incomplete` or `rejected`). One row is one client request however many attempts it took: Attempts reads `2 attempts`
+with the trail of account and status on hover, nothing for a request of one attempt, and a `waited 42 s` badge for a
+request that waited through a hold, for a slot while every account was at its cap, for a reset, for the slow-down or for
+the rewrite in flight, whose hover names each wait with its reason in the row's order and the account it waited on,
+`waited for the slow-down 42 s, for a slot 3 s on {account}` or `waited for the rewrite in flight 2 s on {account}`, or
+each with its own account where the waits span two,
 `waited for the slow-down 42 s on {account}, for a slot 3 s on {other}` (a row from before the reasons reads
 `waited 1 s on {account}`, and a wait under a second reads `1 s`). Cost reads in the top bar's unit, its header's hover
 naming what each kind of request reads under the position. Under Native a request a subscription window paid reads one
@@ -1027,8 +1035,9 @@ the same on the open row closes it. The drawer holds the request's id and time, 
   dash stands, as the Cost cell's hover does, then the hint, the serving account's tier (`Account tier {tier}`) and the
   price list and cost model in force when the request arrived (`Priced at the API prices of {date} and the cost model of
   {date}`, each date with its time where the entry carries one). A client classifier call's row reads its zero figure
-  under Native, `$0.00` with `equivalent` under All in dollars and Dollar equivalent and a dash under Billed dollars,
-  with the hover "Free on the plan: a client classifier call takes no window share".
+  under Native and `$0.00` with `equivalent` under All in dollars and Dollar equivalent, each with the hover "Free on
+  the plan: a client classifier call takes no window share", and a dash under Billed dollars with the hover "Nothing
+  billed: a subscription request".
 - Request: Session, Agent, Client with the request class badge and the fork line where the session branched from another
   conversation, User agent (such as `claude-cli/2.1.310 (external, cli)`), Key, Pool and Kind.
 - Attempts: one row per attempt in its order, with its account, its outcome and status in the words and tones of the
@@ -1172,21 +1181,23 @@ the breakdown names it, the requests with no classifier call listed as `none` un
 group's subscription traffic per hour in the chosen week, the legend's figure in full on hover and its highest hour on
 the entry's hover, led by the whole session id under the session grouping. Beside it the card "5-hour per hour" ("The
 subscription traffic per hour as a share of the chosen tier's 5-hour window, the peak band's factor applied by the
-hour") draws the same lines from the burn route's 5-hour figure under every grouping and bucket size, scaled to the
-chosen tier's 5-hour window by the capacities with no band of its own, and reads unpriced where the cost model holds no
-5-hour capacity for the chosen tier. The card "Fable week per hour" ("The subscription traffic per hour as a share of
+hour") draws the same lines from the burn route's 5-hour figure for the chosen tier under every grouping and bucket
+size, and reads unpriced where no bucket of the range holds a figure for the chosen tier's 5-hour window while one holds
+a figure above zero for another tier. The card "Fable week per hour" ("The subscription traffic per hour as a share of
 the chosen tier's Fable week") draws the subscription traffic of the models that draw the Fable week, and of those
-alone, from the burn route's `fable_equivalent` scaled to the chosen tier's Fable week. A busy bucket with no such
-traffic reads zero, a group whose traffic over the whole range ran on no such model draws no line and no legend entry,
-and the card reads unpriced where the cost model holds no Fable week for the chosen tier. The two cards' tooltips carry
-no account's hint. Under the Ultra week the 5-hour card's note reads "The Ultra tier's 5-hour capacity row is assumed,
-and an approved account carries no 5-hour window." A bucket the cost model could not price stays a gap, under a "model
-unlisted" entry with the hover "A bucket whose traffic ran on a model without a weight in the cost model prices no share
-and draws no point", and an idle bucket reads zero. The three plan cards read the cost revision in force at each bucket,
-so a bucket before a revision's instant keeps the figures of the revision before it, and a bucket whose revision sizes
-no window for the chosen tier draws a gap. Where one account is named, under the account grouping or with one account in
-the Accounts filter, a bucket's tooltip adds the hint the Requests view's Cost column describes under the account's
-line, with no band word, since a bucket holds no one request's completion. Under that grouping or filter a subscription
+alone, from the burn route's Fable-week figure for the chosen tier. A busy bucket with no such traffic reads zero, a
+group whose traffic over the whole range ran on no such model draws no line and no legend entry, and the card reads
+unpriced where no bucket of the range holds a figure for the chosen tier's Fable week while one holds a figure above
+zero for another tier. The two cards' tooltips carry no account's hint. Under the Ultra week the 5-hour card's note
+reads "The Ultra tier's 5-hour capacity row is assumed, and an approved account carries no 5-hour window." A bucket the
+cost model could not price stays a gap, under a "model unlisted" entry with the hover "A bucket whose traffic ran on a
+model without a weight in the cost model prices no share and draws no point", and an idle bucket reads zero. A bucket in
+which a row's cost revision holds no capacity for the chosen tier on the card's window stays a gap too, under a "tier
+unsized" entry of its own. The three plan cards read the figure the router answers for the chosen tier, which it scales
+row by row under each row's own cost revision and band before it sums, so a bucket that spans a revision's start holds
+each side at its own revision. Where one account is named, under the account grouping or with one account in the
+Accounts filter, a bucket's tooltip adds the hint the Requests view's Cost column describes under the account's line,
+with no band word, since a bucket holds no one request's completion. Under that grouping or filter a subscription
 account charts as a plan line where the router sizes its tier or the range holds a priced bucket of it, so an account
 whose range ran on unpriced models alone keeps its line with its gaps, and an account the router prices no tier for (a
 free plan, no tier on file or one the cost model does not hold) whose range holds no priced bucket reads "tier unknown",
