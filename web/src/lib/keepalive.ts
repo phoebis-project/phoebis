@@ -162,22 +162,20 @@ const instantFigure = (at: string | null): number | null => (at === null ? null 
  */
 const byInstant = (a: string | null, b: string | null, dir: SortDir): number => compareFigures(instantFigure(a), instantFigure(b), dir);
 
-/** The later of a session's own last use and its last ledgered request, the `activity` key's value. */
-export const lastActivity = (s: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>): string | null => {
-  if (s.lastUsedAt === null || s.lastRequestAt === null) return s.lastUsedAt ?? s.lastRequestAt;
-  return Date.parse(s.lastRequestAt) > Date.parse(s.lastUsedAt) ? s.lastRequestAt : s.lastUsedAt;
-};
+/** The session's last turn: its newest inference request, or its pin's last use while the ledger holds none, the
+ *  case of a first turn. A probe and a token count stamp the pin and count as no turn. The `activity` key's value. */
+export const lastActivity = (s: Pick<Session, 'lastInferenceAt' | 'lastUsedAt'>): string | null => s.lastInferenceAt ?? s.lastUsedAt;
 
 /** A row's ledgered requests: its spend's count, 0 for a row with no spend. */
 export const requestCount = (session: Pick<Session, 'spend'>): number => session.spend?.requests ?? 0;
 
-type OrderedSession = Pick<Session, 'createdAt' | 'lastRequestAt' | 'lastUsedAt' | 'sessionId' | 'spend'>;
+type OrderedSession = Pick<Session, 'firstRequestAt' | 'lastInferenceAt' | 'lastUsedAt' | 'sessionId' | 'spend'>;
 
 /** A row's figure under each key of the Sessions view's order. */
 const ROW_FIGURE: Record<SessionsAddress['sort'], (s: OrderedSession) => SortFigure> = {
   activity: (s) => instantFigure(lastActivity(s)),
   cost: (s) => s.spend?.usd ?? null,
-  created: (s) => instantFigure(s.createdAt),
+  created: (s) => instantFigure(s.firstRequestAt),
   requests: requestCount,
 };
 
@@ -193,20 +191,20 @@ export function orderSessionRows<T extends { session: OrderedSession }>(rows: re
  *  holds no record of. */
 const lineGroup = (line: SessionLine): number => (line.agentId === MAIN_AGENT ? -1 : line.lifecycle === null ? STATE_ORDER.released + 1 : STATE_ORDER[line.lifecycle]);
 
-const pinCreatedAt = (line: SessionLine): string | null => line.pin?.createdAt ?? null;
+const firstRequestOf = (line: SessionLine): string | null => line.firstRequestAt;
 
 const LINE_VALUE: Record<SessionsAddress['sort'], (line: SessionLine) => string | null> = {
   activity: (line) => (line.recipe !== null ? line.recipe.lastRequestAt : (line.pin?.lastUsedAt ?? null)),
-  cost: pinCreatedAt,
-  created: pinCreatedAt,
-  requests: pinCreatedAt,
+  cost: firstRequestOf,
+  created: firstRequestOf,
+  requests: firstRequestOf,
 };
 
 /**
  * The lines under the rows' key: main first, then the lifecycle groups (`STATE_ORDER`), then the lines with no word,
- * and inside a group by the line's own `createdAt` under `created` (a line without one last) or by `byInstant` under
- * `activity` (a pin-only line by its pin's last use), the direction applied inside the groups, ties by agent id and
- * then by model.
+ * and inside a group by the agent's first request under `created`, `cost` and `requests` (a line without one last) or
+ * by `byInstant` under `activity` (a pin-only line by its pin's last use), the direction applied inside the groups,
+ * ties by agent id and then by model.
  */
 export function orderLines(lines: readonly SessionLine[], sort: SessionsAddress['sort'], dir: SortDir): SessionLine[] {
   const valueOf = LINE_VALUE[sort];
@@ -217,19 +215,28 @@ export type RequestsRange = (typeof RANGE_PRESETS)[number]['name'];
 
 /**
  * A minute under each width: the request log measures its window from its own load, a moment after the click that
- * chose the range, so a last request right at a width's edge would fall out of the window it was picked for.
+ * chose the range, so a request right at a width's edge would fall out of the window it was picked for.
  */
 const RANGE_HEADROOM_MS = 60_000;
 
 /**
- * The narrowest of the request log's ranges that covers a last request, a session's or one of its lines', measured
- * back from `now` (the instant of the click, never a sampled one) with the headroom, or null past the widest range or
- * without a last request, where the page's own default applies.
+ * The narrowest of the request log's ranges that covers an instant, measured back from `now` (the instant of the
+ * click, never a sampled one) with the headroom, or null past the widest range.
  */
-export function requestsRange(lastRequestAt: string | null, now: number): RequestsRange | null {
-  if (lastRequestAt === null) return null;
-  const age = now - Date.parse(lastRequestAt);
+function requestsRange(at: string, now: number): RequestsRange | null {
+  const age = now - Date.parse(at);
   return RANGE_PRESETS.find((r) => age <= r.ms - RANGE_HEADROOM_MS)?.name ?? null;
+}
+
+/** The range "View in requests" opens: the narrowest preset that covers the first request, a custom span from the
+ *  first request to the last one where it is older than the widest preset, and null with no first request, where the
+ *  page's default applies. */
+export type RequestsSpan = { preset: RequestsRange } | { from: number; to: number };
+export function requestsSpan(firstRequestAt: string | null, lastRequestAt: string | null, now: number): RequestsSpan | null {
+  if (firstRequestAt === null) return null;
+  const preset = requestsRange(firstRequestAt, now);
+  if (preset !== null) return { preset };
+  return { from: Date.parse(firstRequestAt), to: (lastRequestAt === null ? now : Date.parse(lastRequestAt)) + RANGE_HEADROOM_MS };
 }
 
 /** Whether the mod released a line's agent, which a live session's row draws only under the Released agents filter. */
@@ -335,6 +342,8 @@ export interface SessionLine {
   agentId: string;
   /** The agent's type from its ledger entry, null on an agent without one. */
   agentType: string | null;
+  /** The agent's first request from its ledger entry, null on an agent without one. */
+  firstRequestAt: string | null;
   /** The pin's word where a pin stands, the engine's record, else the recipe's, and on main's drawn line the row's. */
   lifecycle: Lifecycle | null;
   /** Null on main's line drawn from a row that names no model. */
@@ -352,20 +361,21 @@ export const lineAccountOf = (line: Pick<SessionLine, 'pin' | 'recipe'>): string
  * which `orderLines` sorts into the view's.
  */
 export function sessionLines(s: Pick<Session, 'agentContexts' | 'agentId' | 'agentRequests' | 'lifecycle' | 'model'>, recipes: readonly KeepaliveRecipe[]): SessionLine[] {
-  // The route answers one entry per agent, which carries its newest client request's type and model.
+  // The route answers one entry per agent, which carries its newest client request's type and model and its first
+  // request.
   const newest = new Map(s.agentRequests.map((entry) => [entry.agentId, entry]));
-  const typeOf = (agentId: string) => newest.get(agentId)?.agentType ?? null;
+  const entryOf = (agentId: string) => ({ agentType: newest.get(agentId)?.agentType ?? null, firstRequestAt: newest.get(agentId)?.firstRequestAt ?? null });
   const claimed = new Set<AgentContext>();
   const lines: SessionLine[] = recipes.map((recipe) => {
     const pin = lineFigures(s, recipe.agentId, recipe.model);
     if (pin !== null) claimed.add(pin);
-    return { agentId: recipe.agentId, agentType: typeOf(recipe.agentId), lifecycle: pin !== null ? pin.lifecycle : recipe.agentState, model: recipe.model, pin, recipe };
+    return { agentId: recipe.agentId, ...entryOf(recipe.agentId), lifecycle: pin !== null ? pin.lifecycle : recipe.agentState, model: recipe.model, pin, recipe };
   });
-  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, agentType: typeOf(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
+  for (const pin of s.agentContexts) if (!claimed.has(pin)) lines.push({ agentId: pin.agentId, ...entryOf(pin.agentId), lifecycle: pin.lifecycle, model: pin.model, pin, recipe: null });
   if (lines.some((line) => line.agentId === MAIN_AGENT)) return lines;
   // A row whose pin is another agent's carries that agent's model, so main's line reads main's ledger entry.
   const model = s.agentId === null || s.agentId === MAIN_AGENT ? s.model : (newest.get(MAIN_AGENT)?.model ?? null);
-  return [{ agentId: MAIN_AGENT, agentType: typeOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
+  return [{ agentId: MAIN_AGENT, ...entryOf(MAIN_AGENT), lifecycle: s.lifecycle, model, pin: null, recipe: null }, ...lines];
 }
 
 /** Files the recipes under their rows on the route's flag. A recipe names no generation and belongs to the live
@@ -380,13 +390,15 @@ export function recipeFiler(recipes: readonly KeepaliveRecipe[]): (session: Pick
 export type AgentFigures = Omit<AgentRequests, 'agentId'>;
 
 /** Entries summed over a list of one entry or more, the agents the earlier agents' line counts, with the newest's
- *  account, model and type. */
+ *  account, model and type and the earliest first request, null where no entry holds one. */
 export function figuresOf(entries: readonly AgentRequests[]): AgentFigures {
   const [first, ...rest] = entries;
   const newest = rest.reduce((n, entry) => (byInstant(entry.lastRequestAt, n.lastRequestAt, 'desc') < 0 ? entry : n), first);
+  const earliest = rest.reduce((e, entry) => (byInstant(entry.firstRequestAt, e.firstRequestAt, 'asc') < 0 ? entry : e), first);
   return {
     accountId: newest.accountId,
     agentType: newest.agentType,
+    firstRequestAt: earliest.firstRequestAt,
     lastRequestAt: newest.lastRequestAt,
     model: newest.model,
     spend: rest.reduce((sum, entry) => addSpend(sum, entry.spend), first.spend),
@@ -475,8 +487,8 @@ export function expiryOf(session: Pick<Session, 'companion' | 'companionSince' |
   return instants.length === 0 ? null : Math.max(...instants) + Math.min(limits.nonCompanionIdleSeconds, limits.expireAfterSeconds) * 1000;
 }
 
-/** The later of the row's last use and last request is inside `spanMs` of `now`. */
-function activeWithin(session: Pick<Session, 'lastRequestAt' | 'lastUsedAt'>, spanMs: number, now: number): boolean {
+/** The row's last turn (`lastActivity`) is inside `spanMs` of `now`. */
+function activeWithin(session: Pick<Session, 'lastInferenceAt' | 'lastUsedAt'>, spanMs: number, now: number): boolean {
   const last = lastActivity(session);
   return last !== null && now - Date.parse(last) <= spanMs;
 }

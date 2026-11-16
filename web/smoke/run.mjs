@@ -24228,8 +24228,9 @@ await forView('/sessions', async () => {
 });
 await forView('/sessions', async () => {
   // A row's session is its own key, so every row's menu offers the routing log, which opens on the session an
-  // hour either side of its last activity, the later of its last use and its last request, with the end at most now,
-  // or on the last hour for a row with neither. Read on the frozen clock so each range is the one the page computed.
+  // hour either side of its last turn, its newest inference request or its pin's last use before the first one, with
+  // the end at most now, or on the last hour for a row with neither. Read on the frozen clock so each range is the one
+  // the page computed.
   const HOUR = 3_600_000;
   const listed = await api.listSessions();
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
@@ -24253,13 +24254,13 @@ await forView('/sessions', async () => {
   // while an end the clock caps is the origin itself.
   const at = (instant, shift) => isoAt(Date.parse(instant ?? '') + shift);
   const FOLLOWED = {
-    // Last used 95 minutes back and last requested about 16 hours back: the window centers on the last use and its
-    // hour after ended 35 minutes before now.
-    '1c0f9727-241e-48a5-9d36-3d241522aaa3': (s) => ({ from: at(s.lastUsedAt, -HOUR), to: at(s.lastUsedAt, HOUR) }),
-    // Last used 21 seconds back and last requested about five hours back: the clock caps the window's end at now.
-    'c64358b5-b04f-4047-baf2-5e86716ea490': (s) => ({ from: at(s.lastUsedAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
-    // Last requested 2 minutes 32 seconds back and last used 36 minutes back: the window reads the last request alone.
-    'd7167642-751d-475e-b0bf-2f24fe70245e': (s) => ({ from: at(s.lastRequestAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
+    // Its pin used 95 minutes back and its last turn about 16 hours back: the window centers on the last turn and its
+    // hour after ended about 15 hours before now.
+    '1c0f9727-241e-48a5-9d36-3d241522aaa3': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: at(s.lastInferenceAt, HOUR) }),
+    // Its pin used 21 seconds back and its last turn about five hours back: the window centers on the last turn.
+    'c64358b5-b04f-4047-baf2-5e86716ea490': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: at(s.lastInferenceAt, HOUR) }),
+    // Its last turn 2 minutes 32 seconds back and its pin used 36 minutes back: the clock caps the window's end at now.
+    'd7167642-751d-475e-b0bf-2f24fe70245e': (s) => ({ from: at(s.lastInferenceAt, -HOUR), to: isoAt(CLOCK_ORIGIN) }),
     // The registered row holds neither, so the log opens on its default last hour, which the address leaves out.
     '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43': () => ({}),
   };
@@ -24294,7 +24295,7 @@ const seedSessions = (listSessions) => async () => {
 };
 await forView('/sessions', async () => {
   // The request log reads the ledger, so its entry waits on a ledgered request, and it opens on the session the client
-  // sent under the row's key lifetime inside the narrowest of the log's ranges that covers the row's last request. A
+  // sent under the row's key lifetime inside the narrowest of the log's ranges that covers the row's first request. A
   // session id outlives a key id created again, so the session alone would answer both holders' requests. The page's
   // own `now` is a sample up to five seconds old, so the range is read on the clock at the click, which the last case
   // moves past the sample.
@@ -24309,7 +24310,7 @@ await forView('/sessions', async () => {
     ['7d', 7 * 24 * HOUR - MINUTE],
     ['30d', 30 * 24 * HOUR - MINUTE],
   ];
-  const rangeAt = (lastRequestAt, at) => (lastRequestAt === null ? null : (WIDTHS.find(([, width]) => at - Date.parse(lastRequestAt) <= width)?.[0] ?? null));
+  const rangeAt = (firstRequestAt, at) => (firstRequestAt === null ? null : (WIDTHS.find(([, width]) => at - Date.parse(firstRequestAt) <= width)?.[0] ?? null));
   const listed = await api.listSessions();
   const lifetime = (s) => `${s.keyId}@${s.keyGeneration}`;
   const rowsOf = (page) => [...page.container.querySelectorAll('tbody tr.srow')];
@@ -24351,7 +24352,8 @@ await forView('/sessions', async () => {
   const quiet = rowsOf(page).find((tr) => sessionOf(page, tr)?.lastRequestAt === null);
   const off = await entryOf(page, quiet);
   await toggleMenu(page, quiet);
-  // A row inside the hour, one past it inside six hours and one past six hours inside a day, where the story has them.
+  // A row whose first request is inside the hour, one past it inside six hours and one past six hours inside a day,
+  // where the story has them.
   const bands = [
     ['1h', (age) => age <= HOUR],
     ['6h', (age) => age > HOUR && age <= 6 * HOUR],
@@ -24361,14 +24363,14 @@ await forView('/sessions', async () => {
   for (const [band, holds] of bands) {
     const tr = rowsOf(page).find((r) => {
       const s = sessionOf(page, r);
-      return s !== undefined && (s.spend?.requests ?? 0) > 0 && s.lastRequestAt !== null && holds(CLOCK_ORIGIN - Date.parse(s.lastRequestAt));
+      return s !== undefined && (s.spend?.requests ?? 0) > 0 && s.firstRequestAt !== null && holds(CLOCK_ORIGIN - Date.parse(s.firstRequestAt));
     });
     if (tr === undefined) continue;
     const s = sessionOf(page, tr);
     (await entryOf(page, tr))?.click();
     // The Requests page draws its chips on its own turns, which a busy host can leave past a fixed delay.
     const drawn = await until(page, () => chipRead(page, 'session') === `session: ${cut(s.sessionId)}`);
-    followed.push({ band, drawn, got: landing(page), key: lifetime(s), keyChip: keyWords(s), session: s.sessionId, want: rangeAt(s.lastRequestAt, CLOCK_ORIGIN) });
+    followed.push({ band, drawn, got: landing(page), key: lifetime(s), keyChip: keyWords(s), session: s.sessionId, want: rangeAt(s.firstRequestAt, CLOCK_ORIGIN) });
     await page.navigate('/sessions');
     await page.settle(300);
   }
@@ -24439,12 +24441,13 @@ await forView('/sessions', async () => {
   api.listSessions = routeList;
   // Unmounted before the next mount, since an unmount puts the clock back to live and `tick` needs it frozen.
   page.unmount();
-  // The first row with traffic, keyed beyond its session id, which an earlier holder of its key id shares, moved to one
-  // second inside the hour at the mount's instant: two seconds later, at the click, it is past the hour.
+  // The first row with traffic, keyed beyond its session id, which an earlier holder of its key id shares, its first
+  // request moved to one second inside the hour at the mount's instant: two seconds later, at the click, it is past the
+  // hour.
   const { listSessions } = api;
   const moved = listed.find((s) => (s.spend?.requests ?? 0) > 0);
   const isMoved = (s) => moved !== undefined && s.sessionId === moved.sessionId && s.keyId === moved.keyId && s.historical === moved.historical;
-  api.listSessions = async () => (await listSessions.call(api)).map((s) => (isMoved(s) ? { ...s, lastRequestAt: isoAt(CLOCK_ORIGIN - 59 * MINUTE + 1_000) } : s));
+  api.listSessions = async () => (await listSessions.call(api)).map((s) => (isMoved(s) ? { ...s, firstRequestAt: isoAt(CLOCK_ORIGIN - 59 * MINUTE + 1_000) } : s));
   const later = await mount('/sessions', { now: CLOCK_ORIGIN });
   const movedRow = rowsOf(later).find((r) => {
     const s = sessionOf(later, r);
@@ -24459,7 +24462,7 @@ await forView('/sessions', async () => {
   await later.navigate('/sessions');
   later.unmount();
   results.push({
-    name: "/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page on the session's chip, the row's key lifetime as its key chip and the narrowest range that covers its last request, listing that holder's requests alone",
+    name: "/sessions the row menu offers View in requests after View in analytics, disabled without traffic, and opens the Requests page on the session's chip, the row's key lifetime as its key chip and the narrowest range that covers its first request, listing that holder's requests alone",
     ok:
       labels.indexOf('View in requests') === labels.indexOf('View in routing log') - 1 &&
       labels.indexOf('View in requests') > labels.indexOf('View in analytics') &&
@@ -25654,13 +25657,15 @@ await forView('/sessions', async () => {
     const rowsOf = (prefixes) => prefixes.map((p) => listed.find((s) => !s.historical && s.sessionId.startsWith(p))).filter(Boolean).map(idOfRow).sort();
     const FILTER_CASES = [
       {
-        // The later of the last use and the last request decides: the story's first session (fa23a6da) is in by its
-        // last use 7 minutes back, its last request 129 back, story 3 (d7167642) by its last request 3 minutes back,
-        // its last use 36 back, and the pinless fork (5eeed6ce), quiet for 16 minutes, is out.
-        count: '13 sessions · 22 agents',
-        name: '/sessions ?active=15m keeps the rows whose later of last use and last request is inside 15 minutes',
+        // The last turn decides, whatever the pin's use: story 3 (d7167642) is in by its last turn 3 minutes back, its
+        // pin used 36 back, the story's first session (fa23a6da) and story 5 (0d588de5) are out by their last turns
+        // 129 and 25 minutes back, their pins used 7 minutes and 37 seconds back, and the pinless fork (5eeed6ce),
+        // quiet for 16 minutes, is out. The rows the ledger holds no turn of read their pin's use, the auxiliary-only
+        // session (3e9b7c21) 3 minutes back and the fleet session no mod reports (b7e2d5a9) 2.
+        count: '8 sessions · 11 agents',
+        name: '/sessions ?active=15m keeps the rows whose last turn is inside 15 minutes',
         query: '?active=15m',
-        rows: ['fa23a6da', '4ef130f1', 'd7167642', '89cd1c92', '0d588de5', 'c64358b5', '76ddb35b', '7bea4514', '7d3e1c20', '8b1f4c2e', '4a7c2e9b', '3e9b7c21', 'b7e2d5a9'],
+        rows: ['4ef130f1', 'd7167642', '89cd1c92', '7d3e1c20', '8b1f4c2e', '4a7c2e9b', '3e9b7c21', 'b7e2d5a9'],
       },
       {
         // The folded version of the newest client request: laptop's three story rows (`sessionSpec[6]` to `[8]`), the
@@ -25824,16 +25829,15 @@ await forView('/sessions', async () => {
 await forView('/sessions', async () => {
   // The Sessions view's order through the bar's sort control, read on the story's instant. The rows are the story's
   // sessions as `api.listSessions()` answers them (`SESSIONS` in `web/src/mock/operations.ts`), ordered by the rule the
-  // page reads: the session's creation time under Created, the default, or the later of its last use and its last
-  // request under Last activity, newest first unless Ascending is picked, ties by session id and a row without the
-  // key's time last under either direction.
+  // page reads: the session's first request under Created, the default, or its last turn under Last activity, its
+  // newest inference request or its pin's last use before the first one, newest first unless Ascending is picked, ties
+  // by session id and a row without the key's time last under either direction.
   const listed = await api.listSessions();
   const recipes = await api.listKeepaliveRecipes();
   const idOfRow = (s) => `session-${encodeURIComponent(`${s.keyId}:${s.keyGeneration}:${s.sessionId}`)}`;
-  const later = (a, b) => (a === null ? b : b === null || Date.parse(a) >= Date.parse(b) ? a : b);
   /** Two instants newest first, or oldest first under `asc`, a missing one last under either. */
   const byTime = (a, b, dir) => (a === null || b === null ? (a === b ? 0 : a === null ? 1 : -1) : (dir === 'asc' ? 1 : -1) * (Date.parse(a) - Date.parse(b)));
-  const timeOf = (s, sort) => (sort === 'activity' ? later(s.lastUsedAt, s.lastRequestAt) : s.createdAt);
+  const timeOf = (s, sort) => (sort === 'activity' ? (s.lastInferenceAt ?? s.lastUsedAt) : s.firstRequestAt);
   const ordered = (rows, sort, dir) => [...rows].sort((a, b) => byTime(timeOf(a, sort), timeOf(b, sort), dir) || a.sessionId.localeCompare(b.sessionId)).map(idOfRow);
   const drawnIds = (page) => [...page.container.querySelectorAll('tbody tr.srow')].map((tr) => tr.id);
   const sortButton = (page) => page.container.querySelector('.filter-bar button[aria-label="Sort"]');
@@ -25877,7 +25881,7 @@ await forView('/sessions', async () => {
       activity: { ...shown('down', ordered(drawn, 'activity', 'desc'), '?sort=activity', 'Last activity'), open: false },
       activityAsc: { ...shown('up', ordered(drawn, 'activity', 'asc'), '?sort=activity&dir=asc', 'Last activity'), open: false },
     };
-    // Each order moves rows past the route's own, and the story holds rows with no creation time, which tie and read by
+    // Each order moves rows past the route's own, and the story holds rows with no first request, which tie and read by
     // session id, and rows with no activity, the registration-only row among both.
     const none = (sort) => drawn.filter((s) => timeOf(s, sort) === null).length;
     const story = drawn.length === 24 && ![drawn.map(idOfRow), want.activity.rows].some((rows) => JSON.stringify(rows) === JSON.stringify(want.bare.rows)) && none('created') >= 2 && none('activity') >= 1;
@@ -25894,7 +25898,7 @@ await forView('/sessions', async () => {
     results.push({
       name,
       ok: story && JSON.stringify(bare) === JSON.stringify(want.bare) && JSON.stringify({ ascRadios, bareRadios }) === JSON.stringify(wantRadios) && Object.entries(picks).every(([key, got]) => JSON.stringify(got) === JSON.stringify(want[key])),
-      missing: [`story ${story}: ${drawn.length} rows, ${none('created')} with no creation time, ${none('activity')} with no activity`, `bare ${JSON.stringify(bare)} against ${JSON.stringify(want.bare)}`, `radios ${JSON.stringify({ ascRadios, bareRadios })}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(want[key])}`)],
+      missing: [`story ${story}: ${drawn.length} rows, ${none('created')} with no first request, ${none('activity')} with no activity`, `bare ${JSON.stringify(bare)} against ${JSON.stringify(want.bare)}`, `radios ${JSON.stringify({ ascRadios, bareRadios })}`, ...Object.entries(picks).map(([key, got]) => `${key} ${JSON.stringify(got)} against ${JSON.stringify(want[key])}`)],
     });
   }
   {
@@ -25945,12 +25949,13 @@ await forView('/sessions', async () => {
   }
   {
     // An expanded row's lines follow the rows' key: main first, then the lines by lifecycle word, then the lines with
-    // no word, inside a group by the line's own creation time or by its last request (a pin's last use where no recipe
+    // no word, inside a group by its agent's first request or by its last request (a pin's last use where no recipe
     // stands on it), ties by agent id. No story session draws recipe lines and pin-only lines together, so two read it:
     // the written session on desktop, whose seven agents hold a line in each lifecycle word and three released records
     // (`WRITTEN_SUBAGENTS` in `web/src/mock/operations.ts`), and the slowed notebook session, whose main and Haiku
-    // subagent hold pins no recipe stands on and no mod reports (`SLOWED_PINS`). The written session's released lines
-    // stand on no pin, so under Created they tie and read by agent id, and under Last activity by their last requests.
+    // subagent hold pins no recipe stands on and no mod reports (`SLOWED_PINS`). Under Created the written session's
+    // released lines read their agents' first requests, `e7c1` its own in the request seed and `91aa` and `c3a9` none,
+    // so those two tie and read by agent id, and under Last activity they read their last requests.
     // Each query's lines are written out from those seeds. The written session's live subagents hold one line per
     // word, `4d1a` busy, `b2d8` idle and `4f0c2a9e7b61d3c58` parked, so only its released lines move: `e7c1` last
     // requested nine minutes back, `c3a9` eleven and `91aa` twelve. The slowed session's Haiku subagent `7b2e` holds
@@ -25961,7 +25966,7 @@ await forView('/sessions', async () => {
     const QUERIES = [
       ['', false, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58'] }],
       ['?sort=activity', false, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58'] }],
-      ['?released=1', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', '91aa', 'c3a9', 'e7c1'] }],
+      ['?released=1', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', 'e7c1', '91aa', 'c3a9'] }],
       ['?released=1&sort=activity', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', 'e7c1', 'c3a9', '91aa'] }],
       ['?released=1&sort=activity&dir=asc', true, { slowed: ['main', '7b2e'], written: ['main', '4d1a', 'b2d8', '4f0c2a9e7b61d3c58', '91aa', 'c3a9', 'e7c1'] }],
     ];
@@ -25980,7 +25985,7 @@ await forView('/sessions', async () => {
       reads.push({ got, query, released, want });
     }
     results.push({
-      name: "/sessions an expanded row's lines read main first and then their groups under each key and direction, the released lines tied under Created and read by agent id",
+      name: "/sessions an expanded row's lines read main first and then their groups under each key and direction, the released lines under Created by their agents' first requests, the two with none tied and read by agent id",
       ok: reads.every((r) => JSON.stringify([r.got.slowed, r.got.written]) === JSON.stringify([r.want.slowed, r.want.written])),
       missing: reads.map((r) => `${r.query || 'bare'}: ${JSON.stringify({ slowed: r.got.slowed, written: r.got.written })} against ${JSON.stringify(r.want)}`),
     });
@@ -25998,9 +26003,10 @@ await forView('/sessions', async () => {
   {
     // The five-second re-read keeps an expanded row's place under Created. MockApi.listSessions answers the story's
     // fixed seed, so no tick moves a row's activity, and the case answers every read after the first with nightly's
-    // notebook row (`6d2f8b40`, a fixed row of `sessionSpec` in `web/src/mock/operations.ts`, created 95 minutes back
-    // and last used 20, neither the newest created nor the newest active row at the first read) last used and last
-    // requested at the tick's instant, its creation as the seed carries it.
+    // notebook row (`6d2f8b40`, a fixed row of `sessionSpec` in `web/src/mock/operations.ts`, which the ledger holds no
+    // request of and whose pin was last used 20 minutes back, so neither the newest created nor the newest active row
+    // at the first read) last used and last requested at the tick's instant, its first request none, as the seed
+    // carries it, so its last turn is its pin's use.
     const name = "/sessions a re-read that moves a session's activity keeps the rows and its expanded row in place under Created and moves that row to the top under Last activity";
     const MOVED_ID = '6d2f8b40-1e7a-4c95-a3d8-7b5e0c9f2a61';
     const TICK = 5_000;
@@ -26231,26 +26237,27 @@ await forView('/sessions', async () => {
     });
   }
   {
-    // An agent whose last request is older than its session's lists only in a range that covers its own, so a line's
-    // link reads the agent's last ledgered request and the row's link the session's. At the story's instant no line
-    // older than its session sits past a range edge from the session, so the page mounts where the hour less the link's
-    // minute of headroom ends halfway between the session's last request and its line's agent older by the most, within
-    // ten hours, the widest gap whose halfway point leaves the line inside six hours.
+    // An agent whose first request came after its session's lists in a narrower range than the session's, so a line's
+    // link reads its agent's own first request and the row's link the session's. The page mounts 30 minutes after the
+    // agent's first request of the listed pair with the widest gap between 30 minutes and 5 hours, so the agent's first
+    // request lies inside the hour less the link's minute of headroom and the session's past it, inside six hours. On
+    // the story the pair is the main agent of the session the mod ended (`9b4e2f71`, `sessionSpec[17]`), its first
+    // request 39 minutes after its session's, which the Finished sessions filter draws.
     const MINUTE = 60_000;
     const HOUR = 60 * MINUTE;
     const drawnIds = (s) => new Set([...s.agentContexts.map((c) => c.agentId), ...recipes.filter((r) => r.keyId === s.keyId && r.sessionId === s.sessionId && r.agentState !== 'released').map((r) => r.agentId)]);
-    const newestOf = (s, agentId) => s.agentRequests.filter((e) => e.agentId === agentId && e.lastRequestAt !== null).map((e) => e.lastRequestAt).sort().pop() ?? null;
+    const firstOf = (s, agentId) => s.agentRequests.find((e) => e.agentId === agentId)?.firstRequestAt ?? null;
     const pairs = listed.flatMap((s) =>
-      s.historical || s.lastRequestAt === null
+      s.historical || s.firstRequestAt === null
         ? []
         : [...drawnIds(s)].flatMap((agentId) => {
-            const last = newestOf(s, agentId);
-            return last === null ? [] : [{ gap: Date.parse(s.lastRequestAt) - Date.parse(last), line: { agentId, lastRequestAt: last }, session: s }];
+            const first = firstOf(s, agentId);
+            return first === null ? [] : [{ gap: Date.parse(first) - Date.parse(s.firstRequestAt), line: { agentId, firstRequestAt: first }, session: s }];
           }),
-    ).filter((p) => p.gap <= 10 * HOUR);
+    ).filter((p) => p.gap >= 30 * MINUTE && p.gap <= 5 * HOUR);
     const widest = pairs.sort((a, b) => b.gap - a.gap)[0];
-    const at = widest === undefined ? CLOCK_ORIGIN : Date.parse(widest.line.lastRequestAt) + HOUR - MINUTE + Math.floor(widest.gap / 2);
-    const page = await mount('/sessions', { now: at });
+    const at = widest === undefined ? CLOCK_ORIGIN : Date.parse(widest.line.firstRequestAt) + 30 * MINUTE;
+    const page = await mount('/sessions?finished=1', { now: at });
     const tr = await open(page, widest?.session);
     const line = linesOf(page, tr).lines.find((l) => l.agent === widest?.line.agentId);
     tr?.querySelector('.menu__trigger')?.click();
@@ -26260,9 +26267,9 @@ await forView('/sessions', async () => {
     const read = { line: new URL(line?.agentHref ?? '', 'http://console.test').searchParams.get('range'), row: new URLSearchParams(page.location().search).get('range') };
     page.unmount();
     results.push({
-      name: "/sessions an agent line's link opens the range that covers the line's own last request and the row's link the session's",
-      ok: widest !== undefined && widest.gap >= MINUTE && JSON.stringify(read) === JSON.stringify({ line: '6h', row: '1h' }),
-      missing: [`line ${widest?.line.agentId} of session ${widest?.session.sessionId}, ${widest?.gap} ms before the session's last request`, JSON.stringify(read)],
+      name: "/sessions an agent line's link opens the range that covers its agent's own first request and the row's link the session's",
+      ok: widest !== undefined && JSON.stringify(read) === JSON.stringify({ line: '1h', row: '6h' }),
+      missing: [`line ${widest?.line.agentId} of session ${widest?.session.sessionId}, first request ${widest?.line.firstRequestAt}, the session's ${widest?.session.firstRequestAt}`, JSON.stringify(read)],
     });
   }
   {
@@ -26311,7 +26318,7 @@ m = await mount('/sessions');
 // The bare page's words: the head's sentence, the card's title and its summary line, the default columns' heads and the
 // words the story's rows draw. `finished` reads under the Finished sessions filter alone, and `unknown`, which no story
 // row draws, is read on a wrapped read below.
-expect('/sessions', m.text(), ['Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.', 'How pins and recipes work', 'Cost reference', 'Sessions', 'agents:', 'busy', 'idle', 'parked', 'requests and', 'in 24 h', 'Expand all', 'Session', 'Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'registered', 'unreported', 'warm', 'cold', 'no recipe', 'no pin', 'fork', 'Claude Code 2.1.310', 'epoch 2', 'seen ', 'expires in', 'fable-5-1']);
+expect('/sessions', m.text(), ['Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.', 'How pins and recipes work', 'Cost reference', 'Sessions', 'agents:', 'busy', 'idle', 'parked', 'requests and', 'in 24 h', 'Expand all', 'Session', 'Status', 'Agents', 'Model', 'Account', 'Requests', 'Cost', 'Last used', 'Cache', 'registered', 'unreported', 'warm', 'cold', 'no recipe', 'no pin', 'fork', 'Claude Code 2.1.310', '2 placements', 'seen ', 'expires in', 'fable-5-1']);
 {
   // The tiles left the view for the Dashboard's Sessions card, so none of their words reads here.
   const TILE_WORDS = ['of 128', 'with a recipe', 'of 1,024', 'Retained', 'prompts kept for probes', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps'];
@@ -26322,7 +26329,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
   const para = () => document.getElementById(how()?.getAttribute('aria-controls') ?? '');
-  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a companion mod registered it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
+  const words = 'Every Claude Code session the router has seen within the session expiry, whether or not a companion mod registered it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
   results.push({ name: '/sessions the head reads the lead sentence and the closed disclosure', ok: (lead?.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '').startsWith('Every session the router lists: what it runs, where it is pinned, what it has spent and whether its prompt cache is warm.') && how()?.getAttribute('aria-expanded') === 'false', missing: [lead?.textContent?.slice(0, 160) ?? 'no lead'] });
   // The page text keeps hidden words, so only a count of the head's paragraphs catches a leftover copy of the old one.
   const copies = [...m.container.querySelectorAll('.page-head p')].filter((p) => p.textContent?.includes('Every Claude Code session the router has seen'));
@@ -26349,15 +26356,18 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   const recipes = await api.listKeepaliveRecipes();
   const live = (id) => listed.find((s) => !s.historical && s.sessionId === id);
   // The story's first session (`sessionSpec[0]`), whose recipes the route lists first: busy on desktop under primary
-  // with two subagents on nightly, re-created once, its main awaiting its cache evidence.
+  // with two subagents on nightly, placed once, its main awaiting its cache evidence.
   const story = live(recipes[0]?.sessionId);
+  // The story's fifth session (`sessionSpec[4]`), whose main the mock's routing log places twice (`ROUTING_EVENTS` in
+  // `web/src/mock/routingLog.ts`).
+  const placed = listed.find((s) => !s.historical && s.sessionId.startsWith('89cd1c92'));
   // The written session (`sessionSpec[9]` and `WRITTEN_SUBAGENTS`), whose seven agents hold a line in each word.
   const written = live(recipes.find((r) => r.agentId === 'e7c1' && r.cause === 'agent_released')?.sessionId);
   // The silent session forked from the second story session (`sessionSpec[2]`).
   const silent = listed.find((s) => s.companion === 'silent' && s.forkedFrom !== null);
   // The laptop row the ledger never saw, with no last use (`sessionSpec[14]`).
   const unledgered = listed.find((s) => s.companion === 'none' && s.lastRequestAt === null && s.lastUsedAt === null);
-  const subjects = { auxiliaryOnly: live(AUXILIARY_ONLY_ID), client: live(CLIENT_ID), fleet: live(FLEET_ID), noMod: live(NO_MOD_ID), notebook: live(NOTEBOOK_ID), registered: live(REGISTERED_ID), silent, slowed: live(SLOWED_ID), story, unledgered, written };
+  const subjects = { auxiliaryOnly: live(AUXILIARY_ONLY_ID), client: live(CLIENT_ID), fleet: live(FLEET_ID), noMod: live(NO_MOD_ID), notebook: live(NOTEBOOK_ID), placed, registered: live(REGISTERED_ID), silent, slowed: live(SLOWED_ID), story, unledgered, written };
   const absent = Object.entries(subjects).filter(([, s]) => s === undefined).map(([k]) => k);
   const page = await mount('/sessions', { now: CLOCK_ORIGIN });
   const rowOf = (s) => (s === undefined ? null : page.container.querySelector(`[id="${sessionRowId(s)}"]`));
@@ -26365,25 +26375,42 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   const badgeOf = (el) => (el === null || el === undefined ? null : { cls: el.className, dot: el.querySelector('.badge__dot') !== null, text: el.textContent?.trim() ?? '', title: el.getAttribute('title') });
   const subOf = (el) => [...(el?.querySelectorAll('.sub') ?? [])].map((s) => s.textContent?.trim() ?? '');
   {
-    // Session: the id, then one line under it with the fork badge, the folded client version and the epoch from 2 on,
-    // the raw user agent and the epoch's sentence on its hover. A row with none of the three draws no line, and the
-    // speed chip stands in the Account cell, never here.
+    // Session: the id, then one line under it with the fork badge, the folded client version and the placements from 2
+    // on, the raw user agent and the placements' sentence on its hover. A row with none of the three draws no line, and
+    // the speed chip stands in the Account cell, never here. The story's first session is placed once, the fifth
+    // twice, and the silent fork five times, its main's two placements and three moves in the mock's routing log.
     const lineOf = (s) => {
       const line = cellOf(s, 'Session')?.querySelector('.srow__client') ?? null;
       return line === null ? null : { badge: line.firstElementChild?.classList.contains('srow__fork') === true, text: line.textContent?.trim() ?? '', title: line.getAttribute('title') };
     };
-    const read = { client: lineOf(subjects.client), registered: lineOf(subjects.registered), silent: lineOf(subjects.silent), story: lineOf(subjects.story) };
+    const read = { client: lineOf(subjects.client), placed: lineOf(subjects.placed), registered: lineOf(subjects.registered), silent: lineOf(subjects.silent), story: lineOf(subjects.story) };
     const chips = [...page.container.querySelectorAll('tbody tr.srow')].filter((tr) => sessionCell(page, tr, 'Session')?.querySelector('.speed-chip') != null).length;
     const want = {
       client: { badge: false, text: 'Claude Code 2.0.44', title: 'claude-cli/2.0.44 (external, cli)' },
+      placed: { badge: false, text: 'Claude Code 2.1.310 · 2 placements', title: "claude-cli/2.1.310 (external, cli). How many times the router placed or moved this session's main conversation" },
       registered: null,
-      silent: { badge: true, text: 'fork · Claude Code 2.1.310 · epoch 2', title: "claude-cli/2.1.310 (external, cli). How many times this session's pin was re-created" },
-      story: { badge: false, text: 'Claude Code 2.1.310 · epoch 2', title: "claude-cli/2.1.310 (external, cli). How many times this session's pin was re-created" },
+      silent: { badge: true, text: 'fork · Claude Code 2.1.310 · 5 placements', title: "claude-cli/2.1.310 (external, cli). How many times the router placed or moved this session's main conversation" },
+      story: { badge: false, text: 'Claude Code 2.1.310', title: 'claude-cli/2.1.310 (external, cli)' },
     };
     results.push({
-      name: "/sessions the Session cell's line under the id reads the fork badge, the client version and the epoch from 2 on, the user agent and the epoch's sentence on hover, and no speed chip",
+      name: "/sessions the Session cell's line under the id reads the fork badge, the client version and the placements from 2 on, the user agent and the placements' sentence on hover, and no speed chip",
       ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want) && chips === 0,
       missing: [`absent ${absent.join(',')}`, JSON.stringify(read), `${chips} Session cells with a speed chip`],
+    });
+  }
+  {
+    // Last used: the row's last turn with its instant on hover. The laptop session `c64358b5` (`sessionSpec[7]`) had
+    // its pin used 21 seconds back, while its newest inference request in the request seed lies about five hours back,
+    // so the cell reads that request's age.
+    const turned = live('c64358b5-b04f-4047-baf2-5e86716ea490');
+    const td = cellOf(turned, 'Last used');
+    const read = { text: td?.firstChild?.textContent?.trim() ?? null, title: td?.getAttribute('title') ?? null };
+    const want = { text: fmtRelative(turned?.lastInferenceAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(turned?.lastInferenceAt ?? null) };
+    const pinAhead = turned !== undefined && turned.lastInferenceAt !== null && Date.parse(turned.lastUsedAt) > Date.parse(turned.lastInferenceAt);
+    results.push({
+      name: "/sessions the Last used cell reads the row's last inference request where its pin was used later",
+      ok: pinAhead && JSON.stringify(read) === JSON.stringify(want),
+      missing: [`pin used ${turned?.lastUsedAt}, last turn ${turned?.lastInferenceAt}`, JSON.stringify(read), JSON.stringify(want)],
     });
   }
   {
@@ -26620,15 +26647,15 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     });
   }
   {
-    // The optional columns read off the story's first session: Created as its age with the instant on hover, and Key
-    // as a link to its key's row in the Keys view (`desktop`, `sessionSpec[0]`'s key), which the view lands on by the
-    // anchor since its search matches no key id.
+    // The optional columns read off the story's first session: Created as the age of its first request with the instant
+    // on hover, and Key as a link to its key's row in the Keys view (`desktop`, `sessionSpec[0]`'s key), which the view
+    // lands on by the anchor since its search matches no key id.
     for (const label of ['Created', 'Key']) await showColumn(page, label);
     const created = cellOf(subjects.story, 'Created');
     const key = cellOf(subjects.story, 'Key')?.querySelector('a');
     const read = { created: { text: created?.textContent?.trim() ?? null, title: created?.getAttribute('title') ?? null }, key: { href: key?.getAttribute('href') ?? null, text: key?.textContent?.trim() ?? null } };
     for (const label of ['Created', 'Key']) await showColumn(page, label, false);
-    const want = { created: { text: fmtRelative(subjects.story?.createdAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(subjects.story?.createdAt ?? null) }, key: { href: '/keys#desktop', text: 'desktop' } };
+    const want = { created: { text: fmtRelative(subjects.story?.firstRequestAt ?? null, CLOCK_ORIGIN), title: fmtAbsolute(subjects.story?.firstRequestAt ?? null) }, key: { href: '/keys#desktop', text: 'desktop' } };
     results.push({
       name: "/sessions the Created and Key columns read the age with its instant and the key's link to its row in the Keys view",
       ok: absent.length === 0 && JSON.stringify(read) === JSON.stringify(want),
@@ -26852,12 +26879,13 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     }
     page.unmount();
     const since = (iso) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, CLOCK_ORIGIN)}`;
+    // The log's window an hour either side of the row's last turn, its newest inference request.
     const window = (s) => {
-      const last = Math.max(...[s.lastUsedAt, s.lastRequestAt].filter((t) => t !== null).map((t) => Date.parse(t)));
+      const last = Date.parse(s.lastInferenceAt);
       return { path: '/routing-log', session: s.sessionId, from: isoAt(last - HOUR), to: isoAt(Math.min(last + HOUR, CLOCK_ORIGIN)) };
     };
     const LABELS = [
-      ['Created', 'Key', 'Client', 'Fork', 'Epoch', 'Companion'],
+      ['Created', 'Key', 'Client', 'Fork', 'Placements', 'Companion'],
       ['Account', 'Pinned since', 'Shed mark', 'Moved', 'Runway', 'Speed', 'Cycle'],
     ];
     const want = {
@@ -26865,7 +26893,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         companion: true,
         labels: LABELS,
         routing: { Account: 'primary subscription', 'Pinned since': since(written?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'none', Speed: 'full speed', Cycle: 'not measured yet' },
-        session: { Created: since(written?.createdAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Epoch: '1' },
+        session: { Created: since(written?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(written)}`, Client: 'Claude Code 2.1.310', Fork: 'none', Placements: '3' },
         links: { account: '/accounts/primary', fork: null, forkTitle: null, key: '/keys#desktop', log: written === undefined ? null : window(written), logText: 'View in routing log' },
         speed: false,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
@@ -26874,7 +26902,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         companion: true,
         labels: LABELS,
         routing: { Account: 'studio subscription', 'Pinned since': since(subjects.slowed?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: minuteSpan(subjects.slowed?.runwayMs ?? 0), Speed: '0.5x', Cycle: '42 s' },
-        session: { Created: since(subjects.slowed?.createdAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Fork: 'none', Epoch: '1' },
+        session: { Created: since(subjects.slowed?.firstRequestAt ?? null), Key: `notebook in pool ${poolOf(subjects.slowed)}`, Client: '-', Fork: 'none', Placements: '1' },
         links: { account: '/accounts/studio', fork: null, forkTitle: null, key: '/keys#notebook', log: subjects.slowed === undefined ? null : window(subjects.slowed), logText: 'View in routing log' },
         speed: true,
         clientTitle: null,
@@ -26883,7 +26911,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
         companion: true,
         labels: LABELS,
         routing: { Account: 'primary subscription', 'Pinned since': since(silent?.pinnedAt ?? null), 'Shed mark': 'none', Moved: 'none', Runway: 'unbounded', Speed: 'full speed', Cycle: 'not measured yet' },
-        session: { Created: since(silent?.createdAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, same account`, Epoch: '2' },
+        session: { Created: since(silent?.firstRequestAt ?? null), Key: `desktop in pool ${poolOf(silent)}`, Client: 'Claude Code 2.1.310', Fork: `${silent?.forkedFrom?.slice(0, 13)}… at depth 3, same account`, Placements: '5' },
         links: { account: '/accounts/primary', fork: silent === undefined ? null : `#${sessionRowId({ ...silent, sessionId: silent.forkedFrom })}`, forkTitle: silent?.forkedFrom ?? null, key: '/keys#desktop', log: silent === undefined ? null : window(silent), logText: 'View in routing log' },
         speed: false,
         clientTitle: 'claude-cli/2.1.310 (external, cli)',
@@ -26891,7 +26919,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     };
     const off = Object.keys(want).filter((k) => JSON.stringify(read[k]) !== JSON.stringify(want[k]));
     results.push({
-      name: "/sessions an open row's Session and Routing facts read its creation, key and pool, client, fork, epoch and Companion chip, then its account, pin, shed mark, move, runway, speed and cycle with the routing log's link",
+      name: "/sessions an open row's Session and Routing facts read its first request, key and pool, client, fork, placements and Companion chip, then its account, pin, shed mark, move, runway, speed and cycle with the routing log's link",
       ok: absent.length === 0 && off.length === 0,
       missing: [`absent ${absent.join(',')}`, ...off.flatMap((k) => [`${k} ${JSON.stringify(read[k])}`, `want ${JSON.stringify(want[k])}`])],
     });
@@ -26936,9 +26964,9 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
     api.listSessions = listSessions;
     const since = (iso) => `${fmtAbsolute(iso)}, ${fmtRelative(iso, CLOCK_ORIGIN)}`;
     const want = {
-      marked: { created: since(marked?.createdAt ?? null), hover: `Pinned since ${since(marked?.pinnedAt ?? null)}.`, line: true, moved: 'none', pinnedSince: since(marked?.pinnedAt ?? null), row: true, shedMark: 'leaving on studio by the 5h trigger' },
+      marked: { created: since(marked?.firstRequestAt ?? null), hover: `Pinned since ${since(marked?.pinnedAt ?? null)}.`, line: true, moved: 'none', pinnedSince: since(marked?.pinnedAt ?? null), row: true, shedMark: 'leaving on studio by the 5h trigger' },
       round: 'shed from overflow at Sep 16, 2026, 14:10:00',
-      stamped: { created: since(failedOver?.createdAt ?? null), hover: `Pinned since ${since(landed)}.`, line: false, moved: `failed over from secondary at ${fmtAbsolute(landed)}`, pinnedSince: since(landed), row: false, shedMark: 'none' },
+      stamped: { created: since(failedOver?.firstRequestAt ?? null), hover: `Pinned since ${since(landed)}.`, line: false, moved: `failed over from secondary at ${fmtAbsolute(landed)}`, pinnedSince: since(landed), row: false, shedMark: 'none' },
     };
     results.push({
       name: "/sessions a standing mark draws leaving and a no-return stamp none: a stamped row reads Moved with the account it left and the instant, a round's stamp as shed from, and Pinned since and main's hover at the move",
@@ -27978,7 +28006,7 @@ expect('/sessions', m.text(), ['Every session the router lists: what it runs, wh
   results.push({ name: '/sessions Expand all opens every row', ok: open === (await api.listSessions()).length, missing: [String(open)] });
   {
     const created = [...m.container.querySelectorAll('dl.facts > .kv__row')].filter((r) => r.querySelector('dt')?.textContent?.trim() === 'Created').map((r) => r.querySelector('dd')?.textContent?.trim() ?? '');
-    results.push({ name: '/sessions a session with no creation time says so in its Created fact', ok: created.includes('unknown'), missing: [...new Set(created)].slice(0, 4) });
+    results.push({ name: '/sessions a session with no first request says so in its Created fact', ok: created.includes('unknown'), missing: [...new Set(created)].slice(0, 4) });
   }
   expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });

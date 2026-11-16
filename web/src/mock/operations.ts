@@ -1,9 +1,9 @@
-import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, RecipeCause, RecipeState, RequestLog, Session, SessionDay, SessionSpendPart } from '@/api/types';
+import type { AgentContext, AgentRequests, BurnFigures, BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Lifecycle, RecipeCause, RecipeState, RequestLog, RoutingEvent, Session, SessionDay, SessionSpendPart } from '@/api/types';
 import { anchorTier, fundingOf, tierCapacity, weightOf, type CostWindow } from '@/lib/costs';
 import { groupInto } from '@/lib/counts';
 import { expiredBetweenTurns, servingAttempt } from '@/lib/dimensions';
 import { byteOrder, tokensTotal } from '@/lib/format';
-import { lastActivity, pinTtlMs } from '@/lib/keepalive';
+import { pinTtlMs } from '@/lib/keepalive';
 import { compareRequests } from '@/lib/requests';
 import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
@@ -71,8 +71,8 @@ const ENDED_SUBAGENT = WRITTEN_SUBAGENTS[2];
 // use, and their account has been at its daily budget since its last served
 // request. Session 0 reads it so too, since its main still awaits the evidence of
 // its last request, so no probe has renewed the pin since and the row and the line
-// agree. The two rows whose pin a move of the story wrote (`pinnedBy`) read the
-// later of their last request and that move, since the write of a pin stamps its
+// agree. A row of those whose pin a move of the story wrote (`pinnedBy`) reads the
+// later of its last request and that move, since the write of a pin stamps its
 // last use. `released` marks a session whose every agent, main included, the mod
 // released. `sessionId` writes out the id of a session past the story's ids whose
 // story row names it.
@@ -130,7 +130,7 @@ const sessionSpec: ({
   { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting', cause: 'horizon' },
   // A subagent whose park ran past the pool's parked ceiling.
   { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' }, cause: 'overage', subagentHold: 'parked_limit' },
-  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-4-5', state: 'busy', agents: 1, companion: 'reporting', pinnedBy: { requestId: 'req_da52d141-a5a' } },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-4-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95, cause: 'idle_limit' },
   // Its subagents run Haiku 4.5, which the laptop key's list allows beside the main agent's Sonnet 4.5.
@@ -297,8 +297,8 @@ for (const r of REQUESTS) {
  * An agent's first sighting in its session's current life: its earliest placing request at or after the session's own
  * first sighting, since the router dates a session afresh once its last pin left and an agent's record with it.
  */
-const firstRequestAt = (id: string, sessionCreatedAt: string | null): string | undefined =>
-  (placingRequests.get(id) ?? []).filter((at) => sessionCreatedAt === null || Date.parse(at) >= Date.parse(sessionCreatedAt)).reduce<string | undefined>((first, at) => (first === undefined || at < first ? at : first), undefined);
+const earliestPlacingRequestAt = (id: string, sessionFirstSeen: string | null): string | undefined =>
+  (placingRequests.get(id) ?? []).filter((at) => sessionFirstSeen === null || Date.parse(at) >= Date.parse(sessionFirstSeen)).reduce<string | undefined>((first, at) => (first === undefined || at < first ? at : first), undefined);
 
 /**
  * A pin's burn as the Pro-week figure per hour: the account tier's own share of `window` scaled by the tier's capacity
@@ -338,9 +338,9 @@ const dollarBurnOf = (pin: BurnFigures): number | null => (pin.burnUnit === 'usd
 const servedBeside = (
   display: Pick<Session, 'burn' | 'lastInputTokens'> & { dollars: number | null },
   line: Pick<AgentContext, 'accountId' | 'lastInputTokens' | 'lastUsedAt' | 'model'>,
-  sessionCreatedAt: string | null,
+  sessionFirstSeen: string | null,
 ): { burn: number | null; dollars: number | null } => {
-  if (line.lastUsedAt !== null && line.lastUsedAt === sessionCreatedAt) return { burn: 0, dollars: 0 };
+  if (line.lastUsedAt !== null && line.lastUsedAt === sessionFirstSeen) return { burn: 0, dollars: 0 };
   const priced = burnUnitOf(line.accountId) !== 'window_share' || weightOf(TABLES, line.model, 'seven_day') !== null;
   const scaled = (figure: number | null) => (figure === null || display.lastInputTokens === null || line.lastInputTokens === null ? null : (figure * line.lastInputTokens) / display.lastInputTokens);
   return { burn: priced ? scaled(display.burn) : null, dollars: scaled(display.dollars) };
@@ -375,7 +375,7 @@ const warmUntilOf = (lastRefreshAt: string | null, cacheTtlMs: number | null): s
 /** Whether a pin still holds its cache at the story's clock: before its first cold instant. */
 const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NOW) !== null;
 /** A line before `datedLines` dates it, with its pin's own instant where its caller writes one. */
-type UndatedLine = Omit<AgentContext, 'createdAt' | 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
+type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
  * and its served burn and dollars priced on the pin's own account and model, in that account's unit and window, as the
@@ -402,21 +402,21 @@ const newestUse = (own: string | null, lines: readonly Pick<AgentContext, 'lastU
 const lineOrder = (a: Pick<AgentContext, 'agentId' | 'model'>, b: Pick<AgentContext, 'agentId' | 'model'>) =>
   (a.agentId === 'main') !== (b.agentId === 'main') ? (a.agentId === 'main' ? -1 : 1) : byteOrder(a.agentId, b.agentId) || byteOrder(a.model, b.model);
 /**
- * A row's lines in the route's order, each at its agent's first-seen time: main's at the session's, a subagent's at its
- * earliest placing request (`firstRequestAt`) of the session's current life in the requests seed. A subagent no placing
- * request of that life names reads the session's time plus a minute per place among the row's subagents, a stand-in for
- * a first sighting the story does not write, and an agent pinned on two models takes one place, since it holds one
- * first-seen time. A line's pin was written at that first sighting unless its caller dates the pin itself.
+ * A row's lines in the route's order, each pin written at its agent's first sighting unless its caller dates the pin
+ * itself: main's at the session's, a subagent's at its earliest placing request (`earliestPlacingRequestAt`) of the
+ * session's current life in the requests seed. A subagent no placing request of that life names reads the session's
+ * sighting plus a minute per place among the row's subagents, a stand-in for a first sighting the story does not
+ * write, and an agent pinned on two models takes one place, since it holds one first sighting.
  */
-const datedLines = (createdAt: string | null, session: string, lines: readonly UndatedLine[]): AgentContext[] => {
+const datedLines = (firstSeen: string | null, session: string, lines: readonly UndatedLine[]): AgentContext[] => {
   const places = new Map<string, number>();
-  const dated = (line: UndatedLine, seen: string | null): AgentContext => ({ ...line, createdAt: seen, pinnedAt: line.pinnedAt ?? seen });
+  const dated = (line: UndatedLine, seen: string | null): AgentContext => ({ ...line, pinnedAt: line.pinnedAt ?? seen });
   return [...lines].sort(lineOrder).map((line) => {
-    if (line.agentId === 'main') return dated(line, createdAt);
+    if (line.agentId === 'main') return dated(line, firstSeen);
     if (!places.has(line.agentId)) places.set(line.agentId, places.size + 1);
     const place = places.get(line.agentId)!;
-    const first = firstRequestAt(`${session}|${line.agentId}`, createdAt);
-    return dated(line, first ?? (createdAt === null ? null : iso(Date.parse(createdAt) + place * MINUTE)));
+    const first = earliestPlacingRequestAt(`${session}|${line.agentId}`, firstSeen);
+    return dated(line, first ?? (firstSeen === null ? null : iso(Date.parse(firstSeen) + place * MINUTE)));
   });
 };
 /** The summary of a row main holds no recipe for. */
@@ -440,6 +440,12 @@ function storyPinWrite(requestId: string, accountId: string, stamped: boolean): 
   if (move === undefined || typeof from !== 'string' || typeof reason !== 'string') throw new Error(`the story moves no pin of ${requestId} onto ${accountId}`);
   return { at: move.at, shed: stamped ? { at: move.at, from, reason } : null };
 }
+
+/**
+ * Each drawn row's first sighting, which the builders date its pins from: the router keeps it until the session's last
+ * pin leaves, so an unpinned row holds none.
+ */
+const firstSighting = new Map<Session, string | null>();
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // An entry past the story's session ids draws one the ledger never saw. The draw runs where the spec writes its id
@@ -475,10 +481,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : weighted ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
-  // The router keeps a session's first-seen time until its last pin leaves, so an unpinned session answers none. A
-  // drawn row's pin was written at that first sighting, unless a move of the story wrote it later.
-  const createdAt = pinned ? ago(createdAgo) : null;
-  return {
+  // A drawn row's pin was written at its first sighting, unless a move of the story wrote it later.
+  const firstSeen = pinned ? ago(createdAgo) : null;
+  const row: Session = {
     ...SESSION_SAMPLE,
     sessionId,
     forkedFrom: fork?.forkedFrom ?? null,
@@ -486,11 +491,11 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     keyId: spec.keyId,
     accountId: spec.accountId,
     model: spec.model,
-    epoch: i < 3 ? 2 : 1,
     historical: false,
     keyGeneration,
-    createdAt,
-    pinnedAt: pinWrite?.at ?? createdAt,
+    pinnedAt: pinWrite?.at ?? firstSeen,
+    // The placement the router's ledger holds for a pinned row, which the listing counts with the routing log's.
+    placements: pinned ? 1 : 0,
     // An unpinned session's last use is what its own rows read.
     lastUsedAt: !pinned ? seen : lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen,
@@ -532,10 +537,12 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     // Read off main's pin once the lines are written, before the row's last use moves to the newest across its pins.
     warm: null,
   };
+  firstSighting.set(row, firstSeen);
+  return row;
 });
 
-// A companion registered this session before its first request reached the router, so it holds no pin, no epoch and
-// no activity of its own. Its id is written out rather than drawn, which would shift every later roll in this file.
+// A companion registered this session before its first request reached the router, so it holds no pin, no placement
+// and no activity of its own. Its id is written out rather than drawn, which would shift every later roll in this file.
 SESSIONS.push({
   ...SESSION_SAMPLE,
   accountId: null,
@@ -543,9 +550,7 @@ SESSIONS.push({
   burnUsd: null,
   companion: 'reporting',
   companionSince: null,
-  createdAt: null,
   effort: null,
-  epoch: null,
   forkDepth: null,
   forkedFrom: null,
   historical: false,
@@ -559,6 +564,7 @@ SESSIONS.push({
   model: null,
   pinned: false,
   pinnedAt: null,
+  placements: 0,
   presenceAgeSeconds: 31,
   sessionId: '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43',
   ...NO_STAMP,
@@ -724,6 +730,9 @@ for (const pin of SESSIONS) {
   pin.lifecycle = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main')?.agentState ?? pin.lifecycle;
 }
 
+/** The later of two instants, either of which may be missing. */
+const laterOf = (a: string | null, b: string | null): string | null => (a === null ? b : b === null || Date.parse(a) >= Date.parse(b) ? a : b);
+
 /**
  * A subagent pin's tokens, set from its session's index and its line's place rather than drawn, so the rows after it
  * keep their rolls.
@@ -738,8 +747,9 @@ const agentTokens = (i: number, j: number) => 2_000 + ((i * 31 + j * 17) % 23) *
 // reads both off one pin, before the row's last use moves to the newest across its pins.
 SESSIONS.forEach((pin, i) => {
   const display = { burn: pin.burn, dollars: dollarBurnOf(pin), lastInputTokens: pin.lastInputTokens };
+  const firstSeen = firstSighting.get(pin) ?? null;
   pin.agentContexts = datedLines(
-    pin.createdAt,
+    firstSeen,
     activityOf(pin.keyId, pin.keyGeneration, pin.sessionId),
     RECIPES.filter((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId).flatMap((r, j) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
@@ -750,7 +760,7 @@ SESSIONS.forEach((pin, i) => {
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
       const line = { ...own, cacheTtlMs: 5 * MINUTE, effort: effortAt(j), ended, lastInputTokens: agentTokens(i, j), lastUsedAt: r.lastRequestAt, lifecycle: r.agentState };
-      return [pinLine(line, pin.keyId, servedBeside(display, line, pin.createdAt), line.lastUsedAt)];
+      return [pinLine(line, pin.keyId, servedBeside(display, line, firstSeen), line.lastUsedAt)];
     }),
   );
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
@@ -760,22 +770,22 @@ SESSIONS.forEach((pin, i) => {
 /**
  * A written row that names no fork, no cycle, no runway, no mark and no shed stamp: its lines priced as the route
  * prices a display pin's, the line its caller lists first at the row's burn and its dollar burn per hour, the burn
- * itself on a dollar-billed account and `dollars` on a plan, and the others beside it, and dated from its first-seen
- * time, its figures, its burn reading and its pin's instant off that first line, warm off it and last used at the
+ * itself on a dollar-billed account and `dollars` on a plan, and the others beside it, and dated from its first
+ * sighting, its figures, its burn reading and its pin's instant off that first line, warm off it and last used at the
  * newest of its lines, each line refreshed at its last use, its summary off its session's recipes, and its last request
  * off the activity fold. The engine holds no record of its main, so it reads no lifecycle word. A row passes a
  * companion or a presence only where a mod reports.
  */
 const writtenRow = (
-  { dollars, ...row }: Pick<Session, 'agentId' | 'burn' | 'createdAt' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string; dollars?: number },
+  { dollars, firstSeen, ...row }: Pick<Session, 'agentId' | 'burn' | 'keyId' | 'sessionId'> & Partial<Pick<Session, 'companion' | 'presenceAgeSeconds'>> & { accountId: string; dollars?: number; firstSeen: string },
   lines: Parameters<typeof pinLine>[0][],
 ): Session => {
   const keyGeneration = Date.parse(keyById.get(row.keyId)!.createdAt);
   const key = activityOf(row.keyId, keyGeneration, row.sessionId);
   const display = { burn: row.burn, dollars: burnUnitOf(row.accountId) === 'usd' ? row.burn : (dollars ?? null), lastInputTokens: lines[0].lastInputTokens };
-  const priced = lines.map((l, j) => pinLine(l, row.keyId, j === 0 ? display : servedBeside(display, l, row.createdAt), l.lastUsedAt));
+  const priced = lines.map((l, j) => pinLine(l, row.keyId, j === 0 ? display : servedBeside(display, l, firstSeen), l.lastUsedAt));
   const line = priced[0];
-  const agentContexts = datedLines(row.createdAt, key, priced);
+  const agentContexts = datedLines(firstSeen, key, priced);
   const seen = ledgered.get(key);
   return {
     ...SESSION_SAMPLE,
@@ -791,7 +801,6 @@ const writtenRow = (
     companionSince: null,
     cycleMs: null,
     effort: line.effort,
-    epoch: 1,
     factor: null,
     forkDepth: null,
     forkedFrom: null,
@@ -807,6 +816,8 @@ const writtenRow = (
     model: line.model,
     pinned: true,
     pinnedAt: agentContexts.find((l) => l.agentId === line.agentId && l.model === line.model)!.pinnedAt,
+    // The placement the router's ledger holds for the pin, which the listing counts with the routing log's.
+    placements: 1,
     presenceAgeSeconds: row.presenceAgeSeconds ?? null,
     runwayBounded: null,
     runwayMs: null,
@@ -833,9 +844,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   cacheTtlMs: null,
   companion: 'none',
   companionSince: null,
-  createdAt: null,
   effort: null,
-  epoch: null,
   forkDepth: null,
   forkedFrom: null,
   keepalive: noRecipe(),
@@ -846,6 +855,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   ...NO_MARK,
   pinned: false,
   pinnedAt: null,
+  placements: 0,
   presenceAgeSeconds: null,
   ...NO_STAMP,
   warm: null,
@@ -879,7 +889,7 @@ SLOWED_PINS.forEach((pin, k) => {
   const rows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'notebook' && r.sessionId === pin.sessionId);
   const main = rows.filter((r) => r.agentId === 'main');
   const effort = effortAt(k);
-  const createdAt = main[main.length - 1].at;
+  const firstSeen = main[main.length - 1].at;
   // Each agent's pin reads its own newest turn, which wrote the hour's cache.
   const lines = pin.agents.map(({ agentId, model }, j) => {
     const own = rows.filter((r) => r.agentId === agentId);
@@ -897,7 +907,7 @@ SLOWED_PINS.forEach((pin, k) => {
     };
   });
   SESSIONS.push({
-    ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, createdAt, dollars: pin.burnUsd, keyId: 'notebook', sessionId: pin.sessionId }, lines),
+    ...writtenRow({ accountId: 'studio', agentId: 'main', burn: pin.burn, dollars: pin.burnUsd, firstSeen, keyId: 'notebook', sessionId: pin.sessionId }, lines),
     cycleMs: pin.cycleMs,
     factor: studioSlowed.factor,
     lastRequestAt: rows[0].at,
@@ -946,7 +956,7 @@ if (FLEET_PINS.length > 0) {
     const pinnedAt = runStart(fleetRows.filter((r) => r.canonicalModel === pin.canonicalModel)).at;
     return { accountId: attempt.accountId, agentId: 'main', cacheTtlMs: 5 * MINUTE, effort: effortAt(j + 1), ended: false, lastInputTokens: promptOf(pin.usage), lastUsedAt: attempt.startedAt, lifecycle: null, model: pin.canonicalModel, pinnedAt };
   });
-  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, createdAt: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
+  SESSIONS.push(writtenRow({ accountId: lastAttempt.accountId, agentId: 'main', burn: FLEET_BURN, firstSeen: firstSeen.at, keyId: 'fleet', sessionId: FLEET_SESSION_ID }, lines));
 }
 
 /**
@@ -961,11 +971,11 @@ const WORKSHOP_BURN = 0.0021;
 const WORKSHOP_BURN_USD = 0.19;
 {
   const lastAttempt = servingAttempt(WORKSHOP_PIN)!;
-  const createdAt = workshopRows[workshopRows.length - 1].at;
+  const firstSeen = workshopRows[workshopRows.length - 1].at;
   // A pin holds one model, so the line's pin was written at the session's oldest turn on that model.
   const pinnedAt = workshopRows.filter((r) => r.canonicalModel === WORKSHOP_PIN.canonicalModel).at(-1)!.at;
   const line = { accountId: 'workshop', agentId: 'main', cacheTtlMs: HOUR, effort: effortAt(1), ended: false, lastInputTokens: promptOf(WORKSHOP_PIN.usage), lastUsedAt: lastAttempt.startedAt, lifecycle: null, model: WORKSHOP_PIN.canonicalModel, pinnedAt };
-  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, createdAt, dollars: WORKSHOP_BURN_USD, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
+  SESSIONS.push(writtenRow({ accountId: 'workshop', agentId: 'main', burn: WORKSHOP_BURN, dollars: WORKSHOP_BURN_USD, firstSeen, keyId: 'bench', sessionId: WORKSHOP_SESSION_ID }, [line]));
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...)`
@@ -1051,14 +1061,14 @@ const WRITTEN_SESSIONS = [
       agentId: auxiliaryOnlyLine.agentId,
       burn: AUXILIARY_ONLY_BURN,
       companion: 'reporting',
-      createdAt: AUXILIARY_ONLY_CREATED_AT,
+      firstSeen: AUXILIARY_ONLY_CREATED_AT,
       keyId: 'laptop',
       presenceAgeSeconds: 9,
       sessionId: AUXILIARY_ONLY_SESSION_ID,
     },
     [auxiliaryOnlyLine],
   ),
-  writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, createdAt: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
+  writtenRow({ accountId: 'contract', agentId: 'main', burn: NO_MOD_BURN, firstSeen: NO_MOD_CREATED_AT, keyId: 'fleet', sessionId: NO_MOD_SESSION_ID }, [noModMain, noModSubagent]),
 ];
 SESSIONS.push(...WRITTEN_SESSIONS);
 // Each row carries its own fold of the request seed at the story's clock, the spend its count lives in among it, so a
@@ -1066,16 +1076,17 @@ SESSIONS.push(...WRITTEN_SESSIONS);
 for (const s of SESSIONS) Object.assign(s, foldSessionSpend(REQUESTS, s, NOW));
 
 /**
- * A session's `spend`, `day`, `agentRequests` and `userAgent` folded from the request seed's rows on it, as the route
- * folds the ledger's: a refused row passed over, a probe's figures apart in the probes, every other row a client
- * request priced as the request log prices it (`costUsd`, `costShares`, `costEquivalent`) under its serving attempt's
- * funding and one with no token priced nothing, the day the client requests of the hours from the one holding
- * `now - 24 h` by class, one entry per agent, and the user agent the newest client request's, or the newest refusal's
- * where every request was refused. An agent's entry sums every model it ran and reads the model, the account, the type
- * and the instant of its newest client request, or of an agent with probes alone its newest probe's model and none of
- * the other three.
+ * A session's `spend`, `day`, `agentRequests`, `userAgent`, `firstRequestAt` and `lastInferenceAt` folded from the
+ * request seed's rows on it, as the route folds the ledger's: a refused row passed over, a probe's figures apart in the
+ * probes, every other row a client request priced as the request log prices it (`costUsd`, `costShares`,
+ * `costEquivalent`) under its serving attempt's funding and one with no token priced nothing, the day the client
+ * requests of the hours from the one holding `now - 24 h` by class, one entry per agent, and the user agent the newest
+ * client request's, or the newest refusal's where every request was refused. An agent's entry sums every model it ran
+ * and reads the model, the account, the type and the instant of its newest client request, or of an agent with probes
+ * alone its newest probe's model and none of the other three. The two instants and each entry's first request read the
+ * refused rows too: the first request that is no probe and the newest of kind `inference`, null where none stands.
  */
-export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, now: number): Pick<Session, 'agentRequests' | 'day' | 'spend' | 'userAgent'> {
+export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, now: number): Pick<Session, 'agentRequests' | 'day' | 'firstRequestAt' | 'lastInferenceAt' | 'spend' | 'userAgent'> {
   const emptyPart = (): SessionSpendPart => ({ billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 });
   // A plan-funded request adds its Pro-week figure, and one that priced none leaves the sum unknown. Any other funding
   // bills its dollars, a request that cost nothing filing none.
@@ -1113,8 +1124,18 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
   };
   let newest: RequestLog | null = null;
   let newestRefused: RequestLog | null = null;
+  let firstRequestAt: string | null = null;
+  let lastInferenceAt: string | null = null;
+  // An agent's entry opens on a served request alone, while its first request counts its refused ones too.
+  const firstOfAgent = new Map<string, string>();
+  const earlier = (at: string, than: string | null | undefined) => than === null || than === undefined || Date.parse(at) < Date.parse(than);
   for (const r of rows) {
     if (r.keyId !== session.keyId || r.keyGeneration !== session.keyGeneration || r.sessionId !== session.sessionId) continue;
+    if (r.kind !== 'probe') {
+      if (earlier(r.at, firstRequestAt)) firstRequestAt = r.at;
+      if (r.agentId !== null && earlier(r.at, firstOfAgent.get(r.agentId))) firstOfAgent.set(r.agentId, r.at);
+    }
+    if (r.kind === 'inference') lastInferenceAt = laterOf(lastInferenceAt, r.at);
     if (r.refused) {
       if (r.kind !== 'probe' && newer(r, newestRefused)) newestRefused = r;
       continue;
@@ -1146,6 +1167,7 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
       accountId: a.newest === null ? null : (servingAttempt(a.newest)?.accountId ?? null),
       agentId: a.agentId,
       agentType: a.newest?.agentType ?? null,
+      firstRequestAt: firstOfAgent.get(a.agentId) ?? null,
       lastRequestAt: a.newest?.at ?? null,
       // An entry opens on a row of the agent, so one of the two stands.
       model: (a.newest ?? a.newestProbe)!.canonicalModel,
@@ -1154,23 +1176,46 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
   return {
     agentRequests,
     day: { billedUsd: day.billedUsd, equivalent: day.equivalent, requests: day.requests },
+    firstRequestAt,
+    lastInferenceAt,
     spend: spend.requests > 0 || probes.requests > 0 ? { ...spend, probes } : null,
     userAgent: (newest ?? newestRefused)?.userAgent ?? null,
   };
 }
 
+/** The latest of a row's last use, its last request and its companion's end, the instants the route's list reads. */
+const listedThrough = (s: Pick<Session, 'companionSince' | 'lastRequestAt' | 'lastUsedAt'>): string | null => [s.lastUsedAt, s.lastRequestAt, s.companionSince].reduce(laterOf, null);
+
+/** The routing log's rows a placement count reads. */
+type PinEvent = Pick<RoutingEvent, 'agentId' | 'at' | 'keyId' | 'kind' | 'sessionId'>;
+
 /**
- * The sessions the route lists at `now`, each folded from the request rows handed in: a session no mod reports leaves
- * once its last use is older than the timeout, and each of its lines once its pin's last use is. The clock and the rows
- * are handed in, as `refusalOnlyRows` takes the clock, since the story is built against `NOW` and a test reads the list
- * at any instant without moving `Date.now`, and the mock's route hands the rows its ledger has written by then.
+ * Main's placements as the route counts them: its `pin_created` and `pin_migrated` events under the row's key and
+ * session at or after the row's key generation, and on an earlier holder's row before the live key's. A pinned row
+ * whose creation the log does not hold counts it once, since a router's ledger holds it.
  */
-export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS, rows: readonly RequestLog[] = REQUESTS): Session[] => {
+const placementsOf = (s: Session, events: readonly PinEvent[]): number => {
+  const live = keyById.get(s.keyId);
+  const until = s.historical && live !== undefined ? Date.parse(live.createdAt) : Number.POSITIVE_INFINITY;
+  const own = events.filter((e) => Date.parse(e.at) >= s.keyGeneration && Date.parse(e.at) < until);
+  return own.length + (s.pinned && !own.some((e) => e.kind === 'pin_created') ? 1 : 0);
+};
+
+/**
+ * The sessions the route lists at `now`, each folded from the request rows handed in and counting its placements in
+ * the routing log's events handed in: a session no mod reports leaves once the latest of its last use, its last request
+ * and its companion's end is older than the timeout, and each of its lines once its pin's last use is. The clock, the
+ * rows and the events are handed in, as `refusalOnlyRows` takes the clock, since the story is built against `NOW` and a
+ * test reads the list at any instant without moving `Date.now`, the mock's route hands the rows its ledger has written
+ * by then, and the mock's routing log reads this module's sessions.
+ */
+export const sessionsListedAt = (now: number, sessions: readonly Session[] = SESSIONS, seconds = NON_COMPANION_IDLE_SECONDS, rows: readonly RequestLog[] = REQUESTS, events: readonly PinEvent[] = []): Session[] => {
   const bySession = groupInto(rows, (r) => (r.sessionId === null ? null : activityOf(r.keyId, r.keyGeneration, r.sessionId)));
+  const mainPins = groupInto(events, (e) => (e.agentId === 'main' && (e.kind === 'pin_created' || e.kind === 'pin_migrated') ? `${e.keyId}|${e.sessionId}` : null));
   return sessions
-    .filter((s) => s.companion !== 'none' || withinNonCompanionTimeout(lastActivity(s), seconds, now))
+    .filter((s) => s.companion !== 'none' || withinNonCompanionTimeout(listedThrough(s), seconds, now))
     .map((s) => {
-      const folded = { ...s, ...foldSessionSpend(bySession.get(activityOf(s.keyId, s.keyGeneration, s.sessionId)) ?? [], s, now) };
+      const folded = { ...s, ...foldSessionSpend(bySession.get(activityOf(s.keyId, s.keyGeneration, s.sessionId)) ?? [], s, now), placements: placementsOf(s, mainPins.get(`${s.keyId}|${s.sessionId}`) ?? []) };
       return s.companion !== 'none' ? folded : { ...folded, agentContexts: s.agentContexts.filter((c) => withinNonCompanionTimeout(c.lastUsedAt, seconds, now)) };
     });
 };

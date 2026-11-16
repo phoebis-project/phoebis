@@ -21,7 +21,7 @@ import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
-import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsRange, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
+import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
 import { failedFirst, toggled, useAsync, useNow, useQueryFilters, useWeekReading } from '@/lib/hooks';
 import { minuteSpan, type BadgeTone } from '@/lib/quota';
 import { costCellOf, rateUnder, spendHint, spendHover, spendUnitOf } from '@/lib/requests';
@@ -103,7 +103,7 @@ const timeCell = (at: string | null, now: number, empty: string): { children: Re
   title: at ? fmtAbsolute(at) : undefined,
 });
 const since = (at: string, now: number) => `${fmtAbsolute(at)}, ${fmtRelative(at, now)}`;
-const EPOCH_HINT = "How many times this session's pin was re-created";
+const PLACEMENTS_HINT = "How many times the router placed or moved this session's main conversation";
 const NO_TRAFFIC_HINT = 'No ledgered request yet';
 const REQUESTS_HINT = "Requests over the session's life";
 interface Row {
@@ -150,37 +150,39 @@ const rowKey = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>)
 const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>) => `session-${encodeURIComponent(rowKey(session))}`;
 /**
  * The request log on the session the client sent under the row's key lifetime, since a key id created again can hold
- * the same session id, inside the narrowest range that covers `lastRequestAt`, the last request of the session or of
- * the line the link is for, read on the clock when the link is made (the menu's click, a line's draw): the page's `now`
- * is a sample up to five seconds old, and the request log measures its window from its own load. The session lands as
- * the log's session chip, which matches the id exactly, and an agent line's link adds its agent's.
+ * the same session id, over the range `requestsSpan` reads off the first and the last request of the session or of the
+ * agent the link is for, read on the clock when the link is made (the menu's click, a line's draw): the page's `now` is
+ * a sample up to five seconds old, and the request log measures its window from its own load. The session lands as the
+ * log's session chip, which matches the id exactly, and an agent line's link adds its agent's.
  */
-const requestsHref = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, lastRequestAt: string | null, agentId?: string) => {
+const requestsHref = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, firstRequestAt: string | null, lastRequestAt: string | null, agentId?: string) => {
   const defaults = REQUESTS_CODEC.defaults;
-  const range = requestsRange(lastRequestAt, clock.now());
-  return requestsAddressHref({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range: range === null ? defaults.range : { from: '', preset: range, to: '' }, session: session.sessionId });
+  const span = requestsSpan(firstRequestAt, lastRequestAt, clock.now());
+  const range = span === null ? defaults.range : 'preset' in span ? { from: '', preset: span.preset, to: '' } : { from: iso(span.from), preset: 'custom', to: iso(span.to) };
+  return requestsAddressHref({ ...defaults, agentId: agentId ?? defaults.agentId, keys: [keyLifetime(session.keyId, session.keyGeneration)], range, session: session.sessionId });
 };
 /** The analytics on the session the client sent under the row's key lifetime, an agent line's narrowed to its agent. */
 const analyticsHref = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, agentId?: string) =>
   `/analytics?${ANALYTICS_CODEC.toParams({ ...ANALYTICS_CODEC.defaults, agentId: agentId ?? ANALYTICS_CODEC.defaults.agentId, key: keyLifetime(session.keyId, session.keyGeneration), session: session.sessionId })}`;
 
 /**
- * The menus' Analytics and request log items, the session's or an agent's, each address built when its item is chosen.
- * Both views read the ledger, so a session that never reached it has nothing to open. The count leaves a refused
- * request out while the log lists it, so a ledgered session reads off its last request instead.
+ * The menus' Analytics and request log items, the session's or an agent's, each address built when its item is chosen
+ * over the first and the last request handed in. Both views read the ledger, so a session that never reached it has
+ * nothing to open. The count leaves a refused request out while the log lists it, so a ledgered session reads off its
+ * last request instead.
  */
-const ledgerItems = (session: Session, lastRequestAt: string | null, navigate: (path: string) => void, agentId?: string) => {
+const ledgerItems = (session: Session, firstRequestAt: string | null, lastRequestAt: string | null, navigate: (path: string) => void, agentId?: string) => {
   const hasTraffic = session.lastRequestAt !== null;
   const title = hasTraffic ? undefined : NO_TRAFFIC_HINT;
   return [
     { label: 'View in analytics', disabled: !hasTraffic, title, onClick: () => navigate(analyticsHref(session, agentId)) },
-    { label: 'View in requests', disabled: !hasTraffic, title, onClick: () => navigate(requestsHref(session, lastRequestAt, agentId)) },
+    { label: 'View in requests', disabled: !hasTraffic, title, onClick: () => navigate(requestsHref(session, firstRequestAt, lastRequestAt, agentId)) },
   ];
 };
 
 /**
  * When the pool stopped probing: the longest idle window the router resolves for the pool's recipes, counted from the
- * session's last activity, so the time never reads earlier than the window could have run.
+ * pin's last use, a probe's among them, so the time never reads earlier than the window could have run.
  */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   const seconds = pool?.keepaliveResolved?.idleSeconds.max ?? 0;
@@ -432,7 +434,7 @@ export function SessionsPage() {
               </button>
             </p>
             <p id={howId} className="page-head__meta" hidden={!howOpen}>
-              Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a companion mod registered it. A pin binds each model a session uses to one
+              Every Claude Code session the router has seen within the session expiry, whether or not a companion mod registered it. A pin binds each model a session uses to one
               account, so subagents on another model may sit on another account, and with affinity off every request picks again. Where cache warming is on, each agent carries a recipe that replays its
               cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
             </p>
@@ -823,8 +825,8 @@ function SessionRows({
   const baseAccountId = baseRow !== null && baseRow.session.pinned ? baseRow.session.accountId : null;
   // The row's figures are main's conversation pin's, so a row with no pin reads a dash.
   const context = contextCell(session.pinned ? session.lastInputTokens : null);
-  const client = joinPresent([clientVersion(session.userAgent), (session.epoch ?? 1) > 1 ? `epoch ${session.epoch}` : null], ' · ');
-  const clientTitle = sentences([session.userAgent, (session.epoch ?? 1) > 1 ? EPOCH_HINT : null]);
+  const client = joinPresent([clientVersion(session.userAgent), session.placements > 1 ? `${session.placements} placements` : null], ' · ');
+  const clientTitle = sentences([session.userAgent, session.placements > 1 ? PLACEMENTS_HINT : null]);
   const mainRecipe = row.agents.find((a) => a.agentId === MAIN_AGENT) ?? null;
   const park = status.word === 'parked' && mainRecipe !== null ? parkDetail(mainRecipe, now) : '';
   const statusTitle = joinPresent([LIFECYCLE_HINT[status.word], park], '\n');
@@ -944,8 +946,8 @@ function SessionRows({
         {visible.has('cost') && <CostCell accountId={session.accountId} burn={<BurnLine cost={cost} session={session} />} cost={cost} spend={session.spend} />}
         {/* Expiry rides under the last-used time rather than in a column of its own, which is 90px the 1600px window did not have. */}
         {visible.has('lastUsed') && (
-          <td className="col-fit" title={fmtAbsolute(session.lastUsedAt)}>
-            {fmtRelative(session.lastUsedAt, now)}
+          <td className="col-fit" title={fmtAbsolute(activity)}>
+            {fmtRelative(activity, now)}
             {expiresAt !== null && (
               <span className="sub" title={`The router stops listing this session at ${fmtAbsolute(expiresAt)}`}>
                 expires {fmtRelative(expiresAt, now)}
@@ -976,8 +978,8 @@ function SessionRows({
           </td>
         )}
         {visible.has('created') && (
-          <td className="col-fit" title={session.createdAt === null ? undefined : fmtAbsolute(session.createdAt)}>
-            {session.createdAt === null ? <span className="muted">-</span> : fmtRelative(session.createdAt, now)}
+          <td className="col-fit" title={session.firstRequestAt === null ? undefined : fmtAbsolute(session.firstRequestAt)}>
+            {session.firstRequestAt === null ? <span className="muted">-</span> : fmtRelative(session.firstRequestAt, now)}
           </td>
         )}
         {visible.has('effort') && <td className="col-fit">{session.effort ?? <span className="muted">-</span>}</td>}
@@ -1007,7 +1009,7 @@ function SessionRows({
           <Menu
             label={`Actions for session ${shortId(session.sessionId, SESSION_CHARS)}${session.historical ? ', deleted holder' : ''}`}
             items={[
-              ...ledgerItems(session, session.lastRequestAt, navigate),
+              ...ledgerItems(session, session.firstRequestAt, session.lastRequestAt, navigate),
               // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request and
               // opens an hour either side of the session's last activity.
               { label: 'View in routing log', disabled: !session.sessionId, onClick: () => navigate(routingLogTo()) },
@@ -1024,7 +1026,7 @@ function SessionRows({
                 <Facts
                   title="Session"
                   rows={[
-                    { label: 'Created', value: session.createdAt === null ? <span className="muted">unknown</span> : since(session.createdAt, now) },
+                    { label: 'Created', value: session.firstRequestAt === null ? <span className="muted">unknown</span> : since(session.firstRequestAt, now) },
                     {
                       label: 'Key',
                       value: session.historical ? (
@@ -1073,7 +1075,7 @@ function SessionRows({
                         </>
                       ),
                     },
-                    { label: 'Epoch', value: String(session.epoch ?? 1) },
+                    { label: 'Placements', value: String(session.placements) },
                     { label: 'Companion', value: <CompanionChip now={now} session={session} /> },
                   ]}
                 />
@@ -1169,7 +1171,7 @@ function SessionRows({
                         <span>State</span>
                       </div>
                       {shownLines.map((line) => (
-                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null} />
+                        <AgentLine key={`${line.agentId}|${line.model}`} line={line} now={now} requestsTo={hasTraffic ? requestsHref(session, line.firstRequestAt ?? session.firstRequestAt, lineLastRequestAt(line) ?? session.lastRequestAt, line.agentId) : null} />
                       ))}
                     </div>
                   )}
@@ -1291,8 +1293,8 @@ function CacheBadge({ title, warm }: { title: string; warm: boolean }) {
 
 /**
  * A line's last request, its recipe's or, where no recipe stands, its pin's last use. The Last request cell draws it
- * and the Agent cell's link opens the narrowest range that covers it, so the log the link opens holds the request the
- * cell names.
+ * and the Agent cell's link opens a range from the agent's first request through it, so the log the link opens holds
+ * the request the cell names.
  */
 const lineLastRequestAt = ({ pin, recipe }: SessionLine): string | null => (recipe !== null ? recipe.lastRequestAt : (pin?.lastUsedAt ?? null));
 
@@ -1399,6 +1401,7 @@ function AgentRow({
   const recipe = line?.recipe ?? null;
   // The agent's request log link opens under the check the menu's ledger items read.
   const hasTraffic = session.lastRequestAt !== null;
+  const firstRequestAt = figures?.firstRequestAt ?? session.firstRequestAt;
   const lastRequestAt = figures?.lastRequestAt ?? null;
   const model = line === null ? (figures?.model ?? null) : line.model;
   const short = model === null ? null : shortModel(model);
@@ -1417,7 +1420,7 @@ function AgentRow({
   return (
     <tr>
       <td className="mono" title={title === '' ? undefined : title}>
-        {hasTraffic ? <Link to={requestsHref(session, lastRequestAt, agentId)}>{agentId}</Link> : agentId}
+        {hasTraffic ? <Link to={requestsHref(session, firstRequestAt, lastRequestAt, agentId)}>{agentId}</Link> : agentId}
       </td>
       <td>{type ?? <span className="muted">-</span>}</td>
       <td title={model === null ? undefined : modelTitle(model)}>
@@ -1460,7 +1463,7 @@ function AgentRow({
         <Menu
           label={`Actions for agent ${agentId}`}
           items={[
-            ...ledgerItems(session, lastRequestAt, navigate, agentId),
+            ...ledgerItems(session, firstRequestAt, lastRequestAt, navigate, agentId),
             // An hour either side of the agent's last request, read when the item is chosen.
             { label: 'View in routing log', onClick: () => navigate(logHref({ agentId, session: session.sessionId, ...aroundSubject(lastRequestAt === null ? null : Date.parse(lastRequestAt), now) })) },
           ]}

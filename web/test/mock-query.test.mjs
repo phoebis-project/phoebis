@@ -246,21 +246,26 @@ test("the mock answers an agent id with the agent's rows on both logs, an event 
   }
 });
 
-test('the mock leaves out a session no mod reports once its last use is older than the non-companion timeout, as the route does', async () => {
+test('the mock leaves out a session no mod reports once the latest of its last use, its last request and its companion\'s end is older than the non-companion timeout, as the route does', async () => {
   const now = Date.parse(AT);
   const HOUR_S = 3_600;
   const TWO_HOURS_BACK = 'e5a17c3d-8f20-4b6e-9d41-2c7b0a9f6e58';
   const key = (s) => `${s.keyId}|${s.keyGeneration}|${s.sessionId}`;
   const named = (s) => `${s.keyId} on ${s.accountId ?? 'no account'} ${s.sessionId.slice(0, 8)}${s.historical ? ' earlier holder' : ''}`;
-  const back = (s) => (d.lastActivity(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(d.lastActivity(s))) / 60_000)} min back`);
+  // The three instants the route's list reads, the latest of them.
+  const through = (s) => [s.lastUsedAt, s.lastRequestAt, s.companionSince].filter((at) => at !== null).sort().at(-1) ?? null;
+  const back = (s) => (through(s) === null ? 'no use on record' : `${Math.round((now - Date.parse(through(s))) / 60_000)} min back`);
   const sessions = await api.listSessions();
   const plain = sessions.filter((s) => s.companion === 'none');
   const desktop = plain.find((s) => s.keyId === 'desktop' && s.accountId === 'primary');
   const pinless = plain.find((s) => s.keyId === 'laptop' && s.accountId === 'secondary' && !s.pinned);
   assert.ok(desktop && pinless, `the desktop row on primary and the unpinned laptop row on secondary stay listed, their last use inside the hour: ${plain.map((s) => `${named(s)} (${back(s)})`).join(', ')}`);
   // The laptop row the ledger never saw holds no pin and no request: a null last use is never older than the timeout.
-  const unused = plain.filter((s) => d.lastActivity(s) === null);
+  const unused = plain.filter((s) => through(s) === null);
   assert.deepEqual(unused.map((s) => `${s.keyId} on ${s.accountId}`), ['laptop on nightly'], 'one row no mod reports has no use on record and is listed at any instant');
+  // The session the mod ended 30 seconds back was last used 21 minutes back, so 45 minutes on its end alone keeps it.
+  const ended = plain.find((s) => s.companionSince !== null);
+  assert.ok(ended !== undefined && d.sessionsListedAt(now + 45 * 60_000).some((s) => key(s) === key(ended)), "the ended session stays listed on its companion's end");
   assert.ok(d.sessionsListedAt(now, undefined, 10_800).some((s) => s.sessionId === TWO_HOURS_BACK), 'a three-hour timeout lists the row last used two hours back');
   assert.ok(!d.sessionsListedAt(now, undefined, HOUR_S).some((s) => s.sessionId === TWO_HOURS_BACK), 'the one-hour timeout leaves it out');
   const later = d.sessionsListedAt(now + 2 * HOUR_S * 1000);

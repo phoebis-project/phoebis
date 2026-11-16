@@ -1205,7 +1205,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       assert.deepEqual(row.agentContexts.map((c) => [c.agentId, c.model, c.accountId]), want, `${row.sessionId} lists its unreleased agents' pins`);
       const main = row.agentContexts.find((c) => c.agentId === 'main');
       if (main !== undefined) {
-        const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs, f.createdAt];
+        const read = (f) => [f.model, f.accountId, f.lastInputTokens, f.effort, f.cacheTtlMs];
         assert.deepEqual(read(main), read(row), `${row.sessionId}: main's line reads the row's pin`);
         assert.equal(row.warm, main.warm, `${row.sessionId}: the row's warmth is main's pin's own`);
       }
@@ -1261,75 +1261,21 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual(row.agentContexts.map(read), [read(row)], "the subagent's line, the one the row reads");
   });
 
-  test(`every session a pin placed reads its first-seen time at or before its last use and one no pin placed none, and each line its agent's at or before the line's last use: main's the row's, a subagent's its earliest placing request of the session, and one no request names a minute per place among the row's distinct subagents, at ${at}`, async () => {
+  test(`every listed session reads its first request and its last turn at or before its last request, the first at or before the last turn, both null with no last request, and each agent entry's last request at or before the row's, at ${at}`, async () => {
     const s = await story;
-    const recipes = await s.api.listKeepaliveRecipes();
     // The session expiry lists every row the story seeds, the ones past the non-companion timeout among them.
     const seeded = s.lib.sessionsListedAt(s.now, undefined, s.settings.sessions.expireAfterSeconds);
-    // A recipe stands on a pin its first request placed, so a released or finished row with no pin left once held one.
-    const placed = (row) => row.pinned || (!row.historical && recipes.some((r) => r.keyId === row.keyId && r.sessionId === row.sessionId));
-    // The rows the literal below reads. The other rows' first sightings are mostly draws, so their subagents' lines
-    // are read against the requests seed: an inference request with an attempt places a pin, since a probe follows the
-    // request that placed its agent's pin and a count or a refusal before any attempt places none. An agent's request
-    // before its session's first sighting belongs to an earlier life of the session, which the router dated afresh
-    // once its last pin left.
-    const written = ['5f8a3c1e-9d27-4b6e-8c04-2a7e9b3d1f65', 'b7e2d5a9-6c13-4f80-a4d2-9e1f3c7b0a68', '3e9b7c21-4d58-4a06-8f1e-6c2a9d0b5e74'];
-    const seed = [...s.lib.requestById.values()].filter((r) => r.kind === 'inference' && r.attempts.length > 0);
-    const firstRequestOf = (row, agentId) =>
-      seed
-        .filter((r) => r.keyId === row.keyId && r.keyGeneration === row.keyGeneration && r.sessionId === row.sessionId && r.agentId === agentId && Date.parse(r.at) >= Date.parse(row.createdAt))
-        .reduce((first, r) => (first === null || r.at < first ? r.at : first), null);
-    let laterPlaces = 0;
+    // The route reads the instants off one set of the session's rows, so a fold that read them off two sets breaks an
+    // order below.
+    const notAfter = (a, b) => a === null || (b !== null && Date.parse(a) <= Date.parse(b));
     for (const row of seeded) {
       const name = `${row.keyId} ${row.sessionId}${row.historical ? ', the earlier holder' : ''}`;
-      if (placed(row)) {
-        const lastUse = s.lib.lastActivity(row);
-        assert.ok(row.createdAt !== null && lastUse !== null && Date.parse(row.createdAt) <= Date.parse(lastUse), `${name} first seen at ${row.createdAt}, last used at ${lastUse}`);
-      } else assert.equal(row.createdAt, null, `${name}: no pin ever placed it`);
-      // An agent holds one first-seen time whatever models it is pinned on, so its place counts once.
-      const places = new Map();
-      for (const c of row.agentContexts) {
-        const where = `${name}: ${c.agentId} on ${c.model}`;
-        if (c.createdAt !== null && c.lastUsedAt !== null) assert.ok(Date.parse(c.createdAt) <= Date.parse(c.lastUsedAt), `${where} first seen at ${c.createdAt}, after its last use at ${c.lastUsedAt}`);
-        if (c.agentId === 'main') {
-          assert.equal(c.createdAt, row.createdAt, `${where} reads the session's first-seen time`);
-          continue;
-        }
-        if (c.createdAt !== null) assert.ok(Date.parse(c.createdAt) >= Date.parse(row.createdAt), `${where} first seen at ${c.createdAt}, before the session at ${row.createdAt}`);
-        if (!places.has(c.agentId)) places.set(c.agentId, places.size + 1);
-        if (written.includes(row.sessionId)) continue;
-        const place = places.get(c.agentId);
-        const first = firstRequestOf(row, c.agentId);
-        if (first !== null) assert.equal(c.createdAt, first, `${where} reads its earliest request of the session`);
-        else {
-          if (place > 1) laterPlaces += 1;
-          assert.equal(c.createdAt, iso(Date.parse(row.createdAt) + place * 60_000), `${where} at place ${place} among the subagents`);
-        }
-      }
+      const read = `first ${row.firstRequestAt}, last turn ${row.lastInferenceAt}, last ${row.lastRequestAt}`;
+      assert.ok(notAfter(row.firstRequestAt, row.lastRequestAt) && notAfter(row.lastInferenceAt, row.lastRequestAt), `${name}: ${read}`);
+      if (row.firstRequestAt !== null && row.lastInferenceAt !== null) assert.ok(notAfter(row.firstRequestAt, row.lastInferenceAt), `${name}: ${read}`);
+      if (row.lastRequestAt === null) assert.deepEqual([row.firstRequestAt, row.lastInferenceAt], [null, null], `${name} holds no request`);
+      for (const entry of row.agentRequests) assert.ok(notAfter(entry.lastRequestAt, row.lastRequestAt), `${name}: ${entry.agentId}'s last request ${entry.lastRequestAt}, the row's ${row.lastRequestAt}`);
     }
-    assert.ok(laterPlaces > 0, 'a drawn row holds a stand-in past its first place');
-    // The written rows' lines: the slowed session's main at its oldest turn, 13:58:40, and its Haiku subagent at the one
-    // request it placed, 13:59:05, and a subagent no request names a minute past its session's first sighting, 47
-    // minutes back for the session no mod reports and 38 for the auxiliary-only one.
-    const linesOf = (sessionId) => seeded.find((x) => x.sessionId === sessionId)?.agentContexts.map((c) => [c.agentId, c.createdAt]);
-    assert.deepEqual(
-      written.map(linesOf),
-      [
-        [
-          ['main', iso(s.now - 31 * 60_000 - 20_000)],
-          ['7b2e', iso(s.now - 30 * 60_000 - 55_000)],
-        ],
-        [
-          ['main', iso(s.now - 47 * 60_000)],
-          ['5c8e', iso(s.now - 46 * 60_000)],
-        ],
-        [['d41c', iso(s.now - 37 * 60_000)]],
-      ],
-    );
-    const unplaced = seeded.filter((row) => !placed(row));
-    assert.ok(unplaced.some((row) => row.companion !== 'none' && row.lastRequestAt === null), 'the registration-only row reads none');
-    assert.ok(unplaced.some((row) => row.lastRequestAt !== null), 'a row the ledger alone knows reads none');
-    assert.ok(seeded.some((row) => row.agentContexts[0]?.agentId === 'main' && row.agentContexts.length >= 3), 'a row lists main and two agents after it');
   });
 
   test(`one subagent's recipe stands under compacted after its compaction completed: ended, last guarded as a compaction, with no probe scheduled, at ${at}`, async () => {

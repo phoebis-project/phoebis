@@ -11765,9 +11765,9 @@ async function tableStripes(theme, path) {
 const WRITTEN_SESSION = '7bea4514-4087-4b6a-a410-0dd5cd31cfad';
 
 /**
- * Two addresses that put the written session on a plain and on a striped session row: third under the last activity's
- * order, and second once the search keeps the ids that start with 7, where only the session with the newest activity
- * stands before it.
+ * Two addresses that put the written session on a striped and on a plain session row: twentieth under the last
+ * activity's order, its last turn hours back while its idle subagent's pin was used seconds back, and third once the
+ * search keeps the ids that start with 7, where the two sessions with newer last turns stand before it.
  */
 const WRITTEN_PLACES = ['/sessions?sort=activity', '/sessions?search=7&sort=activity'];
 

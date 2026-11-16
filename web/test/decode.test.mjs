@@ -693,6 +693,19 @@ test("a session reads its pin's open mark, its stamp's instant and the instant i
   );
 });
 
+test('a session reads its placements, its first request, its last turn and its last request, and an agent entry its own first request', () => {
+  // No other check reads these wire keys by name: `mock-sync` takes the 0 and the null a misread answers for the shape
+  // of the right read, and the mock's rows reach the pages without the decoder. Each instant differs, so a crossed
+  // read fails.
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const entry = { ...row.agent_requests[0], first_request_at: 1_791_718_000_000 };
+  const s = d.decodeSession({ ...row, agent_requests: [entry], first_request_at: 1_791_717_000_000, last_inference_at: 1_791_720_000_000, last_request_at: 1_791_720_600_000, placements: 3 });
+  assert.deepEqual(
+    { entryFirstRequestAt: s.agentRequests[0].firstRequestAt, firstRequestAt: s.firstRequestAt, lastInferenceAt: s.lastInferenceAt, lastRequestAt: s.lastRequestAt, placements: s.placements },
+    { entryFirstRequestAt: '2026-10-11T11:26:40.000Z', firstRequestAt: '2026-10-11T11:10:00.000Z', lastInferenceAt: '2026-10-11T12:00:00.000Z', lastRequestAt: '2026-10-11T12:10:00.000Z', placements: 3 },
+  );
+});
+
 test('a session decodes its runway and whether it is bounded', () => {
   const row = fixture('sessions').sessions[0];
   const read = (wire) => {
@@ -2124,7 +2137,6 @@ const agentLine = (agent_id, model, members = {}) => ({
   burn_usd: 0.0215,
   burn_window: 'five_hour',
   cache_ttl_ms: 300_000,
-  created_at: 1_791_717_340_000,
   effort: 'medium',
   ended: true,
   last_input_tokens: 12_000,
@@ -2148,13 +2160,12 @@ test("a session row reads main's effort and every agent line with all its member
   ];
   const s = d.decodeSession({ ...row, agent_contexts: sent, effort: 'high' });
   assert.equal(s.effort, 'high');
-  const created = new Date(1_791_717_340_000).toISOString();
   const used = new Date(1_791_721_000_000).toISOString();
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, createdAt: created, effort: 'low', ended: true, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, createdAt: created, effort: 'high', ended: true, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', pinnedAt, warm: true, warmUntil },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', pinnedAt, warm: false, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', pinnedAt, warm: true, warmUntil },
   ]);
 });
 
@@ -2164,7 +2175,6 @@ test('an agent line reads null for each nullable member the route sends as null,
   const full = agentLine('7b2e', 'claude-haiku-4-5');
   for (const [wire, member] of [
     ['cache_ttl_ms', 'cacheTtlMs'],
-    ['created_at', 'createdAt'],
     ['effort', 'effort'],
     ['last_input_tokens', 'lastInputTokens'],
     ['last_used_at', 'lastUsedAt'],

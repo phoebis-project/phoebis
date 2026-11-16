@@ -27,7 +27,8 @@ export const RANGE_PRESETS = [
   { label: 'Last 30 days', ms: 30 * DAY, name: '30d' },
 ] as const satisfies readonly RangePreset[];
 
-/** The Active within values, each read against the later of a row's last use and last request. */
+/** The Active within values, each read against a row's last turn: its newest inference request, or its pin's last use
+ *  before the first one. */
 export const ACTIVE_WITHIN = [
   { id: '15m', label: '15 min', ms: 15 * MINUTE },
   { id: '1h', label: '1 h', ms: HOUR },

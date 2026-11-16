@@ -38,29 +38,30 @@ const recipe = (agentId, agentState, lastRequestAt) => ({
   wakeAt: null,
 });
 /** A row as the page builds it, with the three times the order reads, each null or a clock time on the test's day. */
-const orderRow = (sessionId, createdAt, lastUsedAt, lastRequestAt) => ({ session: { createdAt: createdAt && iso(createdAt), lastRequestAt: lastRequestAt && iso(lastRequestAt), lastUsedAt: lastUsedAt && iso(lastUsedAt), sessionId } });
+const orderRow = (sessionId, firstRequestAt, lastUsedAt, lastInferenceAt) => ({ session: { firstRequestAt: firstRequestAt && iso(firstRequestAt), lastInferenceAt: lastInferenceAt && iso(lastInferenceAt), lastUsedAt: lastUsedAt && iso(lastUsedAt), sessionId } });
 const sessionIds = (rows) => rows.map((r) => r.session.sessionId);
 
-test('orderSessionRows reads the newest created first, ties by session id and a row with no creation time last under either direction', () => {
-  // a1 and a2 share an instant an hour after b, and n has no creation time. Each row's later time is a different one of
-  // its two, so a key that read either alone would order the activity reads otherwise.
-  const rows = [orderRow('n', null, null, null), orderRow('b', ms(13, 0), ms(14, 25), null), orderRow('a2', ms(14, 0), ms(14, 2), ms(14, 20)), orderRow('a1', ms(14, 0), ms(14, 10), ms(14, 5))];
+test('orderSessionRows reads the newest first request first, ties by session id and a row with no first request last under either direction', () => {
+  // a1 and a2 share a first request an hour after b, and n has none. Each row's pin was used at another time than its
+  // last turn, in another order, so a key that read the pin's use, alone or as the later of the two, orders the
+  // activity reads otherwise.
+  const rows = [orderRow('n', null, null, null), orderRow('b', ms(13, 0), ms(14, 25), ms(14, 1)), orderRow('a2', ms(14, 0), ms(14, 2), ms(14, 20)), orderRow('a1', ms(14, 0), ms(14, 10), ms(14, 5))];
   const before = sessionIds(rows);
   assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'created', 'desc')), ['a1', 'a2', 'b', 'n']);
   assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'created', 'asc')), ['b', 'a1', 'a2', 'n']);
-  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'activity', 'desc')), ['b', 'a2', 'a1', 'n'], 'the later of the last use and the last request decides');
-  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'activity', 'asc')), ['a1', 'a2', 'b', 'n'], 'a row with neither time stays last');
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'activity', 'desc')), ['a2', 'a1', 'b', 'n'], "the last inference request decides, whatever the pin's last use");
+  assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'activity', 'asc')), ['b', 'a1', 'a2', 'n'], 'a row with neither time stays last');
   assert.deepEqual(sessionIds(rows), before, 'the list handed in is left as it is');
   assert.deepEqual(
     rows.map((r) => d.lastActivity(r.session)),
-    [null, iso(ms(14, 25)), iso(ms(14, 20)), iso(ms(14, 10))],
+    [null, iso(ms(14, 1)), iso(ms(14, 20)), iso(ms(14, 5))],
   );
 });
 
 test('orderSessionRows by cost puts a row with no spend last under either direction, and by requests reads the count', () => {
-  // The creation times run in neither key's order, so a key that fell back to them reads otherwise.
+  // The first requests run in neither key's order, so a key that fell back to them reads otherwise.
   // A row with no spend carries a null one, as the route answers it, so it counts no request.
-  const row = (sessionId, createdAt, usd, requests) => ({ session: { createdAt: iso(createdAt), lastRequestAt: null, lastUsedAt: null, sessionId, spend: usd === null ? null : { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });
+  const row = (sessionId, firstRequestAt, usd, requests) => ({ session: { firstRequestAt: iso(firstRequestAt), lastInferenceAt: null, lastUsedAt: null, sessionId, spend: usd === null ? null : { billedUsd: {}, equivalent: 0, probes: { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 }, requests, shares: {}, usd } } });
   const rows = [row('a', ms(13, 0), 0.5, 2), row('b', ms(14, 0), null, 0), row('c', ms(12, 0), 0.25, 4), row('d', ms(11, 0), 0.5, 1)];
   assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'cost', 'desc')), ['a', 'd', 'c', 'b']);
   assert.deepEqual(sessionIds(d.orderSessionRows(rows, 'cost', 'asc')), ['c', 'a', 'd', 'b']);
@@ -68,31 +69,32 @@ test('orderSessionRows by cost puts a row with no spend last under either direct
 });
 
 /** A line as `sessionLines` answers it: a recipe with its pin or none, or a pin with no recipe, with its lifecycle
- *  word. */
-const line = (r, p, lifecycle) => ({ agentId: (r ?? p).agentId, agentType: null, lifecycle, model: (r ?? p).model, pin: p, recipe: r });
-const linePin = (agentId, model, createdAt, lastUsedAt) => ({ accountId: 'primary', agentId, cacheTtlMs: 5 * MINUTE, createdAt: iso(createdAt), effort: 'high', lastInputTokens: 9_000, lastUsedAt: iso(lastUsedAt), model, warm: false });
+ *  word and its agent's first request, null for an agent with no ledger entry. */
+const line = (r, p, lifecycle, firstRequestAt = null) => ({ agentId: (r ?? p).agentId, agentType: null, firstRequestAt: firstRequestAt && iso(firstRequestAt), lifecycle, model: (r ?? p).model, pin: p, recipe: r });
+const linePin = (agentId, model, lastUsedAt) => ({ accountId: 'primary', agentId, cacheTtlMs: 5 * MINUTE, effort: 'high', lastInputTokens: 9_000, lastUsedAt: iso(lastUsedAt), model, warm: false });
 const lineNames = (lines) => lines.map((l) => (l.model === 'claude-sonnet-5' ? l.agentId : `${l.agentId} on ${l.model}`));
 
 test('orderLines puts main first, then the lines by lifecycle word, a pin-only line with its word, then the lines with no word, each group under the key and the direction', () => {
   const HAIKU = 'claude-haiku-4-5';
   const released = (agentId, at) => ({ ...recipe(agentId, 'released', at), cause: 'agent_released' });
   // Handed in no group's order: two busy lines, one on a pin and one with none, two idle ones, one of them a pin no
-  // recipe stands on, two released ones with no pin, and e5, which no mod reports, pinned on two models at one instant.
+  // recipe stands on, two released ones with no pin, and e5, which no mod reports, pinned on two models with one first
+  // request.
   const lines = [
-    line(null, linePin('e5', 'claude-sonnet-5', ms(13, 40), ms(14, 12)), null),
+    line(null, linePin('e5', 'claude-sonnet-5', ms(14, 12)), null, ms(13, 40)),
     line(released('e7c1', ms(14, 8)), null, 'released'),
     line(recipe('a4', 'busy', ms(14, 20)), null, 'busy'),
-    line(null, linePin('d1', 'claude-sonnet-5', ms(13, 20), ms(14, 15)), 'idle'),
-    line(recipe('c2', 'idle', ms(14, 5)), linePin('c2', 'claude-sonnet-5', ms(13, 10), ms(14, 5)), 'idle'),
-    line(recipe('main', 'busy', ms(14, 0)), linePin('main', 'claude-sonnet-5', ms(13, 0), ms(14, 0)), 'busy'),
-    line(null, linePin('e5', HAIKU, ms(13, 40), ms(14, 12)), null),
+    line(null, linePin('d1', 'claude-sonnet-5', ms(14, 15)), 'idle', ms(13, 20)),
+    line(recipe('c2', 'idle', ms(14, 5)), linePin('c2', 'claude-sonnet-5', ms(14, 5)), 'idle', ms(13, 10)),
+    line(recipe('main', 'busy', ms(14, 0)), linePin('main', 'claude-sonnet-5', ms(14, 0)), 'busy', ms(13, 0)),
+    line(null, linePin('e5', HAIKU, ms(14, 12)), null, ms(13, 40)),
     line(released('91aa', ms(14, 2)), null, 'released'),
-    line(recipe('b7', 'busy', ms(14, 10)), linePin('b7', 'claude-sonnet-5', ms(13, 30), ms(14, 10)), 'busy'),
+    line(recipe('b7', 'busy', ms(14, 10)), linePin('b7', 'claude-sonnet-5', ms(14, 10)), 'busy', ms(13, 30)),
   ];
   const before = lineNames(lines);
   const e5 = [`e5 on ${HAIKU}`, 'e5'];
-  // Under created a line reads its own pin's creation, the busy line with no pin and the two released ones last in
-  // their groups whichever the direction, the released pair tied and read by agent id.
+  // Under created a line reads its agent's first request, the busy line and the two released ones with no ledger entry
+  // last in their groups whichever the direction, the released pair tied and read by agent id.
   assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'desc')), ['main', 'b7', 'a4', 'd1', 'c2', '91aa', 'e7c1', ...e5]);
   assert.deepEqual(lineNames(d.orderLines(lines, 'created', 'asc')), ['main', 'b7', 'a4', 'c2', 'd1', '91aa', 'e7c1', ...e5]);
   // Under activity a recipe line reads its last request and a pin-only line its pin's last use, newest first.
@@ -101,24 +103,35 @@ test('orderLines puts main first, then the lines by lifecycle word, a pin-only l
   assert.deepEqual(lineNames(lines), before, 'the list handed in is left as it is');
 });
 
-test('requestsRange picks the narrowest range that covers the last request, with a minute of headroom under each width', () => {
+test('requestsSpan picks the narrowest preset that covers the first request, with a minute of headroom under each width', () => {
+  // The last request a minute back, so the span past the widest preset ends at the clock.
+  const last = iso(NOW - MINUTE);
   const cases = [
-    [59 * MINUTE, '1h'],
-    [59 * MINUTE + SECOND, '6h'],
-    [5 * HOUR + 59 * MINUTE, '6h'],
-    [5 * HOUR + 59 * MINUTE + SECOND, '24h'],
-    [23 * HOUR + 59 * MINUTE, '24h'],
-    [23 * HOUR + 59 * MINUTE + SECOND, '7d'],
-    [6 * DAY + 23 * HOUR + 59 * MINUTE, '7d'],
-    [6 * DAY + 23 * HOUR + 59 * MINUTE + SECOND, '30d'],
-    [29 * DAY + 23 * HOUR + 59 * MINUTE, '30d'],
-    [30 * DAY, null],
+    [59 * MINUTE, { preset: '1h' }],
+    [59 * MINUTE + SECOND, { preset: '6h' }],
+    [5 * HOUR + 59 * MINUTE, { preset: '6h' }],
+    [5 * HOUR + 59 * MINUTE + SECOND, { preset: '24h' }],
+    [23 * HOUR + 59 * MINUTE, { preset: '24h' }],
+    [23 * HOUR + 59 * MINUTE + SECOND, { preset: '7d' }],
+    [6 * DAY + 23 * HOUR + 59 * MINUTE, { preset: '7d' }],
+    [6 * DAY + 23 * HOUR + 59 * MINUTE + SECOND, { preset: '30d' }],
+    [29 * DAY + 23 * HOUR + 59 * MINUTE, { preset: '30d' }],
+    [30 * DAY, { from: NOW - 30 * DAY, to: NOW }],
   ];
   assert.deepEqual(
-    cases.map(([age]) => d.requestsRange(iso(NOW - age), NOW)),
-    cases.map(([, range]) => range),
+    cases.map(([age]) => d.requestsSpan(iso(NOW - age), last, NOW)),
+    cases.map(([, span]) => span),
   );
-  assert.equal(d.requestsRange(null, NOW), null);
+  assert.equal(d.requestsSpan(null, last, NOW), null);
+});
+
+test('the requests link covers a session from its first request', () => {
+  assert.deepEqual(d.requestsSpan(iso(NOW - 3 * DAY), iso(NOW - MINUTE), NOW), { preset: '7d' });
+});
+
+test('a first request past the widest preset opens a custom span', () => {
+  // The last request two days back, so a span that ended at the click reads otherwise.
+  assert.deepEqual(d.requestsSpan(iso(NOW - 31 * DAY), iso(NOW - 2 * DAY), NOW), { from: NOW - 31 * DAY, to: NOW - 2 * DAY + MINUTE });
 });
 
 test('a session that draws a line is finished once every line it draws is released', () => {
@@ -152,7 +165,6 @@ const pinEntry = (agentId, model, lastInputTokens) => ({
   accountId: 'primary',
   agentId,
   cacheTtlMs: 5 * MINUTE,
-  createdAt: iso(ms(13, 0)),
   effort: 'high',
   lastInputTokens,
   lastUsedAt: iso(ms(14, 20)),
@@ -178,7 +190,7 @@ test("an agent line reads the route's entry for its agent on its recipe's model,
 /** A spend part with no request in it. */
 const NO_SPEND = { billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 };
 /** An agent's ledger entry as the decoder answers it, with no spend unless the members hand one. */
-const ledgerEntry = (agentId, model, lastRequestAt, members = {}) => ({ accountId: 'business', agentId, agentType: null, lastRequestAt: iso(lastRequestAt), model, spend: { ...NO_SPEND, probes: NO_SPEND }, ...members });
+const ledgerEntry = (agentId, model, lastRequestAt, members = {}) => ({ accountId: 'business', agentId, agentType: null, firstRequestAt: null, lastRequestAt: iso(lastRequestAt), model, spend: { ...NO_SPEND, probes: NO_SPEND }, ...members });
 
 test("sessionLines reads the recipes first with their pins, then every pin no recipe claims in the route's order, each line its pin's word where a pin stands", () => {
   const at = ms(14, 20);
@@ -206,25 +218,25 @@ test("sessionLines reads the recipes first with their pins, then every pin no re
   assert.ok(lines[0].recipe === recipes[0] && lines[0].pin === entries[0] && lines[3].pin === entries[1], 'each line carries the recipe and the entry it was handed');
   assert.deepEqual(
     d.sessionLines({ agentContexts: [], agentId: null, agentRequests: [], lifecycle: 'registered', model: null }, []),
-    [{ agentId: 'main', agentType: null, lifecycle: 'registered', model: null, pin: null, recipe: null }],
+    [{ agentId: 'main', agentType: null, firstRequestAt: null, lifecycle: 'registered', model: null, pin: null, recipe: null }],
     "a session with neither draws main's line from the row",
   );
 });
 
-test("sessionLines reads each line's type from its own agent's ledger entry, and main's model off the ledger where the row's pin is another agent's", () => {
+test("sessionLines reads each line's type and first request from its own agent's ledger entry, and main's model off the ledger where the row's pin is another agent's", () => {
   // Main sent auxiliary calls alone, so the row reads d41c's pin and d41c's model, which are not main's.
   const row = {
     agentContexts: [{ ...pinEntry('d41c', 'claude-sonnet-4-5', 23_400), lifecycle: 'busy' }],
     agentId: 'd41c',
-    agentRequests: [ledgerEntry('main', 'claude-haiku-4-5', ms(14, 0)), ledgerEntry('d41c', 'claude-sonnet-4-5', ms(14, 10), { agentType: 'Explore' })],
+    agentRequests: [ledgerEntry('main', 'claude-haiku-4-5', ms(14, 0), { firstRequestAt: iso(ms(13, 0)) }), ledgerEntry('d41c', 'claude-sonnet-4-5', ms(14, 10), { agentType: 'Explore', firstRequestAt: iso(ms(13, 30)) })],
     lifecycle: 'busy',
     model: 'claude-sonnet-4-5',
   };
   assert.deepEqual(
-    d.sessionLines(row, []).map((l) => [l.agentId, l.model, l.agentType, l.lifecycle]),
+    d.sessionLines(row, []).map((l) => [l.agentId, l.model, l.agentType, l.firstRequestAt, l.lifecycle]),
     [
-      ['main', 'claude-haiku-4-5', null, 'busy'],
-      ['d41c', 'claude-sonnet-4-5', 'Explore', 'busy'],
+      ['main', 'claude-haiku-4-5', null, iso(ms(13, 0)), 'busy'],
+      ['d41c', 'claude-sonnet-4-5', 'Explore', iso(ms(13, 30)), 'busy'],
     ],
   );
 });
@@ -277,12 +289,16 @@ test("matches reads a bare key id as the live key's rows and id@generation as th
   assert.deepEqual(rows.map((r) => d.matches(r, { ...NO_FILTERS, key: ['desktop@1'] }, NOW)), [false, true], 'a lifetime keeps its own row alone');
 });
 
-test('matches reads Active within against the later of the last use and the last request', () => {
-  const row = (lastRequestAt, lastUsedAt) => ({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, lastRequestAt, lastUsedAt } });
-  const within = { ...NO_FILTERS, active: '1h' };
-  assert.equal(d.matches(row(iso(NOW - 2 * HOUR), iso(NOW - 10 * MINUTE)), within, NOW), true, 'the last use inside the span');
-  assert.equal(d.matches(row(iso(NOW - 10 * MINUTE), iso(NOW - 2 * HOUR)), within, NOW), true, 'the last request inside the span');
-  assert.equal(d.matches(row(iso(NOW - 2 * HOUR), iso(NOW - 2 * HOUR)), within, NOW), false, 'both older than the span');
+/** A row under Active within: its last turn, which a first turn's row holds none of, and its pin's last use. */
+const activeRow = (lastInferenceAt, lastUsedAt) => ({ finished: false, lines: [], poolId: 'all', session: { ...matchSession, lastInferenceAt, lastRequestAt: lastInferenceAt, lastUsedAt } });
+
+test("a probe's pin use is no activity", () => {
+  // A probe stamped the pin ten minutes back, and the last turn is eleven hours old.
+  assert.equal(d.matches(activeRow(iso(NOW - 11 * HOUR), iso(NOW - 10 * MINUTE)), { ...NO_FILTERS, active: '1h' }, NOW), false);
+});
+
+test("a session on its first turn reads its pin's use", () => {
+  assert.equal(d.matches(activeRow(null, iso(NOW - 10 * MINUTE)), { ...NO_FILTERS, active: '1h' }, NOW), true);
 });
 
 test("matches reads a line's Account as the Agents table shows it: the pin's first, beside a recipe that names none too", () => {

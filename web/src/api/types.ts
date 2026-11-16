@@ -1932,8 +1932,6 @@ export interface AgentContext extends BurnFigures {
   agentId: string;
   /** The cache TTL in force at the pin's last refresh. */
   cacheTtlMs: number | null;
-  /** The agent's first-seen time, null where none. */
-  createdAt: string | null;
   /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
   effort: string | null;
   /** Whether the pin's agent ended and its next request has not arrived. A shedding round leaves such a pin out. */
@@ -1943,7 +1941,7 @@ export interface AgentContext extends BurnFigures {
   /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
   lifecycle: Lifecycle | null;
   model: string;
-  /** The instant the pin was written on the account it stands on. `createdAt` keeps the agent's first-seen time. */
+  /** The instant the pin was written on the account it stands on. */
   pinnedAt: string | null;
   /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
   warm: boolean;
@@ -1985,6 +1983,9 @@ export interface AgentRequests {
   agentId: string;
   /** The newest request's agent type. */
   agentType: string | null;
+  /** The agent's first client request over the session's life, refused ones included, null where the ledger holds no
+   *  request of the agent that is no probe. */
+  firstRequestAt: string | null;
   lastRequestAt: string | null;
   model: string;
   spend: SessionSpend;
@@ -2007,7 +2008,6 @@ export interface Session extends BurnFigures {
   /** The companion's last report while `companion` reads `silent`, and the session's end on a row no companion
    *  reports whose mod ended it. Null otherwise. */
   companionSince: string | null;
-  createdAt: string | null;
   /** The pin's cycle, null until two requests of the pin after its placement have measured a gap under the pool's
    *  burn average, and on a row with no pin. */
   cycleMs: number | null;
@@ -2015,10 +2015,12 @@ export interface Session extends BurnFigures {
   day: SessionDay;
   /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
   effort: string | null;
-  epoch: number | null;
   /** The factor of the slow-down entry in force on the pin's account, null on a row with no pin and where no entry is
    *  in force. */
   factor: number | null;
+  /** The session's first request under its key that is no probe, refused ones included, null where the ledger holds
+   *  none. */
+  firstRequestAt: string | null;
   /** The depth where a forked session parts from its base, and `null` with `forkedFrom`. */
   forkDepth: number | null;
   /** The session this one branched from, null for one that branched from none. */
@@ -2033,6 +2035,9 @@ export interface Session extends BurnFigures {
   /** The `created_at` of the key that owns the session. */
   keyGeneration: number;
   keyId: string;
+  /** The session's newest request that is neither a probe nor a token count, refused ones included, null while the
+   *  ledger holds none, as before a first turn. */
+  lastInferenceAt: string | null;
   /** The input, cache-read and cache-write tokens of the pin's last renewal, and `null` for a session with no pin. */
   lastInputTokens: number | null;
   /** The pin's last main, subagent or compaction turn, or a keepalive probe's renewal, and `null` for a session with
@@ -2052,9 +2057,11 @@ export interface Session extends BurnFigures {
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
-  /** The instant the pin was written on the account it stands on, null on a row with no pin. `createdAt` keeps the
-   *  first placement. */
+  /** The instant the pin was written on the account it stands on, null on a row with no pin. */
   pinnedAt: string | null;
+  /** How many times the router placed or moved the session's main conversation under its key, 0 where the ledger
+   *  holds none. */
+  placements: number;
   /** Seconds since main's last presence report, null before the first one. */
   presenceAgeSeconds: number | null;
   /**

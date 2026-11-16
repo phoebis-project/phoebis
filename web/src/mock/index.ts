@@ -1378,7 +1378,7 @@ export class MockApi implements Api {
 
   listSessions() {
     if (sessionsFail()) return Promise.reject(new ApiError(503, 'store busy', null));
-    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now())));
+    return latency(sessionsListedAt(NOW, this.registry().sessions, this.settings.sessions.nonCompanionIdleSeconds, writtenBy(mockClock.now()), ledger().routingEvents));
   }
 
   login(secret: string, stayLoggedIn = false): Promise<SessionInfo> {
