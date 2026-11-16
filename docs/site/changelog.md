@@ -569,11 +569,11 @@ Every finished request lands in the ledger as one row for the client request, on
 decision, folded into the hourly rollup the analytics read ([Statistics](statistics.md#the-ledger)). Each attempt
 carries its token counts and the tier the router prices by, which a page or a route prices when it reads them, so a free
 organization's and a usage-based seat's requests read unpriced in every figure ([Pricing](statistics.md#pricing), [Plan
-meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as one Pro-week figure on every route
-but the burn's, which answers its figures once per plan tier: the share of a Pro 7-day window the same tokens would
-spend, with the request's shares of its own account's windows as the hint where one account is named, bounded by the
-windows the account's poll carries ([Plan meter](statistics.md#plan-meter)). The metrics listener serves `/metrics` in
-Prometheus text format ([Metrics](statistics.md#metrics)), and the `phoebis_attention` gauge carries what needs an
+meter](statistics.md#plan-meter)). A subscription account's plan-side figures read as one Pro-week figure, the share of
+a Pro 7-day window the same tokens would spend, on every route but the burn's, which answers its figures once per plan
+tier. Where one account is named, the figure's hint holds the request's shares of that account's own windows, bounded by
+the windows the account's poll carries ([Plan meter](statistics.md#plan-meter)). The metrics listener serves `/metrics`
+in Prometheus text format ([Metrics](statistics.md#metrics)), and the `phoebis_attention` gauge carries what needs an
 operator ([Conditions and gauges](statistics.md#conditions-and-gauges)). A failed credential refresh raises
 `refresh_failed` in the serious tone. A plan-side figure prices under the regime of the client's entrypoint, the
 interactive regime (the desktop app, the IDE extension, the terminal and the third-party desktop) at twice the 5-hour

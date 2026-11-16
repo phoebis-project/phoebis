@@ -335,9 +335,9 @@ and its text, and when two entries take effect at one instant, naming both entri
 
 ## Plan meter
 
-A subscription account's plan-side figures read as one Pro-week figure on every route but the burn's, which answers its
-figures once per plan tier: the share of a Pro 7-day window the same tokens would spend, which the console shows in the
-week the week control names, and where one account is named the figure's hint gives the request's shares of that
+A subscription account's plan-side figures read as one Pro-week figure, the share of a Pro 7-day window the same tokens
+would spend, on every route but the burn's, which answers its figures once per plan tier. The console shows the figure
+in the week the week control names, and where one account is named the figure's hint gives the request's shares of that
 account's own windows, each a percent with the window named, over the windows the account's window set holds ([The
 windows the router works from](routing.md#the-windows-the-router-works-from)). An API-key account, and a subscription
 account in overage, read dollars, and an overage request adds to no window share. A usage-based seat reads dollars at
