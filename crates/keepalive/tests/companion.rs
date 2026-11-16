@@ -15,6 +15,7 @@ use phoebis_store::{
     CompanionPermissions, CooldownRow, CooldownScope, Identity, MemberWrite, RulesMode, StateCause,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 const ALLOWANCE_PATH: &str = "/v0/companion/allowance";
 const C: &str = "sk-ant-api03-CCCC";
@@ -157,7 +158,8 @@ async fn read_window(r: &Rig, account: &str, window: &str, utilization: f64, res
     r.h.router.samples().await.unwrap();
 }
 
-/// Cancels `account` with its end at `ends_at` through the account edit the admin route commits.
+/// Cancels `account` with its end at `ends_at` through the store write the admin route's account edit commits. The
+/// write runs none of the route's checks, so a caller passes an OAuth account, the one kind the route cancels.
 fn cancel(r: &Rig, account: &str, ends_at: i64) {
     let row = r.h.store.account(account).unwrap().unwrap();
     r.h.store
@@ -606,7 +608,7 @@ async fn each_window_answers_its_own_fit_and_a_spent_fable_week_holds_no_obstacl
 #[tokio::test]
 async fn an_account_past_its_saved_end_leaves_the_list_it_reads_in_before_the_end() {
     let r = rig(RigSpec {
-        storage_key: storage_key(STORAGE_KEY),
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0), api_key("b", B, 1)],
         ..RigSpec::default()
     })
     .await;
@@ -615,16 +617,18 @@ async fn an_account_past_its_saved_end_leaves_the_list_it_reads_in_before_the_en
     r.h.router.reload().await.unwrap();
     let key = r.h.store.companion_key();
     let (a, b) = (key.pseudonym("a"), key.pseudonym("b"));
+    // Membership alone, since the list's order is the pseudonym order case's to prove.
+    let listed = |answer: &Answer| answer.account_ids().into_iter().collect::<BTreeSet<_>>();
     let before = get(&app, Some(SESSION), Some(KEY)).await;
     assert_eq!(
-        before.account_ids(),
-        [b.clone(), a],
+        listed(&before),
+        BTreeSet::from([a, b.clone()]),
         "a canceled account stays listed while its end is ahead: {}",
         before.text
     );
     r.advance(10_000);
     let after = get(&app, Some(SESSION), Some(KEY)).await;
-    assert_eq!(after.account_ids(), [b], "{}", after.text);
+    assert_eq!(listed(&after), BTreeSet::from([b]), "{}", after.text);
 }
 
 #[tokio::test]
