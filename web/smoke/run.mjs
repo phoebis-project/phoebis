@@ -853,13 +853,13 @@ await forView('/', async () => {
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
-    // The expiries between turns rank last: 12 of the day's 14 sit on a pool that warms caches under a key the
+    // The expiries between turns rank last: 13 of the day's 15 sit on a pool that warms caches under a key the
     // keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's rows), the other two on ci.
     [
-      'Expired between turns: 12 in 24h',
+      'Expired between turns: 13 in 24h',
       'badge--warning',
       '/sessions',
-      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 12'],
+      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 13'],
     ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -1282,11 +1282,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (207
-  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 14 expiries between turns the ledger rows of the day
+  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 15 expiries between turns the ledger rows of the day
   // hold and the three bus gaps, the last two hours back. The expired part takes the warning ink while the attention
   // item `expired_between_turns` holds, which the mock holds over its expiries on the pools that warm caches under
   // keys that may be probed for (`ATTENTION` in mock/attention.ts), and with an attention answer that lacks the item
-  // it takes none, the overview's count of 14 standing. The last gap is inside the day, so the bus gaps part takes the
+  // it takes none, the overview's count of 15 standing. The last gap is inside the day, so the bus gaps part takes the
   // warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the mock
   // anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
   const overview = await api.getKeepaliveOverview();
@@ -1329,9 +1329,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 14 · bus gaps 3',
+    line: 'expired between turns 15 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 14', title: null, warning: true },
+      { text: 'expired between turns 15', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '207 ok (75%) of 277',
@@ -13364,12 +13364,14 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
     results.push({ name: '/requests cache row reads Not requested, muted, with no detail', ok: rows.includes('Cache Not requested'), missing: rows });
     results.push({ name: '/requests Not requested is muted', ok: reasonInk() === 'muted', missing: [reasonInk()] });
   }
-  const failedOver = requests.find((r) => serving(r)?.cacheMissReason === 'previous_message_not_found');
-  results.push({ name: 'fixture diagnoses a failover as previous message not found', ok: Boolean(failedOver), missing: [] });
+  // The story's 429 on secondary that req_b8c3e9d4-e61 fails over to primary: the leg lands off the account its pin's
+  // last report stood on, so the relay detaches the member's message and the answer names no reason.
+  const failedOver = requests.find((r) => r.id === 'req_b8c3e9d4-e61');
+  results.push({ name: "fixture files a failover that leaves its pin's account as No reason returned", ok: serving(failedOver)?.cacheMissReason === 'not_returned', missing: [String(serving(failedOver)?.cacheMissReason)] });
   if (failedOver) {
     await m.navigate(`/requests/${failedOver.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row names the failover reason', ok: rows.includes('Cache Previous message not found'), missing: rows });
+    results.push({ name: "/requests cache row names a failover leg's word", ok: rows.includes('Cache No reason returned'), missing: rows });
   }
   // A request whose last attempt failed has no answer to read diagnostics from.
   const unanswered = requests.find((r) => r.attempts.length > 0 && serving(r).cacheMissReason === null);
@@ -19893,17 +19895,25 @@ await forView('/analytics', async () => {
 await forView('/analytics', async () => {
   // The route's answer with five requests under a history edit in its first group and none in the rest, two of the
   // five reading 90% or more of their prompt from the cache: the fault's bar draws the three that missed, then the two
-  // that hit, the hit part with its hover.
-  const name = "/analytics a fault reason's bar draws its hits apart";
+  // that hit, the hit part with its hover. The same group's hit under no divergence draws no part, since only a fault
+  // splits its bar.
+  const name = "/analytics a fault reason's bar draws its hits apart, and the No divergence bar keeps its one fill";
   const breakdownOf = api.getAnalyticsBreakdown;
   api.getAnalyticsBreakdown = async (...args) =>
-    (await breakdownOf.apply(api, args)).map((g, i) => ({ ...g, cacheMissReasonHits: i === 0 ? { messages_changed: 2 } : {}, cacheMissReasons: { ...g.cacheMissReasons, messages_changed: i === 0 ? 5 : 0 } }));
+    (await breakdownOf.apply(api, args)).map((g, i) => ({ ...g, cacheMissReasonHits: i === 0 ? { messages_changed: 2, none: 1 } : {}, cacheMissReasons: { ...g.cacheMissReasons, messages_changed: i === 0 ? 5 : 0 } }));
   const page = await mount('/analytics');
   await tab(page, 'Cache');
   const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Misses by reason');
-  const bar = [...(card?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'History edited');
+  const barOf = (label) => [...(card?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === label);
+  const bar = barOf('History edited');
   const parts = [...(bar?.querySelectorAll('.hbars__stack > .hbars__seg') ?? [])].map((s) => [s.style.flexGrow, s.getAttribute('title')]);
-  results.push({ name, ok: JSON.stringify(parts) === JSON.stringify([['0.6', null], ['0.4', '2 of these requests read 90% or more of their prompt from the cache']]), missing: bar ? parts.map((p) => p.join(' ')) : ['no History edited bar'] });
+  const none = barOf('No divergence');
+  const noneDraw = { fills: none?.querySelectorAll('.hbars__fill').length ?? 0, stacks: none?.querySelectorAll('.hbars__stack').length ?? 0 };
+  results.push({
+    name,
+    ok: JSON.stringify(parts) === JSON.stringify([['0.6', null], ['0.4', '2 of these requests read 90% or more of their prompt from the cache']]) && JSON.stringify(noneDraw) === JSON.stringify({ fills: 1, stacks: 0 }),
+    missing: [...(bar ? parts.map((p) => p.join(' ')) : ['no History edited bar']), none ? JSON.stringify(noneDraw) : 'no No divergence bar'],
+  });
   delete api.getAnalyticsBreakdown;
   page.unmount();
 });
@@ -24784,9 +24794,9 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
   }
   {
     // The story's first session (`STORY_AGENTS[0]`) runs main, the fork c21e and e4b7, and c21e's one request of the
-    // default day is req_96461df2-61a eleven hours back, beside a probe the page leaves out. It is the agent's first
-    // answered turn, whose diagnostics member named no previous message, so it files No reason returned. The rollups
-    // carry no agent, so Add filter offers Agent under a session alone.
+    // default day is req_96461df2-61a, a history edited miss eleven hours back, beside a probe the page leaves out. It
+    // is the fork's first turn, whose diagnostics member names its parent's last answer, so it keeps the reason the
+    // upstream compared. The rollups carry no agent, so Add filter offers Agent under a session alone.
     const name = '/analytics an agent narrows the session view to its requests and its reasons links, and Add filter offers Agent under a session alone';
     const agent = 'c21e';
     const session = requests.find((r) => r.agentId === agent)?.sessionId ?? '';
@@ -24814,7 +24824,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
       ok:
         JSON.stringify(bare) === JSON.stringify(['true', "An agent narrows one session's view, so pick a session first."]) &&
         JSON.stringify(read) === JSON.stringify({ chips: ['agent: c21e', `session: ${session.slice(0, 8)}…`], requests: 1, row: [null, null] }) &&
-        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'not_returned', session }]),
+        JSON.stringify(links) === JSON.stringify([{ agent, reason: 'messages_changed', session }]),
       missing: [JSON.stringify(bare), JSON.stringify(read), JSON.stringify(links)],
     });
   }

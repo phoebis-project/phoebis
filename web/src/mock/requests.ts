@@ -332,37 +332,37 @@ function sourceOf(keyId: string | null, poolId: string | null, kind: RequestKind
  * The word an answered attempt files, as the relay closes it: `not_requested` where its body carried no diagnostics
  * member, `not_returned` where it carried one and the answer drew no reason, else the reason the upstream `compared`.
  * An API-key account in this fixture answers without the beta, so it compares nothing, and neither does the upstream
- * on a probe's body, since the router's member there names no previous message.
+ * on a probe, whose member the relay detaches whoever put it there.
  */
 function filedReason(compared: CacheMissReason | null, source: DiagnosticsSource | null, kind: RequestKind): CacheMissReason {
   if (source === null) return 'not_requested';
-  if (compared === null || (kind === 'probe' && source === 'router')) return 'not_returned';
+  if (compared === null || kind === 'probe') return 'not_returned';
   return compared;
 }
 
+/** The reason an OAuth account's answer draws where the body named a message the account holds. */
+const compare = (): CacheMissReason =>
+  missRng.weighted<CacheMissReason>([
+    { value: 'none', weight: 72 },
+    { value: 'messages_changed', weight: 7 },
+    { value: 'system_changed', weight: 4 },
+    { value: 'tools_changed', weight: 3 },
+    { value: 'model_changed', weight: 2 },
+    { value: 'unavailable', weight: 2 },
+  ]);
+
 /**
  * What each attempt of one request filed for its cache comparison. Diagnostics ride on a response body, so an attempt
- * that failed upstream carries none, and the token-count endpoint returns no usage block to compare against.
+ * that failed upstream carries none, and the token-count endpoint returns no usage block to compare against. A
+ * failover's leg waits for `walkSessionTurns`, which reads whether it landed back on the account its pin's last report
+ * stood on.
  */
 function diagnosed(attempts: Attempt[], kind: RequestKind, source: DiagnosticsSource | null): Attempt[] {
   return attempts.map((a) => {
-    if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
-    // A failover lands on an account that never saw the turn before this one. The draw stands wherever an OAuth
-    // account's first answer stands, whatever word the attempt files, so every later draw keeps its place.
-    const compared =
-      a.accountKind !== 'oauth'
-        ? null
-        : a.index > 0
-          ? 'previous_message_not_found'
-          : missRng.weighted<CacheMissReason>([
-              { value: 'none', weight: 72 },
-              { value: 'messages_changed', weight: 7 },
-              { value: 'system_changed', weight: 4 },
-              { value: 'tools_changed', weight: 3 },
-              { value: 'model_changed', weight: 2 },
-              { value: 'unavailable', weight: 2 },
-            ]);
-    return { ...a, cacheMissReason: filedReason(compared, source, kind) };
+    if (a.upstreamStatus !== 200 || kind === 'count_tokens' || a.index > 0) return a;
+    // The draw stands wherever an OAuth account's first answer stands, whatever word the attempt files, so every later
+    // draw keeps its place.
+    return { ...a, cacheMissReason: filedReason(a.accountKind === 'oauth' ? compare() : null, source, kind) };
   });
 }
 
@@ -782,7 +782,7 @@ function buildRequests(): RequestLog[] {
             ...answered,
             accountId: 'studio',
             accountKind: studio,
-            cacheMissReason: filedReason(answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason, notebookSource, kind),
+            cacheMissReason: filedReason(answered.cacheMissReason, notebookSource, kind),
             index: 0,
             overageInUse: studio === 'oauth' ? false : null,
             tier: accountTier('studio'),
@@ -1221,8 +1221,9 @@ function storyRow(seed: StorySeed): RequestLog {
     return {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
-      // A failover, and a placement after the session's row expired, land on an account that never saw the turn before.
-      cacheMissReason: !answer || kind === 'count_tokens' ? null : filedReason(!oauth ? null : index > 0 || seed.landsAfresh ? 'previous_message_not_found' : seed.pending ? 'pending' : 'none', source, kind),
+      // A failover's leg and a placement after the session's row expired wait for `walkSessionTurns`, which reads where
+      // they landed.
+      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh ? null : filedReason(!oauth ? null : seed.pending ? 'pending' : 'none', source, kind),
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
@@ -2424,37 +2425,40 @@ function phaseRequests() {
 const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
 /**
- * A turn's body names the message its agent's last answer carried, so the first answered turn of an agent in its
- * session names none, and the upstream draws no reason for a member that names no message: each answered attempt of
- * such a turn whose body carried the member files `not_returned`, as the relay does. The rows' last fields are read,
- * since the passes above move arrivals. A probe and a token count are no turns.
+ * The session's turns as the router and the relay see them, over the rows' last fields, since the passes above move
+ * arrivals. Each attempt takes its previous size as the selection hands it on: the size of the last usage report under
+ * the request's pin key (key, session, agent and canonical model), where the attempt lands on that report's account,
+ * and none on a compacted turn, on a pin's first turn, on a pin whose last report was empty, off that account and on a
+ * row with no session. A probe's usage is the keepalive's cost and renews no size, and a token count stores no report.
+ *
+ * A body's member names the message its agent's last answer carried, a fork's its parent's while it has none of its
+ * own, so an agent's first answered turn that is no fork names none. The relay detaches the member's message on an
+ * attempt that lands off the account the selection leaves (the pin's last report's, else on a failover's leg the
+ * account the failover left) and on every probe. An answered attempt whose body carried a member and named no message
+ * files `not_returned`. One the build left unfiled (a failover's leg, a placement after the session's row expired) that
+ * named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing.
  */
-function fileFirstTurns() {
+function walkSessionTurns() {
+  const reports = new Map<string, { accountId: string; size: number }>();
   const answered = new Set<string>();
   for (const r of byArrival()) {
-    if (r.sessionId === null || r.kind !== 'inference' || (servingAttempt(r)?.cacheMissReason ?? null) === null) continue;
+    const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
+    const report = r.sessionId === null ? undefined : reports.get(pin);
     const agent = `${r.sessionId}|${r.agentId}`;
-    if (answered.has(agent)) continue;
-    answered.add(agent);
-    if (r.diagnosticsSource !== null) for (const a of r.attempts) if (a.cacheMissReason !== null) a.cacheMissReason = 'not_returned';
-  }
-}
-
-/**
- * Each attempt's previous size as the selection hands it on: the size of the last usage report under the request's pin
- * key (key, session, agent and canonical model), where the attempt lands on that report's account. None on a compacted
- * turn, on a pin's first turn, on a pin whose last report was empty, off that account and on a row with no session. A
- * probe's usage is the keepalive's cost and renews no size, and a token count stores no usage report.
- */
-function handPreviousSizes() {
-  const reports = new Map<string, { accountId: string; size: number }>();
-  for (const r of byArrival()) {
-    if (r.sessionId === null) continue;
-    const key = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
-    const report = r.contextCompacted === null ? reports.get(key) : undefined;
-    for (const a of r.attempts) a.previousInputTokens = report !== undefined && report.size > 0 && a.accountId === report.accountId ? report.size : null;
+    const turn = r.sessionId !== null && r.kind === 'inference';
+    const firstTurn = turn && !answered.has(agent) && r.agentType !== 'fork' && r.forkedFrom === null;
+    r.attempts.forEach((a, i) => {
+      if (r.sessionId !== null) a.previousInputTokens = report !== undefined && r.contextCompacted === null && report.size > 0 && a.accountId === report.accountId ? report.size : null;
+      if (a.upstreamStatus !== 200 || r.kind === 'count_tokens') return;
+      const left = report?.accountId ?? (i > 0 ? r.attempts[i - 1].accountId : undefined);
+      const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
+      if (r.diagnosticsSource === null) a.cacheMissReason = 'not_requested';
+      else if (!named || a.accountKind !== 'oauth') a.cacheMissReason = 'not_returned';
+      else if (a.cacheMissReason === null) a.cacheMissReason = drawnRow(r) ? compare() : 'none';
+    });
     const serving = servingAttempt(r);
-    if (serving !== null && r.kind !== 'probe' && r.storedTokens.input !== null) reports.set(key, { accountId: serving.accountId, size: promptOf(r.usage) });
+    if (turn && serving?.upstreamStatus === 200) answered.add(agent);
+    if (r.sessionId !== null && serving !== null && r.kind !== 'probe' && r.storedTokens.input !== null) reports.set(pin, { accountId: serving.accountId, size: promptOf(r.usage) });
   }
 }
 
@@ -2465,8 +2469,7 @@ liftCooldowns(REQUESTS);
 identifyRequests();
 phaseRequests();
 traceForks();
-fileFirstTurns();
-handPreviousSizes();
+walkSessionTurns();
 
 function histogramsOf(rows: RequestLog[]): LatencyHistograms {
   const samples = rows.filter((r) => r.status === 200).map((r) => ({ kind: r.kind, ...latencySamples(r) }));
@@ -2729,11 +2732,15 @@ function sampled(h: Rng, n: number, median: number, spread: number): number[] {
 
 // Only the last 24h has row-level logs; older hours are synthesized so the
 // 7d and 30d analytics ranges have a shape to draw.
-/** Splits an hour's requests across the diagnosed reasons, most of them clean. */
-function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
+/**
+ * Splits an hour's requests across the diagnosed reasons, most of them clean. An hour whose account `compares` nothing,
+ * an API key answering the member its client sends without the beta, files each answer under `not_returned`, as the
+ * day's rows of that lane do.
+ */
+function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
   const cacheMissReasons = emptyCacheMissReasons();
-  if (!asksForDiagnostics) {
-    cacheMissReasons.not_requested = ok;
+  if (!compares) {
+    cacheMissReasons.not_returned = ok;
     return { cacheMissReasons, expiredBetweenTurns: 0 };
   }
   let left = ok;

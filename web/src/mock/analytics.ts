@@ -32,10 +32,10 @@ export interface HourlyRollup {
   accountId: string;
   cacheHits: number;
   cacheMisses: number;
-  /** Answered attempts, counted by the word each filed: the upstream's reason or the relay's own. */
-  cacheMissReasons: Record<CacheMissReason, number>;
   /** Per reason, the requests under it that `hitUnderReason` reads as a hit. A reason with none is no key. */
   cacheMissReasonHits: Record<CacheMissReason, number>;
+  /** Answered attempts, counted by the word each filed: the upstream's reason or the relay's own. */
+  cacheMissReasons: Record<CacheMissReason, number>;
   /**
    * `client` for the client's own classifier call on the account and incarnation its judged turn ended on, `client_off`
    * where it ran off them or in a session with no turn to judge, else `-`.
@@ -352,8 +352,8 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     billedUsd: sumOf(billed, (r) => r.costUsd),
     cacheHits: sumOf(counted, (r) => r.cacheHits),
     cacheMisses: sumOf(counted, (r) => r.cacheMisses),
-    cacheMissReasons,
     cacheMissReasonHits,
+    cacheMissReasons,
     clientCanceled,
     cost: sumSplit(priced.map((r) => r.cost)),
     costShares,

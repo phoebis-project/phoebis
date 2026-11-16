@@ -1611,13 +1611,13 @@ export interface AnalyticsGroup {
   cacheEquivalent: { read: number; write: number } | null;
   cacheHits: number;
   cacheMisses: number;
-  /** The ten known reasons always, beside any other name the route answered. */
-  cacheMissReasons: Record<CacheMissReason, number>;
   /**
    * Per reason, the requests under it whose serving attempt read `REASON_HIT_PERCENT` or more of its prompt from the
    * cache. A reason with none is no key, and an hour folded before the route counted them reads empty.
    */
   cacheMissReasonHits: Record<CacheMissReason, number>;
+  /** The ten known reasons always, beside any other name the route answered. */
+  cacheMissReasons: Record<CacheMissReason, number>;
   /** The requests a client left before their answer ended, counted in `requests` and in neither `failed` nor `errors`,
    *  since a client that hangs up is no fault of the route. */
   clientCanceled: number;

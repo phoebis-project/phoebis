@@ -3756,11 +3756,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.some((r) => r.shape.effort === null), 'a row asked for no effort');
   });
 
-  test(`the story holds one request whose comparison was still running, on an account that asked, at ${at}`, async () => {
+  test(`the story's one request whose comparison was still running files pending where its body named a message, on an account that asked, at ${at}`, async () => {
     const s = await story;
+    // On the Sunday night the drawn rows leave the turn's pin last reported on overflow, so its landing on primary
+    // detaches the member's message and the answer names no reason.
+    const word = { '2026-09-16T14:30:00Z': 'pending', '2026-09-20T03:40:00Z': 'not_returned' }[at];
+    const row = s.requests.find((r) => r.id === 'req_b2bed817-a58');
+    assert.equal(row.attempts.at(-1).cacheMissReason, word);
     const pending = s.requests.filter((r) => r.attempts.at(-1)?.cacheMissReason === 'pending');
-    assert.equal(pending.length, 1, `the pending rows: ${pending.map((r) => r.id).join(', ') || 'none'}`);
-    const [row] = pending;
+    assert.deepEqual(pending.map((r) => r.id), word === 'pending' ? [row.id] : [], 'no other row reads its comparison still running');
     assert.equal(s.accounts.find((a) => a.id === row.attempts.at(-1).accountId)?.kind, 'oauth', 'an OAuth account asks for the comparison');
     assert.equal(row.diagnosticsSource, 'client', 'the body carried the member');
   });

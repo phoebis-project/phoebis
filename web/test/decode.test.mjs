@@ -1942,9 +1942,9 @@ test('a request that read nine tenths of its prompt hits under its reason', () =
   const base = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-captured');
   const attempt = { ...base.attempts[base.attempts.length - 1], cacheMissReason: 'messages_changed' };
   const read = (cacheRead, input, cacheWrite5m) => ({ ...base, attempts: [attempt], usage: { ...base.usage, cacheRead, cacheWrite1h: 0, cacheWrite5m, input } });
-  // 900 of a prompt of 1,000 is 90%, 899 of 1,000 falls under it, and 900 beside a write of 200 and an input of 100
-  // is 75% of 1,200.
-  const [g] = d.foldGroups([read(900, 100, 0), read(899, 101, 0), read(900, 100, 200)], 'all');
+  // 900 of a prompt of 1,000 is 90%, 899 of 1,000 falls under it, 900 beside a write of 200 and an input of 100 is 75%
+  // of 1,200, and an answer that read nothing of an empty prompt is no hit.
+  const [g] = d.foldGroups([read(900, 100, 0), read(899, 101, 0), read(900, 100, 200), read(0, 0, 0)], 'all');
   assert.deepEqual({ ...g.cacheMissReasonHits }, { messages_changed: 1 });
 });
 
