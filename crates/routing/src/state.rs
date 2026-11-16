@@ -6981,39 +6981,6 @@ mod tests {
     }
 
     #[test]
-    fn a_heads_bucket_reading_lands_as_read_under_one_reset() {
-        let bucket = |utilization: f64, at: i64| {
-            UtilizationSample {
-                observed_at: at,
-                ..Default::default()
-            }
-            .with(
-                "itpm:x",
-                WindowReading {
-                    utilization,
-                    reset: Some(60_000),
-                    observed_at: at,
-                    source: WindowSource::Head,
-                    plan: None,
-                    tier: None,
-                },
-            )
-        };
-        let mut state = RoutingState::from_load(RoutingLoad::default());
-        state.record_sample("a", bucket(0.50, 1_000), 1_000);
-        state.record_sample("a", bucket(0.30, 2_000), 2_000);
-        let read = state
-            .sample("a")
-            .and_then(|sample| sample.reading("itpm:x"))
-            .expect("a stored reading")
-            .utilization;
-        assert!(
-            (read - 0.30).abs() < CLOSE,
-            "a bucket's figure is a ratio of counts and no truncated percent, not {read}"
-        );
-    }
-
-    #[test]
     fn a_later_poll_with_five_hour_restores_the_window_to_the_set() {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         state.record_sample(

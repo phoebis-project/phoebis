@@ -3904,6 +3904,27 @@ async fn inside_one_reset_a_head_keeps_the_routers_own_figure_within_its_percent
 }
 
 #[tokio::test]
+async fn a_heads_bucket_reading_lands_as_read_under_one_reset() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    let reset = Some(60_000);
+    handle
+        .report(observed("a", sample_with(1_000, "itpm:x", 0.50, reset)))
+        .await;
+    handle.samples().await.unwrap();
+    now.store(2_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(2_000, "itpm:x", 0.30, reset)))
+        .await;
+    let figure = read(&handle, "a", "itpm:x").await;
+    assert!(
+        close(figure, 0.30),
+        "a bucket's figure is a ratio of counts and no truncated percent, not {figure:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_fast_completion_charges_no_window() {
     let store = seeded_oauth(&["a"]);
     with_tier(&store, "a");
