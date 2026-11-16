@@ -155,6 +155,8 @@ struct Observation {
     /// The landed row's epoch, which a report on that row carries.
     epoch: u64,
     left: String,
+    /// The incarnation the row ran on before the move, the left side's holder the learned pair names.
+    left_incarnation: u64,
     /// The row's last prompt before the move, which an answer with no member is measured against.
     last_prompt: u64,
 }
@@ -4442,7 +4444,11 @@ impl Task {
                                             usage.prompt_tokens(),
                                             input_transformations.as_ref(),
                                         )?;
-                                        Some((observation.left, renewed.account_id.clone(), bound))
+                                        Some((
+                                            (observation.left, observation.left_incarnation),
+                                            (renewed.account_id.clone(), renewed.incarnation),
+                                            bound,
+                                        ))
                                     });
                             }
                         }
@@ -4453,10 +4459,19 @@ impl Task {
                                 .note_turn_end(&key, &row.account_id, row.incarnation);
                         }
                         self.write(vec![StateWrite::UpsertPin(row)]);
-                        if let Some((left, served, bound)) = learned {
-                            let fact = self
-                                .state
-                                .learn_binding(&key.model, &left, &served, bound, now);
+                        if let Some((
+                            (left, left_incarnation),
+                            (served, served_incarnation),
+                            bound,
+                        )) = learned
+                        {
+                            let fact = self.state.learn_binding(
+                                &key.model,
+                                (&left, left_incarnation),
+                                (&served, served_incarnation),
+                                bound,
+                                now,
+                            );
                             self.write(vec![StateWrite::ReplaceThinkingBinding(fact)]);
                         }
                     } else if marked {
@@ -5045,6 +5060,7 @@ impl Task {
                 Observation {
                     epoch,
                     left: stood_on.account_id.clone(),
+                    left_incarnation: stood_on.incarnation,
                     last_prompt: stood_on.last_input_tokens,
                 },
             );
@@ -5077,11 +5093,14 @@ impl Task {
             pins = purged.pins.len(),
             "purged expired and orphaned routing state"
         );
-        // A landed row that left before its first report with usage closes nothing.
+        // A landed row that left before its first report with usage closes nothing, and neither does a move off a
+        // holder the id has moved past since: its answer would teach the pair under that holder, and `bound` reads a
+        // pair by its ids. The served side is the pin's own holder, which the purge above already answers for.
         self.observations.retain(|key, observation| {
             self.state
                 .pin(key)
                 .is_some_and(|row| row.epoch == observation.epoch)
+                && holder(&snapshot, &observation.left, observation.left_incarnation).is_some()
         });
         let lapsed: Vec<_> = self
             .invalidated

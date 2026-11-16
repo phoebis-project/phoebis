@@ -17349,7 +17349,9 @@ fn thinking_store(accounts: &[&str], facts: &[(&str, &str, bool)]) -> Arc<Store>
                 tx.replace_thinking_binding(&phoebis_store::ThinkingBindingRow {
                     model: SONNET.into(),
                     account_a: account_a.to_string(),
+                    incarnation_a: 1,
                     account_b: account_b.to_string(),
+                    incarnation_b: 1,
                     bound: *bound,
                     observed_at: AT - HOUR,
                 })
@@ -17923,6 +17925,172 @@ async fn a_second_task_prices_a_moves_drop_from_the_sums_and_the_fact_the_first_
     let (account, booked) = spent_move(&second, turn_of(&second, "s1", "main", SONNET, AT)).await;
     assert_eq!(account, "b");
     assert!(close(booked, 0.006), "100,000 less a's 40,000: {booked:?}");
+}
+
+#[tokio::test]
+async fn a_pair_learned_by_a_move_from_the_higher_id_to_the_lower_stands_through_the_next_purge() {
+    // a deleted and created again under its id holds the id's second incarnation and b its first, and the move runs
+    // from b to a, so the pair names its holders in the reverse of the move's order.
+    let store = thinking_store(&["a", "b"], &[]);
+    store.delete_account("a", "test").unwrap();
+    store
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
+        .unwrap();
+    with_tier(&store, "a");
+    store
+        .set_pool_members(
+            "p",
+            &[
+                MemberWrite {
+                    account_id: "a".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                },
+                MemberWrite {
+                    account_id: "b".into(),
+                    priority: 1,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                },
+            ],
+            "test",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let pins = [
+        stored_pin(&store, "s1", "b", 1, 10.0),
+        stored_pin(&store, "s2", "b", 2, 10.0),
+    ];
+    let handle = thinking_router(&store, &pins, &now).await;
+    handle.report(windows("b", 1.0, 0.3, AT)).await;
+    let Report::Sample {
+        account_id,
+        sample,
+        source_request_id,
+        ..
+    } = windows("a", 0.1, 0.1, AT)
+    else {
+        unreachable!("a usage sample")
+    };
+    handle
+        .report(Report::Sample {
+            account_id,
+            sample,
+            incarnation: 2,
+            source_request_id,
+        })
+        .await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT))
+            .await
+            .0,
+        "a"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            100_000,
+            None,
+            Some(DROPPED_FOR_ACCOUNT),
+        ))
+        .await;
+    // A reload of an unchanged registry purges under the holders the move ran on.
+    handle.reload().await.unwrap();
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    assert_eq!(account, "a");
+    assert!(close(booked, 0.006), "100,000 less b's 40,000: {booked:?}");
+}
+
+#[tokio::test]
+async fn an_answer_behind_the_swap_that_gave_the_left_id_a_new_holder_teaches_the_new_holder_nothing(
+) {
+    // b first in the pool's order, so a fresh session lands on b's new holder once the old one is gone.
+    let store = thinking_store(&["b", "a"], &[]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "b", 1, 10.0)], &now).await;
+    handle.report(windows("b", 1.0, 0.3, AT)).await;
+    handle.report(windows("a", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT))
+            .await
+            .0,
+        "a"
+    );
+    // b deleted and created again while s1's move waits for its answer.
+    store.delete_account("b", "test").unwrap();
+    store
+        .insert_account(&AccountRow::for_tests("b", AccountKind::Oauth))
+        .unwrap();
+    with_tier(&store, "b");
+    store
+        .set_pool_members(
+            "p",
+            &[
+                MemberWrite {
+                    account_id: "b".into(),
+                    priority: 0,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                },
+                MemberWrite {
+                    account_id: "a".into(),
+                    priority: 1,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                },
+            ],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            100_000,
+            None,
+            Some(DROPPED_FOR_ACCOUNT),
+        ))
+        .await;
+    let first_turn = SelectRequest {
+        request_id: "r-s2-first".into(),
+        ..turn_of(&handle, "s2", "main", SONNET, AT)
+    };
+    assert_eq!(landed_on(handle.select(first_turn).await.unwrap()).0, "b");
+    handle
+        .report(answered(
+            session_pin(&handle, "s2").await,
+            100_000,
+            Some(40_000),
+            None,
+        ))
+        .await;
+    let Report::Sample {
+        account_id,
+        sample,
+        source_request_id,
+        ..
+    } = windows("b", 1.0, 0.3, AT)
+    else {
+        unreachable!("a usage sample")
+    };
+    handle
+        .report(Report::Sample {
+            account_id,
+            sample,
+            incarnation: 2,
+            source_request_id,
+        })
+        .await;
+    handle.samples().await.unwrap();
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s2", "main", SONNET, AT)).await;
+    assert_eq!(account, "a");
+    assert!(
+        close(booked, 0.01),
+        "b's new holder has no pair with a: the whole 100,000: {booked:?}"
+    );
 }
 
 #[tokio::test]

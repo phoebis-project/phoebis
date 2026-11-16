@@ -1617,9 +1617,9 @@ pub struct RoutingState {
     /// The source and the reset of each usage-based account's share as a poll or a head of this run set it, by
     /// account id. Memory only, with no column: the share a restart loads takes the estimate over its own instant.
     spend_shares: HashMap<String, SpendShare>,
-    /// Each pair's learned fact by model, then by the pair with the smaller id first: true where the pair is bound.
-    /// Written through and loaded at the start.
-    thinking_bindings: HashMap<String, BTreeMap<(String, String), bool>>,
+    /// Each pair's learned fact by model, then by the pair with the smaller id first. Written through and loaded at the
+    /// start.
+    thinking_bindings: HashMap<String, BTreeMap<(String, String), PairFact>>,
     /// The pin of each session's turn that ended last, by key and session id, as the renewal report at a client
     /// stream's end names it, with the account and incarnation it ran on: what a classifier call that follows within
     /// milliseconds judges. Memory only: after a restart the pins' own stamps stand in until the session's next turn
@@ -1642,6 +1642,15 @@ pub(crate) struct TurnEnd {
 struct WeekHours {
     incarnation: u64,
     hours: BTreeMap<i64, f64>,
+}
+
+/// A pair's learned fact, true where the pair is bound, with the incarnations of the pair's two holders in the pair's
+/// order: an id is reusable, so the fact holds for those holders alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PairFact {
+    bound: bool,
+    incarnation_a: u64,
+    incarnation_b: u64,
 }
 
 /// Two accounts as the facts key their unordered pair: the smaller id first.
@@ -1702,13 +1711,17 @@ impl RoutingState {
             record.incarnation = row.incarnation;
             record.hours.insert(row.hour, row.share);
         }
-        let mut thinking_bindings: HashMap<String, BTreeMap<(String, String), bool>> =
+        let mut thinking_bindings: HashMap<String, BTreeMap<(String, String), PairFact>> =
             HashMap::new();
         for row in load.thinking_bindings {
-            thinking_bindings
-                .entry(row.model)
-                .or_default()
-                .insert((row.account_a, row.account_b), row.bound);
+            thinking_bindings.entry(row.model).or_default().insert(
+                (row.account_a, row.account_b),
+                PairFact {
+                    bound: row.bound,
+                    incarnation_a: row.incarnation_a,
+                    incarnation_b: row.incarnation_b,
+                },
+            );
         }
         RoutingState {
             accounting_degraded: false,
@@ -2338,32 +2351,46 @@ impl RoutingState {
             return false;
         };
         match pairs.get(&pair(account, other)) {
-            Some(bound) => *bound,
+            Some(fact) => fact.bound,
             // One drop says the upstream binds the model's blocks to the account that produced them, which reaches
             // every pair until the pair's own move shows otherwise.
-            None => pairs.values().any(|bound| *bound),
+            None => pairs.values().any(|fact| fact.bound),
         }
     }
 
     /// Records what a move of `model`'s session from `left` to `served` showed, in place of the pair's fact, and
-    /// answers the row the store writes.
+    /// answers the row the store writes. Each side is an account id with the incarnation the move ran on.
     pub(crate) fn learn_binding(
         &mut self,
         model: &str,
-        left: &str,
-        served: &str,
+        left: (&str, u64),
+        served: (&str, u64),
         bound: bool,
         at: i64,
     ) -> ThinkingBindingRow {
-        let (account_a, account_b) = pair(left, served);
+        let ((account_a, incarnation_a), (account_b, incarnation_b)) = if left.0 <= served.0 {
+            (left, served)
+        } else {
+            (served, left)
+        };
+        let (account_a, account_b) = (account_a.to_string(), account_b.to_string());
         self.thinking_bindings
             .entry(model.to_string())
             .or_default()
-            .insert((account_a.clone(), account_b.clone()), bound);
+            .insert(
+                (account_a.clone(), account_b.clone()),
+                PairFact {
+                    bound,
+                    incarnation_a,
+                    incarnation_b,
+                },
+            );
         ThinkingBindingRow {
             model: model.to_string(),
             account_a,
+            incarnation_a,
             account_b,
+            incarnation_b,
             bound,
             observed_at: at,
         }
@@ -4244,6 +4271,13 @@ impl RoutingState {
         self.drop_usage_based_overage(snapshot);
         self.credits
             .retain(|account_id, state| !gone(account_id, state.incarnation));
+        // A pair's row cascades with either account, and its write lands only under the holders it names.
+        for pairs in self.thinking_bindings.values_mut() {
+            pairs.retain(|(account_a, account_b), fact| {
+                !gone(account_a, fact.incarnation_a) && !gone(account_b, fact.incarnation_b)
+            });
+        }
+        self.thinking_bindings.retain(|_, pairs| !pairs.is_empty());
         // Unlike the rows above, the hours take a written cut: the task writes this age cut beside the purge, and a
         // previous holder's hours cascade with its account.
         let oldest = oldest_kept_hour(now);

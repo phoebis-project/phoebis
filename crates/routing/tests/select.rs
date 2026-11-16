@@ -28197,7 +28197,9 @@ fn thinking_state(
             .map(|(model, bound)| ThinkingBindingRow {
                 model: model.to_string(),
                 account_a: "a".into(),
+                incarnation_a: 1,
                 account_b: "b".into(),
+                incarnation_b: 1,
                 bound: *bound,
                 observed_at: T - HOUR,
             })
@@ -28389,6 +28391,75 @@ fn a_move_that_rewrites_nothing_divides_the_burn_by_the_weighted_drop() {
         near(drained.per_rewrite, 0.03 / 120_000.0),
         "the burn over the weighted drop: {:?}",
         drained.per_rewrite
+    );
+}
+
+/// `model`'s fact for the pair of `account_a` and `account_b`, both at their first incarnation, as a router loads it at
+/// its start.
+fn learned_pair(model: &str, account_a: &str, account_b: &str, bound: bool) -> ThinkingBindingRow {
+    ThinkingBindingRow {
+        model: model.into(),
+        account_a: account_a.into(),
+        incarnation_a: 1,
+        account_b: account_b.into(),
+        incarnation_b: 1,
+        bound,
+        observed_at: T - HOUR,
+    }
+}
+
+#[test]
+fn a_purge_under_a_registry_that_no_longer_holds_an_account_drops_its_learned_pairs() {
+    // Sonnet's one fact is the bound pair of a and c, and no move between a and b was observed, so the pair of a and c
+    // reaches a move from a to b until c leaves.
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad {
+        thinking_bindings: vec![learned_pair("claude-sonnet-5", "a", "c", true)],
+        ..RoutingLoad::default()
+    });
+    assert!(
+        st.bound("claude-sonnet-5", "a", "b"),
+        "the bound pair of a and c reaches the pair of a and b"
+    );
+    st.purge(&without_account(&s, "c"), T);
+    assert!(
+        !st.bound("claude-sonnet-5", "a", "b"),
+        "the pair of a and c left with c"
+    );
+}
+
+#[test]
+fn a_purge_drops_the_learned_pair_of_an_id_a_new_holder_took_and_keeps_the_pairs_of_the_holders_that_stand(
+) {
+    // c deleted and created again under its id ahead of the purge: Sonnet's bound pair of a and c names c's first
+    // holder, and Opus's bound pair of a and b names two holders that stand.
+    let mut load = load_of(Pool::default(), &[]);
+    let c = load
+        .accounts
+        .iter_mut()
+        .find(|account| account.id == "c")
+        .expect("the load holds c");
+    c.incarnation = 2;
+    let replaced = RegistrySnapshot::from_load(load, [0; 32], 0, 2);
+    let mut st = RoutingState::from_load(RoutingLoad {
+        thinking_bindings: vec![
+            learned_pair("claude-sonnet-5", "a", "c", true),
+            learned_pair("claude-opus-5", "a", "b", true),
+        ],
+        ..RoutingLoad::default()
+    });
+    assert!(
+        st.bound("claude-sonnet-5", "a", "b"),
+        "the bound pair of a and c reaches the pair of a and b"
+    );
+    st.purge(&replaced, T);
+    assert_eq!(
+        (
+            st.bound("claude-sonnet-5", "a", "b"),
+            st.bound("claude-opus-5", "a", "b")
+        ),
+        (false, true),
+        "the pair of c's first holder left, and the pair of a and b stands"
     );
 }
 

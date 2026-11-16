@@ -7137,7 +7137,9 @@ async fn a_session_row_and_its_line_answer_the_size_and_the_drop_a_round_reads_a
             tx.replace_thinking_binding(&phoebis_store::ThinkingBindingRow {
                 model: "claude-opus-5-5".into(),
                 account_a: "business".into(),
+                incarnation_a: 1,
                 account_b: "direct".into(),
+                incarnation_b: 1,
                 bound: true,
                 observed_at: now - 3_600_000,
             })

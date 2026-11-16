@@ -413,11 +413,16 @@ pub struct ModelWeekHourRow {
 
 /// What a move of one model's session between two accounts showed of its thinking blocks: `bound` where the account
 /// moved to dropped the blocks the other produced. The pair is unordered, so `account_a` holds the smaller id.
+/// `incarnation_a` and `incarnation_b` name the holders of the two ids the fact was learned under. The table stores
+/// neither, so a loaded row takes its accounts' current holders: the cascade deletes a row with either account, and
+/// the write lands only under the holders the row names.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ThinkingBindingRow {
     pub model: String,
     pub account_a: String,
+    pub incarnation_a: u64,
     pub account_b: String,
+    pub incarnation_b: u64,
     pub bound: bool,
     pub observed_at: i64,
 }
@@ -494,11 +499,13 @@ impl Store {
                     round_at: r.get(3)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
-            thinking_bindings: tx.prepare("SELECT model, account_a, account_b, bound, observed_at FROM thinking_bindings \
-                 ORDER BY model, account_a, account_b")?
+            thinking_bindings: tx.prepare("SELECT t.model, t.account_a, a.incarnation, t.account_b, b.incarnation, t.bound, t.observed_at \
+                 FROM thinking_bindings t JOIN accounts a ON a.id = t.account_a JOIN accounts b ON b.id = t.account_b \
+                 ORDER BY t.model, t.account_a, t.account_b")?
                 .query_map([], |r| Ok(ThinkingBindingRow {
-                    model: r.get(0)?, account_a: r.get(1)?, account_b: r.get(2)?, bound: r.get(3)?,
-                    observed_at: r.get(4)?,
+                    model: r.get(0)?, account_a: r.get(1)?, incarnation_a: r.get::<_, i64>(2)? as u64,
+                    account_b: r.get(3)?, incarnation_b: r.get::<_, i64>(4)? as u64, bound: r.get(5)?,
+                    observed_at: r.get(6)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // As with the windows, a previous holder's set is never loaded.
@@ -750,28 +757,31 @@ impl RoutingTx<'_> {
         replace_shed_round_on(self.tx, pool_id, account_id, incarnation, round_at)
     }
 
-    /// Writes the pair's fact in place of the one it held. Only from the router's batches. Answers whether a row was
-    /// written.
+    /// Writes the pair's fact in place of the one it held, only while both ids' holders carry the incarnations the row
+    /// names. Only from the router's batches. Answers whether a row was written.
     pub fn replace_thinking_binding(
         &mut self,
         row: &ThinkingBindingRow,
     ) -> Result<bool, StoreError> {
         // A pair whose account left between the observation and the write lands nowhere, rather than failing the
-        // batch on the reference the cascade would have cleared.
+        // batch on the reference the cascade would have cleared, and so does one whose id a new holder took: the
+        // table names no incarnation, so a row that landed would read as the new holder's.
         let written = self
             .tx
             .prepare_cached(
                 "INSERT OR REPLACE INTO thinking_bindings (model, account_a, account_b, bound, observed_at) \
                  SELECT ?1, ?2, ?3, ?4, ?5 \
-                 WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2) \
-                 AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3)",
+                 WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?2 AND incarnation = ?6) \
+                 AND EXISTS (SELECT 1 FROM accounts WHERE id = ?3 AND incarnation = ?7)",
             )?
             .execute(params![
                 row.model,
                 row.account_a,
                 row.account_b,
                 row.bound,
-                row.observed_at
+                row.observed_at,
+                row.incarnation_a as i64,
+                row.incarnation_b as i64
             ])?;
         Ok(written > 0)
     }

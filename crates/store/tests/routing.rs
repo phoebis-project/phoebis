@@ -3,7 +3,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CompanionPermissions,
     CooldownRow, CooldownScope, CreditsRow, EvidenceSource, OverageRow, PinBurn, PinKey, PinMark,
     PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey,
-    Store, WindowRow, WindowSetRow,
+    Store, ThinkingBindingRow, WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -1497,6 +1497,62 @@ fn rounds_past_the_cut_are_purged_and_newer_ones_stay() {
         1
     );
     assert_eq!(loaded_rounds(&store), vec![round_row("q", "a", 1, 5_000)]);
+}
+
+/// Sonnet's bound fact for the pair of `a` at `incarnation_a` and `b` at `incarnation_b`.
+fn bound_pair(incarnation_a: u64, incarnation_b: u64) -> ThinkingBindingRow {
+    ThinkingBindingRow {
+        model: "claude-sonnet-5".into(),
+        account_a: "a".into(),
+        incarnation_a,
+        account_b: "b".into(),
+        incarnation_b,
+        bound: true,
+        observed_at: 1_000,
+    }
+}
+
+#[test]
+fn a_pairs_fact_lands_under_the_holders_it_names_and_nowhere_once_an_id_moved_past_one() {
+    let store = store_with(&["a", "b"]);
+    store.delete_account("b", "test").unwrap();
+    seed_accounts(&store, &["b"]);
+    assert_eq!(store.account("b").unwrap().unwrap().incarnation, 2);
+    // A move learned on b's first holder, written after the second took the id.
+    assert!(
+        !store
+            .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 1)))
+            .unwrap(),
+        "a fact of b's previous holder lands nowhere"
+    );
+    assert!(store.load_routing().unwrap().thinking_bindings.is_empty());
+    assert!(store
+        .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 2)))
+        .unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().thinking_bindings,
+        [bound_pair(1, 2)],
+        "a fact of the holders that stand lands and loads with their incarnations"
+    );
+    // The same on the pair's other side: a fact of a's first holder, written after the second took the id.
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
+    assert!(
+        !store
+            .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(1, 2)))
+            .unwrap(),
+        "a fact of a's previous holder lands nowhere"
+    );
+    assert!(store.load_routing().unwrap().thinking_bindings.is_empty());
+    assert!(store
+        .write_routing(|tx| tx.replace_thinking_binding(&bound_pair(2, 2)))
+        .unwrap());
+    assert_eq!(
+        store.load_routing().unwrap().thinking_bindings,
+        [bound_pair(2, 2)],
+        "a fact of both second holders lands and loads with their incarnations"
+    );
 }
 
 #[test]
