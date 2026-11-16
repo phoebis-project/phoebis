@@ -8195,12 +8195,14 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
     );
 }
 
-/// The pool `main` from the body `pool` behind key `desktop`, over the OAuth accounts `members` on a priced tier, those
-/// of `ending` canceled to end ten minutes after the rig's clock, and `pins` seeded, handed to a second harness whose
-/// router prices a pin's burn through `round_rates`.
+/// The pool `main` from the body `pool` behind key `desktop`, over the OAuth accounts `members` on a priced tier, the
+/// API-key accounts `paid` as copies of the harness's `direct` under their own ids, those of `ending` canceled to end
+/// ten minutes after the rig's clock, and `pins` seeded, handed to a second harness whose router prices a pin's burn
+/// through `round_rates`.
 async fn fit_harness(
     pool: &str,
     members: &[&str],
+    paid: &[&str],
     ending: &[&str],
     pins: impl Fn(i64) -> Vec<phoebis_store::PinRow>,
 ) -> common::Full {
@@ -8214,6 +8216,16 @@ async fn fit_harness(
             ))
             .unwrap();
         name_the_tier(&seed.store, id, "default_claude_max_20x");
+    }
+    let direct = seed.store.account("direct").unwrap().unwrap();
+    for id in paid {
+        seed.store
+            .insert_account(&phoebis_store::AccountRow {
+                id: id.to_string(),
+                label: id.to_string(),
+                ..direct.clone()
+            })
+            .unwrap();
     }
     for id in ending {
         seed.store
@@ -8250,8 +8262,9 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
     // window. It is the pool's one warm pin, so a fresh session's prior burns as much on every member, and `roomy`
     // burns its own pin's share beside it. The two ending members end ten minutes out, inside the body's wind-down.
     let parts = fit_harness(
-        r#"{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"wind_down_minutes":30,"members":[{"account_id":"roomy","priority":0},{"account_id":"short","priority":0},{"account_id":"high","priority":0},{"account_id":"ending","priority":0},{"account_id":"spent","priority":0},{"account_id":"ending-spent","priority":0},{"account_id":"direct","priority":0}]}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"wind_down_minutes":30,"members":[{"account_id":"roomy","priority":0},{"account_id":"short","priority":0},{"account_id":"high","priority":0},{"account_id":"ending","priority":0},{"account_id":"spent","priority":0},{"account_id":"ending-spent","priority":0},{"account_id":"direct","priority":0},{"account_id":"direct-roomy","priority":0}]}"#,
         &members,
+        &["direct-roomy"],
         &["ending", "ending-spent"],
         |generation| {
             vec![phoebis_store::PinRow {
@@ -8281,13 +8294,16 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
         )
         .await;
     }
-    // The api_key account's request bucket stands full until its reset half a minute out.
-    read_windows(
-        &parts,
-        "direct",
-        &[("rpm:claude-opus-5-5", 1.0, Some(NOW + 30_000))],
-    )
-    .await;
+    // The request bucket of `direct` stands full until its reset half a minute out, and that of `direct-roomy` at
+    // half its limit.
+    for (account, bucket) in [("direct", 1.0), ("direct-roomy", 0.5)] {
+        read_windows(
+            &parts,
+            account,
+            &[("rpm:claude-opus-5-5", bucket, Some(NOW + 30_000))],
+        )
+        .await;
+    }
     let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
         pool_member(v, "ending-spent")["burn"].is_number()
     })
@@ -8316,11 +8332,15 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
         ],
         "{pools}"
     );
+    // A paid member holds no shared window, so it answers the read's verdict: a full bucket reads least bad with no
+    // runway to its wall, and a bucket under its limit fits with no window to bound its runway.
     assert_eq!(
-        read("direct"),
-        (serde_json::json!("least_bad"), serde_json::json!(0)),
-        "a paid member holds no shared window, so it answers the read's verdict, its full bucket least bad with no \
-         runway: {pools}"
+        [read("direct"), read("direct-roomy")],
+        [
+            (serde_json::json!("least_bad"), serde_json::json!(0)),
+            (serde_json::json!("fits"), serde_json::Value::Null),
+        ],
+        "{pools}"
     );
 }
 
@@ -8332,6 +8352,7 @@ async fn a_pool_members_fit_reads_its_worst_shared_window_and_no_model_week() {
     let parts = fit_harness(
         r#"{"id":"main","label":"Main","weekly_ceiling":0.9,"members":[{"account_id":"weekly","priority":0},{"account_id":"model-week","priority":0}]}"#,
         &["weekly", "model-week"],
+        &[],
         &[],
         |_| Vec::new(),
     )
