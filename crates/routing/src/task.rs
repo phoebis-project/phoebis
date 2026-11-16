@@ -5035,8 +5035,9 @@ impl Task {
     }
 
     /// Opens the observation of a selection that landed the session under `key` on another account than the row it
-    /// stood on, where that row's sum for the account it left is above zero, in place of the key's open one. A
-    /// selection that sets the sums to zero drops the key's open observation, landing or not.
+    /// stood on, where that row's sum for the account it left is above zero and the snapshot still holds that row's
+    /// holder, in place of the key's open one. A selection that sets the sums to zero drops the key's open
+    /// observation, landing or not.
     fn observe_landing(
         &mut self,
         key: &PinKey,
@@ -5062,7 +5063,12 @@ impl Task {
             .thinking_sums
             .get(&stood_on.account_id)
             .map_or(0, |sum| sum.tokens);
-        if moved && held > 0 {
+        // A failover's waiting row can name a holder the id has moved past since the purge last ran, and the answer
+        // would teach the pair under that holder: the test the purge's `retain` applies to an open observation.
+        if moved
+            && held > 0
+            && holder(&self.snapshot(), &stood_on.account_id, stood_on.incarnation).is_some()
+        {
             self.observations.insert(
                 key.clone(),
                 Observation {

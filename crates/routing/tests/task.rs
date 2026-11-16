@@ -18269,6 +18269,60 @@ async fn a_failovers_landing_hands_on_no_thinking_of_a_holder_that_left_while_it
 }
 
 #[tokio::test]
+async fn a_failovers_landing_teaches_no_pair_under_a_holder_that_left_while_its_row_waited() {
+    // s1 holds 40,000 tokens of a's thinking when a failover takes its pin off a, and a leaves the registry before
+    // the landing on b. The landing's answer lists a block dropped for the account, so an observation under a's holder
+    // would teach the model its one bound pair, which the move from b to c reads through the model's first drop.
+    let store = thinking_store(&["a", "b", "c"], &[]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "a", 1, 10.0)], &now).await;
+    handle.report(windows("a", 0.3, 0.1, AT)).await;
+    handle.report(windows("b", 0.3, 0.1, AT)).await;
+    handle.report(windows("c", 0.3, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    handle
+        .report(Report::PinInvalidated {
+            account_id: "a".into(),
+            pin: session_pin(&handle, "s1").await,
+            mark: None,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    store.delete_account("a", "test").unwrap();
+    handle.reload().await.unwrap();
+    let landing = SelectRequest {
+        attempted: vec!["a".into()],
+        ..turn_of(&handle, "s1", "main", SONNET, AT)
+    };
+    assert_eq!(
+        landed_on(handle.select(landing).await.unwrap()).0,
+        "b",
+        "the failover lands the session on b"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            120_000,
+            Some(10_000),
+            Some(DROPPED_FOR_ACCOUNT),
+        ))
+        .await;
+    let later = AT + 60_000;
+    now.store(later, Ordering::SeqCst);
+    handle.report(windows("b", 1.0, 0.3, later)).await;
+    handle.samples().await.unwrap();
+    let (account, booked) =
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, later)).await;
+    assert_eq!(account, "c");
+    assert!(
+        close(booked, 0.012),
+        "the model holds no pair, so the whole 120,000: {booked:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_rounds_record_states_the_rewrite_of_a_pin_whose_pair_reads_bound_at_the_smaller_size() {
     let store = averaged(thinking_store(&["a", "b"], &[("a", "b", true)]));
     // The record's figure reads the pricer's Pro-week equivalent: a ten-millionth per cache-write token.
