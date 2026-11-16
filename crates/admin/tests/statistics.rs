@@ -1011,12 +1011,14 @@ async fn the_accounts_route_reads_an_idle_hour_s_fable_peak_off_its_highest_samp
         source: phoebis_ledger::SampleSource::Poll,
         observed_at: at,
     };
-    // Each hour's samples fall from 1.0 to 0.2, so an hour's last sample is not its highest.
+    // Each hour's samples fall from 1.0 to 0.2, so an hour's last sample is not its highest. The model week of Opus
+    // has no peak of its own, so its sample raises neither weekly peak.
     parts
         .db
         .insert_samples(
             &[
                 sample("seven_day_fable", HOUR + 10 * MINUTE, 1.0),
+                sample("seven_day_opus", HOUR + 20 * MINUTE, 0.6),
                 sample("seven_day_fable", HOUR + 30 * MINUTE, 0.2),
                 sample("seven_day_overage_included", 2 * HOUR + 10 * MINUTE, 1.0),
                 sample("seven_day_overage_included", 2 * HOUR + 30 * MINUTE, 0.2),
@@ -1051,6 +1053,16 @@ async fn the_accounts_route_reads_an_idle_hour_s_fable_peak_off_its_highest_samp
             .collect::<Vec<_>>(),
         vec![(HOUR, Some(1.0)), (2 * HOUR, Some(1.0))],
         "an hour with no attempt reads the highest sample of either name of the Fable week as its Fable peak"
+    );
+    assert_eq!(
+        business["hours"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["utilization_7d_max"].as_f64())
+            .collect::<Vec<_>>(),
+        vec![None, None],
+        "the Opus week's sample above the hour's 7-day figure leaves the 7-day peak as it reads without it"
     );
     assert_eq!(
         business["peak"]["seven_day_overage_included"].as_f64(),
