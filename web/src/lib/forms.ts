@@ -39,8 +39,8 @@ export function modelRulesRefusal(rules: ModelRule[]): string | null {
 
 export type WholeEngineKey = { [K in keyof PoolEngineFields]-?: PoolEngineFields[K] extends number ? K : never }[keyof PoolEngineFields];
 
-/** The pool routes' inclusive bound on each whole-number engine field. The cap and the ceiling are fractions. */
-export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'shedCap' | 'windowCeiling'>, { max: number; min: number }> = {
+/** The pool routes' inclusive bound on each whole-number engine field. The cap and the two ceilings are fractions. */
+export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'fiveHourCeiling' | 'shedCap' | 'weeklyCeiling'>, { max: number; min: number }> = {
   burnAverageSeconds: { max: 7_200, min: 600 },
   inFlightCap: { max: 4_294_967_295, min: 1 },
   overageMoveGraceMinutes: { max: 300, min: 0 },
@@ -203,7 +203,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   // NaN is a field left empty or one whose text the browser could not parse, which fails the range and so holds the
   // save.
-  refuse('utilization', 'Window ceiling (%)', ratio(input.windowCeiling, 0.5) ? null : 'Window ceiling (%) is from 50 to 100.');
+  refuse('utilization', '5-hour ceiling (%)', ratio(input.fiveHourCeiling, 0.5) ? null : '5-hour ceiling (%) is from 50 to 100.');
+  refuse('utilization', 'Weekly ceiling (%)', ratio(input.weeklyCeiling, 0.5) ? null : 'Weekly ceiling (%) is from 50 to 100.');
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
     refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));
@@ -239,6 +240,7 @@ export type WarnedSettings = Pick<
   Pool,
   | 'affinityTtlSeconds'
   | 'cacheTtl'
+  | 'fiveHourCeiling'
   | 'inFlightCap'
   | 'loadShedding'
   | 'migrateWhenSpent'
@@ -248,13 +250,13 @@ export type WarnedSettings = Pick<
   | 'slowDown'
   | 'slowDownHoldSeconds'
   | 'warmSessions'
-  | 'windowCeiling'
+  | 'weeklyCeiling'
 >;
 
 const TTL_SECONDS = { '1h': 3_600, '5m': 300 } as const;
 
 /**
- * The pool routes' ten static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
+ * The pool routes' eleven static checks, the mirror of the route's own as `ENGINE_BOUNDS` mirrors its bounds: each with
  * the fields it reads and its sentence, sorted by code. `cohort` is the most agents of one session among the pins
  * under the pool's keys. A warning blocks nothing.
  */
@@ -274,11 +276,16 @@ export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[
   if (pool.shedCap < 0.25) {
     warn('cap_under_quarter', ['shed_cap'], 'A shed cap under 25 percent removes at most a quarter of the burn per round, so a window far over the ceiling needs several rounds and dwells to come under it.');
   }
-  if (pool.windowCeiling < 0.8) {
-    warn('ceiling_low', ['window_ceiling'], 'A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm.');
+  if (pool.fiveHourCeiling < 0.8) {
+    warn('five_hour_ceiling_low', ['five_hour_ceiling'], 'A 5-hour ceiling under 80 percent moves sessions that would have finished the window warm.');
   }
-  if (pool.windowCeiling >= 1) {
-    warn('ceiling_without_margin', ['window_ceiling'], 'A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach the wall before the round or the gate reads it.');
+  if (pool.fiveHourCeiling >= 1) {
+    warn('five_hour_ceiling_without_margin', ['five_hour_ceiling'], 'A ceiling at 100 percent leaves no margin for a stale reading or a large turn, so a session can reach the wall before the round or the gate reads it.');
+  }
+  // A weekly ceiling at the wall takes no margin check: the wall is its default, so the check would hold on every pool
+  // left there.
+  if (pool.weeklyCeiling < 0.8) {
+    warn('weekly_ceiling_low', ['weekly_ceiling'], 'A weekly ceiling under 80 percent leaves a fifth of every week unused.');
   }
   if (pool.slowDownHoldSeconds > 150) {
     warn('hold_over_window', ['slow_down_hold_seconds'], "A hold over 150 seconds leaves under 30 seconds of the client's first-byte window for the upstream's head, so a slowed request can time out at the client and be sent again.");

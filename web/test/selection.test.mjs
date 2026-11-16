@@ -59,6 +59,7 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
     warnings: [],
     // The store's defaults, the balanced presets.
     burnAverageSeconds: 1_800,
+    fiveHourCeiling: 0.95,
     inFlightCap: 16,
     loadShedding: true,
     migrateWhenSpent: true,
@@ -68,8 +69,8 @@ const pool = (strategy, overagePolicy, members, over = {}) => {
     shedCap: 0.5,
     shedDwellSeconds: 900,
     warmSessions: 'when_needed',
+    weeklyCeiling: 0.95,
     windDownMinutes: 30,
-    windowCeiling: 0.95,
     ...over,
   };
   return merged;

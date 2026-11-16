@@ -202,8 +202,8 @@ test('the mock refuses the affinity values the route refuses', async () => {
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false } }, 'affinity_ttl_seconds is 0 or at least 60');
   await refused({ ...poolInputOf(all), affinityTtlSeconds: 120 }, 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed');
   assert.equal((await api.listPools()).find((p) => p.id === 'all').affinityTtlSeconds, all.affinityTtlSeconds, 'a refused save stores nothing');
-  const saved = await api.updatePool('all', { ...poolInputOf(all), windowCeiling: 0.8, keepalive: { ...all.keepalive, enabled: false }, returnToPlan: 'when_cold', slowDown: true, slowDownStretchSeconds: 2_400 });
-  assert.deepEqual([saved.windowCeiling, saved.keepalive.enabled], [0.8, false]);
+  const saved = await api.updatePool('all', { ...poolInputOf(all), fiveHourCeiling: 0.8, keepalive: { ...all.keepalive, enabled: false }, returnToPlan: 'when_cold', slowDown: true, slowDownStretchSeconds: 2_400 });
+  assert.deepEqual([saved.fiveHourCeiling, saved.keepalive.enabled], [0.8, false]);
   // The save goes back to the route as the body the dialog sends, and the route's answer through the decoder.
   const read = d.decodePool({ ...fixture('pools').pools[0], ...d.encodePool({ ...poolInputOf(saved), status: 'active' }) });
   assert.deepEqual([read.slowDown, read.slowDownStretchSeconds, read.returnToPlan], [true, 2_400, 'when_cold'], 'the slow-down, its stretch and the return mode read back as saved');

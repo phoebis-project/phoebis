@@ -57,7 +57,7 @@ const PIN_GROUPS: GroupKeys[] = [
  */
 const SHED_GROUPS: GroupKeys[] = [
   {
-    keys: ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'demand_five_hour', 'factor', 'ramp', 'slow_down', 'speed', 'ceiling', 'cooldown', 'window_share_fast'],
+    keys: ['projection_five_hour', 'horizon_five_hour', 'projection_seven_day', 'horizon_seven_day', 'projection_seven_day_fable', 'horizon_seven_day_fable', 'demand_five_hour', 'factor', 'ramp', 'slow_down', 'speed', 'ceiling', 'five_hour_ceiling', 'weekly_ceiling', 'cooldown', 'window_share_fast'],
     label: 'Windows',
   },
   {

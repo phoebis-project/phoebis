@@ -63,29 +63,34 @@ function Handle({ label, min, max, threshold, track }: { label: string; max: num
   );
 }
 
-/**
- * The members' current 5-hour and 7-day readings on one track of used shares, 0 to 100 %, with the window ceiling as a
- * handle: it drags or takes the arrow keys, a percent a step, between `min` and `max`. One ceiling holds every plan
- * window, so the handle stands over the readings of both.
- */
-export function UtilizationBar({ ceiling, max, min, readings }: { ceiling: Threshold; max: number; min: number; readings: MemberReading[] }) {
+/** One kind of window's track: the members' readings of that window under the handle of its ceiling. */
+function Track({ id, label, max, min, readings, threshold }: { id: '5h' | '7d'; label: string; max: number; min: number; readings: MemberReading[]; threshold: Threshold }) {
   const track = useRef<HTMLDivElement>(null);
-  const windows = readings.flatMap((r) =>
-    (
-      [
-        ['5h', r.fiveHour],
-        ['7d', r.sevenDay],
-      ] as const
-    ).flatMap(([id, w]) => (w === null ? [] : [{ id, key: `${r.id}-${id}`, label: r.label, name: WINDOW_LABEL[id], used: w.utilization }])),
+  const windows = readings.flatMap((r) => {
+    const w = id === '5h' ? r.fiveHour : r.sevenDay;
+    return w === null ? [] : [{ key: `${r.id}-${id}`, label: r.label, used: w.utilization }];
+  });
+  return (
+    <div className="ubar__track" ref={track}>
+      {windows.map((w) => (
+        <span key={w.key} className={`ubar__tick ubar__tick--${id}`} style={{ left: `${clamp(w.used, 0, 1) * 100}%` }} title={`${w.label}: ${WINDOW_LABEL[id]} ${fmtPct(w.used)}`} />
+      ))}
+      <Handle label={label} min={min} max={max} threshold={threshold} track={track} />
+    </div>
   );
+}
+
+/**
+ * The members' current readings on two tracks of used shares, 0 to 100 %: the 5-hour readings under the 5-hour
+ * ceiling's handle, then the 7-day readings under the weekly ceiling's. Each handle drags or takes the arrow keys, a
+ * percent a step, between `min` and `max`. The pool holds a ceiling per kind of window, so each handle stands over the
+ * readings its ceiling holds back and no reading of the other kind.
+ */
+export function UtilizationBar({ fiveHourCeiling, max, min, readings, weeklyCeiling }: { fiveHourCeiling: Threshold; max: number; min: number; readings: MemberReading[]; weeklyCeiling: Threshold }) {
   return (
     <div className="ubar">
-      <div className="ubar__track" ref={track}>
-        {windows.map((w) => (
-          <span key={w.key} className={`ubar__tick ubar__tick--${w.id}`} style={{ left: `${clamp(w.used, 0, 1) * 100}%` }} title={`${w.label}: ${w.name} ${fmtPct(w.used)}`} />
-        ))}
-        <Handle label="Window ceiling" min={min} max={max} threshold={ceiling} track={track} />
-      </div>
+      <Track id="5h" label="5-hour ceiling" min={min} max={max} readings={readings} threshold={fiveHourCeiling} />
+      <Track id="7d" label="Weekly ceiling" min={min} max={max} readings={readings} threshold={weeklyCeiling} />
       {/* Placed rather than spread: spreading centers the middle mark between labels of unequal width, off the track's 50%. */}
       <div className="ubar__scale num" aria-hidden="true">
         <span style={{ left: 0, position: 'absolute' }}>0%</span>

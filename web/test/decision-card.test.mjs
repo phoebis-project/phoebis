@@ -533,22 +533,25 @@ test("a story card's candidate table leads with the member the decision placed, 
   assert.notEqual(record.candidates[0].accountId, record.outcome.accountId, "the fast failover's record leads with another member");
 });
 
-test('the settings fold lists the twenty-four settings with Load shedding on or off, and a version 1 record its three removed after them', async () => {
+test('the settings fold lists the twenty-five settings with Load shedding on or off, and a version 1 record its three removed after them', async () => {
   const { record, row } = await storyRecord('req_ef099b34-453', 1);
   const fold = async (settings) => {
     const container = await cardOf({ ...record, settings }, row);
     return rowsOf(container, '.decision-card__settings');
   };
-  const on = await fold({ ...record.settings, loadShedding: true, windowCeiling: 0.75 });
-  assert.equal(on.length, 24);
-  assert.deepEqual([on[8], on[9]], [['Window ceiling', '75%'], ['Load shedding', 'on']]);
-  assert.deepEqual((await fold({ ...record.settings, loadShedding: false }))[9], ['Load shedding', 'off']);
-  // A version 1 record carried neither the switch and the ceiling nor the slow-down's and the return mode's five.
+  const on = await fold({ ...record.settings, fiveHourCeiling: 0.75, loadShedding: true, weeklyCeiling: 0.78 });
+  assert.equal(on.length, 25);
+  assert.deepEqual([on[8], on[9], on[10]], [['5-hour ceiling', '75%'], ['Weekly ceiling', '78%'], ['Load shedding', 'on']]);
+  assert.deepEqual((await fold({ ...record.settings, loadShedding: false }))[10], ['Load shedding', 'off']);
+  // A version 1 record carried neither the switch and the ceilings nor the slow-down's and the return mode's five.
   const before = { returnToPlan: null, returnToPlanDwellSeconds: null, slowDown: null, slowDownHoldSeconds: null, slowDownStretchSeconds: null };
-  const legacy = await fold({ ...record.settings, ...before, legacy: { paceFloor: 0.05, selectBelowUtilization: 0.6, shedAheadOfPace: null }, loadShedding: null, windowCeiling: null });
+  const legacy = await fold({ ...record.settings, ...before, fiveHourCeiling: null, legacy: { paceFloor: 0.05, selectBelowUtilization: 0.6, shedAheadOfPace: null }, loadShedding: null, weeklyCeiling: null });
   assert.deepEqual(legacy.map(([label]) => label), [...on.map(([label]) => label), 'Shed above (then)', 'Select below (then)', 'Pace floor (then)']);
-  assert.deepEqual([legacy[8], legacy[9], ...legacy.slice(-3)], [['Window ceiling', 'not recorded'], ['Load shedding', 'not recorded'], ['Shed above (then)', 'off'], ['Select below (then)', '60%'], ['Pace floor (then)', '5%']]);
-  assert.equal(legacy.filter(([, value]) => value === 'not recorded').length, 7);
+  assert.deepEqual(
+    [legacy[8], legacy[9], legacy[10], ...legacy.slice(-3)],
+    [['5-hour ceiling', 'not recorded'], ['Weekly ceiling', 'not recorded'], ['Load shedding', 'not recorded'], ['Shed above (then)', 'off'], ['Select below (then)', '60%'], ['Pace floor (then)', '5%']],
+  );
+  assert.equal(legacy.filter(([, value]) => value === 'not recorded').length, 8);
 });
 
 test('the verdict line and the Outcome read a hold for the reset and a reservation, and the foot the record version', async () => {

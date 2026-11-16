@@ -2499,8 +2499,9 @@ async function poolSheddingSwitch(theme) {
 
 /**
  * The Burn average field's hint in the expert view's Windows group: it closes on the sentence naming the preset that
- * unlocks the field, and holds the type, the ink, the line height, the margin, the left edge and the offset under its
- * field's top of the Window ceiling field's hint beside it, as wide as its own field.
+ * unlocks the field, and holds the type, the ink, the line height, the margin and the left edge of the 5-hour ceiling
+ * field's hint in the cell above it, as wide as its own field. The two ceilings' hints, the halves of one row, start at
+ * one offset under their fields' tops.
  */
 async function poolBurnAverageHint(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -2537,11 +2538,15 @@ async function poolBurnAverageHint(theme) {
         wide: Math.round(at.width) === Math.round(frame.width),
       };
     };
-    return { average: read('Burn average (s)'), ceiling: read('Window ceiling (%)') };
+    return { average: read('Burn average (s)'), ceiling: read('5-hour ceiling (%)'), weekly: read('Weekly ceiling (%)') };
   });
   measurements.push(`${theme} /pools burn average hint ${JSON.stringify(hints)}`);
   if (!hints.average?.text.endsWith('. Editable under the Custom preset in Load shedding.')) say(`the Burn average hint reads ${JSON.stringify(hints.average?.text ?? null)}, not closing on the preset that unlocks it`);
-  for (const finding of compare(hints.average, hints.ceiling, ['color', 'font', 'left', 'lineHeight', 'margin', 'top', 'wide'], 'the Burn average hint against the Window ceiling hint beside it')) say(finding);
+  for (const finding of [
+    ...compare(hints.average, hints.ceiling, ['color', 'font', 'left', 'lineHeight', 'margin', 'wide'], 'the Burn average hint against the 5-hour ceiling hint above it'),
+    ...compare(hints.weekly, hints.ceiling, ['top'], 'the Weekly ceiling hint against the 5-hour ceiling hint beside it'),
+  ])
+    say(finding);
   await closeByEscape(dialog, `${theme} /pools burn average hint dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
@@ -2604,9 +2609,9 @@ async function poolEngineHints(theme) {
 
 /**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
- * pill against a session-affinity pill, the overage grace field against the window ceiling field, and a warm-sessions
- * choice against an overage choice. Then the utilization bar's ceiling handle and the shedding and slow-down preview
- * lines.
+ * pill against a session-affinity pill, the overage grace field against the 5-hour ceiling field, and a warm-sessions
+ * choice against an overage choice. Then the utilization bar's 5-hour ceiling handle and the shedding and slow-down
+ * preview lines.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -2642,14 +2647,14 @@ async function poolRoutingCards(theme) {
       // A pressed pill and a chosen radio are drawn in their own ink, so each side is read in its resting state.
       const idlePill = (group) => [...el.querySelectorAll(`[aria-label="${group}"] .pill`)].find((p) => p.getAttribute('aria-pressed') === 'false');
       const idleChoice = (group) => el.querySelector(`[aria-label="${group}"] .radio-list__item:not(.is-active)`);
-      const handle = shown(el.querySelector('[role="slider"][aria-label="Window ceiling"]'));
+      const handle = shown(el.querySelector('[role="slider"][aria-label="5-hour ceiling"]'));
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
       const slowDownPreview = shown(el.querySelector('.slow-down-preview'));
       return {
         affinityPill: box(idlePill('Session affinity')),
-        ceilingField: box(el.querySelector('input[aria-label="Window ceiling (%)"]')),
+        ceilingField: box(el.querySelector('input[aria-label="5-hour ceiling (%)"]')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
         overageChoice: box(idleChoice('Overage policy')),
@@ -2686,8 +2691,8 @@ async function poolRoutingCards(theme) {
     const differs = keys.filter((key) => String(read[mine][key]) !== String(read[neighbour][key]));
     if (differs.length) say(`the ${mine}'s ${differs.join(', ')} differs from the ${neighbour}'s`);
   }
-  if (!read.handle) say('the utilization bar draws no ceiling handle');
-  else if (!read.handle.inside || read.handle.value === null) say(`the ceiling handle sits off its track (${JSON.stringify(read.handle)})`);
+  if (!read.handle) say('the utilization bar draws no 5-hour ceiling handle');
+  else if (!read.handle.inside || read.handle.value === null) say(`the 5-hour ceiling handle sits off its track (${JSON.stringify(read.handle)})`);
   if (!read.preview || !/^(Load shedding is off: no round runs\. )?(\d+ members? projects? over the ceiling|No member projects over the ceiling on any window)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   if (!read.slowDownPreview || !/^(Slow-down is off: no request is held\.|No member is slowed\.|\d+ members? (is|are) slowed: )/.test(read.slowDownPreview)) say(`the slow-down preview reads ${JSON.stringify(read.slowDownPreview)}`);
   await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
@@ -2696,8 +2701,10 @@ async function poolRoutingCards(theme) {
 }
 
 /**
- * The pool dialog's ceiling handle in the plain view: it stands on the track of used shares at the ceiling the field
- * holds, centered on the track's height and taller than the track, and the bar's legend names the two readings alone.
+ * The pool dialog's two ceiling handles in the plain view: each stands on its own track of used shares at the ceiling
+ * its field holds, centered on the track's height and taller than the track, the first track's lowest mark stands
+ * above the second track's highest with a focused handle's ring counted on both, an arrow key on the weekly handle
+ * moves the weekly field and leaves the 5-hour one, and the bar's legend names the two readings alone.
  */
 async function utilizationCeiling(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -2712,28 +2719,52 @@ async function utilizationCeiling(theme) {
     return;
   }
   await settle();
-  const read = await dialog.evaluate((el) => {
-    const track = el.querySelector('.ubar__track');
+  const KINDS = [
+    { field: '5-hour ceiling (%)', handle: '5-hour ceiling', key: 'fiveHour' },
+    { field: 'Weekly ceiling (%)', handle: 'Weekly ceiling', key: 'weekly' },
+  ];
+  const fields = () => dialog.evaluate((el, kinds) => kinds.map((k) => Number(el.querySelector(`input[aria-label="${k.field}"]`)?.value ?? Number.NaN)), KINDS);
+  const read = await dialog.evaluate((el, kinds) => {
+    const tracks = [...(el.querySelector('.ubar')?.querySelectorAll('.ubar__track') ?? [])];
     const box = (node) => node?.getBoundingClientRect() ?? null;
-    const bar = box(track);
-    const knob = box(track?.querySelector('[role="slider"][aria-label="Window ceiling"]'));
-    const field = Number(el.querySelector('input[aria-label="Window ceiling (%)"]')?.value ?? Number.NaN);
-    const legend = [...(track?.closest('.ubar')?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
-    return {
-      field,
-      handle: bar && knob ? { at: ((knob.left + knob.width / 2 - bar.left) / bar.width) * 100, height: knob.height, middle: knob.top + knob.height / 2 - (bar.top + bar.height / 2), track: bar.height } : null,
-      legend,
+    const legend = [...(el.querySelector('.ubar')?.querySelectorAll('.legend li') ?? [])].map((li) => li.textContent?.trim() ?? '');
+    const handleOn = (track, kind) => {
+      const bar = box(track);
+      const knob = box(track?.querySelector(`[role="slider"][aria-label="${kind.handle}"]`));
+      const field = Number(el.querySelector(`input[aria-label="${kind.field}"]`)?.value ?? Number.NaN);
+      return { field, handle: bar && knob ? { at: ((knob.left + knob.width / 2 - bar.left) / bar.width) * 100, height: knob.height, middle: knob.top + knob.height / 2 - (bar.top + bar.height / 2), track: bar.height } : null };
     };
-  });
-  measurements.push(`${theme} /pools window ceiling handle ${JSON.stringify(read)}`);
-  if (read.handle === null) say('the utilization bar draws no ceiling handle in the plain view');
-  else {
-    if (Math.abs(read.handle.at - read.field) > 1) say(`the ceiling handle stands at ${read.handle.at.toFixed(1)}% of the track, not the field's ${read.field}%`);
-    if (Math.abs(read.handle.middle) > 1) say(`the ceiling handle sits ${read.handle.middle}px off the track's middle`);
-    if (read.handle.height <= read.handle.track) say(`the ceiling handle is ${read.handle.height}px tall, no taller than the ${read.handle.track}px track`);
+    // Each track's ticks and its handle, a handle marked so its focus ring can be counted on it.
+    const marks = (track) => [...(track?.querySelectorAll('.ubar__tick, [role="slider"]') ?? [])].map((n) => ({ bottom: box(n).bottom, slider: n.getAttribute('role') === 'slider', top: box(n).top }));
+    return { legend, marks: tracks.map(marks), ...Object.fromEntries(kinds.map((k, i) => [k.key, handleOn(tracks[i], k)])), tracks: tracks.length };
+  }, KINDS);
+  // An arrow key on the weekly handle, which also gives it keyboard focus, so its ring is read as drawn.
+  const before = await fields();
+  const weeklyHandle = dialog.locator('[role="slider"][aria-label="Weekly ceiling"]');
+  await weeklyHandle.press('ArrowUp');
+  await settle();
+  const after = await fields();
+  const ring = await weeklyHandle.evaluate((el) => Number(/(-?[\d.]+)px\s*$/.exec(getComputedStyle(el).boxShadow)?.[1] ?? Number.NaN));
+  await weeklyHandle.press('ArrowDown');
+  await settle();
+  const reach = (list, edge) => list.map((m) => (edge === 'bottom' ? m.bottom + (m.slider ? ring : 0) : m.top - (m.slider ? ring : 0)));
+  const gap = read.marks.length === 2 ? { first: Math.max(...reach(read.marks[0], 'bottom')), ring, second: Math.min(...reach(read.marks[1], 'top')) } : null;
+  const { marks: _marks, ...shown } = read;
+  measurements.push(`${theme} /pools ceiling handles ${JSON.stringify({ ...shown, gap, keyed: { after, before } })}`);
+  if (read.tracks !== 2) say(`the utilization bar draws ${read.tracks} tracks, not one per kind of window`);
+  for (const kind of KINDS) {
+    const { field, handle } = read[kind.key];
+    if (handle === null) say(`the utilization bar draws no ${kind.handle} handle on its track in the plain view`);
+    else {
+      if (Math.abs(handle.at - field) > 1) say(`the ${kind.handle} handle stands at ${handle.at.toFixed(1)}% of its track, not the field's ${field}%`);
+      if (Math.abs(handle.middle) > 1) say(`the ${kind.handle} handle sits ${handle.middle}px off its track's middle`);
+      if (handle.height <= handle.track) say(`the ${kind.handle} handle is ${handle.height}px tall, no taller than the ${handle.track}px track`);
+    }
   }
+  if (gap === null || !Number.isFinite(gap.ring) || gap.first > gap.second) say(`the first track's marks reach ${gap?.first}px, past the second track's at ${gap?.second}px with a ${gap?.ring}px ring`);
+  if (after[1] !== before[1] + 1 || after[0] !== before[0]) say(`an arrow key on the weekly handle moves the fields from ${JSON.stringify(before)} to ${JSON.stringify(after)}`);
   if (JSON.stringify(read.legend) !== '["5-hour reading","7-day reading"]') say(`the bar's legend reads ${JSON.stringify(read.legend)}`);
-  await closeByEscape(dialog, `${theme} /pools window ceiling dialog`, say);
+  await closeByEscape(dialog, `${theme} /pools ceiling handles dialog`, say);
   await atRest();
 }
 
@@ -3249,8 +3280,9 @@ async function poolDialogWalk(theme, mode) {
       found.push(...(await chevronWeight(`${theme} /pools ${mode} dialog Identity select`, dialog.locator('section.dialog-group[aria-label="Identity"] .select > svg'), 12, 1.5)));
     }
     if (group === 'Windows') {
-      // The ceiling's row-mate, the burn average, draws in the expert view alone: the plain view's ceiling spans the
-      // grid's content box, and the expert view's takes the first column with the average in the second.
+      // The two ceilings halve the group's first row in both views, the 5-hour one in the first column and the weekly
+      // one in the second. The burn average draws in the expert view alone, on a row of its own across the grid's
+      // content box.
       const cells = await dialog.evaluate((el) => {
         const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Windows');
         const grid = section?.querySelector('.cells');
@@ -3265,18 +3297,26 @@ async function poolDialogWalk(theme, mode) {
           const r = [...section.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text)?.getBoundingClientRect();
           return r ? { left: at(r.left), top: at(r.top), width: at(r.width) } : null;
         };
-        return { average: cell('Burn average (s)'), ceiling: cell('Window ceiling (%)'), grid: { left: at(left), width: at(width) }, second: { left: at(left + column + parseFloat(s.columnGap)), width: at(column) } };
+        return {
+          average: cell('Burn average (s)'),
+          ceiling: cell('5-hour ceiling (%)'),
+          grid: { left: at(left), width: at(width) },
+          second: { left: at(left + column + parseFloat(s.columnGap)), width: at(column) },
+          weekly: cell('Weekly ceiling (%)'),
+        };
       });
-      measurements.push(`${theme} /pools ${mode} dialog Windows ceiling cell ${JSON.stringify(cells)}`);
+      measurements.push(`${theme} /pools ${mode} dialog Windows ceiling cells ${JSON.stringify(cells)}`);
       // Whole pixels, since the grid's tracks and the arithmetic above round apart in the last digits.
       const px = (o) => o && Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Math.round(v)]));
-      if (!cells) found.push('its cells grid is not drawn to measure the window ceiling against');
-      else if (expert) {
-        found.push(...compare(px(cells.ceiling), px({ left: cells.grid.left, width: cells.second.width }), ['left', 'width'], 'the window ceiling against the first column'));
-        found.push(...compare(px(cells.average), px({ ...cells.second, top: cells.ceiling?.top ?? Number.NaN }), ['left', 'top', 'width'], 'the burn average against the second column beside the ceiling'));
-      } else {
-        if (cells.average) found.push('the burn average draws in the plain view');
-        found.push(...compare(px(cells.ceiling), px(cells.grid), ['left', 'width'], "the window ceiling against the grid's content box"));
+      if (!cells) found.push('its cells grid is not drawn to measure the two ceilings against');
+      else {
+        found.push(...compare(px(cells.ceiling), px({ left: cells.grid.left, width: cells.second.width }), ['left', 'width'], 'the 5-hour ceiling against the first column'));
+        found.push(...compare(px(cells.weekly), px({ ...cells.second, top: cells.ceiling?.top ?? Number.NaN }), ['left', 'top', 'width'], 'the weekly ceiling against the second column beside the 5-hour one'));
+        if (!expert && cells.average) found.push('the burn average draws in the plain view');
+        if (expert) {
+          found.push(...compare(px(cells.average), px(cells.grid), ['left', 'width'], "the burn average against the grid's content box"));
+          if (!(cells.average && cells.ceiling && cells.average.top > cells.ceiling.top)) found.push('the burn average does not stand on a row under the two ceilings');
+        }
       }
     }
     if (group === 'Keepalive') {

@@ -203,19 +203,22 @@ test('the four routing conditions read the count, the setting and the start on t
   const account = { link: { id: 'primary', page: 'accounts' }, pools: ['all'], since, subject: { id: 'primary', label: 'primary', type: 'account' } };
   const main = { link: { id: 'main', page: 'pools' }, pools: ['main'], since, subject: { id: 'main', label: 'main', type: 'pool' } };
   const words = (kind, over, detail) => attentionWords(item(kind, { ...over, detail }), NOW);
-  assert.equal(words('shed_no_runway', main, { accounts: ['primary'], rounds: 4, setting: ['window_ceiling'], setting_values: { window_ceiling: 0.95 } }), `main: 4 rounds marked nothing, no destination had runway, window_ceiling 95 %, since ${at}`);
-  assert.equal(words('shed_no_runway', main, { accounts: ['primary'], rounds: 1, setting: ['window_ceiling'] }), `main: 1 round marked nothing, no destination had runway, window_ceiling, since ${at}`, 'a pool the registry lost carries no value');
-  assert.equal(words('destination_spent', account, { fits: { fits: 1, rewrite_only: 1 }, moves: 2, setting: ['window_ceiling'], windows: ['five_hour'] }), `primary: 2 moves landed and the 5h window was spent within the hour, window_ceiling, since ${at}`);
-  assert.equal(words('destination_spent', account, { fits: { least_bad: 1 }, moves: 1, setting: ['window_ceiling'], windows: ['five_hour', 'seven_day'] }), `primary: 1 move landed and the 5h and 7d windows were spent within the hour, window_ceiling, since ${at}`);
-  assert.equal(words('wall_reached', account, { projection_error: 0.04, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] }), `primary: 1 wall reached on the 5h window, the last round projected 96 %, shed_cap and window_ceiling, since ${at}`);
-  assert.equal(words('wall_reached', account, { projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 2, windows: ['seven_day', 'seven_day_fable'] }), `primary: 2 walls reached on the 7d and Fable windows, shed_cap and window_ceiling, since ${at}`, 'a wall no round projected names no error');
+  assert.equal(
+    words('shed_no_runway', main, { accounts: ['primary'], rounds: 4, setting: ['five_hour_ceiling', 'weekly_ceiling'], setting_values: { five_hour_ceiling: 0.95, weekly_ceiling: 1 } }),
+    `main: 4 rounds marked nothing, no destination had runway, five_hour_ceiling 95 % and weekly_ceiling 100 %, since ${at}`,
+  );
+  assert.equal(words('shed_no_runway', main, { accounts: ['primary'], rounds: 1, setting: ['five_hour_ceiling', 'weekly_ceiling'] }), `main: 1 round marked nothing, no destination had runway, five_hour_ceiling and weekly_ceiling, since ${at}`, 'a pool the registry lost carries no value');
+  assert.equal(words('destination_spent', account, { fits: { fits: 1, rewrite_only: 1 }, moves: 2, setting: ['five_hour_ceiling'], windows: ['five_hour'] }), `primary: 2 moves landed and the 5h window was spent within the hour, five_hour_ceiling, since ${at}`);
+  assert.equal(words('destination_spent', account, { fits: { least_bad: 1 }, moves: 1, setting: ['five_hour_ceiling', 'weekly_ceiling'], windows: ['five_hour', 'seven_day'] }), `primary: 1 move landed and the 5h and 7d windows were spent within the hour, five_hour_ceiling and weekly_ceiling, since ${at}`);
+  assert.equal(words('wall_reached', account, { projection_error: 0.04, setting: ['shed_cap', 'five_hour_ceiling'], walls: 1, windows: ['five_hour'] }), `primary: 1 wall reached on the 5h window, the last round projected 96 %, shed_cap and five_hour_ceiling, since ${at}`);
+  assert.equal(words('wall_reached', account, { projection_error: null, setting: ['shed_cap', 'weekly_ceiling'], walls: 2, windows: ['seven_day', 'seven_day_fable'] }), `primary: 2 walls reached on the 7d and Fable windows, shed_cap and weekly_ceiling, since ${at}`, 'a wall no round projected names no error');
   // After a slow-down round the wall reads how long before its reset it came, since that round's projection measures
   // nothing there.
-  const early = { early_ms: 1_500_000, projection_error: null, setting: ['shed_cap', 'window_ceiling'], walls: 1, windows: ['five_hour'] };
-  assert.equal(words('wall_reached', account, early), `primary: 1 wall reached on the 5h window, the wall came 25 min before the reset, shed_cap and window_ceiling, since ${at}`);
-  assert.equal(words('wall_reached', account, { ...early, early_ms: 40_000 }), `primary: 1 wall reached on the 5h window, the wall came 40 s before the reset, shed_cap and window_ceiling, since ${at}`, 'a span under a minute');
-  assert.equal(words('wall_reached', account, { ...early, early_ms: 0 }), `primary: 1 wall reached on the 5h window, the wall came at the reset, shed_cap and window_ceiling, since ${at}`, 'a wall at or after the reset');
-  assert.equal(words('wall_reached', account, { ...early, early_ms: null }), `primary: 1 wall reached on the 5h window, shed_cap and window_ceiling, since ${at}`, 'neither figure where both are null');
+  const early = { early_ms: 1_500_000, projection_error: null, setting: ['shed_cap', 'five_hour_ceiling'], walls: 1, windows: ['five_hour'] };
+  assert.equal(words('wall_reached', account, early), `primary: 1 wall reached on the 5h window, the wall came 25 min before the reset, shed_cap and five_hour_ceiling, since ${at}`);
+  assert.equal(words('wall_reached', account, { ...early, early_ms: 40_000 }), `primary: 1 wall reached on the 5h window, the wall came 40 s before the reset, shed_cap and five_hour_ceiling, since ${at}`, 'a span under a minute');
+  assert.equal(words('wall_reached', account, { ...early, early_ms: 0 }), `primary: 1 wall reached on the 5h window, the wall came at the reset, shed_cap and five_hour_ceiling, since ${at}`, 'a wall at or after the reset');
+  assert.equal(words('wall_reached', account, { ...early, early_ms: null }), `primary: 1 wall reached on the 5h window, shed_cap and five_hour_ceiling, since ${at}`, 'neither figure where both are null');
   const studio = { ...account, link: { id: 'studio', page: 'accounts' }, pools: ['work'], subject: { id: 'studio', label: 'studio', type: 'account' } };
   const slowed = { bar_ms: 3_600_000, held: 72, held_ms: 7_700_000, open: true, setting: ['slow_down_stretch_seconds'], setting_values: { slow_down_stretch_seconds: 1800 }, spans: 2 };
   assert.equal(words('slowed_long', studio, slowed), `studio: held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since ${at}`);

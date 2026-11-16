@@ -37,8 +37,8 @@ test('a preset sets the cap, the average and the dwell and never the switch, so 
   for (const [name, values] of Object.entries(d.FAILOVER_PRESETS)) assert.deepEqual(Object.keys(values).sort(), ['inFlightCap', 'retryInPlaceSeconds'], name);
   for (const on of [true, false]) {
     for (const name of ['balanced', 'conservative', 'fast']) {
-      const applied = { ...{ ...d.SHEDDING_PRESETS.fast, loadShedding: on, windowCeiling: 0.9 }, ...d.SHEDDING_PRESETS[name] };
-      assert.deepEqual([applied.loadShedding, applied.windowCeiling, d.sheddingPresetOf(applied)], [on, 0.9, name], `${name} with the switch ${on ? 'on' : 'off'}`);
+      const applied = { ...{ ...d.SHEDDING_PRESETS.fast, fiveHourCeiling: 0.9, loadShedding: on, weeklyCeiling: 0.9 }, ...d.SHEDDING_PRESETS[name] };
+      assert.deepEqual([applied.loadShedding, applied.fiveHourCeiling, applied.weeklyCeiling, d.sheddingPresetOf(applied)], [on, 0.9, 0.9, name], `${name} with the switch ${on ? 'on' : 'off'}`);
     }
   }
   const untouched = ['returnToPlan', 'returnToPlanDwellSeconds', 'slowDown', 'slowDownHoldSeconds', 'slowDownStretchSeconds'];
@@ -52,9 +52,14 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const at = (ms) => new Date(ms).toISOString();
 
+/** A weekly reset three days out, past the five-hour bound, so a weekly window there reads its own ceiling. */
+const WEEKS_RESET = at(NOW + 72 * HOUR);
+
 /**
  * A window as the account routes serve it: its projection runs to the horizon `horizonIn` from now, and `burn` is the
- * share of it the account's sessions burn an hour. A null projection is a window the router holds no reading of.
+ * share of it the account's sessions burn an hour. A null projection is a window the router holds no reading of. It
+ * reads its own ceiling: a 5-hour window holds no reset ahead and a weekly one a reset past the five-hour bound, so the
+ * round's line there is the pool's ceiling and not the wall.
  */
 const win = (id, projection, horizonIn = 2 * HOUR, burn = 0.01) => ({
   burn: projection === null ? null : burn,
@@ -64,7 +69,7 @@ const win = (id, projection, horizonIn = 2 * HOUR, burn = 0.01) => ({
   observedAt: at(NOW),
   periodHours: id === '5h' ? 5 : 168,
   projection,
-  resetsAt: at(NOW + horizonIn),
+  resetsAt: id === '5h' ? null : WEEKS_RESET,
   utilization: projection === null ? 0.5 : Math.max(0, projection - 0.1),
 });
 /** A subscription account with its 5-hour and 7-day projections, and its 7-day Fable window's where one is named. */
@@ -94,16 +99,18 @@ const pin = (accountId, sessionId, burn, warm, over = {}) => ({
 const member = (accountId, eligible = 'eligible', priority = 0) => ({ accountId, eligible, priority });
 const pool = (accounts, over = {}) => ({
   burnAverageSeconds: 1_800,
+  fiveHourCeiling: 0.9,
   loadShedding: true,
   members: accounts.map((a) => member(a.id)),
   shedCap: 0.5,
   warmSessions: 'when_needed',
+  weeklyCeiling: 0.9,
   windDownMinutes: 30,
-  windowCeiling: 0.9,
   ...over,
 });
 const line = (accounts, sessions, over = {}) => d.shedPreviewLine(d.shedPreview(pool(accounts, over), accounts, sessions, NOW), NOW);
-// hot projects 99 % at its 5-hour reset two hours out, nine points past the ceiling: an excess of 4.5 points an hour.
+// hot projects 99 % at its 5-hour horizon two hours out, with no reset ahead, nine points past the ceiling: an excess
+// of 4.5 points an hour.
 const hot = oauth('hot', 0.99, 0.4);
 const cool = oauth('cool', 0.3, 0.2);
 const three = [pin('hot', 'cold-a', 0.03, false), pin('hot', 'warm-b', 0.025, true), pin('hot', 'warm-c', 0.01, true)];
@@ -228,6 +235,62 @@ test('the preview names the member closest to the ceiling when none projects ove
   assert.equal(line([{ id: 'key', kind: 'api_key', label: 'key', windows: [], fableWindow: null }], []), 'No member projects over the ceiling on any window.', 'a pool of API-key members alone has no window to read');
 });
 
+test('the preview reads each window against its own ceiling', () => {
+  // weekly's 7-day window projects 93 % at the five-hour bound, three points past the weekly ceiling of 90: an excess
+  // of 0.6 points an hour over the five hours. five's 5-hour window projects 93 % with no reset ahead, under the 5-hour
+  // ceiling of 95.
+  const weekly = { fableWindow: null, id: 'weekly', kind: 'oauth', label: 'weekly', windows: [{ ...win('5h', 0.3), resetsAt: null }, { ...win('7d', 0.93, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  const five = { fableWindow: null, id: 'five', kind: 'oauth', label: 'five', windows: [{ ...win('5h', 0.93), resetsAt: null }, { ...win('7d', 0.2, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  const preview = d.shedPreview(pool([weekly, five], { fiveHourCeiling: 0.95, weeklyCeiling: 0.9 }), [weekly, five], [], NOW);
+  assert.deepEqual(preview.hot.map((h) => [h.label, h.window, h.excess.toFixed(4)]), [['weekly', '7d', '0.0060']]);
+});
+
+test("a sibling's runway reads the weekly ceiling on its 7-day window", () => {
+  // hot projects 97 % with no 5-hour reset ahead, over the 5-hour ceiling of 95: an excess of one point an hour, which
+  // cold-a's cold move covers. Its one sibling's 7-day window reads 97 %, under the weekly ceiling of 100.
+  const over = { fableWindow: null, id: 'hot', kind: 'oauth', label: 'hot', windows: [{ ...win('5h', 0.97), resetsAt: null }, { ...win('7d', 0.4, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  const sibling = { fableWindow: null, id: 'sibling', kind: 'oauth', label: 'sibling', windows: [{ ...win('5h', 0.3), resetsAt: null }, { ...win('7d', 0.97, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  const preview = d.shedPreview(pool([over, sibling], { fiveHourCeiling: 0.95, weeklyCeiling: 1 }), [over, sibling], three, NOW);
+  assert.deepEqual([preview.sessions, preview.noRunway], [1, false]);
+});
+
+test("closest ranks by the room to a window's own ceiling", () => {
+  // near's 5-hour window projects 90 %, five points under the 5-hour ceiling of 95. high's 7-day window projects 94 %,
+  // higher, but six points under the weekly ceiling of 100.
+  const near = { fableWindow: null, id: 'near', kind: 'oauth', label: 'near', windows: [{ ...win('5h', 0.9), resetsAt: null }, { ...win('7d', 0.2, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  const high = { fableWindow: null, id: 'high', kind: 'oauth', label: 'high', windows: [{ ...win('5h', 0.3), resetsAt: null }, { ...win('7d', 0.94, 5 * HOUR), resetsAt: WEEKS_RESET }] };
+  const preview = d.shedPreview(pool([near, high], { fiveHourCeiling: 0.95, weeklyCeiling: 1 }), [near, high], [], NOW);
+  assert.deepEqual(preview.closest, { horizon: NOW + 2 * HOUR, label: 'near', projection: 0.9, window: '5h' });
+});
+
+test("the round's line is the wall at a reset and at the account's end", () => {
+  const hotOf = (account, ceilings) => d.shedPreview(pool([account], ceilings), [account], [], NOW).hot.map((h) => [h.window, h.excess.toFixed(4)]);
+  const defaults = { fiveHourCeiling: 0.95, weeklyCeiling: 1 };
+  const weekly = { fiveHourCeiling: 0.95, weeklyCeiling: 0.9 };
+  // Each tested window reads its horizon two hours out. A 5-hour reset there and the account's end there bound it at
+  // the wall, and so does a weekly reset there, since it lies inside the five hours.
+  const twoHours = at(NOW + 2 * HOUR);
+  const quiet7d = { ...win('7d', 0.2, 5 * HOUR), resetsAt: WEEKS_RESET };
+  const quiet5h = { ...win('5h', 0.3), resetsAt: null };
+  const fiveAtWall = { fableWindow: null, id: 'm', kind: 'oauth', label: 'm', windows: [{ ...win('5h', 0.97), resetsAt: twoHours }, quiet7d] };
+  const fiveOverWall = { fableWindow: null, id: 'm', kind: 'oauth', label: 'm', windows: [{ ...win('5h', 1.03), resetsAt: twoHours }, quiet7d] };
+  const fiveWithoutReset = { fableWindow: null, id: 'm', kind: 'oauth', label: 'm', windows: [{ ...win('5h', 0.97), resetsAt: null }, quiet7d] };
+  const weekAtReset = { fableWindow: null, id: 'm', kind: 'oauth', label: 'm', windows: [quiet5h, { ...win('7d', 0.93, 2 * HOUR), resetsAt: twoHours }] };
+  const weekAtEnd = { ...weekAtReset, canceled: true, subscription: { endsAt: twoHours, trialEndsAt: null }, windows: [quiet5h, { ...win('7d', 0.93, 2 * HOUR), resetsAt: WEEKS_RESET }] };
+  assert.deepEqual(
+    {
+      fiveAtWall: hotOf(fiveAtWall, defaults),
+      fiveOverWall: hotOf(fiveOverWall, defaults),
+      fiveWithoutReset: hotOf(fiveWithoutReset, defaults),
+      weekAtEnd: hotOf(weekAtEnd, weekly),
+      weekAtReset: hotOf(weekAtReset, weekly),
+    },
+    // 103 % three points over the wall two hours out is 1.5 points an hour, and 97 % two points over the 5-hour ceiling
+    // with no reset 1 point an hour.
+    { fiveAtWall: [], fiveOverWall: [['5h', '0.0150']], fiveWithoutReset: [['5h', '0.0100']], weekAtEnd: [], weekAtReset: [] },
+  );
+});
+
 test('the preview names every member over the ceiling, and says no sibling has runway when none can take their sessions', () => {
   const second = oauth('second', 0.4, 0.95);
   const pins = [...three, pin('second', 'a', 0.05, false), pin('second', 'b', 0.01, false)];
@@ -331,17 +394,18 @@ test('the preview counts an unpriced pin on the window for the last-pin rule sti
 });
 
 /**
- * `oauth` with its 5-hour window resetting `resetIn` from now. The window starts five hours before the reset, or at the
- * reset once it has passed.
+ * `oauth` with its 5-hour window resetting `resetIn` from now, its horizon there. The window starts five hours before
+ * the reset, or at the reset once it has passed. A reset ahead sets the round's line at the wall.
  */
-const fresh = (id, five, seven, resetIn) => ({ ...oauth(id, five, seven), windows: [win('5h', five, resetIn), win('7d', seven, 5 * HOUR)] });
+const fresh = (id, five, seven, resetIn) => ({ ...oauth(id, five, seven), windows: [{ ...win('5h', five, resetIn), resetsAt: at(NOW + resetIn) }, win('7d', seven, 5 * HOUR)] });
 /** The sentence that names a member whose 5-hour round the hold, twice the test pool's 30-minute average, took away. */
 const heldSentence = (label, age) => `${label}'s 5-hour window is ${age} old, under the hold of 1 h, so its round reads the next window.`;
 
 test('a member whose 5-hour window is under the hold is read on its next window and named', () => {
-  // hot's 5-hour window reset ten minutes ago, so its round reads the 7-day window, over the ceiling too: 97 % five
-  // hours out, an excess of 1.4 points an hour, which cold-a's 3 covers alone.
-  const young = fresh('hot', 0.99, 0.97, 4 * HOUR + 50 * MINUTE);
+  // hot's 5-hour window reset ten minutes ago and projects past the wall at its next reset, so its round reads the
+  // 7-day window, over the ceiling too: 97 % five hours out, an excess of 1.4 points an hour, which cold-a's 3 covers
+  // alone.
+  const young = fresh('hot', 1.09, 0.97, 4 * HOUR + 50 * MINUTE);
   const preview = d.shedPreview(pool([young, cool]), [young, cool], three, NOW);
   assert.deepEqual(preview.hot.map((h) => h.window), ['7d']);
   assert.deepEqual(preview.held, [{ ageMs: 600_000, holdMs: 3_600_000, id: 'hot', label: 'hot' }]);
@@ -350,7 +414,7 @@ test('a member whose 5-hour window is under the hold is read on its next window 
 });
 
 test('a held member with no other window over the ceiling is named beside the closest', () => {
-  const young = fresh('hot', 0.99, 0.4, 4 * HOUR + 50 * MINUTE);
+  const young = fresh('hot', 1.09, 0.4, 4 * HOUR + 50 * MINUTE);
   const preview = d.shedPreview(pool([young, cool]), [young, cool], three, NOW);
   assert.deepEqual([preview.hot.length, preview.closest], [0, { horizon: NOW + 5 * HOUR, label: 'hot', projection: 0.4, window: '7d' }]);
   // The closest weekly window reads the span to its horizon, whose spelling the duration format decides.
@@ -367,7 +431,7 @@ test('a passed reset with no new one starts the window at the reset', () => {
 
 test('a window older than the hold fires as today', () => {
   const read = (resetIn) => {
-    const member = fresh('hot', 0.99, 0.4, resetIn);
+    const member = fresh('hot', 1.09, 0.4, resetIn);
     const preview = d.shedPreview(pool([member, cool]), [member, cool], three, NOW);
     return [preview.hot.map((h) => h.window), preview.held];
   };
@@ -376,7 +440,7 @@ test('a window older than the hold fires as today', () => {
 });
 
 test('a 5-hour reset more than five hours ahead starts no fresh window, so nothing is held', () => {
-  const ahead = fresh('hot', 0.99, 0.4, 6 * HOUR);
+  const ahead = fresh('hot', 1.09, 0.4, 6 * HOUR);
   const preview = d.shedPreview(pool([ahead, cool]), [ahead, cool], three, NOW);
   assert.deepEqual([preview.hot.map((h) => h.window), preview.held], [['5h'], []]);
 });
@@ -406,14 +470,14 @@ test('a pin on an account without a 5-hour window scales its 7-day burn by 1 on 
   // horizon five hours out under a ceiling of 95 asks 0.4 points an hour, which a's 5 points cover.
   const approved = { fableWindow: null, id: 'approved', kind: 'oauth', label: 'approved', windows: [win('7d', 0.97, 5 * HOUR, 0.02)] };
   const weekly = [pin('approved', 'a', 0.05, false, { burnWindow: 'seven_day' }), pin('approved', 'b', 0.03, false, { burnWindow: 'seven_day' })];
-  assert.equal(line([approved, cool], weekly, { windowCeiling: 0.95 }), '1 member projects over the ceiling: approved. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
+  assert.equal(line([approved, cool], weekly, { fiveHourCeiling: 0.95, weeklyCeiling: 0.95 }),'1 member projects over the ceiling: approved. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
   // On the Fable round the account burns its Fable week half as fast as its 7-day window, so the pins' 3 and 2 points
   // read 1.5 and 1 there. 99 % two hours out asks 2 points an hour, the cap's half of their 2.5 bounds it at 1.25, and
   // a's 1.5 covers that alone.
   const fable = { fableWindow: win('7d_fable', 0.99, 2 * HOUR, 0.01), id: 'fable', kind: 'oauth', label: 'fable', windows: [win('7d', 0.5, 5 * HOUR, 0.02)] };
   const sibling = oauth('sibling', 0.3, 0.2, 0.2);
   const pins = [pin('fable', 'a', 0.03, false, { burnWindow: 'seven_day', model: 'claude-fable-5' }), pin('fable', 'b', 0.02, false, { burnWindow: 'seven_day', model: 'claude-fable-5' })];
-  const preview = d.shedPreview(pool([fable, sibling], { windowCeiling: 0.95 }), [fable, sibling], pins, NOW);
+  const preview = d.shedPreview(pool([fable, sibling], { fiveHourCeiling: 0.95, weeklyCeiling: 0.95 }), [fable, sibling], pins, NOW);
   assert.deepEqual(preview.hot.map((h) => [h.label, h.window]), [['fable', '7d_fable']]);
   assert.equal(d.shedPreviewLine(preview, NOW), '1 member projects over the ceiling: fable. A round there would mark 1 session (0 warm), 1.5 %/h of the excess, to move to a sibling with runway.');
 });

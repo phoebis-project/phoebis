@@ -100,6 +100,7 @@ export const CACHE_TTL_DEFAULTS: PoolCacheTtl = { enabled: false, injectWhenAbse
 export type PoolEngineFields = Pick<
   Pool,
   | 'burnAverageSeconds'
+  | 'fiveHourCeiling'
   | 'inFlightCap'
   | 'loadShedding'
   | 'migrateWhenSpent'
@@ -113,14 +114,15 @@ export type PoolEngineFields = Pick<
   | 'slowDownHoldSeconds'
   | 'slowDownStretchSeconds'
   | 'warmSessions'
+  | 'weeklyCeiling'
   | 'windDownMinutes'
-  | 'windowCeiling'
 >;
 
 /** The store's ceiling, shedding, slow-down, failover and return-to-plan defaults, which a new pool starts with. */
 export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   ...SHEDDING_PRESETS.balanced,
   ...FAILOVER_PRESETS.balanced,
+  fiveHourCeiling: 0.95,
   loadShedding: true,
   migrateWhenSpent: true,
   overageMoveGraceMinutes: 30,
@@ -130,8 +132,8 @@ export const POOL_ENGINE_DEFAULTS: PoolEngineFields = {
   slowDownHoldSeconds: 120,
   slowDownStretchSeconds: 9_000,
   warmSessions: 'when_needed',
+  weeklyCeiling: 1,
   windDownMinutes: 30,
-  windowCeiling: 0.95,
 };
 
 export type PoolAffinityFields = Pick<Pool, 'affinityMode' | 'minSharedPrefixTokens' | 'sessionPlacement' | 'subagentPlacement'>;

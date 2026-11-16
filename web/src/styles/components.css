@@ -2635,6 +2635,12 @@ textarea.input {
   position: relative;
 }
 
+/* A tick reaches 5 px past its track and a focused handle's ring 7 px, so at the bar's 8 px gap alone the two tracks'
+   marks would meet. 14 px between them keeps every mark and ring of one track clear of the other's. */
+.ubar__track + .ubar__track {
+  margin-top: 6px;
+}
+
 .ubar__tick {
   position: absolute;
   top: -5px;

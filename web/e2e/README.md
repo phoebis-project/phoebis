@@ -93,13 +93,16 @@ table scrolling inside its wrap and the first Latest ratio cell in view, a colla
 or plain, an open group's height recorded, that group on an even line with its nested rows alternating two tones, and
 the nested windows table's fill column free of the group column's floor), pool chips, the caching controls, the Load
 shedding switch against Migrate when spent, the Burn average field's hint in the expert view (ending on the preset that
-unlocks the field, against the Window ceiling field's hint beside it in type, ink, line height, margin, left edge and
-top, and as wide as its field), the Wind down and Retention hints of the pool dialog (the Wind down hint naming the
-canceled subscription against the Return dwell hint beside it, and the Retention hint naming the limit and the Settings
-page's About card against the capture switch's hint beside it, each in type, ink and left edge), the load groups (the
-overage grace field against the window ceiling field, the utilization bar's ceiling handle and the shedding preview
-line), the pool dialog's ceiling handle in the plain view (on the track at the field's value, centered on the track and
-taller than it), the pool dialog's return rate range (mock pass: its select against the Strategy select in height and
+unlocks the field, against the 5-hour ceiling field's hint in the cell above it in type, ink, line height, margin and
+left edge, as wide as its field, and the Weekly ceiling field's hint, the other half of its row, starting at the top of
+the 5-hour ceiling's hint), the Wind down and Retention hints of the pool dialog (the Wind down hint naming the canceled
+subscription against the Return dwell hint beside it, and the Retention hint naming the limit and the Settings page's
+About card against the capture switch's hint beside it, each in type, ink and left edge), the load groups (the overage
+grace field against the 5-hour ceiling field, the utilization bar's 5-hour ceiling handle and the shedding preview
+line), the pool dialog's two ceiling handles in the plain view (each on its own track at its field's value, centered on
+the track and taller than it, the first track's lowest mark above the second track's highest with a focused handle's
+ring counted on both, and an arrow key on the weekly handle moving the weekly field by one point and leaving the 5-hour
+one as it was), the pool dialog's return rate range (mock pass: its select against the Strategy select in height and
 font size, beside the "Return rate by idle age" label, their vertical centers within 1 px, opening on "7 days", the
 hint's text recorded), the Active pins tile's line under its figure (in the mock pass on the work card alone, "1 on a
 former member" inside its tile below the figure, in the labels' ink and the type of the serving table's sub line at a

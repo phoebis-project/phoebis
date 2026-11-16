@@ -83,6 +83,45 @@ const lastDay = (kind: string) => ROUTING_EVENTS.filter((e) => e.kind === kind &
 const sorted = (values: unknown[]) => [...new Set(values.map(String))].sort();
 
 /**
+ * `lead`, then the ceiling of each kind of window `windows` lists, each once, as the fold names them: the 5-hour
+ * ceiling where a listed window is no week, the weekly one where one is.
+ */
+const ceilingSettings = (lead: string[], windows: string[]): string[] => [
+  ...lead,
+  ...(windows.some((w) => hoursOfKey(w) !== 168) ? ['five_hour_ceiling'] : []),
+  ...(windows.some((w) => hoursOfKey(w) === 168) ? ['weekly_ceiling'] : []),
+];
+
+/** A pool's value of each setting a condition names, as the reader joins it. */
+const settingValues = (poolId: string, names: string[]): Record<string, number> | null => {
+  const pool = poolById.get(poolId);
+  if (!pool) return null;
+  const value: Record<string, number> = { five_hour_ceiling: pool.fiveHourCeiling, shed_cap: pool.shedCap, weekly_ceiling: pool.weeklyCeiling };
+  return Object.fromEntries(
+    names.flatMap((name) => {
+      const v = lookup(value, name);
+      return v === undefined ? [] : [[name, v]];
+    }),
+  );
+};
+
+/**
+ * The pool whose values a wall or a spent destination of the account reads: its one pool where the account stands in
+ * exactly one, none where it stands in several, since the reader would pick among them in no fixed order.
+ */
+const onePoolOf = (accountId: string): string | null => {
+  const pools = POOLS.filter((p) => p.members.some((m) => m.accountId === accountId));
+  return pools.length === 1 ? pools[0].id : null;
+};
+
+/** An account condition's settings with the values of its one pool, where it stands in exactly one. */
+const accountSettings = (accountId: string, names: string[]) => {
+  const pool = onePoolOf(accountId);
+  const values = pool === null ? null : settingValues(pool, names);
+  return { setting: names, ...(values === null ? {} : { setting_values: values }) };
+};
+
+/**
  * A model the cost model prices nothing for as the ledger counts it: the requests on it that a plan funded and that
  * carried usage, each with no Pro-week figure, the run dated from the first of them. Null when the story holds none.
  */
@@ -121,8 +160,16 @@ function walls(accountId: string): Pick<AttentionItem, 'detail' | 'since'> | nul
   const reset = typeof newest.detail.reset === 'number' ? newest.detail.reset : null;
   // From the block and the present reading, as the reader joins it: the row's windows name the day's spent ones.
   const usable = wallReset(lookup(RESET_BLOCKS, accountId), atLimit(accountId), NOW);
+  const windows = sorted(spent.map((e) => e.detail.window));
   return {
-    detail: { early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null, projection_error: projection === null ? null : roundTo(1 - projection, 3), ...(usable === null ? {} : { reset: usable }), setting: ['shed_cap', 'window_ceiling'], walls: spent.length, windows: sorted(spent.map((e) => e.detail.window)) },
+    detail: {
+      early_ms: slowed && reset !== null ? Math.max(0, reset - wallAt) : null,
+      projection_error: projection === null ? null : roundTo(1 - projection, 3),
+      ...(usable === null ? {} : { reset: usable }),
+      ...accountSettings(accountId, ceilingSettings(['shed_cap'], windows)),
+      walls: spent.length,
+      windows,
+    },
     since: spent[0].at,
   };
 }
@@ -135,15 +182,20 @@ function spentDestination(accountId: string): Pick<AttentionItem, 'detail' | 'si
   if (moves.length === 0) return null;
   const fits: Record<string, number> = {};
   for (const m of moves) fits[String(m.detail.fit ?? 'unknown')] = (fits[String(m.detail.fit ?? 'unknown')] ?? 0) + 1;
-  return { detail: { fits, moves: moves.length, setting: ['window_ceiling'], windows: sorted(moves.flatMap((m) => after(m).map((w) => w.detail.window))) }, since: moves[0].at };
+  const windows = sorted(moves.flatMap((m) => after(m).map((w) => w.detail.window)));
+  return { detail: { fits, moves: moves.length, ...accountSettings(accountId, ceilingSettings([], windows)), windows }, since: moves[0].at };
 }
 
-/** A pool's rounds that marked nothing for want of a destination with runway, with the ceiling the pool holds. */
+/**
+ * A pool's rounds that marked nothing for want of a destination with runway, with both ceilings the pool holds, since
+ * a round reads a sibling's runway over windows of both kinds.
+ */
 function roundsWithoutRunway(poolId: string): Pick<AttentionItem, 'detail' | 'since'> | null {
   const rounds = lastDay('shedding_round').filter((e) => e.poolId === poolId && e.detail.outcome === 'nothing_to_mark' && e.detail.reason === 'no_runway');
   if (rounds.length === 0) return null;
-  const ceiling = poolById.get(poolId)?.windowCeiling ?? null;
-  return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting: ['window_ceiling'], setting_values: { window_ceiling: ceiling } }, since: rounds[0].at };
+  const setting = ['five_hour_ceiling', 'weekly_ceiling'];
+  const values = settingValues(poolId, setting);
+  return { detail: { accounts: sorted(rounds.map((e) => e.accountId)), rounds: rounds.length, setting, ...(values === null ? {} : { setting_values: values }) }, since: rounds[0].at };
 }
 
 /** A routing log event as the slowed-account fold reads it. */

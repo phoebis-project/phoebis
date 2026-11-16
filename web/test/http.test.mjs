@@ -628,7 +628,8 @@ const poolSave = (name) => ({
   status: 'active',
   strategy: 'pace',
   subagentPlacement: 'with_main',
-  windowCeiling: 0.8,
+  fiveHourCeiling: 0.8,
+  weeklyCeiling: 0.9,
 });
 
 test('a pool save is one PATCH that carries the members with the settings', async () => {
@@ -641,8 +642,8 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'business', budget_daily_usd: null, budget_monthly_usd: null, priority: 0 },
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
-  assert.deepEqual([body.load_shedding, body.window_ceiling], [false, 0.8], 'the switch is sent off as it is sent on');
-  const refused = ['burn_window_seconds', 'pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_share', 'source_dwell_seconds'];
+  assert.deepEqual([body.load_shedding, body.five_hour_ceiling, body.weekly_ceiling], [false, 0.8, 0.9], 'the switch is sent off as it is sent on');
+  const refused = ['burn_window_seconds', 'pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_share', 'source_dwell_seconds', 'window_ceiling'];
   assert.deepEqual(refused.filter((f) => f in body), [], 'the body names no field the route refuses as unknown');
   assert.equal(body.cache_diagnostics, false, 'the switch is sent off as it is sent on');
   assert.deepEqual(

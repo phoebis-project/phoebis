@@ -28,7 +28,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   shed_no_runway: 'Rounds without a destination',
   slowed_long: 'Slowed past twice the stretch',
   unknown: 'Unknown condition',
-  wall_reached: 'Wall reached under the ceiling',
+  wall_reached: 'Wall reached',
   writer_degraded: 'State writer degraded',
 };
 /** Critical where requests fail now, serious where they fail soon or lose data, warning for the rest, info for a

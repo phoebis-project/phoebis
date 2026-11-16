@@ -202,6 +202,7 @@ function settingsNow(pool: PoolSeed): RecordSettings {
     affinityMode: pool.affinityMode,
     affinityTtlSeconds: pool.affinityTtlSeconds,
     burnAverageSeconds: pool.burnAverageSeconds,
+    fiveHourCeiling: pool.fiveHourCeiling,
     inFlightCap: pool.inFlightCap,
     legacy: null,
     loadShedding: pool.loadShedding,
@@ -223,8 +224,8 @@ function settingsNow(pool: PoolSeed): RecordSettings {
     strategy: pool.strategy,
     subagentPlacement: pool.subagentPlacement,
     warmSessions: pool.warmSessions,
+    weeklyCeiling: pool.weeklyCeiling,
     windDownMinutes: pool.windDownMinutes,
-    windowCeiling: pool.windowCeiling,
   };
 }
 
@@ -432,12 +433,15 @@ function horizonOf(name: string, resetsAt: string | null, end: number | null, at
   return { at: Math.max(at, byEnd ? end : horizon), bound: byReset || byEnd ? 'wall' : 'span' };
 }
 
+/** A window's own ceiling on a pool by its wire key. */
+const ceilingOn = (pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling'>, window: string): number => (window === 'five_hour' ? pool.fiveHourCeiling : pool.weeklyCeiling);
+
 /**
  * The line a window's projection is tested against, as the router's `HorizonBound::limit` reads it: the wall, 1, at a
- * horizon a reset or the account's end set, and the pool's ceiling at the five-hour bound.
+ * horizon a reset or the account's end set, and the window's own ceiling at the five-hour bound.
  */
-const lineOf = (c: RecordCandidate, window: string, pool: Pick<PoolSeed, 'windowCeiling'>, at: number): number =>
-  horizonOf(window, c.windows[window]?.reset ?? null, endOf(accountById.get(c.accountId)!, at), at).bound === 'wall' ? 1 : pool.windowCeiling;
+const lineOf = (c: RecordCandidate, window: string, pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling'>, at: number): number =>
+  horizonOf(window, c.windows[window]?.reset ?? null, endOf(accountById.get(c.accountId)!, at), at).bound === 'wall' ? 1 : ceilingOn(pool, window);
 
 /**
  * A read of an account's slow-down entry: its factor, the speed its holds realize, its stretch, when the stretch first
@@ -666,13 +670,12 @@ export function runwayTiesOf<T extends Pick<RecordCandidate, 'runwayMs'>>(ties: 
 /**
  * The router's fit of a pin on a candidate, over the plan windows the model draws: each window's runway is the time
  * until the prediction with the pin's rewrite, rising at the account's burn (its demand on the 5-hour window) and the
- * pin's, reaches the ceiling, zero where the rewrite alone does and unbounded with no burn. `fits` reaches the horizon
- * on every window, `rewrite_only` lands the rewrite but falls short on one, and `least_bad` is the rest, as is a window
- * a move cannot read. An account inside the pool's wind-down before its end reads `ending`, and an API-key account fits
- * while its worst bucket has room.
+ * pin's, reaches the window's own ceiling, zero where the rewrite alone does and unbounded with no burn. `fits` reaches
+ * the horizon on every window, `rewrite_only` lands the rewrite but falls short on one, and `least_bad` is the rest, as
+ * is a window a move cannot read. An account inside the pool's wind-down before its end reads `ending`, and an API-key
+ * account fits while its worst bucket has room.
  */
-function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'windDownMinutes' | 'windowCeiling'>, model: string, tokens: number, pinBurn: Record<string, number>, move: boolean): FitRead {
-  const ceiling = pool.windowCeiling;
+function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'fiveHourCeiling' | 'weeklyCeiling' | 'windDownMinutes'>, model: string, tokens: number, pinBurn: Record<string, number>, move: boolean): FitRead {
   const read = (facts: WalkFact[], verdict: string, runwayMs: number | null = null, binding: string | null = null): FitRead => ({
     binding,
     facts: [...facts, fact('verdict', verdict)].map((f) => ({ ...f, accountId: c.accountId })),
@@ -703,6 +706,7 @@ function fitOf(c: RecordCandidate, at: number, pool: Pick<PoolSeed, 'windDownMin
     // The 5-hour window reads the demand, the burn over the account's speed, so a slowed account's holds lend it no
     // room. It reads the burn itself where no slow-down stands.
     const burn = (w === 'five_hour' && x.demand !== null ? x.demand : (c.burn[w] ?? 0)) + (pinBurn[w] ?? 0);
+    const ceiling = ceilingOn(pool, w);
     const landed = predicted + (rewrite[w] ?? 0) < ceiling;
     lands = lands && landed;
     const runway = !landed ? 0 : burn <= 0 ? null : Math.round(((ceiling - predicted - (rewrite[w] ?? 0)) / burn) * HOUR);
@@ -896,8 +900,9 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   }
   const held = fiveHourHeld(source, pool, at);
   if (held) facts.push(fact('age_five_hour', held.ageMs, 'ms'), fact('hold_five_hour', held.holdMs, 'ms'));
-  // The router writes the pool's 5-hour ceiling here at every horizon, whatever line the trigger reads.
-  facts.push(fact('ceiling', pool.windowCeiling, 'percent'));
+  // The line tests windows of both kinds, so the router writes both of the pool's ceilings here, whatever line the
+  // trigger reads.
+  facts.push(fact('five_hour_ceiling', pool.fiveHourCeiling, 'percent'), fact('weekly_ceiling', pool.weeklyCeiling, 'percent'));
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
   const stretchWaits = overSince !== null && at - overSince < SLOW_DOWN_WAIT_MS;
   if (stretchWaits) facts.push(fact('over_ms', at - overSince, 'ms'));
@@ -946,14 +951,14 @@ const fiveHourHeld = (source: RecordCandidate, pool: PoolSeed, at: number): { ag
 /**
  * The 5-hour round under the slow-down: the stretch has read over the threshold for the safety wait, the window's
  * horizon (its reset cut at the account's end) moved back by the threshold lies ahead, and the window is past the hold.
- * The excess is the demand's past the ceiling there, per hour to it.
+ * The excess is the demand's past the 5-hour ceiling there, per hour to it.
  */
 export function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: number): { excess: number; slowed: true; window: string } | null {
   const overSince = slowReadAt(source.accountId, pool, at)?.overSince ?? null;
   const x = source.windows.five_hour;
   if (overSince === null || at - overSince < SLOW_DOWN_WAIT_MS || x?.horizon === null || x?.horizon === undefined || x.demand === null || fiveHourHeld(source, pool, at) !== null) return null;
   const hours = (Date.parse(x.horizon) - pool.slowDownStretchSeconds * 1_000 - at) / HOUR;
-  const excess = round5((x.utilization + x.demand * hours - pool.windowCeiling) / hours);
+  const excess = round5((x.utilization + x.demand * hours - pool.fiveHourCeiling) / hours);
   return hours > 0 && excess > 0 ? { excess, slowed: true, window: 'five_hour' } : null;
 }
 
@@ -961,7 +966,7 @@ export function stretchTriggerOf(source: RecordCandidate, pool: PoolSeed, at: nu
 const wallOf = (x: Pick<RecordCandidate['windows'][string], 'utilization'>, burn: number, at: number): number => Math.round(at + ((1 - x.utilization) / burn) * HOUR);
 
 /**
- * The instant a window the story projects over its line outside a round's dwell first read over the pool's ceiling,
+ * The instant a window the story projects over its line outside a round's dwell first read over its own ceiling,
  * by account and window: secondary's week, which the story's reading dates.
  */
 const OVER_CEILING_SINCE: Readonly<Record<string, Readonly<Record<string, number>>>> = { secondary: { seven_day: SECONDARY_WEEK_OVER_AT } };
@@ -984,9 +989,9 @@ function waitOf(source: RecordCandidate, window: string, reading: Pick<RecordCan
 
 /**
  * The window a round on `source` fires on where `fires` holds, and the excess per hour that lands its projection on the
- * line its horizon read: the wall at a reset or an end horizon, the pool's ceiling at the five-hour bound. Where it does
- * not hold, each window over its line is inside its wait and yields to the next. A 5-hour window under the hold yields
- * to the next window in the order.
+ * line its horizon read: the wall at a reset or an end horizon, the window's own ceiling at the five-hour bound. Where
+ * it does not hold, each window over its line is inside its wait and yields to the next. A 5-hour window under the hold
+ * yields to the next window in the order.
  */
 function triggerOf(source: RecordCandidate, windows: string[], at: number, pool: PoolSeed, fires: boolean): { fired: { excess: number; slowed?: true; window: string } | null; waits: ReturnType<typeof waitOf>[] } {
   const held = fiveHourHeld(source, pool, at) !== null;
@@ -1740,10 +1745,10 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       if (heldWait) return { by: by('hold', heldWait.reason), fact: [summaryFact('held', heldWait.heldMs, 'ms')] };
       if (r.kind === 'probe') return { by: by('none', ''), fact: [summaryFact('epoch', record.pin?.epoch ?? 0, 'count')] };
       if (record.pin?.warmth === 'cold') return { by: by('none', ''), fact: [summaryFact('cause', record.pin.warmthCause ?? '', 'text')] };
-      // The first window, in the trigger's order, whose projection at its horizon reaches the ceiling names its
-      // reading.
+      // The first window, in the trigger's order, whose projection at its horizon reads over the round's line names
+      // its reading. The test is the round's own, strict, so the row names no window that no round fires on.
       const m = record.candidates.find((c) => c.accountId === spec.accountId);
-      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) >= pool.windowCeiling);
+      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) > lineOf(m, w, pool, spec.at));
       if (m !== undefined && hottest !== undefined) return { by: by('none', ''), fact: [summaryFact(hottest, m.windows[hottest].utilization, 'percent')] };
       return { by: by('none', ''), fact: [summaryFact('idle', record.pin?.idleMs ?? 0, 'ms')] };
     }
@@ -2386,6 +2391,7 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     cache_diagnostics: p.cacheDiagnostics,
     cache_ttl: { enabled: p.cacheTtl.enabled, inject_when_absent: p.cacheTtl.injectWhenAbsent, metered: ttlRulesDiff(p.cacheTtl.metered), plan: ttlRulesDiff(p.cacheTtl.plan) },
     enabled: p.status !== 'disabled',
+    five_hour_ceiling: p.fiveHourCeiling,
     in_flight_cap: p.inFlightCap,
     'keepalive.enabled': p.keepalive.enabled,
     'keepalive.max_idle_seconds': p.keepalive.maxIdleSeconds,
@@ -2411,8 +2417,8 @@ function poolRow(p: PoolSeed): Record<string, unknown> {
     strategy: p.strategy,
     subagent_placement: p.subagentPlacement,
     warm_sessions: p.warmSessions,
+    weekly_ceiling: p.weeklyCeiling,
     wind_down_minutes: p.windDownMinutes,
-    window_ceiling: p.windowCeiling,
   };
 }
 
@@ -2439,8 +2445,9 @@ function roundEvent(decision: string, pins: RoundPin[], earlier = false): EventS
   const round = roundOf(roundOfPins(pins), Number(value('excess')), pool);
   // A round the stretch fired reads the demand to the window's horizon less the threshold, the slow-down's horizon.
   const slowed = value('fired_by') === 'slow_down' ? slowReadAt(accountId, pool, at) : null;
-  // The stretch tests the pool's ceiling at every horizon.
-  const ceiling = slowed || candidate === undefined ? pool.windowCeiling : lineOf(candidate, window, pool, at);
+  // The stretch tests the 5-hour ceiling at every horizon, and a round with no candidate to read a line from reads the
+  // window's own ceiling.
+  const ceiling = slowed || candidate === undefined ? ceilingOn(pool, window) : lineOf(candidate, window, pool, at);
   const threshold = pool.slowDownStretchSeconds * 1_000;
   const moved = slowed && source?.horizon ? Date.parse(source.horizon) - threshold : null;
   const horizon = moved ?? (source?.horizon ? Date.parse(source.horizon) : null);

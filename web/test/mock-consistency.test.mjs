@@ -162,11 +162,11 @@ async function logOf(s) {
 
 /** The members the store's `pool_diff` names, whose changed ones a pool edit carries as pairs. */
 const POOL_DIFF_MEMBERS = [
-  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'in_flight_cap',
+  'affinity_mode', 'affinity_ttl_seconds', 'auto_mode_server', 'body_capture_hours', 'burn_average_seconds', 'cache_diagnostics', 'cache_ttl', 'enabled', 'five_hour_ceiling', 'in_flight_cap',
   'keepalive.enabled', 'keepalive.max_idle_seconds', 'keepalive.max_parked_seconds', 'keepalive.scheduled_horizon_seconds', 'label', 'load_shedding',
   'migrate_when_spent', 'min_shared_prefix_tokens', 'model_rules', 'overage_move_grace_minutes', 'overage_policy', 'prefer_subscription', 'retry_in_place_seconds', 'return_to_plan',
   'return_to_plan_dwell_seconds', 'session_placement', 'shed_cap', 'shed_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds', 'strategy', 'subagent_placement',
-  'warm_sessions', 'wind_down_minutes', 'window_ceiling',
+  'warm_sessions', 'weekly_ceiling', 'wind_down_minutes',
 ];
 /** The fields an account edit carries as pairs, beside the flag a staged secret sets. */
 const ACCOUNT_DIFF_MEMBERS = ['canceled', 'enabled', 'label', 'state', 'subscription_ends_at'];
@@ -211,9 +211,9 @@ function fitReadOf(set, pool, r) {
 /**
  * A fresh session's fit on a member as a placement reads it: an account inside the pool's wind-down before its end
  * never fits, an API-key member fits while its worst bucket has room, and on every plan window the model draws the
- * body's rewrite must land under the ceiling and the account's burn with the fresh prior must not carry it there
- * before the horizon, the 5-hour window burning at its demand where a slow-down reads one, as the mock's fit prices it.
- * The story's hand-written placements price the prior, a drawn one none.
+ * body's rewrite must land under the window's own ceiling and the account's burn with the fresh prior must not carry
+ * it there before the horizon, the 5-hour window burning at its demand where a slow-down reads one, as the mock's fit
+ * prices it. The story's hand-written placements price the prior, a drawn one none.
  */
 function freshFitOf(d, c, r, pool) {
   const at = Date.parse(r.request.at);
@@ -226,7 +226,7 @@ function freshFitOf(d, c, r, pool) {
   for (const [w, share] of Object.entries(d.rewriteOf(r.request.bodyTokens ?? 0, r.request.canonicalModel))) {
     const x = c.windows[w];
     if (!x || x.projection === null || x.horizon === null) continue;
-    const room = pool.windowCeiling - x.utilization - (x.reserved ?? 0) - share;
+    const room = (w === 'five_hour' ? pool.fiveHourCeiling : pool.weeklyCeiling) - x.utilization - (x.reserved ?? 0) - share;
     const burn = (w === 'five_hour' && x.demand !== null ? x.demand : (c.burn[w] ?? 0)) + (prior[w] ?? 0);
     if (room <= 0) {
       lands = false;
@@ -239,7 +239,7 @@ function freshFitOf(d, c, r, pool) {
 test("the fresh fit's demand prices the 5-hour window as the mock's fit does, where the achieved burn alone would fit", async () => {
   const d = await import('./dist/api.js');
   const at = Date.parse('2026-09-16T14:00:00Z');
-  const pool = { windDownMinutes: 60, windowCeiling: 0.9 };
+  const pool = { fiveHourCeiling: 0.9, weeklyCeiling: 0.9, windDownMinutes: 60 };
   // A drawn placement, so no prior joins the account's burn.
   const r = { request: { at: iso(at), bodyTokens: 20_000, canonicalModel: 'claude-sonnet-4-5' }, requestId: 'req_drawn' };
   const window = (demand) => ({ demand, horizon: iso(at + 2 * HOUR), projection: 0.6, reserved: 0, utilization: 0.5 });
@@ -420,7 +420,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     };
     for (const p of s.pools) assert.deepEqual(p.warnings, s.lib.poolWarnings(p, cohortOf(p.id)), p.id);
     const codes = new Map(s.pools.map((p) => [p.id, p.warnings.map((w) => w.code)]));
-    assert.deepEqual([codes.get('all'), codes.get('jobs'), codes.get('work')], [['affinity_under_cache_ttl', 'ceiling_low'], ['spent_moves_off', 'warm_never'], []]);
+    assert.deepEqual([codes.get('all'), codes.get('jobs'), codes.get('work')], [['affinity_under_cache_ttl', 'five_hour_ceiling_low', 'weekly_ceiling_low'], ['spent_moves_off', 'warm_never'], []]);
   });
 
   test(`no account's rollup row predates the plan it was served under, at ${at}`, async () => {
@@ -2670,7 +2670,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const r of records) {
       const line = r.walk.find((w) => w.step === 'move:shed');
       const value = (key) => line?.facts.find((f) => f.key === key);
-      if (!value('ceiling') || r.pin?.accountId === null || r.pin?.accountId === undefined) continue;
+      if (!value('five_hour_ceiling') || r.pin?.accountId === null || r.pin?.accountId === undefined) continue;
       const at = Date.parse(r.request.at);
       const start = startOf(r, r.pin.accountId);
       const hold = 2 * r.settings.burnAverageSeconds * 1_000;
@@ -2776,15 +2776,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`a round the projection fired records the line its horizon set, the wall at a 5-hour reset and the pool's ceiling at the five-hour bound, at ${at}`, async () => {
+  test(`a round the projection fired records the line its horizon set, the wall at a 5-hour reset and the window's own ceiling at the five-hour bound, at ${at}`, async () => {
     const s = await story;
     const rounds = (await logOf(s)).filter((row) => row.type === 'event' && row.kind === 'shedding_round').sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
-    // The 08:30 round's 7-day Fable reset lies days past the five-hour bound, so it tests all's ceiling of 0.75
-    // (`windowCeiling` in mock/pools.ts). The stretch tests work's ceiling of 0.95 at every horizon.
+    // The 08:30 round's 7-day Fable reset lies days past the five-hour bound, so it tests all's weekly ceiling of 0.78
+    // (`weeklyCeiling` in mock/pools.ts). The stretch tests work's 5-hour ceiling of 0.95 at every horizon.
     assert.deepEqual(
       rounds.map((e) => [e.requestId, e.detail.window, e.detail.trigger, e.detail.ceiling]),
       [
-        ['req_3e7a5c19-f84', 'seven_day_fable', 'projection', 0.75],
+        ['req_3e7a5c19-f84', 'seven_day_fable', 'projection', 0.78],
         ['req_1eaa9bc1-a18', 'five_hour', 'projection', 1],
         ['req_9f2e7c5a-c49', 'five_hour', 'slow_down', 0.95],
         ['req_6e1f3b98-a24', 'five_hour', 'projection', 1],
@@ -3240,7 +3240,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       .sort((x, y) => x.at - y.at);
     for (const x of reads) {
       const leftMs = Date.parse(x.window.reset) - x.at;
-      const stretchMs = Math.max(0, leftMs - ((work.windowCeiling - x.window.utilization) / x.demand) * HOUR);
+      const stretchMs = Math.max(0, leftMs - ((work.fiveHourCeiling - x.window.utilization) / x.demand) * HOUR);
       assert.ok(x.found === 'live' && x.demand === x.window.demand, `${iso(x.at)}: the read is a pinned selection's on the demand its window reads`);
       assert.ok(Math.abs(x.stretchMs - stretchMs) <= 60_000, `${iso(x.at)}: the stretch reads ${x.stretchMs}, not ${Math.round(stretchMs)}`);
       assert.ok(Math.abs(x.factor - (1 - stretchMs / leftMs)) <= 0.01, `${iso(x.at)}: the factor reads ${x.factor}, not ${1 - stretchMs / leftMs}`);

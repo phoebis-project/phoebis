@@ -56,7 +56,7 @@ const shareField = (percent: number | null) => (percent === null ? null : percen
 const held = (value: number | null) => value ?? Number.NaN;
 /** A field's figure where it reads a number, and null for an emptied entry or unparsable text. */
 const finiteOrNull = (value: number | null) => (value !== null && Number.isFinite(value) ? value : null);
-/** The route's bounds on the two shares the dialog reads in percent: the window ceiling and the shed cap. */
+/** The route's bounds on the shares the dialog reads in percent: the two ceilings and the shed cap. */
 const CEILING_PERCENT = { max: 100, min: 50 } as const;
 const CAP_PERCENT = { max: 100, min: 10 } as const;
 const KNOWN_MOVE_REASONS: ReadonlySet<string> = new Set([...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS, ...CAUSE_MOVE_REASONS]);
@@ -69,7 +69,7 @@ const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: (pool: Po
   { group: 'guardrails', on: (p) => p.guardrails.length > 0, word: (p) => plural(p.guardrails.length, 'guardrail') },
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: () => 'server-side auto mode off' },
   // Drawn on every pool, so a pool whose switch is off says so on its card.
-  { group: 'shedding', on: () => true, word: (p) => (p.loadShedding ? `sheds above ${percentOf(p.windowCeiling)} %` : 'shedding off') },
+  { group: 'shedding', on: () => true, word: (p) => (p.loadShedding ? `sheds above ${percentOf(p.fiveHourCeiling)} % (5-hour) and ${percentOf(p.weeklyCeiling)} % (weekly)` : 'shedding off') },
   { group: 'slowDown', on: (p) => p.slowDown, word: (p) => `slows above ${minuteSpan(p.slowDownStretchSeconds * 1_000)}` },
   { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: () => 'cache TTL' },
   { group: 'keepalive', on: (p) => p.keepalive.enabled, word: () => 'keepalive' },
@@ -79,6 +79,7 @@ const WARNING_FIELD_GROUP: Readonly<Record<string, PoolGroup>> = {
   affinity_ttl_seconds: 'pinning',
   burn_average_seconds: 'utilization',
   cache_ttl: 'cacheTtl',
+  five_hour_ceiling: 'utilization',
   in_flight_cap: 'failover',
   load_shedding: 'shedding',
   migrate_when_spent: 'failover',
@@ -88,7 +89,7 @@ const WARNING_FIELD_GROUP: Readonly<Record<string, PoolGroup>> = {
   slow_down_hold_seconds: 'slowDown',
   slow_down_stretch_seconds: 'slowDown',
   warm_sessions: 'shedding',
-  window_ceiling: 'utilization',
+  weekly_ceiling: 'utilization',
 };
 /** Where a warning is fixed: the group of its first field, or none for a field this build does not know. */
 const warningGroup = (warning: PoolWarning): PoolGroup | null => WARNING_FIELD_GROUP[warning.fields[0] ?? ''] ?? null;
@@ -1024,6 +1025,7 @@ type EngineForm = { [K in keyof PoolEngineFields]: PoolEngineFields[K] extends n
 const engineInput = (e: EngineForm, numberOf: (key: WholeEngineKey) => number = (key) => held(e[key])): PoolEngineFields => ({
   ...e,
   burnAverageSeconds: numberOf('burnAverageSeconds'),
+  fiveHourCeiling: numberOf('fiveHourCeiling'),
   inFlightCap: numberOf('inFlightCap'),
   overageMoveGraceMinutes: numberOf('overageMoveGraceMinutes'),
   retryInPlaceSeconds: numberOf('retryInPlaceSeconds'),
@@ -1032,8 +1034,8 @@ const engineInput = (e: EngineForm, numberOf: (key: WholeEngineKey) => number = 
   shedDwellSeconds: numberOf('shedDwellSeconds'),
   slowDownHoldSeconds: numberOf('slowDownHoldSeconds'),
   slowDownStretchSeconds: numberOf('slowDownStretchSeconds'),
+  weeklyCeiling: numberOf('weeklyCeiling'),
   windDownMinutes: numberOf('windDownMinutes'),
-  windowCeiling: numberOf('windowCeiling'),
 });
 
 /**
@@ -1144,6 +1146,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   customAffinity: !isPreset(pool.affinityTtlSeconds),
   engine: {
     burnAverageSeconds: pool.burnAverageSeconds,
+    fiveHourCeiling: pool.fiveHourCeiling,
     inFlightCap: pool.inFlightCap,
     loadShedding: pool.loadShedding,
     migrateWhenSpent: pool.migrateWhenSpent,
@@ -1157,8 +1160,8 @@ const formFrom = (pool: Pool): PoolForm => ({
     slowDownHoldSeconds: pool.slowDownHoldSeconds,
     slowDownStretchSeconds: pool.slowDownStretchSeconds,
     warmSessions: pool.warmSessions,
+    weeklyCeiling: pool.weeklyCeiling,
     windDownMinutes: pool.windDownMinutes,
-    windowCeiling: pool.windowCeiling,
   },
   failoverCustom: failoverPresetOf(pool) === 'custom',
   guardrails: guardrailIdsOf(pool.guardrails),
@@ -1908,21 +1911,36 @@ export function PoolDialog({
           </p>
           <div className="cells">
             <Field
-              label="Window ceiling (%)"
-              className={expertView || refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds) ? 'cell--half' : undefined}
-              hint="A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it."
+              label="5-hour ceiling (%)"
+              className="cell--half"
+              hint="A move or a new session lands on a member only where its 5-hour window stays under this share until it resets. The slow-down paces a member's 5-hour window to it."
             >
               <NumberInput
                 min={CEILING_PERCENT.min}
                 max={CEILING_PERCENT.max}
-                value={percentField(form.engine.windowCeiling)}
-                onNumber={(v) => setEngine('windowCeiling', shareField(v))}
-                aria-label="Window ceiling (%)"
-                aria-invalid={invalid('Window ceiling (%)')}
+                value={percentField(form.engine.fiveHourCeiling)}
+                onNumber={(v) => setEngine('fiveHourCeiling', shareField(v))}
+                aria-label="5-hour ceiling (%)"
+                aria-invalid={invalid('5-hour ceiling (%)')}
               />
             </Field>
+            <Field
+              label="Weekly ceiling (%)"
+              className="cell--half"
+              hint="The same line for the 7-day window and each model week, read over the next five hours. A round runs on a member whose weekly window would pass it. At 100 a week is used up to its wall. Lower it for accounts with extra usage on or used outside the router."
+            >
+              <NumberInput
+                min={CEILING_PERCENT.min}
+                max={CEILING_PERCENT.max}
+                value={percentField(form.engine.weeklyCeiling)}
+                onNumber={(v) => setEngine('weeklyCeiling', shareField(v))}
+                aria-label="Weekly ceiling (%)"
+                aria-invalid={invalid('Weekly ceiling (%)')}
+              />
+            </Field>
+            {/* A full cell on its own row, since no half stands alone. */}
             <Expert refused={refusedFields.has(ENGINE_FIELD_LABELS.burnAverageSeconds)}>
-              <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} className="cell--half" hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding.">
+              <Field label={ENGINE_FIELD_LABELS.burnAverageSeconds} hint="The time constant of each session's burn average. The projection, the slow-down and the round read it. A 5-hour window younger than twice it fires no round. A slowed member's holds reach their full length over it. Editable under the Custom preset in Load shedding.">
                 <NumberInput
                   min={ENGINE_BOUNDS.burnAverageSeconds.min}
                   step={60}
@@ -1938,13 +1956,14 @@ export function PoolDialog({
               plain
               hint={
                 <>
-                  Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag the ceiling&apos;s handle, or focus it and use the arrow keys.
+                  Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag a ceiling&apos;s handle, or focus it and use the arrow keys.
                 </>
               }
             >
               <UtilizationBar
-                // The handle takes a number, so an emptied or unparsable field puts it at 0.
-                ceiling={{ onChange: (v) => setEngine('windowCeiling', v / 100), value: percentOf(form.engine.windowCeiling || 0) }}
+                // A handle takes a number, so an emptied or unparsable field puts it at 0.
+                fiveHourCeiling={{ onChange: (v) => setEngine('fiveHourCeiling', v / 100), value: percentOf(form.engine.fiveHourCeiling || 0) }}
+                weeklyCeiling={{ onChange: (v) => setEngine('weeklyCeiling', v / 100), value: percentOf(form.engine.weeklyCeiling || 0) }}
                 min={CEILING_PERCENT.min}
                 max={CEILING_PERCENT.max}
                 readings={readings}

@@ -561,22 +561,22 @@ test('a pool decodes the ceilings the router resolved for it, and a pool with no
   assert.equal(d.decodePool(bare).keepaliveResolved, null, 'a row without the member resolves nothing');
 });
 
-const SHEDDING_FIELDS = ['load_shedding', 'window_ceiling', 'shed_cap', 'burn_average_seconds', 'shed_dwell_seconds'];
-const shedding = (p) => [p.loadShedding, p.windowCeiling, p.shedCap, p.burnAverageSeconds, p.shedDwellSeconds];
+const SHEDDING_FIELDS = ['load_shedding', 'five_hour_ceiling', 'weekly_ceiling', 'shed_cap', 'burn_average_seconds', 'shed_dwell_seconds'];
+const shedding = (p) => [p.loadShedding, p.fiveHourCeiling, p.weeklyCeiling, p.shedCap, p.burnAverageSeconds, p.shedDwellSeconds];
 
-test('a pool decodes its switch, its ceiling, its cap, its average and its dwell and encodes them back', () => {
+test('a pool decodes its switch, its two ceilings, its cap, its average and its dwell and encodes them back', () => {
   const row = fixture('pools').pools[0];
   assert.deepEqual(shedding(d.decodePool(row)), SHEDDING_FIELDS.map((f) => row[f]), 'the captured pool reads as the route answered it');
-  const wire = { ...row, burn_average_seconds: 3_600, load_shedding: false, shed_cap: 0.3, shed_dwell_seconds: 1_800, window_ceiling: 0.8 };
+  const wire = { ...row, burn_average_seconds: 3_600, five_hour_ceiling: 0.8, load_shedding: false, shed_cap: 0.3, shed_dwell_seconds: 1_800, weekly_ceiling: 0.9 };
   const p = d.decodePool(wire);
-  assert.deepEqual(shedding(p), [false, 0.8, 0.3, 3_600, 1_800], 'a pool with its switch off reads it off');
+  assert.deepEqual(shedding(p), [false, 0.8, 0.9, 0.3, 3_600, 1_800], 'a pool with its switch off reads it off');
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
   assert.deepEqual(Object.fromEntries(SHEDDING_FIELDS.map((f) => [f, back[f]])), Object.fromEntries(SHEDDING_FIELDS.map((f) => [f, wire[f]])), 'each goes back under the name the route reads');
   assert.equal(d.encodePool({ ...p, loadShedding: true, name: p.name, status: 'active' }).load_shedding, true, 'the switch is sent on as it is sent off');
   const bare = { ...row };
   for (const f of SHEDDING_FIELDS) delete bare[f];
   const balanced = d.SHEDDING_PRESETS.balanced;
-  assert.deepEqual(shedding(d.decodePool(bare)), [true, 0.95, balanced.shedCap, balanced.burnAverageSeconds, balanced.shedDwellSeconds], 'a row without the fields reads the switch on, the ceiling at 95 % and the balanced preset');
+  assert.deepEqual(shedding(d.decodePool(bare)), [true, 0.95, 1, balanced.shedCap, balanced.burnAverageSeconds, balanced.shedDwellSeconds], 'a row without the fields reads the switch on, the ceilings at 95 % and 100 % and the balanced preset');
 });
 
 const SLOW_FIELDS = ['return_to_plan', 'return_to_plan_dwell_seconds', 'slow_down', 'slow_down_hold_seconds', 'slow_down_stretch_seconds'];
@@ -712,21 +712,30 @@ test("every record version decodes its settings, a version 1 record's three remo
   const v3 = d.decodeDecisionRecord(body);
   const s = body.settings;
   assert.equal(v3.version, 3);
-  assert.equal(Object.keys(s).length, 25, 'the route answers twenty-five settings');
-  assert.deepEqual(Object.keys(v3.settings).filter((k) => k !== 'legacy').length, 25);
+  assert.equal(Object.keys(s).length, 26, 'the route answers twenty-six settings');
+  assert.deepEqual(Object.keys(v3.settings).filter((k) => k !== 'legacy').length, 26);
   assert.deepEqual(shedding(v3.settings), SHEDDING_FIELDS.map((f) => s[f]), 'a version 3 record reads the new names');
   assert.equal(v3.settings.legacy, null);
   assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, load_shedding: false } }).settings.loadShedding, false, 'the switch reads off');
   assert.equal(d.decodeDecisionRecord({ ...body, settings: { ...s, shed_share: 0.9 } }).settings.shedCap, s.shed_cap, 'a version 3 record reads no old name');
-  const { burn_average_seconds: _a, load_shedding: _l, shed_cap: _c, shed_dwell_seconds: _d, window_ceiling: _w, ...shared } = s;
+  const { burn_average_seconds: _a, five_hour_ceiling: _f, load_shedding: _l, shed_cap: _c, shed_dwell_seconds: _d, weekly_ceiling: _w, ...shared } = s;
   const old = { ...shared, burn_window_seconds: 600, migrate_band: 0.05, pace_floor: 0.05, select_below_utilization: 0.8, shed_ahead_of_pace: 0.2, shed_share: 0.5, source_dwell_seconds: 900 };
   const v1 = d.decodeDecisionRecord({ ...body, settings: old, version: 1 });
   assert.equal(v1.version, 1);
-  assert.deepEqual(shedding(v1.settings), [null, null, 0.5, 600, 900], 'the three renamed settings read the old names, the switch and the ceiling none');
+  assert.deepEqual(shedding(v1.settings), [null, null, null, 0.5, 600, 900], 'the three renamed settings read the old names, the switch and the ceilings none');
   assert.deepEqual(v1.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: 0.8, shedAheadOfPace: 0.2 });
   assert.equal(v1.settings.strategy, s.strategy, 'every setting both versions name reads as today');
   const off = d.decodeDecisionRecord({ ...body, settings: { ...old, select_below_utilization: null, shed_ahead_of_pace: null }, version: 1 });
   assert.deepEqual(off.settings.legacy, { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: null }, 'a setting the pool left off reads null');
+});
+
+test("a stored record's single ceiling reads on both settings", () => {
+  // A record written while the pool held one ceiling for every window stays stored with `window_ceiling` alone, and
+  // its decision read that one fraction on both kinds of window.
+  const body = fixture('decision');
+  const { five_hour_ceiling: _five, weekly_ceiling: _weekly, ...settings } = body.settings;
+  const stored = d.decodeDecisionRecord({ ...body, settings: { ...settings, window_ceiling: 0.85 } });
+  assert.deepEqual([stored.version, stored.settings.fiveHourCeiling, stored.settings.weeklyCeiling], [3, 0.85, 0.85]);
 });
 
 test("a record before version 3 reads its session under the older member's name, and a version 3 record under session_id alone", () => {
@@ -1727,8 +1736,8 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: true });
   assert.deepEqual([r.pin.found, r.pin.accountId, r.pin.released], ['none', null, []]);
   assert.equal(r.pinReason, null, 'a record with a pin block names no reason');
-  assert.ok('window_ceiling' in body.settings, 'the route names the ceiling as the pool row does');
-  assert.deepEqual([r.settings.strategy, r.settings.inFlightCap, r.settings.windowCeiling], ['pace', 16, body.settings.window_ceiling]);
+  assert.ok('five_hour_ceiling' in body.settings && 'weekly_ceiling' in body.settings, 'the route names the two ceilings as the pool row does');
+  assert.deepEqual([r.settings.strategy, r.settings.inFlightCap, r.settings.fiveHourCeiling, r.settings.weeklyCeiling], ['pace', 16, body.settings.five_hour_ceiling, body.settings.weekly_ceiling]);
   assert.ok(isIso(r.settings.poolUpdatedAt));
   const [chosen, spare] = r.candidates;
   assert.match(chosen.prefix.static.hash, /^[0-9a-f]{64}$/, 'a prefix lookup carries the boundary hash whole');

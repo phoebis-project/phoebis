@@ -565,6 +565,11 @@ export interface Pool {
   /** The day's sum: the billed rows' dollars, every row's cost and the plan rows as the Pro-week figure, 0 with no
    *  plan-funded request. */
   day24h: FundedSum;
+  /**
+   * The share of the 5-hour window a move or a new session must stay under until the window resets, and the line a
+   * shedding round tests the window against at the five-hour bound.
+   */
+  fiveHourCeiling: number;
   /** The pool's own guardrails, which run before a key's, ordered by `position`. */
   guardrails: GuardrailRef[];
   id: string;
@@ -624,13 +629,10 @@ export interface Pool {
   warmSessions: WarmSessions;
   /** The static checks that hold on the saved settings, sorted by code. None blocks a save. */
   warnings: PoolWarning[];
+  /** The same line for the 7-day window and each model week, read over the next five hours. */
+  weeklyCeiling: number;
   /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
   windDownMinutes: number;
-  /**
-   * The share of every plan window a move or a new session must stay under until the window resets, and the line a
-   * shedding round triggers on.
-   */
-  windowCeiling: number;
 }
 
 export type KeyStatus = 'active' | 'disabled' | 'expired' | 'revoked';
@@ -1291,14 +1293,16 @@ export interface RecordPin {
 }
 
 /**
- * The twenty-five values that entered the decision, each named as the pool row names the field it was read from. A
- * version 1 record read the cap, the average and the dwell under their old names and carried neither the switch nor
- * the ceiling. The slow-down's three and the return-to-plan's two read null on a record from before them.
+ * The twenty-six values that entered the decision, each named as the pool row names the field it was read from. A
+ * version 1 record read the cap, the average and the dwell under their old names and carried neither the switch nor a
+ * ceiling. The slow-down's three and the return-to-plan's two read null on a record from before them.
  */
 export interface RecordSettings {
   affinityMode: string;
   affinityTtlSeconds: number;
   burnAverageSeconds: number;
+  /** Null on a version 1 record, which carried no ceiling. */
+  fiveHourCeiling: number | null;
   inFlightCap: number;
   /** A version 1 record's three removed settings, null on a record from version 2 on. */
   legacy: { paceFloor: number; selectBelowUtilization: number | null; shedAheadOfPace: number | null } | null;
@@ -1322,9 +1326,9 @@ export interface RecordSettings {
   strategy: string;
   subagentPlacement: string;
   warmSessions: string;
-  windDownMinutes: number;
   /** Null on a version 1 record, which carried no ceiling. */
-  windowCeiling: number | null;
+  weeklyCeiling: number | null;
+  windDownMinutes: number;
 }
 
 /** A member's spend against one budget. The spend and its period are null while the ledger has reported none. */

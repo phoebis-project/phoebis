@@ -133,6 +133,16 @@ const burnWindowOf = (key: string | null): ShedWindow | null => {
 const drawsFable = (model: string | null) => (model ?? '').toLowerCase().includes('fable');
 const windowsOf = (model: string | null): ShedWindow[] => (drawsFable(model) ? TRIGGER_ORDER : TRIGGER_ORDER.slice(0, 2));
 
+/** A window's ceiling by the router's arm: the 5-hour ceiling for the 5-hour window, the weekly one for the 7-day
+ *  window and each model week. */
+const ceilingOf = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, id: string): number => (id === '5h' ? pool.fiveHourCeiling : pool.weeklyCeiling);
+/** The line the round tests a projection against: the wall where the window's reset or the account's end sets the
+ *  horizon, the window's own ceiling at the five-hour bound. */
+const lineOf = (pool: Pick<Pool, 'fiveHourCeiling' | 'weeklyCeiling'>, id: string, resetAt: number | null, endAt: number | null, horizon: number, now: number): number => {
+  const atReset = resetAt !== null && resetAt > now && (id === '5h' || resetAt <= now + 5 * HOUR);
+  return atReset || (endAt !== null && endAt <= horizon) ? 1 : ceilingOf(pool, id);
+};
+
 /**
  * Whether an API-key account has room for a moved session: its worst live bucket under 1.0, since a bucket refills
  * within its minute. Its live buckets are its `rpm:`, `itpm:` and `otpm:` ones whose reset is ahead, or which carry
@@ -141,9 +151,9 @@ const windowsOf = (model: string | null): ShedWindow[] => (drawsFable(model) ? T
 const bucketRoom = (a: Account, now: number) =>
   Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).map((w) => w.utilization)) < 1;
 
-/** A member whose projection crosses the ceiling, on the first window in the trigger's order that does. */
+/** A member whose projection crosses the round's line, on the first window in the trigger's order that does. */
 export interface ShedHot {
-  /** The burn a round removes to land the projection on the ceiling at the horizon, in the window's share an hour. */
+  /** The burn a round removes to land the projection on its line at the horizon, in the window's share an hour. */
   excess: number;
   horizon: number;
   id: string;
@@ -157,18 +167,19 @@ export interface ShedHeld { ageMs: number; holdMs: number; id: string; label: st
 
 export interface ShedPreview {
   /**
-   * With no member over the ceiling, the window whose projection reads nearest under it. Null with none to read. A
-   * 5-hour window under the hold is out of the reading, so the nearest is among the windows a round would read.
+   * With no member over its line, the window with the least room to its own ceiling, the first in the walk's order
+   * among equals. Null with none to read. A 5-hour window under the hold is out of the reading, so the nearest is among
+   * the windows a round would read.
    */
   closest: { horizon: number; label: string; projection: number; window: ShedWindow } | null;
   /** The excess the marks take off, in share an hour, each member's in the share of the window that fired it. */
   covered: number;
   /**
-   * The members whose 5-hour window projects over the ceiling under the hold, read on their next window, in the
+   * The members whose 5-hour window projects over the round's line under the hold, read on their next window, in the
    * members' order.
    */
   held: ShedHeld[];
-  /** The members over the ceiling, in the order the Members group lists them. */
+  /** The members over the round's line, in the order the Members group lists them. */
   hot: ShedHot[];
   /** The rounds mark nothing because no sibling has runway for any pin they could mark. */
   noRunway: boolean;
@@ -192,9 +203,13 @@ const endedPin = (s: Session): boolean => s.agentContexts.some((c) => c.agentId 
 
 /**
  * The shedding round's dry run, replayed from the data the routes serve. Each member's served projection is read at
- * its served horizon on the windows its pins draw, in the trigger's order, and the first window over the ceiling fires
- * its round. A 5-hour window younger than twice the pool's burn average does not fire, and the member reads its next
- * window, as the router holds the round. The round walks the pool's own pins on the member, the sessions under its
+ * its served horizon on the windows its pins draw, in the trigger's order, and the first window over the round's line
+ * fires its round: the wall, 1, where the window's served reset ahead of `now` or the account's end set the horizon,
+ * else the window's own ceiling, 5-hour or weekly. The excess runs from that line. A 5-hour window younger than twice
+ * the pool's burn average does not fire, and the member reads its next window, as the router holds the round. With no
+ * member over its line, the closest window is the one with the least room to its own ceiling. The router's round on a
+ * pool that slows its pins tests the 5-hour window by the stretch, which the preview reads as it reads the other
+ * windows. The round walks the pool's own pins on the member, the sessions under its
  * keys, which the caller filters, since the router's round marks the triggering pool's pins alone. It orders them by
  * their served 5-hour burn, decayed from the instant it was served to `now`: cold pins first by burn, then warm ones by
  * burn over their last input size, bounded by the warm-sessions mode. It marks until the removed burn covers the excess
@@ -205,12 +220,11 @@ const endedPin = (s: Session): boolean => s.agentContexts.some((c) => c.agentId 
  * `eligible` counts as eligible, as a member of a pool not saved yet does.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnAverageSeconds' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'windDownMinutes' | 'windowCeiling'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
+  pool: Pick<Pool, 'burnAverageSeconds' | 'fiveHourCeiling' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'weeklyCeiling' | 'windDownMinutes'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
 ): ShedPreview {
-  const ceiling = pool.windowCeiling;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const listed = pool.members
     .flatMap((m) => {
@@ -219,9 +233,9 @@ export function shedPreview(
     })
     .sort((a, b) => a.priority - b.priority || a.account.label.localeCompare(b.account.label));
   // The preview's reading of the gate: a sibling has runway for a pin while its served projection sits under the
-  // ceiling on every window the pin's model draws. The router also adds the pin's rewrite and burn and counts the
-  // round's planned reservations, which the served figures cannot replay, so this is an approximation of its read. A
-  // sibling whose end falls inside the pool's wind-down is no destination whatever it reads, an end exactly the
+  // window's own ceiling on every window the pin's model draws. The router also adds the pin's rewrite and burn and
+  // counts the round's planned reservations, which the served figures cannot replay, so this is an approximation of its
+  // read. A sibling whose end falls inside the pool's wind-down is no destination whatever it reads, an end exactly the
   // wind-down away included. A sibling whose windows hold the 7-day window and no 5-hour one, as an approved Ultra
   // account's set does, is read on the 7-day window alone, since the router's fit books the windows of the
   // destination's set and nothing on a window that set lacks.
@@ -237,7 +251,7 @@ export function shedPreview(
               .filter((id) => id !== '5h' || windowOf(account, '5h') !== null || windowOf(account, '7d') === null)
               .every((id) => {
                 const projection = windowOf(account, id)?.projection ?? null;
-                return projection !== null && projection < ceiling;
+                return projection !== null && projection < ceilingOf(pool, id);
               })),
     );
   const windowMs = pool.burnAverageSeconds * 1_000;
@@ -262,23 +276,28 @@ export function shedPreview(
     // A start at or after `now`, from a reset more than five hours ahead, is no reading of a fresh window, so it holds
     // nothing, as the router reads it.
     const heldNow = start !== null && start < now && now - start < 2 * windowMs;
+    const end = endOf(account, now);
+    const lineAt = (id: ShedWindow, w: RateLimitWindow, horizon: number) => lineOf(pool, id, w.resetsAt === null ? null : Date.parse(w.resetsAt), end, horizon, now);
     // A model week is read only where one of the pins draws it, as the router's trigger reads it.
     const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || pins.some((s) => drawsFable(s.model)))
       .filter((id) => !(id === '5h' && heldNow))
       .flatMap((id) => {
         const w = windowOf(account, id);
-        return w === null || w.projection === null || w.horizon === null ? [] : [{ burn: w.burn, horizon: Date.parse(w.horizon), id, projection: w.projection }];
+        if (w === null || w.projection === null || w.horizon === null) return [];
+        const horizon = Date.parse(w.horizon);
+        return [{ burn: w.burn, horizon, id, line: lineAt(id, w, horizon), projection: w.projection }];
       });
-    // A young 5-hour window under the ceiling changes nothing in the round, so only one over it names its member: that
+    // A young 5-hour window under its line changes nothing in the round, so only one over it names its member: that
     // is the round the hold took away.
-    if (heldNow && five !== null && five.projection !== null && five.horizon !== null && five.projection > ceiling) held.push({ ageMs: now - start, holdMs: 2 * windowMs, id: account.id, label: account.label });
-    const fired = read.find((w) => w.projection > ceiling);
+    if (heldNow && five !== null && five.projection !== null && five.horizon !== null && five.projection > lineAt('5h', five, Date.parse(five.horizon))) held.push({ ageMs: now - start, holdMs: 2 * windowMs, id: account.id, label: account.label });
+    const fired = read.find((w) => w.projection > w.line);
     if (fired === undefined) {
-      for (const w of read) if (closest === null || w.projection > closest.projection) closest = { horizon: w.horizon, label: account.label, projection: w.projection, window: w.id };
+      // The room to each window's own ceiling ranks them, since the two kinds of window read different ceilings.
+      for (const w of read) if (closest === null || ceilingOf(pool, w.id) - w.projection < ceilingOf(pool, closest.window) - closest.projection) closest = { horizon: w.horizon, label: account.label, projection: w.projection, window: w.id };
       continue;
     }
     // A horizon at or behind `now` reads as a minute away, so the excess stays finite.
-    const excess = (fired.projection - ceiling) / Math.max((fired.horizon - now) / HOUR, 1 / 60);
+    const excess = (fired.projection - fired.line) / Math.max((fired.horizon - now) / HOUR, 1 / 60);
     hot.push({ excess, horizon: fired.horizon, id: account.id, label: account.label, projection: fired.projection, window: fired.id });
     if (!pool.loadShedding) continue;
     // The served burn is a pin's share of the window its `burnWindow` names: the 5-hour window, or the 7-day one on an

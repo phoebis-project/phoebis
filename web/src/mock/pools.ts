@@ -146,9 +146,10 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'pace',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    // A ceiling under 80 % with its shedding on the balanced preset: primary, secondary and nightly all project past
-    // it, and the route warns about the unused fifth.
-    windowCeiling: 0.75,
+    // Two ceilings under 80 %, apart so that a read of the other kind's shows, with its shedding on the balanced
+    // preset: primary, secondary and nightly all project past their lines, and the route warns on each ceiling.
+    fiveHourCeiling: 0.75,
+    weeklyCeiling: 0.78,
     loadShedding: true,
     shedCap: 0.5,
     burnAverageSeconds: 1_800,
@@ -223,7 +224,7 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'round_robin',
     preferSubscription: false,
     overagePolicy: 'allow',
-    windowCeiling: 0.95,
+    fiveHourCeiling: 0.95,
     loadShedding: true,
     // A batch pool tuned by hand, so neither setting group matches a preset and both read custom.
     shedCap: 0.4,
@@ -277,7 +278,7 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'priority',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    windowCeiling: 0.95,
+    fiveHourCeiling: 0.95,
     loadShedding: true,
     // Its own cap at the balanced preset's, where the sample's captured pool sets one under a quarter.
     shedCap: 0.5,

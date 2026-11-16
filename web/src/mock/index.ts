@@ -144,11 +144,12 @@ const KEY_INPUT_MEMBERS: ReadonlySet<string> = new Set(['autoModeServer', 'bodyC
 const unknownKeyMember = (input: object): string | null => (Object.keys(input).some((k) => !KEY_INPUT_MEMBERS.has(k)) ? 'body must be a JSON object' : null);
 
 /**
- * The ceiling, shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
+ * The ceilings', shedding, failover, slow-down and return-to-plan refusals, in the order and words of the pool routes.
  */
 const engineRefusal = (input: PoolInput): string | null => {
   const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
-  if (!(input.windowCeiling >= 0.5 && input.windowCeiling <= 1)) return 'window_ceiling is between 0.5 and 1.0';
+  if (!(input.fiveHourCeiling >= 0.5 && input.fiveHourCeiling <= 1)) return 'five_hour_ceiling is between 0.5 and 1.0';
+  if (!(input.weeklyCeiling >= 0.5 && input.weeklyCeiling <= 1)) return 'weekly_ceiling is between 0.5 and 1.0';
   if (!(input.shedCap >= 0.1 && input.shedCap <= 1)) return 'shed_cap is between 0.1 and 1.0';
   if (!whole(input.burnAverageSeconds, 600, 7_200)) return 'burn_average_seconds is between 600 and 7200';
   if (!whole(input.shedDwellSeconds, 300, 7_200)) return 'shed_dwell_seconds is between 300 and 7200';

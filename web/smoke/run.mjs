@@ -782,33 +782,53 @@ await forView('/', async () => {
     // opens the Meter view on the account.
     ['nightly: 5h charged 2.0x the table, since 13:11', 'badge--warning', '/meter', [`effective: ${drift?.detail.effective}`, 'source: shipped', `windows: ${JSON.stringify(drift?.detail.windows.map((w) => ({ ...w, window_end: fmtAbsolute(new Date(w.window_end).toISOString()) })))}`]],
     // A routing condition's badge reads its words, the count, the setting and the start, and opens the routing log, or
-    // the account's Quota card for a wall a reset can clear. Nightly's walls, its poll's edge and the 429's head after
-    // the clear, have no 5-hour round before them, so they name no projection.
-    ['nightly: 2 walls reached on the 5h window, shed_cap and window_ceiling, since 12:01', 'badge--warning', '/routing-log', ['setting: ["shed_cap","window_ceiling"]', 'walls: 2', 'windows: ["five_hour"]']],
+    // the account's Quota card for a wall a reset can clear. A 5-hour wall or spent destination names the 5-hour
+    // ceiling, and each account stands in one pool, so its item reads that pool's values: all's cap of 50 % and 5-hour
+    // ceiling of 75 %, work's 50 % and 95 %. Nightly's walls, its poll's edge and the 429's head after the clear, have
+    // no 5-hour round before them, so they name no projection.
+    [
+      'nightly: 2 walls reached on the 5h window, shed_cap 50 % and five_hour_ceiling 75 %, since 12:01',
+      'badge--warning',
+      '/routing-log',
+      ['setting: ["shed_cap","five_hour_ceiling"]', 'setting_values: {"shed_cap":0.5,"five_hour_ceiling":0.75}', 'walls: 2', 'windows: ["five_hour"]'],
+    ],
     // secondary's 5-hour window reads at its limit and its reset is usable, so the wall names the reset and opens the
     // account's Quota card.
     [
-      'secondary: 1 wall reached on the 5h window, the last round projected 109 %, a reset can clear it, shed_cap and window_ceiling, since 14:02',
+      'secondary: 1 wall reached on the 5h window, the last round projected 109 %, a reset can clear it, shed_cap 50 % and five_hour_ceiling 75 %, since 14:02',
       'badge--warning',
       '/quota#secondary',
-      ['projection_error: -0.087', 'reset: {"clears":["five_hour"],"grant":"rg-secondary-1","label":"Launch reset"}', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+      [
+        'projection_error: -0.087',
+        'reset: {"clears":["five_hour"],"grant":"rg-secondary-1","label":"Launch reset"}',
+        'setting: ["shed_cap","five_hour_ceiling"]',
+        'setting_values: {"shed_cap":0.5,"five_hour_ceiling":0.75}',
+        'walls: 1',
+        'windows: ["five_hour"]',
+      ],
     ],
     // Studio's wall at a poll of 14:20 follows the round its stretch fired at 14:05, so it reads how long before the
     // 15:29 reset it came, read off the mock's studio wall seed.
     [
-      'studio: 1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20',
+      'studio: 1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap 50 % and five_hour_ceiling 95 %, since 14:20',
       'badge--warning',
       '/routing-log',
-      ['early_ms: 4140000', 'setting: ["shed_cap","window_ceiling"]', 'walls: 1', 'windows: ["five_hour"]'],
+      ['early_ms: 4140000', 'setting: ["shed_cap","five_hour_ceiling"]', 'setting_values: {"shed_cap":0.5,"five_hour_ceiling":0.95}', 'walls: 1', 'windows: ["five_hour"]'],
     ],
     // The least-bad move at 11:01:50 and the failover onto nightly within the hour of its second wall, which names no
     // fit.
-    ['nightly: 2 moves landed and the 5h window was spent within the hour, window_ceiling, since 11:01', 'badge--warning', '/routing-log', ['fits: {"least_bad":1,"unknown":1}', 'moves: 2', 'setting: ["window_ceiling"]', 'windows: ["five_hour"]']],
     [
-      'all: 1 round marked nothing, no destination had runway, window_ceiling 75 %, since 14:12',
+      'nightly: 2 moves landed and the 5h window was spent within the hour, five_hour_ceiling 75 %, since 11:01',
       'badge--warning',
       '/routing-log',
-      ['accounts: ["primary"]', 'rounds: 1', 'setting: ["window_ceiling"]', 'setting_values: {"window_ceiling":0.75}'],
+      ['fits: {"least_bad":1,"unknown":1}', 'moves: 2', 'setting: ["five_hour_ceiling"]', 'setting_values: {"five_hour_ceiling":0.75}', 'windows: ["five_hour"]'],
+    ],
+    // A round reads a sibling's runway over windows of both kinds, so its item names both of all's ceilings.
+    [
+      'all: 1 round marked nothing, no destination had runway, five_hour_ceiling 75 % and weekly_ceiling 78 %, since 14:12',
+      'badge--warning',
+      '/routing-log',
+      ['accounts: ["primary"]', 'rounds: 1', 'setting: ["five_hour_ceiling","weekly_ceiling"]', 'setting_values: {"five_hour_ceiling":0.75,"weekly_ceiling":0.78}'],
     ],
     // Studio's two slow-down spans in work: the closed one from 09:12 until its factor read 1 at 10:38:20, and the open
     // one from 13:48, with the day's held time and held requests of `HELD_TODAY` (`mock/attention.ts`).
@@ -3522,16 +3542,16 @@ expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Ide
       ok: JSON.stringify(rows) === JSON.stringify([['metered P1', 'contract', 'next']]),
       missing: [JSON.stringify(rows)],
     });
-    // The Member utilization bar measures the plan windows the ceiling binds, so the pool's one usage-based member
-    // draws no tick on it.
+    // The Member utilization bar measures the plan windows the ceilings bind, so the pool's one usage-based member
+    // draws no tick on either track.
     [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool contract')?.click();
     await page.settle(300);
-    const track = page.container.querySelector('dialog[open] .ubar__track');
-    const ticks = track?.querySelectorAll('.ubar__tick').length ?? -1;
+    const bar = page.container.querySelector('dialog[open] .ubar');
+    const ticks = bar?.querySelectorAll('.ubar__track .ubar__tick').length ?? -1;
     results.push({
       name: "/pools the contract pool's Member utilization bar draws no tick for its usage-based member",
-      ok: track !== null && ticks === 0,
-      missing: [track ? `${ticks} ticks` : 'no bar'],
+      ok: bar !== null && ticks === 0,
+      missing: [bar ? `${ticks} ticks` : 'no bar'],
     });
     page.unmount();
   }
@@ -6097,21 +6117,21 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
   }
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
-  // The shedding badge draws on every card, reading the pool's ceiling with its switch on, so all reads its 75 % and
-  // jobs and work the store's 95 %. The slow-down badge draws on work alone, the one pool with the switch on, and reads
-  // its threshold of 30 minutes. all carries the story's one pool guardrail, whose badge leads the strip, since the
-  // rail draws Guardrails before every other group a badge opens.
-  const shedding = (id, ceiling) => [`sheds above ${ceiling} %`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
+  // The shedding badge draws on every card, reading the pool's two ceilings with its switch on, so all reads its 75 %
+  // and 78 % and jobs and work the store's 95 % and 100 %. The slow-down badge draws on work alone, the one pool with
+  // the switch on, and reads its threshold of 30 minutes. all carries the story's one pool guardrail, whose badge leads
+  // the strip, since the rail draws Guardrails before every other group a badge opens.
+  const shedding = (id, fiveHour, weekly) => [`sheds above ${fiveHour} % (5-hour) and ${weekly} % (weekly)`, `/pools?edit=${id}&group=shedding`, 'Opens the pool dialog on Load shedding'];
   results.push({
     name: "/pools the strip badges the features a pool has on, and the shedding's state, and opens the dialog on their groups",
     ok:
       JSON.stringify(strip('all')) ===
-        JSON.stringify([['1 guardrail', '/pools?edit=all&group=guardrails', 'Opens the pool dialog on Guardrails'], shedding('all', 75), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
-      JSON.stringify(strip('jobs')) === JSON.stringify([shedding('jobs', 95)]) &&
+        JSON.stringify([['1 guardrail', '/pools?edit=all&group=guardrails', 'Opens the pool dialog on Guardrails'], shedding('all', 75, 78), ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('jobs')) === JSON.stringify([shedding('jobs', 95, 100)]) &&
       JSON.stringify(strip('work')) ===
         JSON.stringify([
           ['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'],
-          shedding('work', 95),
+          shedding('work', 95, 100),
           ['slows above 30 min', '/pools?edit=work&group=slowDown', 'Opens the pool dialog on Slow-down'],
           ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'],
           ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive'],
@@ -6336,14 +6356,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Reset ending', 'nightly', '/quota#nightly'],
           ['Usage poll backing off', 'secondary', '/accounts/secondary'],
           ['Meter drift against the table', 'nightly', '/meter'],
-          ['Wall reached under the ceiling', 'nightly', '/routing-log'],
-          ['Wall reached under the ceiling', 'secondary', '/quota#secondary'],
+          ['Wall reached', 'nightly', '/routing-log'],
+          ['Wall reached', 'secondary', '/quota#secondary'],
           ['Destination spent within the hour', 'nightly', '/routing-log'],
           ['Rounds without a destination', 'all', '/routing-log'],
         ]) &&
-      JSON.stringify(attentionRows('work')) === JSON.stringify([['Wall reached under the ceiling', 'studio', '/routing-log'], ['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
+      JSON.stringify(attentionRows('work')) === JSON.stringify([['Wall reached', 'studio', '/routing-log'], ['Slowed past twice the stretch', 'studio', '/routing-log']]) &&
       JSON.stringify(workDetail) ===
-        JSON.stringify(['1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap and window_ceiling, since 14:20', 'held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since 09:12']),
+        JSON.stringify(['1 wall reached on the 5h window, the wall came 1 h 9 min before the reset, shed_cap 50 % and five_hour_ceiling 95 %, since 14:20', 'held 2 h 8 min of the last 24 h over 1 h, 72 requests held, slow_down_stretch_seconds 1800, since 09:12']),
     missing: [...['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))} ${JSON.stringify(rowAges(name))}`), ...workDetail],
   });
   {
@@ -6478,16 +6498,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     'fast lane cooling 1',
     "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
   ].join('\n');
-  // The route's sentences for all's two warnings, the affinity under the injected cache TTL and the ceiling under 80 %.
+  // The route's sentences for all's three warnings, the affinity under the injected cache TTL and the two ceilings
+  // under 80 %, in the order of their codes.
   const allWarnings = [
     'The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere.',
-    'A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm.',
+    'A 5-hour ceiling under 80 percent moves sessions that would have finished the window warm.',
+    'A weekly ceiling under 80 percent leaves a fifth of every week unused.',
   ].join(' ');
   results.push({
     name: '/pools seven tiles per card, the sixth the count of the warnings with their sentences in its title, the seventh the count of rule moves in the last hour with the reasons and the failovers left out in its title',
     ok:
       tiles('all').length === 7 &&
-      JSON.stringify(tiles('all')[5]) === JSON.stringify(['Warnings', '2', allWarnings]) &&
+      JSON.stringify(tiles('all')[5]) === JSON.stringify(['Warnings', '3', allWarnings]) &&
       JSON.stringify(tiles('work')[5]) === JSON.stringify(['Warnings', '0', null]) &&
       JSON.stringify(tiles('all')[6]) === JSON.stringify(['Moves in the last hour', '2', allTitle]) &&
       JSON.stringify(tiles('jobs')[6]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
@@ -6579,8 +6601,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
           ['Reset ending', '/quota#nightly'],
           ['Usage poll backing off', '/accounts/secondary'],
           ['Meter drift against the table', '/meter?accounts=nightly'],
-          ['Wall reached under the ceiling', sinceThen({ accounts: 'nightly', kinds: 'window_spent' }, since('wall_reached', 'nightly'))],
-          ['Wall reached under the ceiling', '/quota#secondary'],
+          ['Wall reached', sinceThen({ accounts: 'nightly', kinds: 'window_spent' }, since('wall_reached', 'nightly'))],
+          ['Wall reached', '/quota#secondary'],
           ['Destination spent within the hour', sinceThen({ accounts: 'nightly', kinds: 'pin_migrated,window_spent' }, since('destination_spent', 'nightly'))],
           ['Rounds without a destination', sinceThen({ kinds: 'shedding_round', pools: 'all' }, since('shed_no_runway', 'all'))],
         ]),
@@ -6794,7 +6816,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // jobs' switch turned off in its dialog and saved reads on its badge, and the route adds the warning that says so.
-  // Turned on again, the badge reads its ceiling once more.
+  // Turned on again, the badge reads its ceilings once more.
   const badge = () =>
     [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs')?.querySelector('.pool__features a[href="/pools?edit=jobs&group=shedding"]')?.textContent?.trim() ?? null;
   const flipJobs = async () => {
@@ -6813,8 +6835,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await flipJobs();
   const on = [badge(), (await api.listPools()).find((p) => p.id === 'jobs')?.loadShedding];
   results.push({
-    name: "/pools jobs' badge reads shedding off once its Load shedding switch is turned off in the dialog and saved, and its ceiling again once turned on",
-    ok: before === 'sheds above 95 %' && JSON.stringify(off) === JSON.stringify(['shedding off', false, ['shedding_off', 'spent_moves_off', 'warm_never']]) && JSON.stringify(on) === '["sheds above 95 %",true]' && m.container.querySelector('dialog[open]') === null,
+    name: "/pools jobs' badge reads shedding off once its Load shedding switch is turned off in the dialog and saved, and its ceilings again once turned on",
+    ok:
+      before === 'sheds above 95 % (5-hour) and 100 % (weekly)' &&
+      JSON.stringify(off) === JSON.stringify(['shedding off', false, ['shedding_off', 'spent_moves_off', 'warm_never']]) &&
+      JSON.stringify(on) === '["sheds above 95 % (5-hour) and 100 % (weekly)",true]' &&
+      m.container.querySelector('dialog[open]') === null,
     missing: [String(before), JSON.stringify(off), JSON.stringify(on)],
   });
 }
@@ -6961,7 +6987,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Window ceiling (%)', 'Load shedding', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request. Off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', '5-hour ceiling (%)', 'Weekly ceiling (%)', 'Load shedding', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a1c4e', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool. Rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   // A multi-select is the option list's listbox, which the Keys group would carry.
@@ -7156,13 +7182,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
 
   // The saved pool's warnings stand above the groups, one line each with a link to the group of its first field: all
-  // injects an hour's cache TTL past its ten minutes of affinity, and its ceiling sits under 80 %.
+  // injects an hour's cache TTL past its ten minutes of affinity, and both its ceilings sit under 80 %.
   {
     const lines = [...(dlg?.querySelectorAll('.dialog__body--grouped .pool-warnings > .callout--warning') ?? [])];
     const read = lines.map((c) => [c.textContent?.replace(/\s+/g, ' ').trim(), [...c.querySelectorAll('button')].map((b) => b.textContent?.trim())]);
     const wanted = [
       ['The session affinity ends before the cache TTL the pool injects, so a pin can expire while its cache is warm and the next request can land cold elsewhere. Go to Pinning.', ['Pinning']],
-      ['A ceiling under 80 percent leaves a fifth of every window unused and moves sessions that would have finished the window warm. Go to Windows.', ['Windows']],
+      ['A 5-hour ceiling under 80 percent moves sessions that would have finished the window warm. Go to Windows.', ['Windows']],
+      ['A weekly ceiling under 80 percent leaves a fifth of every week unused. Go to Windows.', ['Windows']],
     ];
     [...(lines[1]?.querySelectorAll('button') ?? [])][0]?.click();
     await m.settle(120);
@@ -7205,8 +7232,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const slowSwitch = () => card('Slow-down')?.querySelector('button[role="switch"][aria-label="Slow-down"]');
     const preview = () => card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
     const slowPreview = () => card('Slow-down')?.querySelector('.slow-down-preview')?.textContent ?? '';
-    expect('/pools the load groups draw the ceiling, the average and the bar, then the shedding, slow-down, failover and overage controls', ['Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
-      'Window ceiling (%)',
+    expect('/pools the load groups draw the two ceilings, the average and the bar, then the shedding, slow-down, failover and overage controls', ['Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end'].map((label) => card(label)?.textContent ?? '').join(' '), [
+      '5-hour ceiling (%)',
+      'Weekly ceiling (%)',
       'Burn average (s)',
       'Member utilization',
       'Load shedding',
@@ -7239,37 +7267,45 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         'The longest throttle a request waits out on its member before failing over, and the longest wait for a free slot. At 0 a request fails over at once. Claude Code gives up on a request that has waited about 180 seconds without an answer and retries it on its own, so a longer wait is spent for nothing.',
       missing: [String(hintOf('Failover', 'Retry in place (s)'))],
     });
-    const ceilingField = () => field('Windows', 'Window ceiling (%)');
+    const ceilingField = () => field('Windows', '5-hour ceiling (%)');
+    const weeklyField = () => field('Windows', 'Weekly ceiling (%)');
+    const bounds = (input) => [input?.value, input?.getAttribute('min'), input?.getAttribute('max')];
     results.push({
-      name: '/pools the Windows group opens with its intro and draws the ceiling from 50 to 100 with its hint, the burn average, then the bar',
+      name: '/pools the Windows group opens with its intro and draws the two ceilings from 50 to 100 with their hints, the burn average, then the bar',
       ok:
         introOf('Windows') === "The windows the router works from: the share of each it keeps every account under, and the span each session's burn is averaged over." &&
-        JSON.stringify(labelsOf('Windows')) === '["Window ceiling (%)","Burn average (s)","Member utilization"]' &&
-        hintOf('Windows', 'Window ceiling (%)') === 'A move or a new session lands on a member only where its windows stay under this share until they reset, or for the next five hours on a weekly window. A round runs on a member whose window would pass it.' &&
-        ceilingField()?.value === '75' &&
-        ceilingField()?.getAttribute('min') === '50' &&
-        ceilingField()?.getAttribute('max') === '100',
-      missing: [String(introOf('Windows')), JSON.stringify(labelsOf('Windows')), String(hintOf('Windows', 'Window ceiling (%)')), String(ceilingField()?.value), String(ceilingField()?.getAttribute('min')), String(ceilingField()?.getAttribute('max'))],
+        JSON.stringify(labelsOf('Windows')) === '["5-hour ceiling (%)","Weekly ceiling (%)","Burn average (s)","Member utilization"]' &&
+        hintOf('Windows', '5-hour ceiling (%)') === "A move or a new session lands on a member only where its 5-hour window stays under this share until it resets. The slow-down paces a member's 5-hour window to it." &&
+        hintOf('Windows', 'Weekly ceiling (%)') ===
+          'The same line for the 7-day window and each model week, read over the next five hours. A round runs on a member whose weekly window would pass it. At 100 a week is used up to its wall. Lower it for accounts with extra usage on or used outside the router.' &&
+        // all's seeds, 75 % and 78 % (mock/pools.ts).
+        JSON.stringify([bounds(ceilingField()), bounds(weeklyField())]) === '[["75","50","100"],["78","50","100"]]',
+      missing: [String(introOf('Windows')), JSON.stringify(labelsOf('Windows')), String(hintOf('Windows', '5-hour ceiling (%)')), String(hintOf('Windows', 'Weekly ceiling (%)')), JSON.stringify([bounds(ceilingField()), bounds(weeklyField())])],
     });
     {
       const util = card('Windows');
       const ticks = [...(util?.querySelectorAll('.ubar__track .ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
-      const handle = () => util?.querySelector('[role="slider"][aria-label="Window ceiling"]');
-      const atStored = [handle()?.className, handle()?.style.left, handle()?.getAttribute('aria-valuetext'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax')];
+      const handle = () => util?.querySelector('[role="slider"][aria-label="5-hour ceiling"]');
+      const weeklyHandle = () => util?.querySelector('[role="slider"][aria-label="Weekly ceiling"]');
+      // Each handle stands on the track of its own kind's readings.
+      const kinds = (slider) => [...(slider?.closest('.ubar__track')?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.className.replace('ubar__tick ', ''));
+      const tracks = [kinds(handle()), kinds(weeklyHandle())];
+      const atStored = [handle()?.className, handle()?.style.left, handle()?.getAttribute('aria-valuetext'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax'), weeklyHandle()?.style.left];
       await type(ceilingField(), '80');
-      const typed = handle()?.style.left;
+      const typed = [handle()?.style.left, weeklyHandle()?.style.left];
       await type(ceilingField(), '75');
       const legend = [...(util?.querySelectorAll('.ubar .legend li') ?? [])].map((li) => li.textContent?.trim());
       results.push({
-        name: "/pools the bar draws each member reading with the ceiling's handle at the field's value, and no lead track, margin or band",
+        name: "/pools the bar draws each member's 5-hour reading under the 5-hour ceiling's handle and its 7-day reading under the weekly one's, each at its field's value, and no lead track, margin or band",
         ok:
           ticks.length === 6 &&
           ticks.includes('primary: 5-hour 62%') &&
-          JSON.stringify(atStored) === JSON.stringify(['ubar__handle ubar__handle--ceiling', '75%', '75%', '50', '100']) &&
-          typed === '80%' &&
+          JSON.stringify(tracks) === JSON.stringify([['ubar__tick--5h', 'ubar__tick--5h', 'ubar__tick--5h'], ['ubar__tick--7d', 'ubar__tick--7d', 'ubar__tick--7d']]) &&
+          JSON.stringify(atStored) === JSON.stringify(['ubar__handle ubar__handle--ceiling', '75%', '75%', '50', '100', '78%']) &&
+          JSON.stringify(typed) === '["80%","78%"]' &&
           util?.querySelector('.ubar__track--lead, .ubar__margin, .ubar__band') === null &&
           JSON.stringify(legend) === '["5-hour reading","7-day reading"]',
-        missing: [...ticks.map(String), JSON.stringify(atStored), String(typed), JSON.stringify(legend)],
+        missing: [...ticks.map(String), JSON.stringify(tracks), JSON.stringify(atStored), JSON.stringify(typed), JSON.stringify(legend)],
       });
     }
     {
@@ -7280,7 +7316,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await type(ceilingField(), '75');
       results.push({
         name: '/pools a ceiling out of range holds the save from the footer and the rail',
-        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Windows' && outOfRange[2] === true,
+        ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: 5-hour ceiling (%) is from 50 to 100.Go to Windows' && outOfRange[2] === true,
         missing: outOfRange.map(String),
       });
     }
@@ -7337,16 +7373,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         JSON.stringify(balanced) === '[["50","900","1800"],[true,true,true]]',
       missing: [JSON.stringify(fast), JSON.stringify(fromFast), JSON.stringify(edited), JSON.stringify(conservative), String(customHint), JSON.stringify(balanced)],
     });
-    // At the mock's clock primary projects 112 % at its 5-hour reset, secondary 100 % and nightly 104 %, all past all's
-    // 75 %, and every sibling of each is over it too or out of the rotation. Under a ceiling of 100 nightly and primary
-    // still cross, and neither has a sibling with runway.
+    // At the mock's clock primary projects 112 % at its 5-hour reset and nightly 104 % at its own, both past the wall a
+    // reset ahead sets. secondary projects 100 % at its 5-hour reset, at the wall and not over it, and 80.8 % on its
+    // 7-day window at the five-hour bound, past all's weekly 78 %. Every sibling of each is over its ceiling too or out
+    // of the rotation. Under a weekly ceiling of 100 secondary's week drops under its line, nightly and primary still
+    // cross, and neither has a sibling with runway.
     const stored = preview();
-    await type(ceilingField(), '100');
+    await type(weeklyField(), '100');
     const raised = preview();
     shedSwitch()?.click();
     await m.settle(120);
     const offRaised = preview();
-    await type(ceilingField(), '75');
+    await type(weeklyField(), '78');
     const offLine = preview();
     await pick('Load shedding preset', 'Fast');
     const afterPreset = [shedSwitch()?.getAttribute('aria-checked'), shedDisabled()];
@@ -7356,7 +7394,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     shedSwitch()?.click();
     await m.settle(120);
     results.push({
-      name: '/pools the shedding preview reads that no sibling has runway for the members over the ceiling, three at 75 and nightly and primary at 100',
+      name: "/pools the shedding preview reads that no sibling has runway for the members over the ceiling, three at all's ceilings and nightly and primary at a weekly 100",
       ok:
         stored === '3 members project over the ceiling: nightly, primary, secondary. No sibling has runway for them, so nothing would be marked.' &&
         raised === '2 members project over the ceiling: nightly, primary. No sibling has runway for them, so nothing would be marked.',
@@ -8375,7 +8413,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const refused = [stale?.hasAttribute('open') === true, callout?.textContent ?? '', !!reload, shedChip()];
   results.push({
     name: '/pools a save over a pool written since the dialog opened is refused as stale with a Reload in the callout',
-    ok: story.loadShedding === true && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && refused[3] === 'sheds above 75 %',
+    ok: story.loadShedding === true && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && refused[3] === 'sheds above 75 % (5-hour) and 78 % (weekly)',
     missing: [String(story.loadShedding), ...refused.map(String)],
   });
   const footer = stale?.querySelector('.dialog__status');
@@ -8403,7 +8441,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const saved = (await api.listPools()).find((p) => p.id === 'all');
   results.push({
     name: '/pools an edit opened after Reload saves over the fresh row',
-    ok: m.container.querySelector('dialog[open]') === null && saved?.loadShedding === true && shedChip() === 'sheds above 75 %',
+    ok: m.container.querySelector('dialog[open]') === null && saved?.loadShedding === true && shedChip() === 'sheds above 75 % (5-hour) and 78 % (weekly)',
     missing: [String(saved?.loadShedding), String(shedChip())],
   });
   // Cancel after a stale refusal reads the lists again, as after any refusal; the write through the API moves the
@@ -8563,14 +8601,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
   }
   {
-    // A new pool starts where the route seeds one: the ceiling at 95 % and its switch on. The route computes the
-    // warnings, so an unsaved pool lists none.
+    // A new pool starts where the route seeds one: the 5-hour ceiling at 95 %, the weekly one at 100 % and its switch
+    // on. The route computes the warnings, so an unsaved pool lists none.
     const shedSwitch = group(dlg, 'Load shedding')?.querySelector('button[role="switch"][aria-label="Load shedding"]');
-    const ceiling = group(dlg, 'Windows')?.querySelector('input[aria-label="Window ceiling (%)"]');
+    const ceilings = ['5-hour ceiling (%)', 'Weekly ceiling (%)'].map((label) => group(dlg, 'Windows')?.querySelector(`input[aria-label="${label}"]`)?.value ?? null);
     results.push({
-      name: '/pools create dialog starts with Load shedding on under a ceiling of 95 %, and lists no warnings',
-      ok: shedSwitch?.getAttribute('aria-checked') === 'true' && ceiling?.value === '95' && dlg?.querySelector('.pool-warnings') === null,
-      missing: [String(shedSwitch?.getAttribute('aria-checked')), String(ceiling?.value), dlg?.querySelector('.pool-warnings')?.textContent ?? 'no warnings line'],
+      name: '/pools create dialog starts with Load shedding on under ceilings of 95 % and 100 %, and lists no warnings',
+      ok: shedSwitch?.getAttribute('aria-checked') === 'true' && JSON.stringify(ceilings) === '["95","100"]' && dlg?.querySelector('.pool-warnings') === null,
+      missing: [String(shedSwitch?.getAttribute('aria-checked')), JSON.stringify(ceilings), dlg?.querySelector('.pool-warnings')?.textContent ?? 'no warnings line'],
     });
   }
   {
@@ -8961,9 +8999,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  // primary projects 112 % at its 5-hour reset, so a ceiling of 80 % makes it the one member over the ceiling, and the
-  // annex, an API-key sibling, has runway for its pins.
-  const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+  // primary projects 112 % at its 5-hour reset, past the wall that reset sets, so it is the one member over its line
+  // under any 5-hour ceiling, the 80 % typed here among them, and the annex, an API-key sibling, has runway for its
+  // pins.
+  const ceiling = dlg?.querySelector('input[aria-label="5-hour ceiling (%)"]');
   if (ceiling) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(ceiling, '80');
   ceiling?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
@@ -8991,7 +9030,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(300);
     return [...m.container.querySelectorAll('dialog[open]')].pop();
   };
-  const ceiling = (dlg) => dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+  const ceiling = (dlg) => dlg?.querySelector('input[aria-label="5-hour ceiling (%)"]');
   const footButton = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   // An edit of another field, so the ceiling goes out as the dialog read it from the stored pool.
   const disable = async (dlg) => {
@@ -9005,11 +9044,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     footButton(dlg, 'Save pool')?.click();
     await m.settle(700);
     spy.restore();
-    return spy.calls[0]?.[1]?.windowCeiling;
+    return spy.calls[0]?.[1]?.fiveHourCeiling;
   };
 
   // The page reads the pools once at mount, so a pool written through the API reaches the card after a remount.
-  await api.updatePool('all', { ...written, windowCeiling: 0.875 });
+  await api.updatePool('all', { ...written, fiveHourCeiling: 0.875 });
   m.unmount();
   m = await mount('/pools');
   let dlg = await openAll();
@@ -9023,7 +9062,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 
   // Four decimals, which the two-decimal percent divided by 100 would send back one ulp off.
-  await api.updatePool('all', { ...written, windowCeiling: 0.8333 });
+  await api.updatePool('all', { ...written, fiveHourCeiling: 0.8333 });
   m.unmount();
   m = await mount('/pools');
   dlg = await openAll();
@@ -9053,7 +9092,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const eighty = await savedCeiling(dlg);
   results.push({
     name: '/pools a ceiling typed under 50 holds the save, and 80 % typed back saves as 0.8',
-    ok: low[0] === true && low[1] === 'Save is held: Window ceiling (%) is from 50 to 100.Go to Windows' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
+    ok: low[0] === true && low[1] === 'Save is held: 5-hour ceiling (%) is from 50 to 100.Go to Windows' && low[2] === 'true' && eighty === 0.8 && !m.container.querySelector('dialog[open]'),
     missing: [...low.map(String), String(eighty)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
@@ -9599,11 +9638,12 @@ await forView(['/keys', '/pools'], async () => {
   };
   const PLAIN_PAIRS = [
     ['Identity', 'Name', 'Status'],
+    ['Windows', '5-hour ceiling (%)', 'Weekly ceiling (%)'],
     ['Keepalive', 'Max parked (s)', 'Scheduled horizon (s)'],
   ];
   const EXPERT_PAIRS = [
     ['Identity', 'Name', 'Status'],
-    ['Windows', 'Window ceiling (%)', 'Burn average (s)'],
+    ['Windows', '5-hour ceiling (%)', 'Weekly ceiling (%)'],
     ['Load shedding', 'Shed cap (%)', 'Shed dwell (s)'],
     ['Slow-down', 'Stretch (s)', 'Hold (s)'],
     ['Failover', 'In flight', 'Retry in place (s)'],
@@ -9626,7 +9666,7 @@ await forView(['/keys', '/pools'], async () => {
     Guardrails: [['Guardrails'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
-    Windows: [['Window ceiling (%)', 'Member utilization'], '1 more setting in the '],
+    Windows: [['5-hour ceiling (%)', 'Weekly ceiling (%)', 'Member utilization'], '1 more setting in the '],
     'Load shedding': [['Load shedding'], '5 more settings in the '],
     'Overage and plan end': [['Overage policy'], '4 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
@@ -9638,7 +9678,7 @@ await forView(['/keys', '/pools'], async () => {
     'Auto mode': ['Support server-side auto mode'],
     Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
     Pinning: ['Session affinity', 'Pin sessions'],
-    Windows: ['Window ceiling (%)', 'Burn average (s)', 'Member utilization'],
+    Windows: ['5-hour ceiling (%)', 'Weekly ceiling (%)', 'Burn average (s)', 'Member utilization'],
     'Load shedding': ['Load shedding', 'Preset', 'Shed cap (%)', 'Shed dwell (s)', 'Warm sessions', 'Preview'],
     'Slow-down': ['Slow-down', 'Stretch (s)', 'Hold (s)', 'Preview'],
     Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Migrate when spent'],
@@ -9674,15 +9714,18 @@ await forView(['/keys', '/pools'], async () => {
   });
   const plainHalves = halvesOf(dlg);
   results.push({
-    name: '/pools with the mode off no half cell stands alone on its row, so the window ceiling spans the row its hidden average leaves',
+    name: "/pools with the mode off no half cell stands alone on its row, and the two ceilings halve the Windows group's first row",
     ok: plainHalves.alone.length === 0 && JSON.stringify(plainHalves.pairs) === JSON.stringify(PLAIN_PAIRS),
     missing: [...plainHalves.alone, JSON.stringify(plainHalves.pairs)],
   });
   const memberHint = () => [...(group(dlg, 'Windows')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
   const plainHint = memberHint();
   results.push({
-    name: "/pools with the mode off the member utilization hint names the ceiling's handle, since every view draws it",
-    ok: plainHint.includes("the ceiling's handle") && plainHint.includes('arrow keys') && group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="Window ceiling"]') != null,
+    name: "/pools with the mode off the member utilization hint names a ceiling's handle, since every view draws both",
+    ok:
+      plainHint.includes("a ceiling's handle") &&
+      plainHint.includes('arrow keys') &&
+      ['5-hour ceiling', 'Weekly ceiling'].every((label) => group(dlg, 'Windows')?.querySelector(`[role="slider"][aria-label="${label}"]`) != null),
     missing: [plainHint],
   });
   const drawnExpert = ['select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', 'button[role="switch"][aria-label="Migrate when spent"]'].filter((s) => dlg?.querySelector(s) !== null);
@@ -9703,7 +9746,7 @@ await forView(['/keys', '/pools'], async () => {
   });
   const expertHalves = halvesOf(dlg);
   results.push({
-    name: '/pools with the mode on the half cells stand in their six pairs, the window ceiling beside the burn average',
+    name: '/pools with the mode on the half cells stand in their six pairs, the two ceilings side by side and the burn average a whole row under them',
     ok: expertHalves.alone.length === 0 && JSON.stringify(expertHalves.pairs) === JSON.stringify(EXPERT_PAIRS),
     missing: [...expertHalves.alone, JSON.stringify(expertHalves.pairs)],
   });
@@ -9711,7 +9754,7 @@ await forView(['/keys', '/pools'], async () => {
   await p.settle(200);
 
   // A plan override per model set in the expert view, then the pool saved in the plain view, where the override is not
-  // drawn and the ceiling's handle is.
+  // drawn and the ceilings' handles are.
   const story = (await api.listPools()).find((x) => x.id === 'all');
   dlg = await open('all');
   const picker = dlg?.querySelector('[data-rule-set="plan"] select[aria-label^="Model to add"]');
@@ -9735,8 +9778,8 @@ await forView(['/keys', '/pools'], async () => {
   {
     // The handle steps a percent on an arrow key and ten on a page key, and the steps back leave the 75 the save
     // below reads.
-    const handle = () => dlg?.querySelector('[role="slider"][aria-label="Window ceiling"]');
-    const ceiling = () => dlg?.querySelector('input[aria-label="Window ceiling (%)"]')?.value ?? 'absent';
+    const handle = () => dlg?.querySelector('[role="slider"][aria-label="5-hour ceiling"]');
+    const ceiling = () => dlg?.querySelector('input[aria-label="5-hour ceiling (%)"]')?.value ?? 'absent';
     const steps = [];
     for (const key of ['ArrowUp', 'PageDown', 'PageUp', 'ArrowDown']) {
       handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key }));
@@ -9744,7 +9787,7 @@ await forView(['/keys', '/pools'], async () => {
       steps.push(ceiling());
     }
     results.push({
-      name: "/pools with the mode off the ceiling's handle steps by the arrow and page keys",
+      name: "/pools with the mode off the 5-hour ceiling's handle steps its field by the arrow and page keys",
       ok: localStorage.getItem('phoebis.expertView') === 'off' && JSON.stringify(steps) === JSON.stringify(['76', '66', '76', '75']),
       missing: [String(localStorage.getItem('phoebis.expertView')), JSON.stringify(steps)],
     });
@@ -9828,13 +9871,13 @@ await forView(['/keys', '/pools'], async () => {
       cap().dispatchEvent(new window.Event('input', { bubbles: true }));
       await p.settle(120);
     }
-    const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+    const ceiling = dlg?.querySelector('input[aria-label="5-hour ceiling (%)"]');
     if (ceiling) {
       setter.call(ceiling, '120');
       ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
       await p.settle(120);
     }
-    const handle = () => group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="Window ceiling"]');
+    const handle = () => group(dlg, 'Windows')?.querySelector('[role="slider"][aria-label="5-hour ceiling"]');
     const read = () => [handle()?.getAttribute('aria-valuenow'), handle()?.getAttribute('aria-valuemin'), handle()?.getAttribute('aria-valuemax'), handle()?.style.left, handle()?.getAttribute('aria-valuetext')];
     const past = read();
     if (ceiling) {
@@ -9851,8 +9894,8 @@ await forView(['/keys', '/pools'], async () => {
   }
   {
     // The ceiling back inside its bound, then a burn average under its 600 s floor typed in the expert view and the
-    // mode turned off: the refused average stays drawn, so the window ceiling halves its row beside it again.
-    const ceiling = dlg?.querySelector('input[aria-label="Window ceiling (%)"]');
+    // mode turned off: the refused average stays drawn on a row of its own, under the two ceilings' row.
+    const ceiling = dlg?.querySelector('input[aria-label="5-hour ceiling (%)"]');
     if (ceiling) {
       setter.call(ceiling, '75');
       ceiling.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -9869,8 +9912,8 @@ await forView(['/keys', '/pools'], async () => {
     const halves = halvesOf(dlg);
     const windows = halves.pairs.filter(([section]) => section === 'Windows');
     results.push({
-      name: '/pools with the mode off a refused burn average stays drawn, and the window ceiling halves its row beside it',
-      ok: localStorage.getItem('phoebis.expertView') === 'off' && average()?.getAttribute('aria-invalid') === 'true' && halves.alone.length === 0 && JSON.stringify(windows) === JSON.stringify([['Windows', 'Window ceiling (%)', 'Burn average (s)']]),
+      name: '/pools with the mode off a refused burn average stays drawn as no half, and the two ceilings halve their row',
+      ok: localStorage.getItem('phoebis.expertView') === 'off' && average()?.getAttribute('aria-invalid') === 'true' && halves.alone.length === 0 && JSON.stringify(windows) === JSON.stringify([['Windows', '5-hour ceiling (%)', 'Weekly ceiling (%)']]),
       missing: [String(localStorage.getItem('phoebis.expertView')), average()?.getAttribute('aria-invalid') ?? 'no average drawn', ...halves.alone, JSON.stringify(halves.pairs)],
     });
   }
@@ -17213,9 +17256,9 @@ await forView('/routing-log', async () => {
       await page.settle(50);
       const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
       const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
-      const twentyFour = [
-        'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent', 'Overage grace', 'Return to plan',
-        'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
+      const twentyFive = [
+        'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', '5-hour ceiling', 'Weekly ceiling', 'Load shedding', 'Move when spent', 'Overage grace',
+        'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
       ];
       const values = Object.fromEntries(settings.map((r) => [r.label, r.dd?.textContent ?? '']));
       // The fold's head names when the pool's settings took force, the settings' own instant.
@@ -17223,15 +17266,19 @@ await forView('/routing-log', async () => {
       const edited = `since ${new Date(record.settings.poolUpdatedAt).toISOString().slice(11, 16)}`;
       const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
       results.push({
-        name: "/routing-log the three folds open to Request facts, Pin and warmth and the twenty-four settings in order, Load shedding on, under the instant the settings took force",
+        name: "/routing-log the three folds open to Request facts, Pin and warmth and the twenty-five settings in order, Load shedding on, under the instant the settings took force",
         ok:
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.firstChild?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
-          since === edited && values['Load shedding'] === 'on' && values['Window ceiling'] === fmtPct(record.settings.windowCeiling) && values['Shed cap'] === fmtPct(record.settings.shedCap) &&
+          since === edited &&
+          values['Load shedding'] === 'on' &&
+          values['5-hour ceiling'] === fmtPct(record.settings.fiveHourCeiling) &&
+          values['Weekly ceiling'] === fmtPct(record.settings.weeklyCeiling) &&
+          values['Shed cap'] === fmtPct(record.settings.shedCap) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Session', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
           request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
           request.Session?.querySelector('a')?.getAttribute('href') === '/sessions' && request.Session?.querySelector('.chip')?.getAttribute('title') === record.request.sessionId && JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
-          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentyFour) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twentyFive) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
         missing: [JSON.stringify(closed), String(since), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
       });
       scan('renewal, folds open', card);

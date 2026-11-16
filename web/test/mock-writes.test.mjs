@@ -836,7 +836,7 @@ test('the mock answers each captured bound probe with the route\'s status and se
   // form's own check, which the form's test holds to these probes.
   const base = await storyPool(api);
   const probes = fixture('bound_refusals').probes.filter((p) => p.field !== 'model_rules');
-  assert.deepEqual(['shed_cap', 'window_ceiling'].filter((field) => !probes.some((p) => p.field === field)), [], 'the two fractions are among the probes');
+  assert.deepEqual(['five_hour_ceiling', 'shed_cap', 'weekly_ceiling'].filter((field) => !probes.some((p) => p.field === field)), [], 'the three fractions are among the probes');
   const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
   const keepalive = (field) => camel(field.slice('keepalive.'.length));
   // The capture names under `with` what it sent beside the probed field, a retry ceiling at its base or a lead beside
@@ -864,12 +864,14 @@ test('the mock answers each captured bound probe with the route\'s status and se
   }
 });
 
-test("the mock answers a two-field mistake with the route's first sentence, the ceiling before the cap, the average and the dwell, the wind-down before the stretch, the hold, the mode and the return dwell", async () => {
+test("the mock answers a two-field mistake with the route's first sentence, the 5-hour ceiling before the weekly one and both before the cap, the average and the dwell, the wind-down before the stretch, the hold, the mode and the return dwell", async () => {
   const api = await signedIn();
   const base = await storyPool(api);
   const slowed = { returnToPlan: 'sometimes', returnToPlanDwellSeconds: 86_401, slowDownHoldSeconds: 0, slowDownStretchSeconds: 59 };
   const cases = [
-    [{ burnAverageSeconds: 599, shedCap: 0.05, shedDwellSeconds: 299, windowCeiling: 0.4 }, 'window_ceiling is between 0.5 and 1.0'],
+    [{ fiveHourCeiling: 0.4, weeklyCeiling: 0.4 }, 'five_hour_ceiling is between 0.5 and 1.0'],
+    [{ burnAverageSeconds: 599, fiveHourCeiling: 0.4, shedCap: 0.05, shedDwellSeconds: 299 }, 'five_hour_ceiling is between 0.5 and 1.0'],
+    [{ shedCap: 0.05, weeklyCeiling: 0.4 }, 'weekly_ceiling is between 0.5 and 1.0'],
     [{ burnAverageSeconds: 599, shedCap: 0.05, shedDwellSeconds: 299 }, 'shed_cap is between 0.1 and 1.0'],
     [{ burnAverageSeconds: 599, shedDwellSeconds: 299 }, 'burn_average_seconds is between 600 and 7200'],
     [{ ...slowed, windDownMinutes: 10_081 }, 'wind_down_minutes is at most 10080 (one week)'],

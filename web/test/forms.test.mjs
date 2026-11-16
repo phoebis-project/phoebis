@@ -15,6 +15,7 @@ const input = {
   burnAverageSeconds: pool.burnAverageSeconds,
   cacheDiagnostics: pool.cacheDiagnostics,
   cacheTtl: pool.cacheTtl,
+  fiveHourCeiling: pool.fiveHourCeiling,
   inFlightCap: pool.inFlightCap,
   keepalive: pool.keepalive,
   loadShedding: pool.loadShedding,
@@ -39,8 +40,8 @@ const input = {
   strategy: pool.strategy,
   subagentPlacement: pool.subagentPlacement,
   warmSessions: pool.warmSessions,
+  weeklyCeiling: pool.weeklyCeiling,
   windDownMinutes: pool.windDownMinutes,
-  windowCeiling: pool.windowCeiling,
 };
 const tuned = (patch) => ({ ...input, keepalive: { ...input.keepalive, ...patch } });
 
@@ -83,11 +84,11 @@ test('a members list that did not load holds the save once and names no member',
 
 test('a pool input refuses thresholds outside their range and an empty name', () => {
   assert.notEqual(d.poolRefusals({ ...input, name: '' }, accounts).length, 0);
-  assert.deepEqual(d.poolRefusals({ ...input, windowCeiling: 0.5 }, accounts), [], 'a ceiling runs from half of a window');
-  assert.deepEqual(d.poolRefusals({ ...input, windowCeiling: 1 }, accounts), [], 'to the wall itself');
-  assert.notEqual(d.poolRefusals({ ...input, windowCeiling: 0.49 }, accounts).length, 0);
-  assert.notEqual(d.poolRefusals({ ...input, windowCeiling: 1.01 }, accounts).length, 0);
-  assert.notEqual(d.poolRefusals({ ...input, windowCeiling: Number.NaN }, accounts).length, 0, 'a field left empty holds the save');
+  assert.deepEqual(d.poolRefusals({ ...input, fiveHourCeiling: 0.5 }, accounts), [], 'a ceiling runs from half of a window');
+  assert.deepEqual(d.poolRefusals({ ...input, fiveHourCeiling: 1 }, accounts), [], 'to the wall itself');
+  assert.notEqual(d.poolRefusals({ ...input, fiveHourCeiling: 0.49 }, accounts).length, 0);
+  assert.notEqual(d.poolRefusals({ ...input, fiveHourCeiling: 1.01 }, accounts).length, 0);
+  assert.notEqual(d.poolRefusals({ ...input, fiveHourCeiling: Number.NaN }, accounts).length, 0, 'a field left empty holds the save');
   assert.deepEqual(d.poolRefusals({ ...input, shedCap: 0.1 }, accounts), [], 'a cap runs from a tenth of the burn');
   assert.deepEqual(d.poolRefusals({ ...input, shedCap: 1 }, accounts), []);
   assert.notEqual(d.poolRefusals({ ...input, shedCap: 0.09 }, accounts).length, 0);
@@ -125,9 +126,9 @@ test('a pool input refuses a half step on every whole engine field and a choice 
     'the slow-down fields refuse in their own group, the return dwell in the overage group',
   );
   assert.deepEqual(
-    d.poolRefusals({ ...input, burnAverageSeconds: 599, shedCap: 1.2, windowCeiling: 0.49 }, accounts).map((r) => [r.group, r.field]),
+    d.poolRefusals({ ...input, burnAverageSeconds: 599, fiveHourCeiling: 0.49, shedCap: 1.2 }, accounts).map((r) => [r.group, r.field]),
     [
-      ['utilization', 'Window ceiling (%)'],
+      ['utilization', '5-hour ceiling (%)'],
       ['utilization', 'Burn average (s)'],
       ['shedding', 'Shed cap (%)'],
     ],
@@ -335,8 +336,8 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ windowCeiling: 0.49 }, refused('Window ceiling (%)', 'utilization', 'Window ceiling (%) is from 50 to 100.')],
-    [{ windowCeiling: Number.NaN }, refused('Window ceiling (%)', 'utilization', 'Window ceiling (%) is from 50 to 100.')],
+    [{ fiveHourCeiling: 0.49 }, refused('5-hour ceiling (%)', 'utilization', '5-hour ceiling (%) is from 50 to 100.')],
+    [{ fiveHourCeiling: Number.NaN }, refused('5-hour ceiling (%)', 'utilization', '5-hour ceiling (%) is from 50 to 100.')],
     [{ shedCap: 1.2 }, refused('Shed cap (%)', 'shedding', 'Shed cap (%) is from 10 to 100.')],
     [{ burnAverageSeconds: 599 }, refused('Burn average (s)', 'utilization', 'Burn average (s) is a whole number from 600 to 7,200.')],
     [{ shedDwellSeconds: 299 }, refused('Shed dwell (s)', 'shedding', 'Shed dwell (s) is a whole number from 300 to 7,200.')],
@@ -451,12 +452,12 @@ const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
 const keepaliveWith = (fields = {}) => Object.fromEntries(Object.entries(fields).map(([field, value]) => [camel(field.slice('keepalive.'.length)), value]));
 
 /** The fraction probes and the field each one's refusal names in the dialog. */
-const FRACTION_FIELDS = { shed_cap: 'Shed cap (%)', window_ceiling: 'Window ceiling (%)' };
+const FRACTION_FIELDS = { five_hour_ceiling: '5-hour ceiling (%)', shed_cap: 'Shed cap (%)', weekly_ceiling: 'Weekly ceiling (%)' };
 
 test('the form admits and refuses the values the routes do', () => {
   const { probes } = fixture('bound_refusals');
   assert.ok(probes.length > 0);
-  assert.deepEqual(Object.keys(FRACTION_FIELDS).filter((field) => !probes.some((p) => p.field === field)), [], 'the capture probes both fractions');
+  assert.deepEqual(Object.keys(FRACTION_FIELDS).filter((field) => !probes.some((p) => p.field === field)), [], 'the capture probes the three fractions');
   for (const { field, route, status, value, with: fields } of probes) {
     let admitted;
     if (field in FRACTION_FIELDS) {
@@ -478,12 +479,13 @@ test('the form admits and refuses the values the routes do', () => {
   }
 });
 
-test("the warnings mirror reads the pool routes' ten checks on a pool's settings, sorted by code", () => {
+test("the warnings mirror reads the pool routes' eleven checks on a pool's settings, sorted by code", () => {
   const row = fixture('pools').pools[0];
   assert.deepEqual(d.poolWarnings(d.decodePool(row), 0), d.decodePool(row).warnings, 'the captured pool reads the warnings the route answered');
   const quiet = {
     affinityTtlSeconds: 3_600,
     cacheTtl: { ...input.cacheTtl, enabled: true, injectWhenAbsent: true },
+    fiveHourCeiling: 0.95,
     inFlightCap: 16,
     loadShedding: true,
     migrateWhenSpent: true,
@@ -493,17 +495,19 @@ test("the warnings mirror reads the pool routes' ten checks on a pool's settings
     slowDown: false,
     slowDownHoldSeconds: 120,
     warmSessions: 'when_needed',
-    windowCeiling: 0.95,
+    weeklyCeiling: 1,
   };
-  assert.deepEqual(d.poolWarnings(quiet, 16), [], 'a pool inside every check reads none');
+  assert.deepEqual(d.poolWarnings(quiet, 16), [], 'a pool inside every check reads none, a weekly ceiling at the wall among them');
   const codes = (patch, cohort = 0) => d.poolWarnings({ ...quiet, ...patch }, cohort).map((w) => [w.code, w.fields]);
   assert.deepEqual(codes({ affinityTtlSeconds: 600 }), [['affinity_under_cache_ttl', ['affinity_ttl_seconds', 'cache_ttl']]], 'an affinity under the hour the plan main TTL injects');
   assert.deepEqual(codes({ affinityTtlSeconds: 600, cacheTtl: { ...quiet.cacheTtl, injectWhenAbsent: false } }), [], 'a policy that leaves an absent marker alone injects nothing');
   assert.deepEqual(codes({ affinityTtlSeconds: 600, cacheTtl: { ...quiet.cacheTtl, enabled: false } }), [], 'a policy that is off injects nothing');
   assert.deepEqual(codes({}, 17), [['cap_under_cohort', ['in_flight_cap']]]);
   assert.deepEqual(codes({ shedCap: 0.2 }), [['cap_under_quarter', ['shed_cap']]]);
-  assert.deepEqual(codes({ windowCeiling: 0.75 }), [['ceiling_low', ['window_ceiling']]]);
-  assert.deepEqual(codes({ windowCeiling: 1 }), [['ceiling_without_margin', ['window_ceiling']]]);
+  assert.deepEqual(codes({ fiveHourCeiling: 0.75 }), [['five_hour_ceiling_low', ['five_hour_ceiling']]]);
+  assert.deepEqual(codes({ fiveHourCeiling: 1 }), [['five_hour_ceiling_without_margin', ['five_hour_ceiling']]]);
+  assert.deepEqual(codes({ weeklyCeiling: 0.79 }), [['weekly_ceiling_low', ['weekly_ceiling']]], 'a weekly ceiling under 80 percent');
+  assert.deepEqual(codes({ weeklyCeiling: 0.8 }), [], 'a weekly ceiling of 80 percent leaves no fifth unused');
   assert.deepEqual(codes({ loadShedding: false }), [['shedding_off', ['load_shedding', 'slow_down']]], 'the check reads both switches, and the dialog opens the first');
   assert.deepEqual(codes({ migrateWhenSpent: false }), [['spent_moves_off', ['migrate_when_spent']]]);
   assert.deepEqual(codes({ warmSessions: 'never' }), [['warm_never', ['warm_sessions']]]);
@@ -517,7 +521,11 @@ test("the warnings mirror reads the pool routes' ten checks on a pool's settings
   ]);
   assert.deepEqual(codes({ returnToPlan: 'when_cold', returnToPlanDwellSeconds: 0 }), [], 'a mode that reads no dwell returns no warm session at once');
   assert.deepEqual(codes({ loadShedding: false, slowDown: true }), [], 'with the slow-down on a session over the ceiling is slowed rather than left to spend its window');
-  const every = d.poolWarnings({ ...quiet, affinityTtlSeconds: 600, loadShedding: false, migrateWhenSpent: false, returnToPlanDwellSeconds: 0, shedCap: 0.2, slowDownHoldSeconds: 300, warmSessions: 'never', windowCeiling: 0.75 }, 17);
-  assert.deepEqual(every.map((w) => w.code), ['affinity_under_cache_ttl', 'cap_under_cohort', 'cap_under_quarter', 'ceiling_low', 'hold_over_window', 'return_at_once', 'shedding_off', 'spent_moves_off', 'warm_never'], 'sorted by code');
+  const every = d.poolWarnings({ ...quiet, affinityTtlSeconds: 600, fiveHourCeiling: 0.75, loadShedding: false, migrateWhenSpent: false, returnToPlanDwellSeconds: 0, shedCap: 0.2, slowDownHoldSeconds: 300, warmSessions: 'never', weeklyCeiling: 0.75 }, 17);
+  assert.deepEqual(
+    every.map((w) => w.code),
+    ['affinity_under_cache_ttl', 'cap_under_cohort', 'cap_under_quarter', 'five_hour_ceiling_low', 'hold_over_window', 'return_at_once', 'shedding_off', 'spent_moves_off', 'warm_never', 'weekly_ceiling_low'],
+    'sorted by code',
+  );
   assert.equal(every.find((w) => w.code === 'cap_under_cohort').text, 'The in-flight cap is under the largest live cohort of 17 agents, so subagents of one session wait for a slot they share.');
 });

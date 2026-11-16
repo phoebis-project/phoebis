@@ -381,6 +381,7 @@ export function decodePool(v: unknown): Pool {
     cacheDiagnostics: bool(p.cache_diagnostics),
     cacheTtl: decodeCacheTtl(p.cache_ttl),
     day24h: daySum(p),
+    fiveHourCeiling: num(p.five_hour_ceiling, POOL_ENGINE_DEFAULTS.fiveHourCeiling),
     guardrails: guardrailRefs(p.guardrails),
     id: str(p.id),
     inFlightCap: num(p.in_flight_cap, POOL_ENGINE_DEFAULTS.inFlightCap),
@@ -438,8 +439,8 @@ export function decodePool(v: unknown): Pool {
     warmSessions: oneOf(WARM_SESSIONS_VALUES, p.warm_sessions) ?? POOL_ENGINE_DEFAULTS.warmSessions,
     // An entry that is no object says nothing the dialog can draw, so it is left out rather than drawn blank.
     warnings: list(p.warnings).filter((w) => w !== null && typeof w === 'object').map(rec).map((w) => ({ code: str(w.code), fields: strings(w.fields), text: str(w.text) })),
+    weeklyCeiling: num(p.weekly_ceiling, POOL_ENGINE_DEFAULTS.weeklyCeiling),
     windDownMinutes: num(p.wind_down_minutes, POOL_ENGINE_DEFAULTS.windDownMinutes),
-    windowCeiling: num(p.window_ceiling, POOL_ENGINE_DEFAULTS.windowCeiling),
   };
 }
 
@@ -625,10 +626,10 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
 }
 
 /**
- * The settings by the record's version: a record names the switch, the ceiling, the cap, the average and the dwell, and
- * a version 1 record the three old names of the last three with its three removed settings, which `legacy` keeps so an
- * old record still shows what it read. The slow-down's three and the return-to-plan's two read null on a record
- * written before them, so the card draws them as not recorded.
+ * The settings by the record's version: a record names the switch, the two ceilings, the cap, the average and the
+ * dwell, and a version 1 record the three old names of the last three with its three removed settings, which `legacy`
+ * keeps so an old record still shows what it read. The slow-down's three and the return-to-plan's two read null on a
+ * record written before them, so the card draws them as not recorded.
  */
 function decodeRecordSettings(x: Rec, version: number): RecordSettings {
   const shared = {
@@ -641,10 +642,16 @@ function decodeRecordSettings(x: Rec, version: number): RecordSettings {
   if (version === 1) {
     return {
       ...shared, burnAverageSeconds: num(x.burn_window_seconds), legacy: { paceFloor: num(x.pace_floor), selectBelowUtilization: numOrNull(x.select_below_utilization), shedAheadOfPace: numOrNull(x.shed_ahead_of_pace) },
-      loadShedding: null, shedCap: num(x.shed_share), shedDwellSeconds: num(x.source_dwell_seconds), windowCeiling: null,
+      fiveHourCeiling: null, loadShedding: null, shedCap: num(x.shed_share), shedDwellSeconds: num(x.source_dwell_seconds), weeklyCeiling: null,
     };
   }
-  return { ...shared, burnAverageSeconds: num(x.burn_average_seconds), legacy: null, loadShedding: bool(x.load_shedding), shedCap: num(x.shed_cap), shedDwellSeconds: num(x.shed_dwell_seconds), windowCeiling: num(x.window_ceiling) };
+  // A record stored while the pool held one ceiling for every window carries `window_ceiling` alone, and its decision
+  // read that fraction on both kinds.
+  const single = num(x.window_ceiling);
+  return {
+    ...shared, burnAverageSeconds: num(x.burn_average_seconds), fiveHourCeiling: num(x.five_hour_ceiling, single), legacy: null, loadShedding: bool(x.load_shedding), shedCap: num(x.shed_cap),
+    shedDwellSeconds: num(x.shed_dwell_seconds), weeklyCeiling: num(x.weekly_ceiling, single),
+  };
 }
 
 export function decodeDecisionRecord(v: unknown): DecisionRecord {
@@ -1129,9 +1136,9 @@ export const encodePool = (i: PoolInput) => ({
   label: i.name, members: i.members.map((m) => ({ account_id: m.accountId, budget_daily_usd: m.budgetDailyUsd, budget_monthly_usd: m.budgetMonthlyUsd, priority: m.priority })),
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription,
   session_placement: i.sessionPlacement, strategy: i.strategy, subagent_placement: i.subagentPlacement,
-  burn_average_seconds: i.burnAverageSeconds, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
+  burn_average_seconds: i.burnAverageSeconds, five_hour_ceiling: i.fiveHourCeiling, in_flight_cap: i.inFlightCap, load_shedding: i.loadShedding, migrate_when_spent: i.migrateWhenSpent, overage_move_grace_minutes: i.overageMoveGraceMinutes,
   retry_in_place_seconds: i.retryInPlaceSeconds, return_to_plan: i.returnToPlan, return_to_plan_dwell_seconds: i.returnToPlanDwellSeconds, shed_cap: i.shedCap, shed_dwell_seconds: i.shedDwellSeconds,
-  slow_down: i.slowDown, slow_down_hold_seconds: i.slowDownHoldSeconds, slow_down_stretch_seconds: i.slowDownStretchSeconds, warm_sessions: i.warmSessions, wind_down_minutes: i.windDownMinutes, window_ceiling: i.windowCeiling,
+  slow_down: i.slowDown, slow_down_hold_seconds: i.slowDownHoldSeconds, slow_down_stretch_seconds: i.slowDownStretchSeconds, warm_sessions: i.warmSessions, weekly_ceiling: i.weeklyCeiling, wind_down_minutes: i.windDownMinutes,
   ...(i.guardrails === undefined ? {} : { guardrails: i.guardrails }),
 });
 

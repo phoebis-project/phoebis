@@ -530,15 +530,18 @@ const candidate = (o) => ({
 });
 const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, promisedTokens: null, status: null, ...o });
 const SETTINGS = {
-  affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
+  affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, fiveHourCeiling: 0.95, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
   overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, returnToPlan: 'when_cold', returnToPlanDwellSeconds: 900,
   sessionPlacement: 'by_warm_prefix', shedCap: 0.5, shedDwellSeconds: 900, slowDown: true, slowDownHoldSeconds: 120, slowDownStretchSeconds: 1_800, strategy: 'pace', subagentPlacement: 'by_cohort', warmSessions: 'when_needed',
-  windDownMinutes: 30, windowCeiling: 0.95,
+  weeklyCeiling: 1, windDownMinutes: 30,
 };
 /** The five settings a record written before the slow-down and the return mode carries no value for. */
 const BEFORE_SLOW_DOWN = { returnToPlan: null, returnToPlanDwellSeconds: null, slowDown: null, slowDownHoldSeconds: null, slowDownStretchSeconds: null };
-/** The settings a version 1 record read: the three renamed under their new members, no switch, no ceiling, and the three removed. */
-const LEGACY_SETTINGS = { ...SETTINGS, ...BEFORE_SLOW_DOWN, legacy: { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: 0.9 }, loadShedding: null, windowCeiling: null };
+/**
+ * The settings a version 1 record read: the three renamed under their new members, no switch, no ceilings, and the
+ * three removed.
+ */
+const LEGACY_SETTINGS = { ...SETTINGS, ...BEFORE_SLOW_DOWN, fiveHourCeiling: null, legacy: { paceFloor: 0.05, selectBelowUtilization: null, shedAheadOfPace: 0.9 }, loadShedding: null, weeklyCeiling: null };
 const record = (o = {}) => ({
   candidates: [],
   outcome: {
@@ -1486,14 +1489,15 @@ test('the verdict line words the kind with its accounts and its pool as entities
   assert.deepEqual(texts(d.verdictChips(pending, decision({ by: strategy('pace', [0, 0, 0]) }))).slice(-1), ['cache pending']);
 });
 
-test('the settings fold lists twenty-four rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {
+test('the settings fold lists twenty-five rows, draws the five as not recorded on a record from before, and a return dwell of 0 as at once', () => {
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => s.label), [
-    'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Window ceiling', 'Load shedding', 'Move when spent',
-    'Overage grace', 'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap', 'Retry in place',
+    'Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', '5-hour ceiling', 'Weekly ceiling', 'Load shedding',
+    'Move when spent', 'Overage grace', 'Return to plan', 'Return dwell', 'Wind-down', 'Shed cap', 'Burn average', 'Shed dwell', 'Slow-down', 'Stretch', 'Hold', 'Warm sessions', 'In-flight cap',
+    'Retry in place',
   ]);
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), [
-    'Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', 'on', 'on', '30 min', 'when cold', '15 min', '30 min', '50%', '30 min', '15 min', 'on', '30 min',
-    '2 min', 'when needed', '16', '1 min',
+    'Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', '95%', '100%', 'on', 'on', '30 min', 'when cold', '15 min', '30 min', '50%', '30 min', '15 min',
+    'on', '30 min', '2 min', 'when needed', '16', '1 min',
   ]);
   const rows = (settings) => d.settingsRows(record({ settings })).map((r) => [r.label, texts(r.chips)]);
   assert.deepEqual(rows({ ...SETTINGS, loadShedding: false }).find(([label]) => label === 'Load shedding'), ['Load shedding', ['off']]);
@@ -1503,11 +1507,11 @@ test('the settings fold lists twenty-four rows, draws the five as not recorded o
   assert.deepEqual(rows({ ...SETTINGS, slowDown: false }).find(([label]) => label === 'Slow-down'), ['Slow-down', ['off']]);
   const before = rows({ ...SETTINGS, ...BEFORE_SLOW_DOWN });
   assert.deepEqual(['Return to plan', 'Return dwell', 'Slow-down', 'Stretch', 'Hold'].map((label) => before.find(([l]) => l === label)), ['Return to plan', 'Return dwell', 'Slow-down', 'Stretch', 'Hold'].map((label) => [label, ['not recorded']]));
-  assert.equal(before.filter(([, [value]]) => value === 'not recorded').length, 5, 'the switch and the ceiling a record from version 2 on carries read as recorded');
+  assert.equal(before.filter(([, [value]]) => value === 'not recorded').length, 5, 'the switch and the ceilings a record from version 2 on carries read as recorded');
   const legacy = rows(LEGACY_SETTINGS);
-  assert.deepEqual(legacy.slice(8, 10), [['Window ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
+  assert.deepEqual(legacy.slice(8, 11), [['5-hour ceiling', ['not recorded']], ['Weekly ceiling', ['not recorded']], ['Load shedding', ['not recorded']]]);
   assert.deepEqual(legacy.slice(-3), [['Shed above (then)', ['90%']], ['Select below (then)', ['off']], ['Pace floor (then)', ['5%']]]);
-  assert.equal(rows(SETTINGS).length, 24);
+  assert.equal(rows(SETTINGS).length, 25);
   const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { code: 'contract', kind: 'client', reason: 'the request has no session header' }, strategy: '' } });
   assert.equal(d.settingsRows(refused), null, 'a refusal entered no setting, so it lists none');
 });
@@ -1563,8 +1567,8 @@ test("an account edit's drawer reads each pair and the replaced secret beside th
   assert.deepEqual(key.slice(1), [['Change', ['key edited', 'ci']], ['enabled', ['from on', 'to off']], ['expires at', ['from none', 'to Sep 26 00:00']], ['Actor', ['admin']]]);
   const end = pairs({ canceled: { from: false, to: true }, subscription_ends_at: { from: null, to: ms(18, 0) } }, 'account_updated', 'secondary');
   assert.deepEqual(end.slice(2), [['canceled', ['from off', 'to on']], ['subscription ends at', ['from none', 'to 18:00']], ['Actor', ['admin']]]);
-  const pool = pairs({ window_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
-  assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry window ceiling 95%']]], 'a pool edit keeps its reading');
+  const pool = pairs({ five_hour_ceiling: { from: 0.95, to: 0.75 } }, 'pool_updated', 'all');
+  assert.deepEqual(pool.slice(-1), [['Reading it', ['decisions before 09:08 carry five hour ceiling 95%']]], 'a pool edit keeps its reading');
   const listed = pairs({ guardrails: { from: [], to: ['no-secrets', 'size-cap'] } }, 'pool_updated', 'all');
   assert.deepEqual(listed[2], ['guardrails', ['from none', 'to no-secrets, size-cap']], 'a list reads its items where the count stood');
 });
@@ -1573,6 +1577,7 @@ test('a registry change reads the renamed pool settings by their new word, marks
   const pool = { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' };
   const change = (diff) => event('registry_changed', { diff, kind: 'pool_updated', target: 'all' }, pool);
   const pairs = (diff) => Object.fromEntries(d.detailPairs(change(diff), NOW, [], PRO, NO_TIERS).map((p) => [p.label, texts(p.chips)]));
+  // A row written while the pool held one ceiling for every window keeps its name, and its share reads as a percent.
   assert.deepEqual(read(change({ window_ceiling: { from: 0.95, to: 0.9 } })), { by: 'pool edited', facts: ['field window ceiling', 'to 90%'] });
   assert.deepEqual(read(change({ shed_cap: { from: 0.5, to: 0.2 } })), { by: 'pool edited', facts: ['field shed cap', 'to 20%'] });
   assert.deepEqual(read(change({ shed_share: { from: 0.5, to: 0.25 } })), { by: 'pool edited', facts: ['field shed cap (then shed_share)', 'to 25%'] });
@@ -1585,9 +1590,9 @@ test('a registry change reads the renamed pool settings by their new word, marks
   assert.deepEqual(removed['pace floor (removed)'], ['from 5%', 'to 10%']);
   assert.deepEqual(removed['select below utilization (removed)'], ['from none', 'to 80%']);
   assert.deepEqual(removed['shed ahead of pace (removed)'], ['from 90%', 'to 85%']);
-  const current = pairs({ shed_cap: { from: 0.5, to: 0.2 }, window_ceiling: { from: 0.95, to: 0.9 } });
-  assert.deepEqual([current['shed cap'], current['window ceiling']], [['from 50%', 'to 20%'], ['from 95%', 'to 90%']]);
-  assert.deepEqual(current['Reading it'], ['decisions before 09:05 carry shed cap 50%', 'decisions before 09:05 carry window ceiling 95%']);
+  const current = pairs({ five_hour_ceiling: { from: 0.95, to: 0.9 }, shed_cap: { from: 0.5, to: 0.2 }, weekly_ceiling: { from: 1, to: 0.8 } });
+  assert.deepEqual([current['five hour ceiling'], current['shed cap'], current['weekly ceiling']], [['from 95%', 'to 90%'], ['from 50%', 'to 20%'], ['from 100%', 'to 80%']]);
+  assert.deepEqual(current['Reading it'], ['decisions before 09:05 carry five hour ceiling 95%', 'decisions before 09:05 carry shed cap 50%', 'decisions before 09:05 carry weekly ceiling 100%']);
 });
 
 test("a pool save's keepalive policy reads as its dotted fields, each under its label, and no decision reads them", () => {

@@ -377,9 +377,9 @@ const resetOutcome = (v: unknown): string | null => {
 };
 /**
  * The pool fields a registry edit reads as a share rather than a bare number, a row written before the rename among
- * them.
+ * them, and the one ceiling a row written before the split into a ceiling per kind of window names.
  */
-const SHARE_FIELDS = new Set(['pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_cap', 'shed_share', 'window_ceiling']);
+const SHARE_FIELDS = new Set(['five_hour_ceiling', 'pace_floor', 'select_below_utilization', 'shed_ahead_of_pace', 'shed_cap', 'shed_share', 'weekly_ceiling', 'window_ceiling']);
 /**
  * The fields whose label is not their words: a row written before the rename keeps the old field names, so a renamed
  * field reads its new word and a removed one says so, and a pool's keepalive policy member, written under its dotted
@@ -946,6 +946,7 @@ export const WALK_KEY: Record<string, string> = {
   factor: 'speed',
   fast: 'fast',
   fired_by: 'fired by',
+  five_hour_ceiling: 'ceiling 5h',
   found: 'found',
   grace_ms: 'grace',
   hashes_stamped: 'hashes stamped',
@@ -1021,6 +1022,7 @@ export const WALK_KEY: Record<string, string> = {
   wall_seven_day: 'wall 7d',
   wall_seven_day_fable: 'wall Fable',
   warmth: 'warmth',
+  weekly_ceiling: 'ceiling weekly',
   winding_down: 'winding down',
   window: 'window',
   window_share_fast: 'window share fast',
@@ -1637,7 +1639,8 @@ export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
   { key: 'sessionPlacement', label: 'Sessions placed by' },
   { key: 'minSharedPrefixTokens', label: 'Minimum shared prefix' },
   { key: 'subagentPlacement', label: 'Subagents placed by' },
-  { key: 'windowCeiling', label: 'Window ceiling' },
+  { key: 'fiveHourCeiling', label: '5-hour ceiling' },
+  { key: 'weeklyCeiling', label: 'Weekly ceiling' },
   { key: 'loadShedding', label: 'Load shedding' },
   { key: 'migrateWhenSpent', label: 'Move when spent' },
   { key: 'overageMoveGraceMinutes', label: 'Overage grace' },
@@ -1657,9 +1660,9 @@ export const SETTINGS_ROWS: { key: SettingKey; label: string }[] = [
 
 const SECONDS: readonly SettingKey[] = ['affinityTtlSeconds', 'burnAverageSeconds', 'retryInPlaceSeconds', 'returnToPlanDwellSeconds', 'shedDwellSeconds', 'slowDownHoldSeconds', 'slowDownStretchSeconds'];
 const MINUTES: readonly SettingKey[] = ['overageMoveGraceMinutes', 'windDownMinutes'];
-const SHARES: readonly SettingKey[] = ['shedCap', 'windowCeiling'];
+const SHARES: readonly SettingKey[] = ['fiveHourCeiling', 'shedCap', 'weeklyCeiling'];
 /** The settings a record from before carries no value for, since its pool had none of them when it was written. */
-const UNRECORDED: readonly SettingKey[] = ['loadShedding', 'returnToPlan', 'returnToPlanDwellSeconds', 'slowDown', 'slowDownHoldSeconds', 'slowDownStretchSeconds', 'windowCeiling'];
+const UNRECORDED: readonly SettingKey[] = ['fiveHourCeiling', 'loadShedding', 'returnToPlan', 'returnToPlanDwellSeconds', 'slowDown', 'slowDownHoldSeconds', 'slowDownStretchSeconds', 'weeklyCeiling'];
 
 /** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
 export function settingValue(key: SettingKey, settings: RecordSettings): string {
