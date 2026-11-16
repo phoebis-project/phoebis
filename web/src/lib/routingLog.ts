@@ -1,6 +1,6 @@
 import { iso, list, numOrNull as num, oneOf, strings, strOrNull as str } from '@/api/decode';
 import { FACT_UNIT_VALUES, RESET_OUTCOME_VALUES } from '@/api/types';
-import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, Placement, PrefixEntry, RecordCandidate, RecordOutcome, RecordSettings, Refusal, ResetOutcome, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { CohortHold, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, ModelTiers, PinReason, Placement, PrefixEntry, RecordCandidate, RecordCompletion, RecordOutcome, RecordSettings, Refusal, ResetOutcome, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { accountHref, type LogFilters, requestHref, ROUTING_LOG_CODEC, type RangeValue } from './address';
 import { FAILOVER_MOVE_REASONS, moveLabel, releaseLabel, RULE_MOVE_REASONS, type WeekReading } from './analytics';
 import { tierOrder } from './costs';
@@ -876,6 +876,17 @@ export const PROMISE_HINT: Record<Placement['rung'], string> = {
   with_main: 'A placement beside the main conversation hits when the cache reads anything',
 };
 
+/** A completion's cache figure: the read over the promised prefix where the rung promised one, over the read, the
+ *  write and the uncached input otherwise, with the three counts as the hover. A promise's hover is its rung's. */
+const cacheFigure = (c: Pick<RecordCompletion, 'cacheReadTokens' | 'cacheWriteTokens' | 'inputTokens' | 'promisedTokens'>): { text: string; title: string | null } | null => {
+  if (c.cacheReadTokens === null) return null;
+  const read = fmtCompact(c.cacheReadTokens);
+  if (c.promisedTokens !== null) return { text: `${read} of ${fmtCompact(c.promisedTokens)} promised`, title: null };
+  const write = c.cacheWriteTokens ?? 0;
+  const input = c.inputTokens ?? 0;
+  return { text: `${read} of ${fmtCompact(c.cacheReadTokens + write + input)}`, title: `${read} read from the cache, ${fmtCompact(write)} written to it, ${fmtCompact(input)} uncached` };
+};
+
 /** A boundary's hash as its chip draws it. The whole 64 characters ride the chip's hover. */
 export const shortHash = (hash: string) => hash.slice(0, 8);
 
@@ -1077,8 +1088,13 @@ export const tierOf = (value: unknown): number[] | null => {
   const parts = Array.isArray(value) ? value.map(Number) : typeof value === 'string' ? value.split('/').map(Number) : [];
   return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? parts : null;
 };
-/** The kind tier's word: an API key, overage, or the plan's own quota. */
-const tierWord = (tier: readonly number[], kind: RecordCandidate['kind'] | null, plan: string) => (kind === 'api_key' || tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan);
+/**
+ * The kind tier's word: paid, overage, or the plan's own quota. An API key and a usage-based seat read paid in any
+ * group, since a pool that does not prefer subscriptions ranks them beside the plans. A walk fact names no member, so
+ * its group alone decides.
+ */
+const tierWord = (tier: readonly number[], member: Pick<RecordCandidate, 'kind' | 'planTier'> | null, plan: string) =>
+  tier[0] === 2 || member?.kind === 'api_key' || member?.planTier === 'usage_based' ? 'paid' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan;
 
 /** A lane's speed, thinking and effort chips, an effort of `-` read as none. */
 const laneChipsOf = ({ effort, speed, thinking }: { effort: string; speed: string; thinking: string }): Chip[] => [plain(speed, 'speed'), plain(thinking, 'thinking'), plain(effort === '-' ? 'none' : effort, 'effort')];
@@ -1301,7 +1317,7 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
   const chips: Chip[] = [];
   const member = memberOf(record, o.accountId);
   const tier = o.tier ?? member?.tier ?? null;
-  if (tier !== null && o.accountId !== null) chips.push(plain(`${tierWord(tier, member?.kind ?? null, 'plan quota')} P${tier[1]}`, 'tier'));
+  if (tier !== null && o.accountId !== null) chips.push(plain(`${tierWord(tier, member ?? null, 'plan quota')} P${tier[1]}`, 'tier'));
   const rung = o.rung;
   const placed = rung === null ? undefined : PLACED[rung.rung](rung.depth);
   if (row.by.kind === 'rung') {
@@ -1324,9 +1340,9 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
   if (record.pin?.found === 'live' && record.pin.warmth) chips.push(plain(wordOf(WARMTH_WORD, record.pin.warmth), 'pin'));
   const c = o.completion;
   const promise = rung !== null && c !== null && c.promisedTokens !== null ? PROMISE_HINT[rung.rung] : undefined;
-  if (c !== null && c.hit !== null && c.cacheReadTokens !== null) {
-    const read = fmtCompact(c.cacheReadTokens);
-    chips.push({ ...plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))}`, c.hit ? 'cache hit' : 'cache miss'), title: promise });
+  const figure = c === null ? null : cacheFigure(c);
+  if (c !== null && c.hit !== null && figure !== null) {
+    chips.push({ ...plain(figure.text, c.hit ? 'cache hit' : 'cache miss'), title: figure.title ?? promise });
   } else if (c !== null && c.completedAt === null) {
     chips.push(plain('cache pending'));
   }
@@ -1602,7 +1618,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
     projection: projectionLines(c, record, now),
     projectionTitle: projectionTitle(c, now),
     runway: runwayWord(c),
-    tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,
+    tier: `${tierWord(c.tier, c, 'plan')} P${c.tier[1]}`,
     verdict: candidateVerdict(c, now),
     windows,
   };
@@ -1731,12 +1747,13 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
         rows.push({ chips: [...accounts, ...tierChips, ...latest, prefix], label: 'Cache-map entries', more: { all: [...accounts, ...depths(entries), prefix], count: entries.length } });
       }
     }
-    if (c.hit !== null && c.cacheReadTokens !== null) {
-      const read = fmtCompact(c.cacheReadTokens);
+    const figure = cacheFigure(c);
+    if (c.hit !== null && figure !== null) {
       // The request's own TTL is the one its deepest entry was written under.
       const deepest = entries.reduce<(typeof entries)[number] | null>((best, e) => (best === null || e.depth > best.depth ? e : best), null);
+      const read = { ...plain(c.promisedTokens !== null ? figure.text : `${figure.text} input`, 'read'), ...(figure.title === null ? {} : { title: figure.title }) };
       rows.push({
-        chips: [plain(c.hit ? 'hit' : 'miss'), plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))} input`, 'read'), ...(deepest ? [plain(ttlWord(deepest.ttlMs), 'tier')] : [])],
+        chips: [plain(c.hit ? 'hit' : 'miss'), read, ...(deepest ? [plain(ttlWord(deepest.ttlMs), 'tier')] : [])],
         label: 'Cache read',
         ...(o.rung !== null && c.promisedTokens !== null ? { title: PROMISE_HINT[o.rung.rung] } : {}),
       });

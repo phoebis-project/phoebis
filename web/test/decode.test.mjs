@@ -1788,6 +1788,14 @@ test('a decision record decodes its six blocks and the completion', () => {
   assert.deepEqual(revoked.outcome.refusal, { code: 'revoked', kind: 'key', reason: 'the key was revoked' });
 });
 
+test("a decision record's completion reads the attempt's cache write", () => {
+  // No other check reads this wire key: `mock-sync` takes the null a misread answers for the shape of the right read,
+  // and the mock's rows reach the card without the decoder.
+  const body = fixture('decision');
+  const r = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, completion: { ...body.outcome.completion, cache_write_tokens: 27_246 } } });
+  assert.equal(r.outcome.completion.cacheWriteTokens, 27_246);
+});
+
 test('a row with null optionals decodes to nulls', () => {
   const s = d.decodeDecisionSummary({
     account_id: null, agent_id: null, at: 1_000, attempt: 1, attempt_count: null, by: { kind: 'none', tier: null, value: '' }, cache: null, exhaustion: null, fact: [{ entity: null, key: 'pick', unit: null, value: true }, { entity: null, key: 'idle', unit: 'ms', value: 5 }],

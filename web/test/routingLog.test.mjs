@@ -528,7 +528,7 @@ const candidate = (o) => ({
   windows: { five_hour: window5h(0.62, ms(16, 44)), seven_day: window5h(0.41, Date.UTC(2026, 8, 19, 20, 10)), seven_day_fable: window5h(0.12, Date.UTC(2026, 8, 19, 20, 10)) },
   ...o,
 });
-const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, promisedTokens: null, status: null, ...o });
+const completion = (o) => ({ cacheMapWritten: null, cacheReadTokens: null, cacheWriteTokens: null, completedAt: null, freed: false, heldMs: null, hit: null, inputTokens: null, promisedTokens: null, status: null, ...o });
 const SETTINGS = {
   affinityMode: 'when_cached', affinityTtlSeconds: 600, burnAverageSeconds: 1_800, fiveHourCeiling: 0.95, inFlightCap: 16, legacy: null, loadShedding: true, migrateWhenSpent: true, minSharedPrefixTokens: 20_000,
   overageMoveGraceMinutes: 30, overagePolicy: 'prefer_plan', poolUpdatedAt: iso(ms(9, 5, 12)), preferSubscription: true, retryInPlaceSeconds: 60, returnToPlan: 'when_cold', returnToPlanDwellSeconds: 900,
@@ -732,7 +732,7 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(chosen.verdict, { badge: 'chosen', badgeTone: 'accent', chip: null, chosen: true, tone: null });
   assert.deepEqual(cell({ windows: { five_hour: window5h(1, ms(15, 42), 'poll', 120_000), seven_day: window5h(0.88, null, 'poll', 120_000) } }).windows, [['100%', '15:42', 'poll 2 min'], ['88%', 'no reset', 'poll 2 min'], ['not reported']]);
   const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
-  assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'keys P1', [['worst bucket 4%']], '96% left']);
+  assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'paid P1', [['worst bucket 4%']], '96% left']);
   assert.equal(cell({ inOverage: true, tier: [1, 0, 1] }).tier, 'overage P0');
   assert.equal(cell({ pace: null }).pace, '-');
   const until = (h, m) => iso(ms(h, m));
@@ -845,6 +845,13 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
     });
   assert.deepEqual(rows(reachedBy('month')).find(([label]) => label === 'Spend'), ['Spend', ['research $12.00 of $10.00']]);
   assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
+});
+
+test("the cache figure's base holds the write", () => {
+  // A turn that wrote most of its prompt to the cache paid for the write, so the figure reads no full hit for it.
+  const written = record({ outcome: { completion: completion({ cacheReadTokens: 19_330, cacheWriteTokens: 27_246, completedAt: iso(NOW), hit: true, inputTokens: 2, status: 200 }) } });
+  assert.equal(d.verdictChips(written, decision({ by: strategy('pace', [0, 0, 0]) })).find((c) => c.label === 'cache hit')?.value, '19.3K of 46.6K');
+  assert.equal(d.outcomeRows(written, NOW).find((r) => r.label === 'Cache read')?.chips.find((c) => c.label === 'read')?.value, '19.3K of 46.6K input');
 });
 
 test('a cache-map row of four entries or more draws one chip per tier and the three deepest message depths, with every entry behind its control', () => {
@@ -1711,12 +1718,21 @@ test("a usage-based candidate's one window cell reads its spend share over the r
   const seat = (windows, tier = [2, 1, 0]) => d.candidateCells(candidate({ accountId: 'seat', planTier: 'default_claude_zero', priority: 1, tier, windows }), record(), NOW);
   const reset = Date.UTC(2026, 9, 1);
   const estimated = seat({ spend: window5h(0.41, reset, 'estimated', 300_000) });
-  assert.deepEqual([estimated.tier, estimated.windows], ['keys P1', [['spend 41%', 'Oct 1 00:00', 'estimated']]], "the tier word is the engine's, the cell the spend window");
+  assert.deepEqual([estimated.tier, estimated.windows], ['paid P1', [['spend 41%', 'Oct 1 00:00', 'estimated']]], "the tier word is the engine's, the cell the spend window");
   assert.deepEqual(seat({ spend: window5h(0.41, reset, 'head') }).windows, [['spend 41%', 'Oct 1 00:00']], "a reset a head named reads as a plan window's");
   assert.deepEqual(seat({ spend: window5h(0.41, null, 'estimated') }).windows, [['spend 41%', 'no reset', 'estimated']]);
   assert.deepEqual(seat({ spend: window5h(0.41, reset, 'estimated') }, [0, 1, 0]).windows, [['spend 41%', 'Oct 1 00:00', 'estimated']], 'a pool that does not prefer subscriptions files the seat in group 0');
   assert.deepEqual(seat({}).windows, [['not reported'], ['not reported'], ['not reported']], 'a share expired at its reset leaves no entry, so the record reads an oauth candidate with no window');
   assert.deepEqual(d.candidateCells(candidate({}), record(), NOW).windows.length, 3, 'a plan candidate keeps its three window cells');
+});
+
+test("a paid member's tier reads paid whatever its group", () => {
+  // A paid source stands in group 0 where the pool does not prefer subscriptions, so the member decides the word.
+  const tier = (o) => d.candidateCells(candidate({ tier: [0, 0, 0], ...o }), record(), NOW).tier;
+  const seat = { accountId: 'seat', planTier: 'usage_based' };
+  assert.deepEqual([tier(seat), tier({ planTier: 'max_20x' }), tier({ accountId: 'research', kind: 'api_key', planTier: null })], ['paid P0', 'plan P0', 'paid P0']);
+  const placed = record({ candidates: [candidate({ ...seat, tier: [0, 0, 0], verdict: 'chosen' })], outcome: { accountId: 'seat' } });
+  assert.equal(texts(d.verdictChips(placed, decision({ accountId: 'seat', by: strategy('pace', [0, 0, 0]) })))[0], 'tier paid P0');
 });
 
 test("a usage-based candidate's Pace cell reads its remaining allowance, and the header passes over it to a subscription candidate", () => {

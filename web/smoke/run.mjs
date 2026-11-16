@@ -17243,9 +17243,10 @@ await forView('/routing-log', async () => {
       ok: renew?.step === 'Renew' && (popoverRowOf(renewed, 'on') ?? []).includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !stations.some((s) => s.step === 'Pick'),
       missing: [JSON.stringify(out['Pin written']), renew ? `${renew.step}: ${rowsRead(renewed)}` : 'no station'],
     });
+    // The seed of req_f8085653-422 reads 48,100 tokens from the cache, writes 2,100 at 1 hour and sends 3,900 uncached.
     results.push({
       name: "/routing-log a card reads the answering attempt's cache read as a hit or a miss against its input",
-      ok: record.outcome.completion?.hit === true && JSON.stringify(out['Cache read']) === JSON.stringify(['hit', `read ${fmtCompact(record.outcome.completion.cacheReadTokens)} of ${fmtCompact(record.outcome.completion.cacheReadTokens + record.outcome.completion.inputTokens)} input`, 'tier 1h']),
+      ok: record.outcome.completion?.hit === true && JSON.stringify(out['Cache read']) === JSON.stringify(['hit', 'read 48.1K of 54.1K input', 'tier 1h']),
       missing: [JSON.stringify(out['Cache read'])],
     });
     {

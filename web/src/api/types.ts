@@ -1441,6 +1441,8 @@ export interface WalkFact {
 export interface RecordCompletion {
   cacheMapWritten: { accountId: string; depth: number; prefixTokens: number; tier: string; ttlMs: number }[] | null;
   cacheReadTokens: number | null;
+  /** The completing attempt's two cache write counts added, null until the attempt has usage. */
+  cacheWriteTokens: number | null;
   completedAt: string | null;
   freed: boolean;
   heldMs: number | null;

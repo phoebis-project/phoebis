@@ -611,7 +611,7 @@ function decodeRecordOutcome(v: unknown): RecordOutcome {
     accountId: strOrNull(o.account_id), cause: causeOf(o.cause), cohortHold: cohortHoldOf(o.cohort_hold),
     completion: orNull(o.completion, (c) => ({
       cacheMapWritten: Array.isArray(c.cache_map_written) ? c.cache_map_written.map(rec).map((m) => ({ accountId: str(m.account_id), depth: num(m.depth), prefixTokens: num(m.prefix_tokens), tier: str(m.tier), ttlMs: num(m.ttl_ms) })) : null,
-      cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: boolOrNull(c.hit), inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
+      cacheReadTokens: numOrNull(c.cache_read_tokens), cacheWriteTokens: numOrNull(c.cache_write_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: boolOrNull(c.hit), inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
     })),
     exhaustion: exhaustionOf(o.exhaustion), fromAccountId: strOrNull(o.from_account_id), hold: holdOf(o.hold), inOverage: bool(o.in_overage), kind: decisionKindOf(o.kind) ?? 'placed',
     markCleared: orNull(o.mark_cleared, (m) => ({ markedAt: isoOr(m.marked_at, epoch), markedOn: str(m.marked_on), markedWindow: str(m.marked_window), projection: numOrNull(m.projection), reason: str(m.reason) })),

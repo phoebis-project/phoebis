@@ -1475,6 +1475,7 @@ function completionOf(spec: Spec, pool: PoolSeed, chosen: RecordCandidate | unde
   return {
     cacheMapWritten: cache.answered && usage.cacheWrite5m + usage.cacheWrite1h > 0 ? written.map((e) => ({ accountId: spec.accountId ?? '', depth: e.depth, prefixTokens: e.prefixTokens, tier: e.tier, ttlMs })) : null,
     cacheReadTokens: cache.hasUsage ? usage.cacheRead : null,
+    cacheWriteTokens: cache.hasUsage ? usage.cacheWrite5m + usage.cacheWrite1h : null,
     completedAt: attempt ? iso(attemptEnd(attempt)) : null,
     freed: spec.heldBefore !== undefined,
     heldMs: spec.heldBefore?.heldMs ?? null,
