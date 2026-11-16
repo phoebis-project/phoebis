@@ -2511,12 +2511,14 @@ fn run(
         } else if !rewrite_only.is_empty() {
             (
                 FitWord::RewriteOnly.as_str(),
-                longest_of(&rewrite_only, |read| read.rank_runway_ms),
+                longest_of(&rewrite_only, |read| {
+                    read.rung_runway_ms(FitWord::RewriteOnly)
+                }),
             )
         } else if !least_bad.is_empty() {
             (
                 FitWord::LeastBad.as_str(),
-                longest_of(&least_bad, |read| read.wall_runway_ms),
+                longest_of(&least_bad, |read| read.rung_runway_ms(FitWord::LeastBad)),
             )
         } else if !ending.is_empty() {
             (FitWord::Ending.as_str(), ending)
@@ -3668,6 +3670,18 @@ pub(crate) struct FitRead {
     pub words: BTreeMap<String, FitWord>,
 }
 
+impl FitRead {
+    /// The runway the ladder ranks a member on `rung` by: `rank_runway_ms` on `Fits` and `RewriteOnly`,
+    /// `wall_runway_ms` on `LeastBad`, none on a rung that ranks by no runway.
+    pub(crate) fn rung_runway_ms(&self, rung: FitWord) -> Option<i64> {
+        match rung {
+            FitWord::Fits | FitWord::RewriteOnly => self.rank_runway_ms,
+            FitWord::LeastBad => self.wall_runway_ms,
+            FitWord::Ending | FitWord::Spent => None,
+        }
+    }
+}
+
 /// How `fit_of` reads a window with no reading and an account with no tier. `Move` reads either gap as least bad: a
 /// move pays a cold rewrite on its destination, so it trusts only one it can price on every window the model draws that
 /// the destination's set holds. `Placement` skips a window with no reading and reads an untiered account as fitting
@@ -4332,7 +4346,9 @@ fn gate<'a>(
         (Vec::new(), "none")
     } else if !rewrite_only.is_empty() {
         (
-            chosen(longest(rewrite_only, |read| read.rank_runway_ms)),
+            chosen(longest(rewrite_only, |read| {
+                read.rung_runway_ms(FitWord::RewriteOnly)
+            })),
             "rewrite_only",
         )
     } else if !least_bad.is_empty() {
@@ -5787,7 +5803,7 @@ fn pin_request(request: &SelectRequest, pin: &PinRow, current: bool) -> SelectRe
 /// The request a standing pin is read by outside a round, shaped from the pin's own facts as `pin_request` shapes
 /// another pin of a round: its key, its model, its lane with the lane's speed and its entrypoint. No request stands
 /// behind a standing, so it holds no body estimate and no candidates, and every other member reads empty.
-pub(crate) fn standing_request(pin: &PinRow) -> SelectRequest {
+fn standing_request(pin: &PinRow) -> SelectRequest {
     // Every member is written out, so a member the type gains states its value for a standing too.
     SelectRequest {
         request_id: String::new(),
@@ -6051,30 +6067,37 @@ pub(crate) fn standing_eligible(
 }
 
 /// A standing pin's `move_read` at the destination a round's order reads for it now among `eligible`, the set
-/// `standing_eligible` answers for the pin's pool, model and lane speed, with no booking planned.
+/// `standing_eligible` answers for the pin's pool, model and lane speed, with no booking planned. `pool` is the pool
+/// of the pin's key, `None` where it left the registry.
 pub(crate) fn standing_move_read(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
-    pool: &PoolRow,
+    pool: Option<&PoolRow>,
     eligible: &[Candidate],
     pin: &PinRow,
     now: i64,
     fallback_ms: i64,
 ) -> MoveRead {
     let request = standing_request(pin);
-    let eligible: Vec<&Candidate> = eligible.iter().collect();
-    let (_, read) = move_at(
-        state,
-        snapshot,
-        pool,
-        &request,
-        &eligible,
-        pin,
-        &[],
-        now,
-        fallback_ms,
-    );
-    read
+    match pool {
+        Some(pool) => {
+            let eligible: Vec<&Candidate> = eligible.iter().collect();
+            let (_, read) = move_at(
+                state,
+                snapshot,
+                pool,
+                &request,
+                &eligible,
+                pin,
+                &[],
+                now,
+                fallback_ms,
+            );
+            read
+        }
+        // A pin whose pool left the registry has no siblings to plan a move among.
+        None => move_read(state, &request, pin, now, None),
+    }
 }
 
 /// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's

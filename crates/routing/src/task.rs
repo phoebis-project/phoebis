@@ -25,11 +25,11 @@ use crate::record::{
     PinEventFacts, RefusalFacts, RefusedRequest, ShedRoundFacts,
 };
 use crate::select::{
-    account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, handed_sums,
-    lane_is_fast, mark_cleared_of, move_read, obstacle_on, pace_of, projection_of, projections_of,
-    runway, slow_down_ramp, standing_eligible, standing_move_read, standing_request, zeroes_sums,
-    BurnRead, Decided, FailedOver, FitRead, FitWord, Judged, JudgedCharge, MoveRead, Obstacle,
-    Refusal, SelectRequest, SelectResult, RATE_LIMIT_REASON,
+    account_end, budget_facts, burn_unit, decide, fresh_fit, fresh_prior, lane_is_fast,
+    mark_cleared_of, obstacle_on, pace_of, projection_of, projections_of, runway, slow_down_ramp,
+    standing_eligible, standing_move_read, zeroes_sums, BurnRead, Decided, FailedOver, FitRead,
+    FitWord, Judged, JudgedCharge, MoveRead, Obstacle, Refusal, SelectRequest, SelectResult,
+    RATE_LIMIT_REASON,
 };
 use crate::state::{
     all_plan_windows, burn_average_ms, burn_decayed, ceiling, default_burn_average_ms, fold_usage,
@@ -81,22 +81,19 @@ const MIGRATION_WINDOW_MS: i64 = 60_000;
 /// The pin a failover invalidated, or one the purge took off an account the registry no longer holds, kept for its
 /// `life` so the landing reads its figures and names its cause.
 struct Invalidated {
-    account_id: String,
-    /// `cooldown`, `fast_lane` or `mark` for a failover, `deleted` for a deleted account's pin.
-    reason: &'static str,
-    at: i64,
     row: PinRow,
-    cause: Option<MoveCause>,
-    /// The list of the release that made the entry, which the landing's `pin_migrated` carries, and so does the
-    /// `pin_expired` of a deleted account's lapse: empty for a failover, `deleted` for a deleted account's pin.
-    released: Vec<&'static str>,
     life: Life,
 }
 
 /// How long an entry stands.
 enum Life {
-    /// `MIGRATION_WINDOW_MS` from the invalidation, and a lapse writes nothing.
-    Failover,
+    /// `MIGRATION_WINDOW_MS` from the invalidation `at`, and a lapse writes nothing.
+    Failover {
+        /// `cooldown`, `fast_lane` or `mark`.
+        reason: &'static str,
+        at: i64,
+        cause: Option<MoveCause>,
+    },
     /// As long as `trace_stands` holds: the session of a deleted account keeps its move until its pool's affinity TTL
     /// has passed since its last use, its key is replaced or gone, its pool is gone, or an account is created again
     /// under the id. The purge's sweep or the session's next selection, whichever meets the lapse first, writes the
@@ -105,11 +102,49 @@ enum Life {
 }
 
 impl Invalidated {
+    /// The failover's reason, `deleted` for a deleted account's pin.
+    fn reason(&self) -> &'static str {
+        match self.life {
+            Life::Failover { reason, .. } => reason,
+            Life::Pin => "deleted",
+        }
+    }
+
+    /// The list of the release that made the entry, which the landing's `pin_migrated` carries, and so does the
+    /// `pin_expired` of a deleted account's lapse: empty for a failover, `deleted` for a deleted account's pin.
+    fn released(&self) -> Vec<&'static str> {
+        match self.life {
+            Life::Failover { .. } => Vec::new(),
+            Life::Pin => vec!["deleted"],
+        }
+    }
+
+    fn cause(&self) -> Option<MoveCause> {
+        match &self.life {
+            Life::Failover { cause, .. } => cause.clone(),
+            Life::Pin => None,
+        }
+    }
+
     /// Whether the entry still stands at `now` under `snapshot`, by its `life`.
     fn within(&self, now: i64, snapshot: &RegistrySnapshot) -> bool {
         match self.life {
-            Life::Failover => now - self.at <= MIGRATION_WINDOW_MS,
+            Life::Failover { at, .. } => now - at <= MIGRATION_WINDOW_MS,
             Life::Pin => trace_stands(snapshot, &self.row, now),
+        }
+    }
+
+    /// The `pin_expired` a deleted account's trace writes as it lapses, `None` for a failover's entry.
+    fn expiry(self, key: &PinKey, snapshot: &RegistrySnapshot, now: i64) -> Option<RouterEvent> {
+        match self.life {
+            Life::Failover { .. } => None,
+            Life::Pin => Some(RouterEvent::pin_expired(
+                key,
+                &self.row.account_id,
+                self.released(),
+                key_pool_id(snapshot, &self.row.key_id),
+                now,
+            )),
         }
     }
 }
@@ -161,6 +196,16 @@ pub const RESET_SLACK_MS: i64 = 60_000;
 /// Whether two readings' resets name one reset.
 pub fn same_reset(a: i64, b: i64) -> bool {
     a.abs_diff(b) <= RESET_SLACK_MS.unsigned_abs()
+}
+
+/// Whether a reading's reset `next` lies more than `RESET_SLACK_MS` past the stored `reset_at`.
+fn later_reset(reset_at: i64, next: i64) -> bool {
+    next > reset_at.saturating_add(RESET_SLACK_MS)
+}
+
+/// Whether a reading taken at `observed_at` stands within `RESET_SLACK_MS` of `reset_at` or past it.
+fn reached(reset_at: i64, observed_at: i64) -> bool {
+    reset_at <= observed_at.saturating_add(RESET_SLACK_MS)
 }
 
 /// How far under 1.0 a reading may land over a stored reading at the wall and still read the wall. A poll reads the
@@ -1502,11 +1547,16 @@ pub struct PinStanding {
     /// The pin's cycle from its pace, `None` until two requests of the pin after its placement have measured a gap
     /// under the pool's burn average.
     pub cycle_ms: Option<f64>,
-    /// The pin's lane is the fast lane, by the test a shedding round reads to leave a fast-lane pin out of a
-    /// window-share round.
-    pub fast: bool,
     /// The round's read of the pin's move at the destination a round's order would plan for it now.
     pub move_read: MoveRead,
+}
+
+impl PinStanding {
+    /// Whether the pin's lane is the fast lane, by the test a shedding round reads to leave a fast-lane pin out of a
+    /// window-share round.
+    pub fn fast(&self) -> bool {
+        lane_is_fast(&self.pin.lane)
+    }
 }
 
 /// A standing pin's account as the slow-down entry in force reads it.
@@ -2797,6 +2847,12 @@ fn cleared_mark(
     })
 }
 
+/// `cleared_mark`'s `released` mark under the pool `snapshot` holds for the row's key, the pool of an event outside a
+/// selection.
+fn released_mark(snapshot: &RegistrySnapshot, row: &PinRow, at: i64) -> Option<RouterEvent> {
+    cleared_mark(row, "released", key_pool_id(snapshot, &row.key_id), at)
+}
+
 /// The fit of a move's destination as the decision's candidate table holds it: what the move's gate read there, or
 /// the fresh placement's fit for a fail-over's landing and for a replaced live pin's move. `None` throughout for a
 /// member the table does not list.
@@ -2927,11 +2983,7 @@ fn projections(
             // neither the member's word nor its runway.
             let shared = fresh_fit(state, snapshot, pool, &prior, account_id, "", now);
             let fit = member_fit(&shared);
-            let runway_ms = match fit {
-                FitWord::Fits | FitWord::RewriteOnly => shared.rank_runway_ms,
-                FitWord::LeastBad => shared.wall_runway_ms,
-                _ => None,
-            };
+            let runway_ms = shared.rung_runway_ms(fit);
             let mut words = shared.words;
             // A week's family is a model id that `model_week` matches to that week, so the read draws it.
             for &(family, week) in MODEL_WINDOWS {
@@ -2948,23 +3000,13 @@ fn projections(
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
                     let word = words.get(window).copied()?;
-                    let pace = pace_of(
-                        state,
-                        snapshot,
-                        pool,
-                        account_id,
-                        incarnation,
-                        window,
-                        now,
-                        None,
-                    );
                     Some((
                         window.to_string(),
                         WindowProjection {
                             predicted: projection.predicted,
                             projection: projection.at_horizon,
                             horizon: projection.horizon,
-                            wall: pace.deadline,
+                            wall: projection.reset.into_iter().chain(end).min(),
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
                             runway_ms: runway(
@@ -3102,26 +3144,15 @@ fn pins_standing(
             };
             let cycle_ms = state.pin_pace(&pin.key()).and_then(|pace| pace.cycle_ms);
             let fast = lane_is_fast(&pin.lane);
-            // A pin whose pool left the registry has no siblings to plan a move among.
-            let read = match pool {
-                Some(pool) => {
-                    let eligible = eligible_sets
-                        .entry((pool.id.clone(), pin.model.clone(), fast))
-                        .or_insert_with(|| {
-                            standing_eligible(
-                                state,
-                                snapshot,
-                                pool,
-                                &pin.model,
-                                fast,
-                                now,
-                                fallback_ms,
-                            )
-                        });
-                    standing_move_read(state, snapshot, pool, eligible, &pin, now, fallback_ms)
-                }
-                None => move_read(state, &standing_request(&pin), &pin, now, None),
+            let eligible: &[Candidate] = match pool {
+                Some(pool) => eligible_sets
+                    .entry((pool.id.clone(), pin.model.clone(), fast))
+                    .or_insert_with(|| {
+                        standing_eligible(state, snapshot, pool, &pin.model, fast, now, fallback_ms)
+                    }),
+                None => &[],
             };
+            let read = standing_move_read(state, snapshot, pool, eligible, &pin, now, fallback_ms);
             PinStanding {
                 pin: decayed(pin, now, average_ms),
                 burn_unit,
@@ -3130,7 +3161,6 @@ fn pins_standing(
                 binding,
                 slow_down,
                 cycle_ms,
-                fast,
                 move_read: read,
             }
         })
@@ -3391,10 +3421,10 @@ impl Task {
                     .filter(|_| before.is_none() && !request.classifier)
                     .filter(|entry| entry.within(request.now, &snapshot))
                     .map(|entry| FailedOver {
-                        from_account_id: entry.account_id.clone(),
-                        reason: entry.reason,
+                        from_account_id: entry.row.account_id.clone(),
+                        reason: entry.reason(),
                         row: entry.row.clone(),
-                        cause: entry.cause.clone(),
+                        cause: entry.cause(),
                     });
                 let Decided {
                     result,
@@ -3437,7 +3467,7 @@ impl Task {
                 // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
                 // its row and its pin events in one tick.
                 let mut pin_events = Vec::new();
-                let pool_id = Some(record.request.pool_id.clone());
+                let pool_id = record.request.pool_id.as_str();
                 let after = self.state.pin(&pin_key);
                 let now = request.now;
                 let selected = matches!(result, SelectResult::Selected(_));
@@ -3445,12 +3475,13 @@ impl Task {
                 match (before.as_ref(), after) {
                     (None, Some(new)) if selected => match self.invalidated.remove(&pin_key) {
                         Some(entry) if entry.within(now, &snapshot) => {
+                            let (reason, released) = (entry.reason(), entry.released());
                             pin_events.push(RouterEvent::pin_migrated(
                                 &pin_key,
-                                entry.account_id,
+                                entry.row.account_id,
                                 new,
-                                entry.reason,
-                                entry.released,
+                                reason,
+                                released,
                                 &record,
                                 record.outcome.cause.clone(),
                                 now,
@@ -3459,22 +3490,14 @@ impl Task {
                         lapsed => {
                             // A deleted account's trace that lapsed before the purge's sweep met it ends at this
                             // request, with the expiry the sweep would write.
-                            if let Some(entry) =
-                                lapsed.filter(|entry| matches!(entry.life, Life::Pin))
-                            {
-                                pin_events.push(RouterEvent::pin_expired(
-                                    &pin_key,
-                                    &entry.account_id,
-                                    entry.released,
-                                    key_pool_id(&snapshot, &entry.row.key_id),
-                                    now,
-                                ));
-                            }
+                            pin_events.extend(
+                                lapsed.and_then(|entry| entry.expiry(&pin_key, &snapshot, now)),
+                            );
                             pin_events.push(RouterEvent::pin_created(
                                 &pin_key,
                                 &new.account_id,
                                 new.epoch,
-                                pool_id.clone(),
+                                Some(pool_id.to_string()),
                                 now,
                             ));
                         }
@@ -3505,14 +3528,14 @@ impl Task {
                                         &pin_key,
                                         &old.account_id,
                                         released.clone(),
-                                        pool_id.clone(),
+                                        Some(pool_id.to_string()),
                                         now,
                                     ));
                                     pin_events.push(RouterEvent::pin_created(
                                         &pin_key,
                                         &new.account_id,
                                         new.epoch,
-                                        pool_id.clone(),
+                                        Some(pool_id.to_string()),
                                         now,
                                     ));
                                 }
@@ -3535,7 +3558,7 @@ impl Task {
                             &pin_key,
                             &old.account_id,
                             released,
-                            pool_id.clone(),
+                            Some(pool_id.to_string()),
                             now,
                         ));
                     }
@@ -3560,15 +3583,21 @@ impl Task {
                             account_id,
                             pin_key.clone(),
                             facts.clone(),
-                            pool_id.clone(),
+                            Some(pool_id.to_string()),
                             request.now,
                         )),
                         None => left.and_then(|reason| {
-                            cleared_mark(old, reason, pool_id.clone(), request.now).or_else(|| {
-                                marked_here.as_ref().and_then(|row| {
-                                    cleared_mark(row, reason, pool_id.clone(), request.now)
+                            cleared_mark(old, reason, Some(pool_id.to_string()), request.now)
+                                .or_else(|| {
+                                    marked_here.as_ref().and_then(|row| {
+                                        cleared_mark(
+                                            row,
+                                            reason,
+                                            Some(pool_id.to_string()),
+                                            request.now,
+                                        )
+                                    })
                                 })
-                            })
                         }),
                     }
                 });
@@ -4040,26 +4069,13 @@ impl Task {
                             "a fast refusal from a lane the pin has left leaves the pin"
                         );
                     } else {
-                        if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
-                            let now = (self.clock)();
-                            let pool_id = key_pool_id(&self.snapshot(), &row.key_id);
-                            if let Some(event) = cleared_mark(&row, "released", pool_id, now) {
-                                self.emit(event);
-                            }
-                            self.invalidated.insert(
-                                key.clone(),
-                                Invalidated {
-                                    account_id: account_id.clone(),
-                                    reason: moved,
-                                    at: now,
-                                    row,
-                                    cause: Some(cause),
-                                    released: Vec::new(),
-                                    life: Life::Failover,
-                                },
-                            );
-                            writes.push(StateWrite::DeletePin(key));
-                        }
+                        writes.extend(self.invalidate_failover(
+                            &pin,
+                            key,
+                            &account_id,
+                            moved,
+                            Some(cause),
+                        ));
                     }
                 }
                 self.write(writes);
@@ -4243,30 +4259,14 @@ impl Task {
                     return;
                 }
                 let key = self.canonical_pin(&mut pin);
-                if let Some(row) = self.state.invalidate_pin(&pin, &account_id) {
-                    let now = (self.clock)();
-                    let pool_id = key_pool_id(&self.snapshot(), &row.key_id);
-                    if let Some(event) = cleared_mark(&row, "released", pool_id, now) {
-                        self.emit(event);
-                    }
-                    self.invalidated.insert(
-                        key.clone(),
-                        Invalidated {
-                            account_id: account_id.clone(),
-                            // The reason stays `mark` for a failover the relay sent unmarked too, which names no
-                            // cause.
-                            reason: "mark",
-                            at: now,
-                            row,
-                            cause: mark.map(|(state, cause)| MoveCause::Mark {
-                                state: state.as_str(),
-                                cause: cause.as_str(),
-                            }),
-                            released: Vec::new(),
-                            life: Life::Failover,
-                        },
-                    );
-                    self.write(vec![StateWrite::DeletePin(key)]);
+                let cause = mark.map(|(state, cause)| MoveCause::Mark {
+                    state: state.as_str(),
+                    cause: cause.as_str(),
+                });
+                // The reason stays `mark` for a failover the relay sent unmarked too, which names no cause.
+                if let Some(write) = self.invalidate_failover(&pin, key, &account_id, "mark", cause)
+                {
+                    self.write(vec![write]);
                 }
             }
             Report::PinReleased {
@@ -4418,10 +4418,14 @@ impl Task {
                                 );
                                 renewed.last_input_tokens = usage.prompt_tokens();
                                 if let Some(tokens) = thinking_tokens.filter(|tokens| *tokens > 0) {
-                                    *renewed
-                                        .thinking_sums
-                                        .entry(renewed.account_id.clone())
-                                        .or_default() += tokens;
+                                    match renewed.thinking_sums.get_mut(&renewed.account_id) {
+                                        Some(sum) => *sum += tokens,
+                                        None => {
+                                            renewed
+                                                .thinking_sums
+                                                .insert(renewed.account_id.clone(), tokens);
+                                        }
+                                    }
                                 }
                                 learned = self
                                     .observations
@@ -4513,18 +4517,18 @@ impl Task {
                         moved.into_iter().filter(|w| is_plan_window(w)).collect();
                     let mut restarted = false;
                     for window in &windows {
-                        let Some(reading) = sample.reading(window) else {
+                        let Some(reading) = sample.windows.get(window) else {
                             continue;
                         };
                         restarted |= stored
                             .get(window)
-                            .is_some_and(|stored| Self::restarted_ahead_of_turn(stored, &reading));
+                            .is_some_and(|stored| Self::restarted_ahead_of_turn(stored, reading));
                         self.window_edges(
                             &account_id,
                             window,
-                            stored.get(window).cloned(),
+                            stored.get(window),
                             predicted.get(window).copied(),
-                            reading.clone(),
+                            reading,
                             source_request_id.as_deref(),
                             now,
                         );
@@ -4532,7 +4536,7 @@ impl Task {
                             &account_id,
                             window,
                             stored.get(window),
-                            &reading,
+                            reading,
                             sample.poll,
                             now,
                         );
@@ -4790,8 +4794,7 @@ impl Task {
         let (rekey, merged_away) = self.state.rekey(spelling, dated_id, at);
         let snapshot = self.snapshot();
         for row in &merged_away {
-            let pool_id = key_pool_id(&snapshot, &row.key_id);
-            if let Some(event) = cleared_mark(row, "released", pool_id, at) {
+            if let Some(event) = released_mark(&snapshot, row, at) {
                 self.emit(event);
             }
         }
@@ -4859,6 +4862,36 @@ impl Task {
     fn canonical_pin(&self, pin: &mut PinRef) -> PinKey {
         pin.model = self.state.canonical(&pin.model).to_string();
         pin.key()
+    }
+
+    /// A failover's invalidation of the pin under `key` on `account_id`: the row leaves the state with the `released`
+    /// mark it carried, and its entry stands for the session's landing under `reason` and `cause`. Answers the pin's
+    /// delete where the invalidation took a row.
+    fn invalidate_failover(
+        &mut self,
+        pin: &PinRef,
+        key: PinKey,
+        account_id: &str,
+        reason: &'static str,
+        cause: Option<MoveCause>,
+    ) -> Option<StateWrite> {
+        let row = self.state.invalidate_pin(pin, account_id)?;
+        let now = (self.clock)();
+        if let Some(event) = released_mark(&self.snapshot(), &row, now) {
+            self.emit(event);
+        }
+        self.invalidated.insert(
+            key.clone(),
+            Invalidated {
+                row,
+                life: Life::Failover {
+                    reason,
+                    at: now,
+                    cause,
+                },
+            },
+        );
+        Some(StateWrite::DeletePin(key))
     }
 
     /// Starts the one registry load, which answers every reload waiting now. Off the loop: a selection is answered
@@ -4980,10 +5013,12 @@ impl Task {
         stood_on: Option<&PinRow>,
         request: &SelectRequest,
     ) {
-        // A compacted prompt holds no earlier block, so its answer would close an earlier landing's observation with
-        // a false `kept`, or with a false bound where it carries no member.
+        // A compacted prompt holds no earlier block, so its answer drops none: it would close an earlier landing's
+        // observation with a false `kept`, or with a false bound where it carries no member, and teach a landing's
+        // pair a false `kept`. The selection hands such a landing its sums at zero, so it opens no observation.
         if zeroes_sums(request) {
             self.observations.remove(key);
+            return;
         }
         let (Some(stood_on), Some(landed)) = (stood_on, self.state.pin(key)) else {
             return;
@@ -4993,9 +5028,8 @@ impl Task {
         }
         let (epoch, moved) = (landed.epoch, landed.account_id != stood_on.account_id);
         self.observations.remove(key);
-        // The sum as the selection handed it on: a compacted prompt holds no earlier block, so its answer drops none
-        // and would teach the pair a false `kept`.
-        let held = handed_sums(stood_on, request)
+        let held = stood_on
+            .thinking_sums
             .get(&stood_on.account_id)
             .copied()
             .unwrap_or(0);
@@ -5049,14 +5083,8 @@ impl Task {
             .collect();
         // A failover's entry leaves in silence, while a deleted account's trace writes the expiry its purge held back.
         for (key, entry) in lapsed {
-            if matches!(entry.life, Life::Pin) {
-                self.emit(RouterEvent::pin_expired(
-                    &key,
-                    &entry.account_id,
-                    entry.released,
-                    key_pool_id(&snapshot, &entry.row.key_id),
-                    now,
-                ));
+            if let Some(event) = entry.expiry(&key, &snapshot, now) {
+                self.emit(event);
             }
         }
         for (account_id, scope) in &purged.cooldowns {
@@ -5087,20 +5115,14 @@ impl Task {
         // pin lands on it as a move off the account.
         for row in purged.traced {
             let key = row.key();
-            let pool_id = key_pool_id(&snapshot, &row.key_id);
-            if let Some(event) = cleared_mark(&row, "released", pool_id, now) {
+            if let Some(event) = released_mark(&snapshot, &row, now) {
                 self.emit(event);
             }
             pin_ends.push(StateWrite::DeletePin(key.clone()));
             self.invalidated.insert(
                 key,
                 Invalidated {
-                    account_id: row.account_id.clone(),
-                    reason: "deleted",
-                    at: now,
                     row,
-                    cause: None,
-                    released: vec!["deleted"],
                     life: Life::Pin,
                 },
             );
@@ -5154,8 +5176,8 @@ impl Task {
         let (Some(reset_at), Some(next)) = (stored.reset, reading.reset) else {
             return false;
         };
-        next > reset_at.saturating_add(RESET_SLACK_MS)
-            && reset_at > reading.observed_at.saturating_add(RESET_SLACK_MS)
+        later_reset(reset_at, next)
+            && !reached(reset_at, reading.observed_at)
             && whole_points(stored.utilization) - whole_points(reading.utilization) >= 1
     }
 
@@ -5170,20 +5192,20 @@ impl Task {
         &mut self,
         account_id: &str,
         window: &str,
-        stored: Option<WindowReading>,
+        stored: Option<&WindowReading>,
         predicted: Option<f64>,
-        reading: WindowReading,
+        reading: &WindowReading,
         source_request_id: Option<&str>,
         now: i64,
     ) {
-        let passed = stored.as_ref().and_then(|stored| {
+        let passed = stored.and_then(|stored| {
             let reset_at = stored.reset?;
             let next_reset = match reading.reset {
                 // A reset is passed once the reading's own instant has passed it, within the slack. An idle account's
                 // 5-hour reset slides later with every poll, so a reading taken more than `RESET_SLACK_MS` ahead of the
                 // stored reset that names a later one replaces it with no reset event.
-                Some(next) => (next > reset_at.saturating_add(RESET_SLACK_MS)
-                    && reset_at <= reading.observed_at.saturating_add(RESET_SLACK_MS))
+                Some(next) => (later_reset(reset_at, next)
+                    && reached(reset_at, reading.observed_at))
                 .then_some(Some(next)),
                 // The reading replaces the stored one whole, so the clock walk would never see this reset: it is
                 // announced here or nowhere.
@@ -5202,8 +5224,8 @@ impl Task {
                     observed: "sample",
                     restored: false,
                     at: now,
-                    plan: stored.as_ref().and_then(|stored| stored.plan.clone()),
-                    tier: stored.as_ref().and_then(|stored| stored.tier.clone()),
+                    plan: stored.and_then(|stored| stored.plan.clone()),
+                    tier: stored.and_then(|stored| stored.tier.clone()),
                 });
             }
             // A wall announced under the passed reset that goes on into the window open past it is the same wall: its
@@ -5227,7 +5249,7 @@ impl Task {
         // The clear leaves the reset to the next sample or the clock walk, and the wall's announcement, the
         // prediction's or a sample's, leaves with it, so a reading back at the limit under the same reset is spent
         // again.
-        if let Some(stored) = stored.as_ref().filter(|stored| stored.utilization >= 1.0) {
+        if let Some(stored) = stored.filter(|stored| stored.utilization >= 1.0) {
             if reading.utilization < 1.0 && passed.is_none() {
                 self.spent_announced
                     .remove(&(account_id.to_string(), window.to_string()));
@@ -5248,7 +5270,7 @@ impl Task {
             // from the prediction's figure, once a reading of the announced cycle reads the window under its limit. The
             // announcement a reading below the wall left standing past its reset is another cycle's and clears nothing.
             let key = (account_id.to_string(), window.to_string());
-            let reset = reset_under(stored.as_ref(), &reading);
+            let reset = reset_under(stored, reading);
             let announced = self
                 .spent_announced
                 .get(&key)
@@ -5269,7 +5291,7 @@ impl Task {
         }
         // A wall the prediction or an earlier sample announced is not announced again by a reading of its cycle, and
         // a reading that names no reset before the stored reset passed stands under that one.
-        let reset = reset_under(stored.as_ref(), &reading);
+        let reset = reset_under(stored, reading);
         let announced = self
             .spent_announced
             .get(&(account_id.to_string(), window.to_string()))
@@ -5277,10 +5299,7 @@ impl Task {
         // A reading at the wall that names the reset after a passed one is a new wall, over a stored reading at the
         // wall too.
         let next_cycle = matches!(passed, Some((_, _, Some(_))));
-        if (next_cycle
-            || stored
-                .as_ref()
-                .is_none_or(|stored| stored.utilization < 1.0))
+        if (next_cycle || stored.is_none_or(|stored| stored.utilization < 1.0))
             && reading.utilization >= 1.0
             && !announced
         {
@@ -5416,10 +5435,7 @@ impl Task {
                     reading.utilization = stored.utilization;
                 }
             }
-            let one_reset = matches!(
-                (stored.reset, reading.reset),
-                (Some(held), Some(named)) if same_reset(held, named)
-            );
+            let one_reset = stored.reset.is_some_and(|held| stands_under(held, reading));
             // A head inside the margin was just raised to a stored figure at the wall, which its own percent reaches at
             // most, so the raised figure stands as the stored one. A real head that reads that figure or more stands
             // as read too, which leaves out at most a point of charges on a figure past the wall.
