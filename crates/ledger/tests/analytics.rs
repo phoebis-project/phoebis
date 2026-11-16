@@ -9355,8 +9355,9 @@ fn a_key_s_totals_add_a_billed_probe_s_dollars_and_no_probe_s_request_or_token()
     );
 }
 
-/// On the pool `p` at `WEEKDAY_OFF_PEAK`, a plan request of 1,000 input and 100 output tokens and an overage probe that
-/// failed with a code after its answer read 300 cached tokens and 20 input tokens, both on Sonnet 5.5.
+/// On the pool `p` at `WEEKDAY_OFF_PEAK`, a plan request of 1,000 input and 100 output tokens, an overage probe that
+/// failed with a code after its answer read 300 cached tokens and 20 input tokens, and a plan probe of 400 input
+/// tokens, all on Sonnet 5.5.
 fn plant_a_request_and_a_failed_billed_probe(db: &LedgerDb) {
     let model = "claude-sonnet-5-5";
     plant_share(
@@ -9364,6 +9365,16 @@ fn plant_a_request_and_a_failed_billed_probe(db: &LedgerDb) {
         ShareRow {
             id: "r-plan",
             model,
+            ..ShareRow::default()
+        },
+    );
+    plant_share(
+        db,
+        ShareRow {
+            id: "r-plan-probe",
+            kind: "probe",
+            model,
+            usage: usage(400, 0),
             ..ShareRow::default()
         },
     );
@@ -9404,7 +9415,8 @@ fn plant_a_request_and_a_failed_billed_probe(db: &LedgerDb) {
 }
 
 /// The pool's statement holds a clause of its own, so its bucket adds the failed overage probe's dollars and reads no
-/// request, no token and no failed request from it. One dollar a token, so the request costs $1,100 and the probe $320.
+/// request, no token and no failed request from it, and the plan probe adds nothing. One dollar a token, so the request
+/// costs $1,100 and the overage probe $320.
 #[tokio::test]
 async fn the_pool_s_bucket_adds_a_billed_probe_s_dollars_and_no_request_or_failure_of_it() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
@@ -9437,8 +9449,8 @@ async fn the_pool_s_bucket_adds_a_billed_probe_s_dollars_and_no_request_or_failu
 }
 
 /// The Dashboard's day adds the failed overage probe's dollars and no other figure of it: the requests, the errors, the
-/// refused count, the most common code and the cached tokens read the plan request alone. One dollar a token, so the
-/// request costs $1,100 and the probe $320.
+/// refused count, the most common code and the cached tokens read the plan request alone, and the plan probe adds
+/// nothing. One dollar a token, so the request costs $1,100 and the overage probe $320.
 #[tokio::test]
 async fn the_dashboard_s_day_adds_a_billed_probe_s_dollars_and_no_other_figure_of_it() {
     let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
