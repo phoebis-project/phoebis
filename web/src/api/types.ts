@@ -1953,6 +1953,8 @@ export interface AgentContext extends BurnFigures {
 export interface SessionSpendPart {
   /** The dollars billed by funding (`api_key`, `fast`, `overage`, `usage_based`), a zero entry left out. */
   billedUsd: Record<string, number>;
+  /** The dollars each serving account billed, an account with none left out. */
+  billedUsdByAccount: Record<string, number>;
   /** The Pro-week figures summed, null where a request priced nothing and 0 with no plan-funded request. */
   equivalent: number | null;
   requests: number;

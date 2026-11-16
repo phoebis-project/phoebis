@@ -693,6 +693,14 @@ test("a session reads its pin's open mark, its stamp's instant and the instant i
   );
 });
 
+test('a session spend part reads the dollars each serving account billed', () => {
+  // No other check reads this wire key: `mock-sync` holds the member as an open map, which asks a decoded `{}` nothing,
+  // and the mock's rows reach the pages without the decoder.
+  const row = fixture('sessions').sessions[0];
+  const s = d.decodeSession({ ...row, spend: { ...row.spend, billed_usd_by_account: { overflow: 1.25 } } });
+  assert.deepEqual(s.spend.billedUsdByAccount, { overflow: 1.25 });
+});
+
 test('a session reads its placements, its first request, its last turn and its last request, and an agent entry its own first request', () => {
   // No other check reads these wire keys by name: `mock-sync` takes the 0 and the null a misread answers for the shape
   // of the right read, and the mock's rows reach the pages without the decoder. Each instant differs, so a crossed

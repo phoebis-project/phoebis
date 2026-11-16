@@ -315,7 +315,7 @@ test('a count never stored files after a stored zero', () => {
 });
 
 test("a session spend with plan and billed requests reads the plan requests' list dollars as its equivalent and the billed ones on the badge", () => {
-  const spend = { billedUsd: { api_key: 3 }, equivalent: 0.01, requests: 2, shares: { a: {} }, usd: 5 };
+  const spend = { billedUsd: { api_key: 3 }, billedUsdByAccount: {}, equivalent: 0.01, requests: 2, shares: { a: {} }, usd: 5 };
   const reading = d.spendUnitOf(spend, 'equivalent', null, null);
   assert.deepEqual([reading.billed, reading.unit], [3, { figure: 0.01, hint: null, kind: 'equivalent_dollars', reason: null, usd: 2 }]);
 });
@@ -323,7 +323,14 @@ test("a session spend with plan and billed requests reads the plan requests' lis
 test('a plan spend whose list dollars come to nothing beside two billed fundings reads $0.00 in its cell and its hover', () => {
   // 0.1 and 0.2 sum to 0.30000000000000004, so `usd` less the billed sum is -5.6e-17, which the formatter's
   // four-decimal arm prints as -$0.0000. The hover reads the dollars in place of the week share while the scale is out.
-  const spend = { billedUsd: { fast: 0.1, overage: 0.2 }, equivalent: 0, probes: { requests: 0 }, requests: 3, shares: { a: {} }, usd: 0.3 };
+  const spend = { billedUsd: { fast: 0.1, overage: 0.2 }, billedUsdByAccount: {}, equivalent: 0, probes: { requests: 0 }, requests: 3, shares: { a: {} }, usd: 0.3 };
   const cell = d.costCellOf(d.spendUnitOf(spend, 'equivalent', null, null).unit, WEEK, null);
   assert.deepEqual([cell, d.spendHover(spend, WEEK, null, null)], [{ main: '$0.00', sub: 'equivalent', title: '$0.00 equivalent' }, '3 requests. $0.00. Billed in dollars: $0.10 fast mode, $0.20 overage']);
+});
+
+test("the badge lists a billed account once and never the row's own", () => {
+  // primary is the row's own account and studio stands in both maps, while overflow billed with no plan share. The
+  // shares' keys come first, so a list left in the maps' order reads studio ahead of overflow.
+  const spend = { billedUsd: { api_key: 1, overage: 0.75 }, billedUsdByAccount: { overflow: 1, primary: 0.25, studio: 0.5 }, equivalent: 0.01, requests: 4, shares: { primary: {}, studio: {} }, usd: 2 };
+  assert.deepEqual(d.spendUnitOf(spend, 'equivalent', 'primary', null).accounts, ['overflow', 'studio']);
 });

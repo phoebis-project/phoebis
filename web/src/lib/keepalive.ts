@@ -417,6 +417,7 @@ const addMap = (a: Record<string, number>, b: Record<string, number>): Record<st
 
 const addPart = (a: SessionSpendPart, b: SessionSpendPart): SessionSpendPart => ({
   billedUsd: addMap(a.billedUsd, b.billedUsd),
+  billedUsdByAccount: addMap(a.billedUsdByAccount, b.billedUsdByAccount),
   equivalent: a.equivalent === null || b.equivalent === null ? null : a.equivalent + b.equivalent,
   requests: a.requests + b.requests,
   shares: Object.fromEntries(keysOf(a.shares, b.shares).map((id) => [id, addMap(lookup(a.shares, id) ?? {}, lookup(b.shares, id) ?? {})])),

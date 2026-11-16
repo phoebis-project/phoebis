@@ -192,8 +192,9 @@ export function requestCostUnit(r: RequestLog, unit: UnitPosition, accounts: Acc
 
 /** The Cost cell's reading of a session's spend. */
 export interface SpendReading {
-  /** The other accounts whose plan windows the requests spent on, in id order, which the "+N" badge names. An API-key
-   *  account bills dollars and writes no window share, so none is among them. */
+  /** The other accounts the requests spent on, in id order and each once, which the "+N" badge names: the keys of
+   *  `shares` and of `billedUsdByAccount` less the row's account, so an account that billed dollars with no plan share
+   *  (on an API key, fast mode, overage or a usage-based seat) stands among them. */
   accounts: string[];
   /** The dollars billed outside a plan beside a plan figure, summed over the fundings, the `+$` badge's figure, 0 with
    *  none and where the figure is the billed dollars themselves. */
@@ -233,7 +234,7 @@ const planUsdOf = (spend: Pick<SessionSpendPart, 'usd'>, billed: number): number
  * plan-funded request reads 0 too.
  */
 export function spendUnitOf(spend: SessionSpendPart, unit: UnitPosition, accountId: string | null, hint: string | null): SpendReading {
-  const accounts = Object.keys(spend.shares).filter((id) => id !== accountId).sort();
+  const accounts = [...new Set([...Object.keys(spend.shares), ...Object.keys(spend.billedUsdByAccount)])].filter((id) => id !== accountId).sort();
   if (spend.requests === 0) return { accounts, billed: 0, unit: { kind: 'unserved', usd: 0 } };
   const billed = billedSum(spend);
   const figures = { dollars: billed, figure: spend.equivalent, hint, reason: null, usd: spend.usd };

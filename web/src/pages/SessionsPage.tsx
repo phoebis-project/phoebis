@@ -19,6 +19,7 @@ import { UNPRICED_TITLE, sentences, type WeekReading } from '@/lib/analytics';
 import { AGENT_TYPES, clientVersion } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { tierOrder } from '@/lib/costs';
+import { lookup } from '@/lib/counts';
 import { keyOptions, SESSIONS_DIMENSIONS } from '@/lib/filterBar';
 import { SESSION_CHARS, fmtAbsolute, fmtDuration, fmtInt, fmtRelative, fmtShare, fmtUsd, joinPresent, keyLifetime, modelTitle, plural, shortId, shortModel, weekShort } from '@/lib/format';
 import { agentCount, type AgentFigures, agentFigures, agentFiltersStand, CAUSE_HINT, CAUSE_LABEL, contextCell, earlierAgents, expiryOf, figuresOf, hiddenLines, isFinished, lastActivity, lifecycleSplit, lineAccountOf, lineTotals, lineWordOf, type ListingLimits, MAIN_AGENT, matches, matchingAgents, openMark, orderLines, orderSessionRows, pinTtlMs, presenceOf, recipeFiler, requestCount, requestsSpan, sessionLines, type SessionLine, STATUS_TONE, statusOf, type StatusWord, WARNING_CAUSES } from '@/lib/keepalive';
@@ -568,10 +569,10 @@ function BurnLine({ cost, session }: { cost: CostContext; session: Session }) {
 
 /**
  * The Cost cell: a spend over client requests in the chosen unit, the session's or an agent's, as the request log's
- * cell reads a request, then the dollars billed beside a plan figure and the accounts other than `accountId` whose
- * windows the requests spent on, the figure in full with the probes' share on the title, and `burn` under it. The
- * skeleton while the scale is out, a dash titled with the week reading's failure where it carries one, and a muted
- * dash before any ledgered request.
+ * cell reads a request, then the dollars billed beside a plan figure and the accounts other than `accountId` the
+ * requests spent on, by a plan share or by billed dollars, a billed one with its dollars, the figure in full with the
+ * probes' share on the title, and `burn` under it. The skeleton while the scale is out, a dash titled with the week
+ * reading's failure where it carries one, and a muted dash before any ledgered request.
  */
 function CostCell({ accountId, burn = null, cost, spend }: { accountId: string | null; burn?: ReactNode; cost: CostContext; spend: SessionSpend | null }) {
   let title: string | undefined;
@@ -589,13 +590,18 @@ function CostCell({ accountId, burn = null, cost, spend }: { accountId: string |
       body = cost.failure === null ? <Skeleton width={72} /> : '-';
     } else {
       title = spendHover(spend, cost.week, cost.scale, hint);
+      const accountLines = reading.accounts.map((id) => {
+        const label = cost.accountById.get(id)?.label ?? id;
+        const billed = lookup(spend.billedUsdByAccount, id);
+        return billed === undefined ? label : `${label}, ${fmtUsd(billed)} billed in dollars`;
+      });
       body = (
         <>
           <span className="srow__pin">
             {cell.main}
             <BilledBadge usd={reading.billed} />
             {reading.accounts.length > 0 && (
-              <Badge tone="neutral" title={`Other accounts whose plan windows the requests spent on:\n${reading.accounts.map((id) => cost.accountById.get(id)?.label ?? id).join('\n')}`}>
+              <Badge tone="neutral" title={`Other accounts the requests spent on:\n${accountLines.join('\n')}`}>
                 +{reading.accounts.length}
               </Badge>
             )}

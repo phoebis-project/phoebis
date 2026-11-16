@@ -1087,14 +1087,20 @@ for (const s of SESSIONS) Object.assign(s, foldSessionSpend(REQUESTS, s, NOW));
  * refused rows too: the first request that is no probe and the newest of kind `inference`, null where none stands.
  */
 export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'>, now: number): Pick<Session, 'agentRequests' | 'day' | 'firstRequestAt' | 'lastInferenceAt' | 'spend' | 'userAgent'> {
-  const emptyPart = (): SessionSpendPart => ({ billedUsd: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 });
+  const emptyPart = (): SessionSpendPart => ({ billedUsd: {}, billedUsdByAccount: {}, equivalent: 0, requests: 0, shares: {}, usd: 0 });
   // A plan-funded request adds its Pro-week figure, and one that priced none leaves the sum unknown. Any other funding
-  // bills its dollars, a request that cost nothing filing none.
-  const addMoney = (into: Pick<SessionSpendPart, 'billedUsd' | 'equivalent' | 'usd'>, r: RequestLog) => {
+  // bills its dollars, a request that cost nothing filing none. It answers whether it filed the dollars as billed, so
+  // the map by account reads that one condition, as the ledger's does.
+  const addMoney = (into: Pick<SessionSpendPart, 'billedUsd' | 'equivalent' | 'usd'>, r: RequestLog): boolean => {
     const funding = fundingOf(servingAttempt(r));
     into.usd += r.costUsd;
-    if (funding === 'plan') into.equivalent = into.equivalent === null || r.costEquivalent === null ? null : into.equivalent + r.costEquivalent;
-    else if (r.costUsd > 0) into.billedUsd[funding] = (into.billedUsd[funding] ?? 0) + r.costUsd;
+    if (funding === 'plan') {
+      into.equivalent = into.equivalent === null || r.costEquivalent === null ? null : into.equivalent + r.costEquivalent;
+      return false;
+    }
+    if (r.costUsd <= 0) return false;
+    into.billedUsd[funding] = (into.billedUsd[funding] ?? 0) + r.costUsd;
+    return true;
   };
   // The route prices no usage without a token, so such a request, a failed one among them, adds its count alone.
   const priced = (r: RequestLog) => tokensTotal(r.usage) > 0;
@@ -1102,8 +1108,9 @@ export function foldSessionSpend(rows: readonly RequestLog[], session: Pick<Sess
   const add = (into: SessionSpendPart, r: RequestLog) => {
     into.requests += 1;
     if (!priced(r)) return;
-    addMoney(into, r);
     const serving = servingAttempt(r);
+    // A request no attempt served costs nothing (`fundingOf`), so a billed one always names its account.
+    if (addMoney(into, r) && serving !== null) into.billedUsdByAccount[serving.accountId] = (into.billedUsdByAccount[serving.accountId] ?? 0) + r.costUsd;
     if (serving === null || fundingOf(serving) !== 'plan') return;
     const windows = (into.shares[serving.accountId] ??= {});
     for (const [window, share] of Object.entries(r.costShares ?? {})) if (share !== null) windows[window] = (windows[window] ?? 0) + share;

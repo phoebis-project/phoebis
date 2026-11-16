@@ -868,7 +868,7 @@ function decodeAgentContext(v: unknown): AgentContext {
 
 function decodeSessionSpendPart(v: unknown): SessionSpendPart {
   const p = rec(v);
-  return { billedUsd: numberMap(p.billed_usd), equivalent: numOrNull(p.equivalent), requests: num(p.requests), shares: numberMaps(p.shares), usd: num(p.usd) };
+  return { billedUsd: numberMap(p.billed_usd), billedUsdByAccount: numberMap(p.billed_usd_by_account), equivalent: numOrNull(p.equivalent), requests: num(p.requests), shares: numberMaps(p.shares), usd: num(p.usd) };
 }
 const decodeSessionSpend = (v: unknown): SessionSpend => ({ ...decodeSessionSpendPart(v), probes: decodeSessionSpendPart(rec(v).probes) });
 function decodeSessionDay(v: unknown): SessionDay {
