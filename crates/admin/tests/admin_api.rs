@@ -8196,8 +8196,8 @@ async fn a_pool_member_answers_the_engines_pace_score_whatever_its_kind() {
 }
 
 /// The pool `main` from the body `pool` behind key `desktop`, over the OAuth accounts `members` on a priced tier, those
-/// of `ending` canceled to end ten minutes after the rig's clock, inside the pool's default wind-down of 30 minutes,
-/// and `pins` seeded, handed to a second harness whose router prices a pin's burn through `round_rates`.
+/// of `ending` canceled to end ten minutes after the rig's clock, and `pins` seeded, handed to a second harness whose
+/// router prices a pin's burn through `round_rates`.
 async fn fit_harness(
     pool: &str,
     members: &[&str],
@@ -8248,9 +8248,9 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
     let members = ["roomy", "short", "high", "ending", "spent", "ending-spent"];
     // One pin on `roomy` burning five points of the 5-hour window an hour and two tenths of a point of the 7-day
     // window. It is the pool's one warm pin, so a fresh session's prior burns as much on every member, and `roomy`
-    // burns its own pin's share beside it.
+    // burns its own pin's share beside it. The two ending members end ten minutes out, inside the body's wind-down.
     let parts = fit_harness(
-        r#"{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"members":[{"account_id":"roomy","priority":0},{"account_id":"short","priority":0},{"account_id":"high","priority":0},{"account_id":"ending","priority":0},{"account_id":"spent","priority":0},{"account_id":"ending-spent","priority":0}]}"#,
+        r#"{"id":"main","label":"Main","strategy":"priority","five_hour_ceiling":0.95,"burn_average_seconds":1800,"wind_down_minutes":30,"members":[{"account_id":"roomy","priority":0},{"account_id":"short","priority":0},{"account_id":"high","priority":0},{"account_id":"ending","priority":0},{"account_id":"spent","priority":0},{"account_id":"ending-spent","priority":0},{"account_id":"direct","priority":0}]}"#,
         &members,
         &["ending", "ending-spent"],
         |generation| {
@@ -8281,6 +8281,13 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
         )
         .await;
     }
+    // The api_key account's request bucket stands full until its reset half a minute out.
+    read_windows(
+        &parts,
+        "direct",
+        &[("rpm:claude-opus-5-5", 1.0, Some(NOW + 30_000))],
+    )
+    .await;
     let pools = wait_json(&parts.app, "/admin/pools", &cookie, |v| {
         pool_member(v, "ending-spent")["burn"].is_number()
     })
@@ -8308,6 +8315,12 @@ async fn a_pool_member_answers_the_worst_fit_of_its_shared_windows_and_the_runwa
             (serde_json::json!("spent"), null),
         ],
         "{pools}"
+    );
+    assert_eq!(
+        read("direct"),
+        (serde_json::json!("least_bad"), serde_json::json!(0)),
+        "a paid member holds no shared window, so it answers the read's verdict, its full bucket least bad with no \
+         runway: {pools}"
     );
 }
 
