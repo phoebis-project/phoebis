@@ -30,7 +30,7 @@ subscription's end, `retryable_probe_error` on a member this probe already tried
 ledger is degraded (`budget_unknown`), and `probe_quota_exhausted` under a cooldown, a credits block, overage under
 `never` or a seat at its spend cap, with the wait the answer names. With no eligible sibling the probe gets the pool's
 own answer ([When nothing can serve](routing.md#when-nothing-can-serve)), and the wait that answer names holds up to the
-ladder's `retry_max_ms`. A probe whose session holds no pin, because the pin idled out or its account left the pool,
+ladder's five-minute cap. A probe whose session holds no pin, because the pin idled out or its account left the pool,
 places nothing either, and the recipe pauses under `no_pin` until the next real request lands. A probe's own 429 cools
 the account and leaves the pin, which the session's next real request then moves. A probe whose pinned account was
 deleted is held as `paused` before it is sent, as one on a disabled account is. A probe whose pinned account's
