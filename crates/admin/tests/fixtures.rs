@@ -1109,15 +1109,12 @@ async fn every_route_is_captured_and_holds_its_shape() {
             )
         },
         attempts: vec![
-            // The first attempt landed on the account of the session's previous request and hands its size on, and the
-            // failover's attempt elsewhere hands on none.
             AttemptRecord {
                 account_kind: AccountKind::ApiKey,
                 cooldown_scope: Some("account".into()),
                 cooldown_until: Some(now + 1_800_000),
                 selection: Some(placed_json),
                 stop_reason: None,
-                previous_input_tokens: Some(1_200),
                 ..attempt("r-failover", 1, "direct", 429, "rate_limited", hour_ago)
             },
             // The router's member named no message on the account the failover reached, and the answer drew no reason.

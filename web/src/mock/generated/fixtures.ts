@@ -16794,7 +16794,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "ttfb_ms": 120,
             "ttft_ms": null,
             "cache_miss_reason": "none",
-            "previous_input_tokens": 1200,
+            "previous_input_tokens": null,
             "service_tier": null,
             "client_drift": null,
             "cooldown_set": {
@@ -18259,7 +18259,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "ttfb_ms": 120,
               "ttft_ms": null,
               "cache_miss_reason": "none",
-              "previous_input_tokens": 1200,
+              "previous_input_tokens": null,
               "service_tier": null,
               "client_drift": null,
               "cooldown_set": {
