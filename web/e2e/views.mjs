@@ -3218,10 +3218,10 @@ async function chevronWeight(label, svg, size, stroke) {
  * and read while it shows: its height against the body's window, every cell against the two columns, every label beside
  * its switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled
  * while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select,
- * nothing pushed apart or past the frame, the window ceiling across the grid in the plain view and beside the burn
- * average in the expert view, and the mono Name input as tall as the Status select beside it. The strips draw their
- * groups without the column rail's indent and hairline, a parent there answers the pointer, and a refusal dot follows
- * its entry's words by 6 px on their line.
+ * nothing pushed apart or past the frame, the two ceilings halving the Windows group's first row in both views and the
+ * burn average on a row of its own under them in the expert view, and the mono Name input as tall as the Status select
+ * beside it. The strips draw their groups without the column rail's indent and hairline, a parent there answers the
+ * pointer, and a refusal dot follows its entry's words by 6 px on their line.
  */
 async function poolDialogGeometry(theme) {
   for (const mode of ['plain', 'expert']) {

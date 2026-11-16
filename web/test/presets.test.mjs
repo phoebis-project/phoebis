@@ -470,7 +470,7 @@ test('a pin on an account without a 5-hour window scales its 7-day burn by 1 on 
   // horizon five hours out under a ceiling of 95 asks 0.4 points an hour, which a's 5 points cover.
   const approved = { fableWindow: null, id: 'approved', kind: 'oauth', label: 'approved', windows: [win('7d', 0.97, 5 * HOUR, 0.02)] };
   const weekly = [pin('approved', 'a', 0.05, false, { burnWindow: 'seven_day' }), pin('approved', 'b', 0.03, false, { burnWindow: 'seven_day' })];
-  assert.equal(line([approved, cool], weekly, { fiveHourCeiling: 0.95, weeklyCeiling: 0.95 }),'1 member projects over the ceiling: approved. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
+  assert.equal(line([approved, cool], weekly, { fiveHourCeiling: 0.95, weeklyCeiling: 0.95 }), '1 member projects over the ceiling: approved. A round there would mark 1 session (0 warm), 0.4 %/h of the excess, to move to a sibling with runway.');
   // On the Fable round the account burns its Fable week half as fast as its 7-day window, so the pins' 3 and 2 points
   // read 1.5 and 1 there. 99 % two hours out asks 2 points an hour, the cap's half of their 2.5 bounds it at 1.25, and
   // a's 1.5 covers that alone.

@@ -1745,10 +1745,13 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
       if (heldWait) return { by: by('hold', heldWait.reason), fact: [summaryFact('held', heldWait.heldMs, 'ms')] };
       if (r.kind === 'probe') return { by: by('none', ''), fact: [summaryFact('epoch', record.pin?.epoch ?? 0, 'count')] };
       if (record.pin?.warmth === 'cold') return { by: by('none', ''), fact: [summaryFact('cause', record.pin.warmthCause ?? '', 'text')] };
-      // The first window, in the trigger's order, whose projection at its horizon reads over the round's line names
-      // its reading. The test is the round's own, strict, so the row names no window that no round fires on.
+      // The first window, in the trigger's order, whose projection at its horizon reads over its limit names its
+      // reading. The limit is the line the horizon's bound sets, and the 5-hour ceiling for the 5-hour window of a
+      // pool that slows its pins, since the stretch tests that window there. The test is the round's own, strict, so
+      // the row names no window that no round fires on.
       const m = record.candidates.find((c) => c.accountId === spec.accountId);
-      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) > lineOf(m, w, pool, spec.at));
+      const limitOf = (c: RecordCandidate, w: string) => (pool.slowDown && w === 'five_hour' ? ceilingOn(pool, w) : lineOf(c, w, pool, spec.at));
+      const hottest = m === undefined ? undefined : drawnWindows(r.canonicalModel).find((w) => (m.windows[w]?.projection ?? -1) > limitOf(m, w));
       if (m !== undefined && hottest !== undefined) return { by: by('none', ''), fact: [summaryFact(hottest, m.windows[hottest].utilization, 'percent')] };
       return { by: by('none', ''), fact: [summaryFact('idle', record.pin?.idleMs ?? 0, 'ms')] };
     }
