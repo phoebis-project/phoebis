@@ -2112,7 +2112,8 @@ fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hou
 
 /// The purge reads an agent's probe again where it lies before the cutoff: agent `g`'s one probe, two and a half hours
 /// before the cutoff, leaves with the pass, and its client request ten minutes after the cutoff, which the router
-/// refused, keeps the agent's row. With no served request left, the session's figures list no line for `g`.
+/// refused, keeps the agent's row. With no served request left, the session's figures list no line for `g`, and agent
+/// `h`, whose one probe lies ten minutes after the cutoff, keeps its line through that probe.
 #[test]
 fn the_purge_leaves_an_agent_no_probe_where_its_one_probe_lay_before_the_cutoff() {
     const MINUTE: i64 = 60_000;
@@ -2146,6 +2147,18 @@ fn the_purge_leaves_an_agent_no_probe_where_its_one_probe_lay_before_the_cutoff(
         &prices,
     )
     .unwrap();
+    db.insert_request_at(
+        &RequestRecord {
+            kind: "probe".into(),
+            origin: "keepalive".into(),
+            agent_id: Some("h".into()),
+            ..session_request("h-probe", "s", kept_at)
+        },
+        &[answered("h-probe", 1, "a", kept_at, 100)],
+        None,
+        &prices,
+    )
+    .unwrap();
     let now = cutoff + 86_400_000;
     phoebis_ledger::run_retention_blocking(
         &db,
@@ -2159,11 +2172,12 @@ fn the_purge_leaves_an_agent_no_probe_where_its_one_probe_lay_before_the_cutoff(
     )
     .unwrap();
     let figures = figures_of(&db, &prices, &PlanTables::shipped(), now);
-    assert!(
-        figures.agents.is_empty(),
-        "g holds no served request: {:?}",
-        figures.agents
-    );
+    let agents: Vec<&str> = figures
+        .agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect();
+    assert_eq!(agents, ["h"]);
 }
 
 /// Session `s` under the key `desktop`, as the sessions route names it.
