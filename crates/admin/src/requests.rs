@@ -369,7 +369,9 @@ pub(crate) struct AttemptResponse {
 }
 
 /// The blocks an answer dropped under one key of `input_transformations`.
-#[derive(serde::Serialize, ToSchema)]
+// Declared for the document alone, since the attempt answers the ledger's own type.
+#[allow(dead_code)]
+#[derive(ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct InputTransformationView {
     /// The dropped blocks under the key.
