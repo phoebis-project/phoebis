@@ -4131,6 +4131,66 @@ fn the_key_loss_recovery_opens_the_registry_under_a_new_key_with_its_accounts_an
     assert_eq!(store.api_key("desktop").unwrap().unwrap().pool_id, "main");
 }
 
+/// `discard_sealed` itself, where the key-loss case runs the page's sequence: `held` already reads `disconnected` and
+/// `moved` another state, each dated at a literal by an operator's edit.
+#[test]
+fn a_recovery_keeps_the_stamp_of_a_state_that_holds_and_stamps_a_state_it_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    let anchor = |id: &str, state: AccountState, at: i64| {
+        store
+            .create_account(&account(id, AccountKind::Oauth), None, 1, "admin")
+            .unwrap();
+        store
+            .commit_account_update(&AccountUpdate {
+                id,
+                expected_revision: 1,
+                incarnation: 1,
+                lifecycle_generation: 1,
+                label: id,
+                secret: None,
+                state: Some((state, StateCause::Operator)),
+                at,
+                actor: "admin",
+                enabled: None,
+                cancellation: None,
+            })
+            .unwrap();
+    };
+    anchor("held", AccountState::Disconnected, 7_000);
+    anchor("moved", AccountState::ReauthRequired, 5_000);
+    drop(store);
+
+    let new = StorageKey::generate();
+    let mut recovery = Store::open_for_recovery(&path).unwrap();
+    recovery.prepare_recovery().unwrap();
+    recovery.discard_sealed(&new, StateCause::Operator).unwrap();
+    drop(recovery);
+
+    let store = Store::open(&path, &new).unwrap();
+    let read = |id: &str| {
+        (
+            store.account(id).unwrap().unwrap().state,
+            store
+                .account_extras_of(id)
+                .unwrap()
+                .unwrap()
+                .state_changed_at,
+        )
+    };
+    assert_eq!(
+        read("held"),
+        (AccountState::Disconnected, 7_000),
+        "the run leaves the date of a state the account already held"
+    );
+    let moved = read("moved");
+    assert!(
+        moved.0 == AccountState::Disconnected && moved.1 > 5_000,
+        "the run moves the other account's state and dates it: {moved:?}"
+    );
+}
+
 /// A guardrail named after its id, enabled, observing, with no preset stamp and no stamps of its own, matching the
 /// auxiliary class unless the case gives its conditions.
 fn guardrail(id: &str, conditions: Option<Vec<Condition>>) -> GuardrailRow {
