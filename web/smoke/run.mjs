@@ -855,13 +855,13 @@ await forView('/', async () => {
     ],
     // The engine's retained prompts at 92 percent of their cap, the mock overview's retained bytes.
     ['Keepalive cap at 92%: retained prompts', 'badge--warning', '/sessions', ['The engine is near its cap and will refuse new records at it. Opens the Sessions view.', 'cap: retained', 'count: 246960620', 'max: 268435456', 'pct: 0.92']],
-    // The expiries between turns rank last: 13 of the day's 15 sit on a pool that warms caches under a key the
+    // The expiries between turns rank last: 14 of the day's 16 sit on a pool that warms caches under a key the
     // keepalive may probe for (`ATTENTION` in mock/attention.ts over the request seed's rows), the other two on ci.
     [
-      'Expired between turns: 13 in 24h',
+      'Expired between turns: 14 in 24h',
       'badge--warning',
       '/sessions',
-      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 13'],
+      ['Prompt caches expired between two turns on a pool whose keepalive policy is on, under a key that holds the keepalive permission, so a probe came too late or not at all. Opens the Sessions view.', 'expired: 14'],
     ],
   ];
   const ages = listed.map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
@@ -1284,11 +1284,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // The Keepalive engine block reads the mock's keepalive overview (`KEEPALIVE_OVERVIEW` in mock/operations.ts): the 19
   // sessions the engine holds and its 33 agent records, one per recipe the story writes, against the bootstrap file's
   // caps of 128 and 1,024, the retained prompts hand-set at 92 percent of 256 MiB, the day's probes `PROBES_24H` (207
-  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 15 expiries between turns the ledger rows of the day
+  // ok of 277, since its `ok` of 225 holds the 18 migrated), the 16 expiries between turns the ledger rows of the day
   // hold and the three bus gaps, the last two hours back. The expired part takes the warning ink while the attention
   // item `expired_between_turns` holds, which the mock holds over its expiries on the pools that warm caches under
   // keys that may be probed for (`ATTENTION` in mock/attention.ts), and with an attention answer that lacks the item
-  // it takes none, the overview's count of 15 standing. The last gap is inside the day, so the bus gaps part takes the
+  // it takes none, the overview's count of 16 standing. The last gap is inside the day, so the bus gaps part takes the
   // warning ink with that gap's instant on its hover. The card is read at the story's own instant, which the mock
   // anchors as it loads, a moment past the clock's origin, so the gap lies two hours back.
   const overview = await api.getKeepaliveOverview();
@@ -1331,9 +1331,9 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
       ['Retained', '235.5 MiB of 256 MiB', null],
     ],
     heads: ['Keepalive engine', 'Cache probes, 24h'],
-    line: 'expired between turns 15 · bus gaps 3',
+    line: 'expired between turns 16 · bus gaps 3',
     parts: [
-      { text: 'expired between turns 15', title: null, warning: true },
+      { text: 'expired between turns 16', title: null, warning: true },
       { text: 'bus gaps 3', title: `The last gap was 2h ago, at ${fmtAbsolute(overview.lastBusGapAt)}.`, warning: true },
     ],
     probes: '207 ok (75%) of 277',
@@ -13368,8 +13368,8 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
     results.push({ name: '/requests cache row reads a stored Not requested with its read and written counts', ok: rows.includes('Cache Not requested, 20K read, 2.2K written'), missing: rows });
     results.push({ name: '/requests Not requested is muted', ok: reasonInk() === 'muted', missing: [reasonInk()] });
   }
-  // The story's 429 on secondary that req_b8c3e9d4-e61 fails over to primary: the leg lands off the account its pin's
-  // last report stood on, so the relay detaches the member's message and the answer names no reason. It wrote 54,800
+  // The story's 429 on secondary that req_b8c3e9d4-e61 fails over to primary: the leg leaves secondary, the account of
+  // the leg before it, so the relay detaches the member's message and the answer names no reason. It wrote 54,800
   // tokens to the hour cache and read none.
   const failedOver = requests.find((r) => r.id === 'req_b8c3e9d4-e61');
   results.push({ name: "fixture files a failover that leaves its pin's account as No reason returned", ok: serving(failedOver)?.cacheMissReason === 'not_returned', missing: [String(serving(failedOver)?.cacheMissReason)] });

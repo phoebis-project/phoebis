@@ -354,8 +354,7 @@ const compare = (): CacheMissReason =>
 /**
  * What each attempt of one request filed for its cache comparison. Diagnostics ride on a response body, so an attempt
  * that failed upstream carries none, and the token-count endpoint returns no usage block to compare against. A
- * failover's leg waits for `walkSessionTurns`, which reads whether it landed back on the account its pin's last report
- * stood on.
+ * failover's leg waits for `walkSessionTurns`, which reads it off the account of the leg before it.
  */
 function diagnosed(attempts: Attempt[], kind: RequestKind, source: DiagnosticsSource | null): Attempt[] {
   return attempts.map((a) => {
@@ -559,7 +558,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       issuedDigest: null,
       outcome,
       overageInUse: kind === 'oauth' ? false : null,
-      // Read off the day's rows once each stands as it ends (`handPreviousSizes`).
+      // Read off the day's rows once each stands as it ends (`walkSessionTurns`).
       previousInputTokens: null,
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
@@ -1251,7 +1250,7 @@ function storyRow(seed: StorySeed): RequestLog {
       outcome: cut ? 'canceled' : a.headless ? 'transport_error' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
       overageInUse: oauth && !usageBased ? false : null,
-      // Read off the day's rows once each stands as it ends (`handPreviousSizes`).
+      // Read off the day's rows once each stands as it ends (`walkSessionTurns`).
       previousInputTokens: null,
       response: { clearedInputTokens: null, inferenceGeo: answer ? (seed.geo ?? 'us') : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: answer ? (fast ? 'fast' : 'standard') : null, stopReason: answer && !stopless ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
@@ -1411,7 +1410,7 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: 'main', session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     // The same client's next request carried no class header, so the contract refused it before any account was chosen.
     { agentId: 'main', at: t(14, 14, 20), attempts: [], clientContract: 'class_header', errorCode: 'client_contract', id: 'req_f1c8e3a5-29d', keyId: 'laptop', model: 'claude-sonnet-4-5', outcome: 'rejected', refused: true, requestClass: null, session: '5eeed6ce', status: 403, userAgent: 'claude-cli/2.1.271 (external, cli)' },
-    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
+    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     // The model takes no inference geography parameter, so its answer reports the geography as not available.
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], geo: 'not_available', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
     // A token count follows its subagent's pin to secondary before its window is spent, so it never meets the cooldown
@@ -1561,8 +1560,10 @@ function storySeeds(): StorySeed[] {
     { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
     // A fresh placement whose reservation the answer's usage replaces.
     { agentId: 'main', at: t(13, 41, 15), attempts: [{ accountId: 'primary', at: t(13, 41, 15), ms: 7_200, status: 200 }], id: 'req_7a3f0c26-d81', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'c5d2e8a1-4f6b-4b17-a9c3-6e0d2f8b1a57', usage: { cacheWrite1h: 38_400, input: 2_600, output: 1_150 } },
-    // A renewal on primary whose round finds no sibling with runway for either pin.
-    { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
+    // A renewal on primary whose round finds no sibling with runway for either pin. It follows the placement of 14:11:44
+    // on the same account, so its member names a message primary holds, and the upstream's comparison was still
+    // running when its answer went out.
+    { agentId: 'main', at: t(14, 12, 30), attempts: [{ accountId: 'primary', at: t(14, 12, 30), ms: 5_600, status: 200 }], id: 'req_6e1f3b98-a24', keyId: 'desktop', model: 'claude-sonnet-5-5', pending: true, requestClass: 'main', session: 'd7167642', usage: { cacheRead: 52_300, cacheWrite1h: 900, input: 2_100, output: 870 } },
     // A desktop session placed on secondary before its spent edge, whose next turn secondary answers with a 429 on the
     // spent 5-hour window while primary is full, so the turn fails over to primary.
     { agentId: 'main', at: t(14, 1, 45), attempts: [{ accountId: 'secondary', at: t(14, 1, 45), ms: 5_000, status: 200 }], id: 'req_d2a8f6c1-d50', keyId: 'desktop', model: 'claude-sonnet-4-5', requestClass: 'main', session: FAILED_OVER_SESSION_ID, usage: { cacheWrite1h: 52_000, input: 1_600, output: 700 } },
@@ -2467,32 +2468,54 @@ const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.par
 
 /**
  * The session's turns as the router and the relay see them, over the rows' last fields, since the passes above move
- * arrivals. Each attempt takes its previous size as the selection hands it on: the size of the last usage report under
- * the request's pin key (key, session, agent and canonical model), where the attempt lands on that report's account,
- * and none on a compacted turn, on a pin's first turn, on a pin whose last report was empty, off that account and on a
- * row with no session. A probe's usage is the keepalive's cost and renews no size, and a token count stores no report.
+ * arrivals. A first attempt takes its previous size as the selection hands it on: the size of the last usage report
+ * under the request's pin key (key, session, agent and canonical model), where the attempt lands on that report's
+ * account, and none on a compacted turn, on a pin's first turn, on a pin whose last report was empty, off that account
+ * and on a row with no session. A probe's usage is the keepalive's cost and renews no size, and a token count stores no
+ * report. A failover's leg finds no row of its own, since the failover took it, so it takes no size, and a resend in
+ * place goes out under the decision of the attempt it repeats, its size and the account it left included.
+ *
+ * The account a first attempt leaves is its agent's newest landing under the key and session, whatever the model, as
+ * each selection moves it: a placement, a renewal and a probe's renewal stamp the pin they land on. An auxiliary call
+ * reads its own pin's account, and its pins answer no other request. A token count creates no pin, and an answer of 400
+ * releases the pin it placed. A failover's leg leaves the account of the leg before it.
  *
  * A body's member names the message its agent's last answer carried, a fork's its parent's while it has none of its
  * own, so an agent's first answered turn that is no fork names none. The relay detaches the member's message on an
- * attempt that lands off the account the selection leaves (the pin's last report's, else on a failover's leg the
- * account the failover left) and on every probe. An answered attempt whose body carried a member and named no message
- * files `not_returned`. One the build left unfiled (a failover's leg, a placement after the session's row expired) that
- * named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing. A row stored
- * before the relay filed its words keeps its null.
+ * attempt that lands off the account it leaves and on every probe. An answered attempt whose body carried a member and
+ * named no message files `not_returned`. One the build left unfiled (a leg, a placement after the session's row
+ * expired) that named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing. A
+ * row stored before the relay filed its words keeps its null.
  */
 function walkSessionTurns() {
   const reports = new Map<string, { accountId: string; size: number }>();
+  const newest = new Map<string, string>();
+  const pinned = new Map<string, string>();
   const answered = new Set<string>();
   for (const r of byArrival()) {
     const pin = `${r.keyId}|${r.sessionId}|${r.agentId}|${r.canonicalModel}`;
     const report = r.sessionId === null ? undefined : reports.get(pin);
+    const landing = `${r.keyId}|${r.sessionId}|${r.agentId}`;
+    const auxiliary = r.requestClass === 'auxiliary';
     const agent = `${r.sessionId}|${r.agentId}`;
     const turn = r.sessionId !== null && r.kind === 'inference';
     const firstTurn = turn && !answered.has(agent) && r.agentType !== 'fork' && r.forkedFrom === null;
+    let left: string | undefined;
     r.attempts.forEach((a, i) => {
-      if (r.sessionId !== null) a.previousInputTokens = report !== undefined && r.contextCompacted === null && report.size > 0 && a.accountId === report.accountId ? report.size : null;
+      if (resentInPlace(r, i)) {
+        if (r.sessionId !== null) a.previousInputTokens = r.attempts[i - 1].previousInputTokens;
+      } else if (i > 0) {
+        left = r.attempts[i - 1].accountId;
+        a.previousInputTokens = null;
+      } else if (r.sessionId !== null) {
+        left = auxiliary ? pinned.get(pin) : newest.get(landing);
+        a.previousInputTokens = report !== undefined && r.contextCompacted === null && report.size > 0 && a.accountId === report.accountId ? report.size : null;
+      }
+      if (r.sessionId !== null && r.kind !== 'count_tokens' && a.upstreamStatus !== 400) {
+        pinned.set(pin, a.accountId);
+        if (!auxiliary) newest.set(landing, a.accountId);
+      }
       if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
-      const left = report?.accountId ?? (i > 0 ? r.attempts[i - 1].accountId : undefined);
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
       if (r.diagnosticsSource === null) a.cacheMissReason = 'not_requested';
       else if (!named || a.accountKind !== 'oauth') a.cacheMissReason = 'not_returned';
@@ -2737,8 +2760,8 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         },
         cacheHits: ok.filter((r) => r.usage.cacheRead > 0).length,
         cacheMisses: ok.filter((r) => r.usage.cacheRead === 0 && r.usage.cacheWrite5m + r.usage.cacheWrite1h > 0).length,
-        cacheMissReasons,
         cacheMissReasonHits,
+        cacheMissReasons,
         expiredBetweenTurns: ok.filter(expiredBetweenTurns).length,
         uncacheable: uncached.filter(couldNotCache).length,
         uncached: uncached.length,
@@ -2777,16 +2800,16 @@ function sampled(h: Rng, n: number, median: number, spread: number): number[] {
 // Only the last 24h has row-level logs; older hours are synthesized so the
 // 7d and 30d analytics ranges have a shape to draw.
 /**
- * Splits an hour's requests across the diagnosed reasons, most of them clean. An hour whose account `compares` nothing,
- * an API key answering the member its client sends without the beta, files each answer under `not_returned`, as the
- * day's rows of that lane do.
+ * Splits an hour's requests across the diagnosed reasons, most of them clean. Every lane's body carries a member, the
+ * client's or the router's, so an hour whose answers draw no comparison (`compares` false) files each under
+ * `not_returned`, as the day's rows do: an hour on an API-key account, which answers without the beta, and a probe
+ * hour, whose member the relay detaches. Such an hour still `draws` its split and keeps its expiries, so every later
+ * draw keeps its place, but on the `ci` lane, whose hours never drew one.
  */
-function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
+function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean, draws = true): { cacheMissReasons: Record<CacheMissReason, number>; expiredBetweenTurns: number } {
+  const uncompared = () => Object.assign(emptyCacheMissReasons(), { not_returned: ok });
+  if (!draws) return { cacheMissReasons: uncompared(), expiredBetweenTurns: 0 };
   const cacheMissReasons = emptyCacheMissReasons();
-  if (!compares) {
-    cacheMissReasons.not_returned = ok;
-    return { cacheMissReasons, expiredBetweenTurns: 0 };
-  }
   let left = ok;
   const take = (n: number) => {
     const taken = Math.max(0, Math.min(left, n));
@@ -2800,7 +2823,8 @@ function synthesizeMissReasons(hm: Rng, ok: number, compares: boolean): { cacheM
   cacheMissReasons.previous_message_not_found = take(hm.chance(0.2) ? 1 : 0);
   cacheMissReasons.unavailable = take(hm.chance(0.1) ? 1 : 0);
   cacheMissReasons.none = left;
-  return { cacheMissReasons, expiredBetweenTurns: Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0) };
+  const expiredBetweenTurns = Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0);
+  return { cacheMissReasons: compares ? cacheMissReasons : uncompared(), expiredBetweenTurns };
 }
 
 // The smoke run reads the holder's day and the mock consistency tests read the cap raise through this module.
@@ -2914,7 +2938,7 @@ function historicalRollups(): HourlyRollup[] {
         tokens,
         cacheHits: Math.round(ok * h.float(0.6, 0.8)),
         cacheMisses: Math.round(ok * h.float(0.1, 0.25)),
-        ...synthesizeMissReasons(hm, ok, lane.keyId !== 'ci'),
+        ...synthesizeMissReasons(hm, ok, kindOf(accountId) === 'oauth', lane.keyId !== 'ci'),
         // The route answers no hit map for an hour folded before it counted one.
         cacheMissReasonHits: emptyCounts(),
         // The hour holds the lane's inference turns alone, so its uncached turns count where the lane's turns mark no
@@ -2979,7 +3003,7 @@ function historicalRollups(): HourlyRollup[] {
           tokens: { uncachedInput: 0, cacheRead: probeUsage.cacheRead, cacheWrite5m: 0, cacheWrite1h: 0, output: probes, ...NO_ANSWER_FACTS },
           cacheHits: probes,
           cacheMisses: 0,
-          ...synthesizeMissReasons(hm, probes, true),
+          ...synthesizeMissReasons(hm, probes, false),
           cacheMissReasonHits: emptyCounts(),
           uncacheable: 0,
           uncached: 0,
@@ -3046,8 +3070,8 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
       tokens: { cacheRead: 0, cacheWrite1h: prefix, cacheWrite5m: 0, output: 1, ...NO_ANSWER_FACTS, uncachedInput: 0 },
       cacheHits: 0,
       cacheMisses: 1,
-      cacheMissReasons: emptyCacheMissReasons(),
       cacheMissReasonHits: emptyCounts(),
+      cacheMissReasons: emptyCacheMissReasons(),
       expiredBetweenTurns: 0,
       uncacheable: 0,
       uncached: 0,
