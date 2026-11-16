@@ -5834,6 +5834,101 @@ async fn a_tiers_burn_figure_scales_each_plan_request_at_the_cost_revision_in_fo
     );
 }
 
+/// A cost model whose two entries size different tiers beside the anchor `test_tier`: the first `old_tier`, the second,
+/// from 18:00 UTC on 2026-01-15, `new_tier`, with Sonnet 5.5 at weight 1 in both entries.
+const A_TIER_FOR_EACH_REVISION: &str = "\
+unit: {tier: test_tier, window: seven_day}
+revisions:
+  - effective: 2026-01-01
+    capacity:
+      old_tier:  {five_hour: 200, seven_day: 2000}
+      test_tier: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5-5: sonnet
+  - effective: 2026-01-15T18:00:00Z
+    capacity:
+      new_tier:  {five_hour: 400, seven_day: 4000}
+      test_tier: {five_hour: 100, seven_day: 1000}
+    peak:
+      zone: America/Los_Angeles
+      weekdays: true
+      from_hour: 5
+      to_hour: 11
+      capacity_factor: {five_hour: 0.5, seven_day: 1}
+    type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+    model_weight:
+      claude-sonnet-5-5: 1
+    model_windows: {}
+    overrides: {}
+    tier_order: [fable, opus, sonnet, haiku]
+    model_tier:
+      claude-sonnet-5-5: sonnet
+";
+
+/// Each burn point keys its three maps by the tiers of every loaded cost revision, whichever revision priced its rows:
+/// a plan request at 17:10 under the first entry and one at 18:10 under the second each leave a point that holds
+/// `new_tier`, `old_tier` and `test_tier`.
+#[tokio::test]
+async fn each_burn_point_keys_its_figures_by_the_tiers_of_every_cost_revision() {
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    for (id, hour) in [("first", 17), ("second", 18)] {
+        plant_share(
+            &db,
+            ShareRow {
+                id,
+                model: "claude-sonnet-5-5",
+                at: ms(2026, 1, 15, hour, 10),
+                usage: usage(50, 5),
+                ..ShareRow::default()
+            },
+        );
+    }
+    let tables = phoebis_ledger::test_tables::tables(
+        CostRevisions::from_yaml(A_TIER_FOR_EACH_REVISION).unwrap(),
+    );
+    let from = ms(2026, 1, 15, 17, 0);
+    let points = burn_points(
+        &db,
+        &tables,
+        &priced_table("claude-sonnet-5-5", 1.0),
+        from,
+        from + 2 * 3_600_000,
+        3_600,
+    )
+    .await;
+    let keys = |hour: i64| {
+        let point = point_at(&points, hour);
+        [
+            point.equivalent_by_tier.into_keys().collect::<Vec<_>>(),
+            point.five_hour_equivalent_by_tier.into_keys().collect(),
+            point.fable_equivalent_by_tier.into_keys().collect(),
+        ]
+    };
+    let every = ["new_tier", "old_tier", "test_tier"]
+        .map(String::from)
+        .to_vec();
+    assert_eq!(
+        [keys(from / 1_000), keys(from / 1_000 + 3_600)],
+        [
+            [every.clone(), every.clone(), every.clone()],
+            [every.clone(), every.clone(), every]
+        ],
+        "the first entry's hour, then the second's"
+    );
+}
+
 /// One cost revision of three tiers: the anchor `test_tier` at 100 units on the 5-hour window and 1,000 on the week,
 /// `wide_tier` at 200 and 2,000, and `narrow_tier` sized on the 5-hour window alone at 50. Sonnet 5.5 weighs 1 and
 /// Fable 5.1 weighs 10 on every window, its Fable week half the week.
