@@ -79,6 +79,23 @@ pub fn unknown_word_error(word: &str) -> Box<dyn std::error::Error + Send + Sync
     format!("unknown word {word:?}").into()
 }
 
+/// The SET clause that writes `$new` to `accounts.state` and moves `state_changed_at` to `$stamp` only when the state
+/// changes. SQLite reads `state` in each SET expression as the row's value before the write, so the CASE compares the
+/// old state with the new one.
+macro_rules! state_write {
+    ($new:literal, $stamp:literal) => {
+        concat!(
+            "state = ",
+            $new,
+            ", state_changed_at = CASE WHEN state = ",
+            $new,
+            " THEN state_changed_at ELSE ",
+            $stamp,
+            " END"
+        )
+    };
+}
+
 mod accounts;
 mod credentials;
 mod lock;
@@ -1015,10 +1032,12 @@ impl RecoveryStore {
             [],
         )?;
         tx.execute(
-            "UPDATE accounts SET state = CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END, \
-             state_cause = ?1, lifecycle_generation = lifecycle_generation + 1, revision = revision + 1, \
-             updated_at = ?2, state_changed_at = CASE WHEN state = \
-             CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END THEN state_changed_at ELSE ?2 END",
+            concat!(
+                "UPDATE accounts SET ",
+                state_write!("CASE kind WHEN 'oauth' THEN 'disconnected' ELSE 'unpaired' END", "?2"),
+                ", state_cause = ?1, lifecycle_generation = lifecycle_generation + 1, revision = revision + 1, \
+                 updated_at = ?2"
+            ),
             params![cause, now],
         )?;
         tx.execute(

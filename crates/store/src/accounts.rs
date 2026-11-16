@@ -400,9 +400,11 @@ impl Store {
     ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "UPDATE accounts SET state = ?2, state_cause = ?4, revision = revision + 1, updated_at = ?3, \
-             state_changed_at = CASE WHEN state = ?2 THEN state_changed_at ELSE ?3 END \
-             WHERE id = ?1",
+            concat!(
+                "UPDATE accounts SET ",
+                state_write!("?2", "?3"),
+                ", state_cause = ?4, revision = revision + 1, updated_at = ?3 WHERE id = ?1"
+            ),
             params![id, state, self.now_ms(), cause],
         )?;
         Ok(())
@@ -449,9 +451,11 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
         let updated = tx.execute(
-            "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
-             state_cause = ?4, revision = revision + 1, updated_at = ?3, \
-             state_changed_at = CASE WHEN state = ?2 THEN state_changed_at ELSE ?3 END WHERE id = ?1",
+            concat!(
+                "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, ",
+                state_write!("?2", "?3"),
+                ", state_cause = ?4, revision = revision + 1, updated_at = ?3 WHERE id = ?1"
+            ),
             params![id, AccountState::Disconnected, now, cause],
         )?;
         if updated == 0 {
@@ -740,13 +744,13 @@ static TERM_BY_ID: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {TERM_COLUMNS} FROM accounts WHERE id = ?1"));
 
 pub(crate) fn row_to_term(row: &Row<'_>) -> rusqlite::Result<SubscriptionTerm> {
-    let profile = document_of(row, 7)?;
+    let profile = profile_of(row)?;
     term_of(row, profile.as_ref())
 }
 
 fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
     // Parsed once, so the term's class, its plan and the extras share it.
-    let profile = document_of(row, 7)?;
+    let profile = profile_of(row)?;
     let term = term_of(row, profile.as_ref())?;
     let extras = AccountExtras {
         created_at: row.get(12)?,
@@ -760,9 +764,9 @@ fn row_to_extras(row: &Row<'_>) -> rusqlite::Result<(String, AccountExtras)> {
     Ok((extras.term.account_id.clone(), extras))
 }
 
-/// The JSON document in a text column of a `TERM_COLUMNS` row. A document that does not parse reads as absent.
-fn document_of(row: &Row<'_>, index: usize) -> rusqlite::Result<Option<serde_json::Value>> {
-    let raw: Option<String> = row.get(index)?;
+/// The JSON document in the profile column of a `TERM_COLUMNS` row. A document that does not parse reads as absent.
+fn profile_of(row: &Row<'_>) -> rusqlite::Result<Option<serde_json::Value>> {
+    let raw: Option<String> = row.get(7)?;
     Ok(raw
         .as_deref()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()))
@@ -947,14 +951,15 @@ pub(crate) fn set_state_if_generations_on(
         return Ok(None);
     };
     let revision: Option<i64> = conn
-        .prepare_cached(
-            "UPDATE accounts SET state = ?2, state_cause = ?7, revision = revision + 1, updated_at = ?3, \
-             state_changed_at = CASE WHEN state = ?2 THEN state_changed_at ELSE ?3 END \
+        .prepare_cached(concat!(
+            "UPDATE accounts SET ",
+            state_write!("?2", "?3"),
+            ", state_cause = ?7, revision = revision + 1, updated_at = ?3 \
              WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
              AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
                   OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5)) \
              RETURNING revision",
-        )?
+        ))?
         .query_row(
             params![
                 id,

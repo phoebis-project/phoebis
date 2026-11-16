@@ -8,6 +8,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::accounts::set_state_if_generations_on;
+use crate::registry::json_column;
 use crate::{AccountState, Clock, StateCause, Store, StoreError, LOCK_POISONED};
 
 /// The identity a pin is held under: one conversation of one agent under one key, per model.
@@ -476,7 +477,8 @@ impl Store {
                     mark: mark_from(r)?,
                     entrypoint: none_if_empty(r.get("entrypoint")?),
                     auxiliary_only: r.get("auxiliary_only")?, effort: none_if_empty(r.get("effort")?),
-                    ended: r.get("ended")?, thinking_sums: sums_from(r)?,
+                    ended: r.get("ended")?,
+                    thinking_sums: json_column(r, r.as_ref().column_index("thinking_sums")?)?,
                 }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             resolutions: all_resolutions(&tx)?,
@@ -1029,19 +1031,6 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
         serde_json::to_string(&pin.thinking_sums)?
     ])?;
     Ok(())
-}
-
-/// The pin's thinking sums from their JSON object. A text that does not parse fails the row's read.
-fn sums_from(r: &rusqlite::Row<'_>) -> rusqlite::Result<BTreeMap<String, u64>> {
-    let column = r.as_ref().column_index("thinking_sums")?;
-    let text: String = r.get(column)?;
-    serde_json::from_str(&text).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            column,
-            rusqlite::types::Type::Text,
-            Box::new(error),
-        )
-    })
 }
 
 /// An optional pin column read back: the write stores `None` as the empty text, since the column is `NOT NULL`.

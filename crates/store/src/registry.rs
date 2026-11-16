@@ -818,7 +818,7 @@ fn stamp_subject(tx: &Transaction<'_>, table: &str, id: &str, at: i64) -> Result
 }
 
 /// A JSON text column decoded as its row is read: a malformed value fails the read of its row, as an unknown word does.
-fn json_column<T: serde::de::DeserializeOwned>(
+pub(crate) fn json_column<T: serde::de::DeserializeOwned>(
     r: &rusqlite::Row<'_>,
     idx: usize,
 ) -> rusqlite::Result<T> {
@@ -841,7 +841,7 @@ fn json_text<T: serde::de::DeserializeOwned>(raw: &str, idx: usize) -> rusqlite:
     })
 }
 
-/// The 36 pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
+/// The pool columns the insert and the update write, in the order `pool_params!` binds them. `POOL_SELECT` reads
 /// them in this order too, so `row_to_pool` indexes each column by its bind.
 macro_rules! pool_columns {
     () => {
@@ -874,8 +874,7 @@ macro_rules! guardrail_params {
     };
 }
 
-/// The binds `?1` to `?36` the pool insert and the pool update share, in their column order, then each statement's
-/// own tail.
+/// The binds the pool insert and the pool update share, in their column order, then each statement's own tail.
 macro_rules! pool_params {
     ($row:ident, $($tail:expr),+ $(,)?) => {
         params![
@@ -1032,16 +1031,10 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = self.now_ms();
         let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::Pool, &row.id)?;
-        tx.execute(
-            concat!(
-                "INSERT INTO pools (",
-                pool_columns!(),
-                ", created_at, updated_at, incarnation) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?37, ?38)"
-            ),
-            pool_params!(row, now, incarnation as i64),
-        )
-        .map_err(|error| create_failure(&tx, "pools", &row.id, error.into(), StoreError::from))?;
+        tx.execute(&POOL_INSERT, pool_params!(row, now, incarnation as i64))
+            .map_err(|error| {
+                create_failure(&tx, "pools", &row.id, error.into(), StoreError::from)
+            })?;
         record_change(
             &tx,
             now,
@@ -1541,7 +1534,6 @@ impl Store {
             incarnation,
             row.lifecycle_generation,
             None,
-            None,
             bundle,
             crate::credentials::CommitKind::Pairing,
             at,
@@ -1578,13 +1570,15 @@ impl Store {
         let (canceled, ends_at) = u.cancellation.map(Cancellation::stored_pair).unzip();
         let (state, cause) = u.state.unzip();
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
-             state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
-             canceled = COALESCE(?8, canceled), \
-             subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at ELSE ?9 END, \
-             revision = revision + 1, updated_at = ?4, \
-             state_changed_at = CASE WHEN ?3 IS NULL OR ?3 = state THEN state_changed_at ELSE ?4 END \
-             WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
+            concat!(
+                "UPDATE accounts SET label = ?2, ",
+                state_write!("COALESCE(?3, state)", "?4"),
+                ", state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
+                 canceled = COALESCE(?8, canceled), \
+                 subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at ELSE ?9 END, \
+                 revision = revision + 1, updated_at = ?4 \
+                 WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6"
+            ),
             params![
                 u.id,
                 u.label,
@@ -2063,8 +2057,24 @@ const POOL_SELECT: &str = concat!(
     ", created_at, updated_at, incarnation FROM pools"
 );
 
+/// Built from `pool_columns!` as `POOL_UPDATE` is, so a column added to the macro needs no bind numbered by hand.
+static POOL_INSERT: LazyLock<String> = LazyLock::new(|| {
+    let count = pool_columns!().split(',').count();
+    let values = (1..=count)
+        .map(|bind| format!("?{bind}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "INSERT INTO pools ({}, created_at, updated_at, incarnation) VALUES ({values}, ?{stamp}, ?{stamp}, ?{incarnation})",
+        pool_columns!(),
+        stamp = count + 1,
+        incarnation = count + 2,
+    )
+});
+
 /// Built from `pool_columns!`, so each column after `id` takes the number `pool_params!` binds it at, from `?2`.
 static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
+    let count = pool_columns!().split(',').count();
     let set = pool_columns!()
         .split(',')
         .map(str::trim)
@@ -2074,7 +2084,10 @@ static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "UPDATE pools SET {set}, updated_at = ?37 WHERE id = ?1 AND updated_at = ?38 AND incarnation = ?39"
+        "UPDATE pools SET {set}, updated_at = ?{stamp} WHERE id = ?1 AND updated_at = ?{expected} AND incarnation = ?{incarnation}",
+        stamp = count + 1,
+        expected = count + 2,
+        incarnation = count + 3,
     )
 });
 
@@ -2143,8 +2156,8 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         model_rules: json_column(r, 7)?,
         keepalive_json: r.get(8)?,
         body_capture_hours: r.get(9)?,
-        created_at: r.get(36)?,
-        updated_at: r.get(37)?,
+        created_at: r.get("created_at")?,
+        updated_at: r.get("updated_at")?,
         prefer_subscription: r.get(10)?,
         shedding: Shedding {
             shed_cap: r.get(11)?,
@@ -2178,7 +2191,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(26)? as u64,
         },
         auto_mode_server: r.get(27)?,
-        incarnation: r.get::<_, i64>(38)? as u64,
+        incarnation: r.get::<_, i64>("incarnation")? as u64,
     })
 }
 

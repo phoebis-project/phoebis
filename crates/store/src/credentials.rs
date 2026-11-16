@@ -100,10 +100,10 @@ pub struct NewBundle {
 }
 
 /// The commit that writes a bundle, which decides whether the stored end of the refresh token outlives a bundle
-/// that names none.
+/// that names none. A refresh carries the attempt the commit resolves, so a pairing cannot name one.
 pub(crate) enum CommitKind {
     Pairing,
-    Refresh,
+    Refresh { attempt_id: Option<u64> },
 }
 
 /// How a refresh attempt settles. A failure's `cause` is its class (the token endpoint's code or status, or the step
@@ -634,9 +634,8 @@ impl Store {
             incarnation,
             lifecycle_generation,
             expected_generation,
-            attempt_id,
             bundle,
-            CommitKind::Refresh,
+            CommitKind::Refresh { attempt_id },
             self.now_ms(),
         )?;
         tx.commit()?;
@@ -669,7 +668,6 @@ impl Store {
             incarnation,
             lifecycle_generation,
             expected_generation,
-            None,
             bundle,
             CommitKind::Pairing,
             now,
@@ -713,7 +711,6 @@ impl Store {
         incarnation: u64,
         lifecycle_generation: u64,
         expected_generation: Option<u64>,
-        attempt_id: Option<u64>,
         bundle: &NewBundle,
         kind: CommitKind,
         now: i64,
@@ -765,7 +762,7 @@ impl Store {
         };
         let refresh_expires_at = match kind {
             CommitKind::Pairing => bundle.refresh_expires_at,
-            CommitKind::Refresh => bundle
+            CommitKind::Refresh { .. } => bundle
                 .refresh_expires_at
                 .or(existing.as_ref().and_then(|(_, _, _, end)| *end)),
         };
@@ -816,14 +813,20 @@ impl Store {
             params![
                 account_id,
                 now,
-                attempt_id.map(|id| id as i64),
+                match kind {
+                    CommitKind::Refresh { attempt_id } => attempt_id.map(|id| id as i64),
+                    CommitKind::Pairing => None,
+                },
                 superseded.word(),
                 superseded.detail(),
                 superseded.cause()
             ],
         )?;
 
-        if let Some(id) = attempt_id {
+        if let CommitKind::Refresh {
+            attempt_id: Some(id),
+        } = kind
+        {
             // Scoped by account_id, not just id: an attempt_id that belongs to another account must not
             // be resolved by this commit, even by accident.
             let committed = AttemptOutcome::Committed;
