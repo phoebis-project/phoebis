@@ -547,6 +547,38 @@ async fn a_weekly_windows_runway_runs_to_its_reset_past_the_five_hour_horizon() 
 }
 
 #[tokio::test]
+async fn a_weekly_runway_past_the_accounts_end_reads_null_with_the_end_as_its_horizon() {
+    // Every pin on the account burns a tenth of the week per hour, whatever its tokens.
+    let share = SharePricer::default()
+        .with_rate(|window, _, _, _, _, _| (window == SEVEN_DAY).then_some(0.1 / 3_600.0));
+    let mut r = rig(RigSpec {
+        accounts: vec![oauth("a", "sk-ant-oat01-AAAA", 0)],
+        router: RouterConfig {
+            share,
+            ..RouterConfig::default()
+        },
+        tier: Some(TIER),
+        ..RigSpec::default()
+    })
+    .await;
+    let app = companion_router(r.engine.clone());
+    cancel(&r, "a", NOW + 3 * HOUR_MS);
+    r.h.router.reload().await.unwrap();
+    r.observe("main").await;
+    read_window(&r, "a", SEVEN_DAY, 0.4, NOW + 24 * HOUR_MS).await;
+    let answer = get(&app, Some(SESSION), Some(KEY)).await;
+    let week = &answer.body["accounts"][0]["windows"][SEVEN_DAY];
+    // 0.6 of the week left to the weekly ceiling of 1.0 at 0.1 an hour is 6 hours, past the end three hours out and
+    // inside the reset a day out, so the end is the window's wall and the runway reaches it first.
+    assert_eq!(
+        (week["runway_minutes"].clone(), week["horizon_at"].clone()),
+        (json!(null), json!("1970-01-01T03:16:40Z")),
+        "{}",
+        answer.text
+    );
+}
+
+#[tokio::test]
 async fn a_pins_runway_reads_the_routers_milliseconds_as_whole_minutes() {
     // Every pin on the account burns a tenth of the week per hour, whatever its tokens.
     let share = SharePricer::default()
