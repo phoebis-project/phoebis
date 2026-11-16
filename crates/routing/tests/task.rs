@@ -18178,6 +18178,97 @@ async fn a_move_onto_an_id_deleted_and_created_again_prices_none_of_the_thinking
 }
 
 #[tokio::test]
+async fn a_failovers_landing_hands_on_no_thinking_of_a_holder_that_left_while_its_row_waited() {
+    // s1 holds 40,000 tokens of a's thinking when a failover takes its pin off a, and a is deleted and created again
+    // before the landing, so no purge reads the waiting row. The bound pair of b and c makes the pair of a and b read
+    // bound, and c spent keeps both selections off c.
+    let store = thinking_store(&["a", "b", "c"], &[("b", "c", true)]);
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "a", 1, 10.0)], &now).await;
+    handle.report(windows("a", 0.3, 0.1, AT)).await;
+    handle.report(windows("b", 0.3, 0.1, AT)).await;
+    handle.report(windows("c", 1.0, 0.3, AT)).await;
+    handle.samples().await.unwrap();
+    handle
+        .report(Report::PinInvalidated {
+            account_id: "a".into(),
+            pin: session_pin(&handle, "s1").await,
+            mark: None,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    store.delete_account("a", "test").unwrap();
+    store
+        .insert_account(&AccountRow::for_tests("a", AccountKind::Oauth))
+        .unwrap();
+    with_tier(&store, "a");
+    store
+        .set_pool_members(
+            "p",
+            &["a", "b", "c"]
+                .iter()
+                .enumerate()
+                .map(|(priority, id)| MemberWrite {
+                    account_id: id.to_string(),
+                    priority: priority as u32,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                })
+                .collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    let landing = SelectRequest {
+        attempted: vec!["a".into()],
+        ..turn_of(&handle, "s1", "main", SONNET, AT)
+    };
+    assert_eq!(
+        landed_on(handle.select(landing).await.unwrap()).0,
+        "b",
+        "the failover lands the session on b"
+    );
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            120_000,
+            Some(10_000),
+            None,
+        ))
+        .await;
+    let later = AT + 60_000;
+    now.store(later, Ordering::SeqCst);
+    let Report::Sample {
+        account_id,
+        sample,
+        source_request_id,
+        ..
+    } = windows("a", 0.1, 0.1, later)
+    else {
+        unreachable!("a usage sample")
+    };
+    handle
+        .report(Report::Sample {
+            account_id,
+            sample,
+            incarnation: 2,
+            source_request_id,
+        })
+        .await;
+    handle.report(windows("b", 1.0, 0.3, later)).await;
+    handle.samples().await.unwrap();
+    let (account, booked) =
+        spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, later)).await;
+    assert_eq!(account, "a");
+    assert!(
+        close(booked, 0.011),
+        "120,000 less b's 10,000, and nothing for a's first holder: {booked:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_rounds_record_states_the_rewrite_of_a_pin_whose_pair_reads_bound_at_the_smaller_size() {
     let store = averaged(thinking_store(&["a", "b"], &[("a", "b", true)]));
     // The record's figure reads the pricer's Pro-week equivalent: a ten-millionth per cache-write token.

@@ -988,17 +988,24 @@ pub(crate) fn zeroes_sums(request: &SelectRequest) -> bool {
     request.context_compacted && !request.probe
 }
 
-/// The thinking sums a selection writes on the session's row from the row it stood on, each entry at zero where
-/// `zeroes_sums` reads the request.
-pub(crate) fn handed_sums(row: &PinRow, request: &SelectRequest) -> BTreeMap<String, ThinkingSum> {
-    if zeroes_sums(request) {
-        row.thinking_sums
-            .iter()
-            .map(|(account, sum)| (account.clone(), ThinkingSum { tokens: 0, ..*sum }))
-            .collect()
-    } else {
-        row.thinking_sums.clone()
-    }
+/// The thinking sums a selection writes on the session's row from the row it stood on: each entry whose holder
+/// `snapshot` still carries, at zero where `zeroes_sums` reads the request. A failover's row and a deleted account's
+/// trace wait outside the state, where the purge's pass does not walk, so the hand-over drops a gone holder's sum
+/// itself.
+pub(crate) fn handed_sums(
+    row: &PinRow,
+    request: &SelectRequest,
+    snapshot: &RegistrySnapshot,
+) -> BTreeMap<String, ThinkingSum> {
+    let zeroed = zeroes_sums(request);
+    row.thinking_sums
+        .iter()
+        .filter(|(account, sum)| snapshot.holder(account, sum.incarnation).is_some())
+        .map(|(account, sum)| {
+            let tokens = if zeroed { 0 } else { sum.tokens };
+            (account.clone(), ThinkingSum { tokens, ..*sum })
+        })
+        .collect()
 }
 
 /// The rewrite a selection prices for the pin's next write: its last context, or the body's estimate for a fresh
@@ -2786,6 +2793,7 @@ fn run(
         };
         let row = fresh_pin(
             request,
+            snapshot,
             session,
             epoch,
             chosen,
@@ -2903,10 +2911,12 @@ fn replace_expired(
 /// a move takes off its source, or a failover or the purge of a deleted account took off its account, whose burn
 /// averages, the classifier copy's model and the last prompt the new row carries, so the destination's projection
 /// counts the pin from the moment it lands, the copy keeps its price and a later move prices its rewrite from a figure.
-/// `replaced` is any row of the pin the placement replaces, `moving` among them, whose thinking sums the new row
-/// carries.
+/// `replaced` is any row of the pin the placement replaces, `moving` among them, whose thinking sums of the holders
+/// `snapshot` carries the new row takes on.
+#[allow(clippy::too_many_arguments)]
 fn fresh_pin(
     request: &SelectRequest,
+    snapshot: &RegistrySnapshot,
     session: &str,
     epoch: u64,
     chosen: &Candidate,
@@ -2956,7 +2966,7 @@ fn fresh_pin(
         effort: request.effort.clone(),
         ended: false,
         thinking_sums: replaced
-            .map(|r| handed_sums(r, request))
+            .map(|r| handed_sums(r, request, snapshot))
             .unwrap_or_default(),
     };
     stamp_hashes(&mut row, request);
