@@ -8,7 +8,7 @@ use std::sync::Arc;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, CooldownScope,
     OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, ReturnToPlan,
-    SessionPlacement, ShedStamp, Strategy, SubagentPlacement, WarmSessions,
+    SessionPlacement, ShedStamp, Strategy, SubagentPlacement, ThinkingSum, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -961,7 +961,7 @@ fn prompt_size(
     }
     match bound_destination(state, pin, destination) {
         Some(destination) => {
-            let sum = |account: &str| pin.thinking_sums.get(account).copied().unwrap_or(0);
+            let sum = |account: &str| pin.thinking_sums.get(account).map_or(0, |sum| sum.tokens);
             pin.last_input_tokens
                 .saturating_add(sum(destination))
                 .saturating_sub(sum(&pin.account_id))
@@ -990,11 +990,11 @@ pub(crate) fn zeroes_sums(request: &SelectRequest) -> bool {
 
 /// The thinking sums a selection writes on the session's row from the row it stood on, each entry at zero where
 /// `zeroes_sums` reads the request.
-pub(crate) fn handed_sums(row: &PinRow, request: &SelectRequest) -> BTreeMap<String, u64> {
+pub(crate) fn handed_sums(row: &PinRow, request: &SelectRequest) -> BTreeMap<String, ThinkingSum> {
     if zeroes_sums(request) {
         row.thinking_sums
-            .keys()
-            .map(|account| (account.clone(), 0))
+            .iter()
+            .map(|(account, sum)| (account.clone(), ThinkingSum { tokens: 0, ..*sum }))
             .collect()
     } else {
         row.thinking_sums.clone()
@@ -2146,7 +2146,7 @@ fn run(
         let as_written = |mut row: PinRow| {
             if zeroes_sums(request) {
                 for sum in row.thinking_sums.values_mut() {
-                    *sum = 0;
+                    sum.tokens = 0;
                 }
             }
             row
@@ -5894,8 +5894,11 @@ pub(crate) fn move_read(
             now,
         )
     };
-    let dropped_thinking_tokens = bound_destination(state, pin, destination)
-        .map(|_| pin.thinking_sums.get(&pin.account_id).copied().unwrap_or(0));
+    let dropped_thinking_tokens = bound_destination(state, pin, destination).map(|_| {
+        pin.thinking_sums
+            .get(&pin.account_id)
+            .map_or(0, |sum| sum.tokens)
+    });
     // An output share of zero weighs the drop at nothing, so the read answers none there: the pin stays in the first
     // part of the cold group, and no zero reaches `move_drop_size` or the order's division.
     let weighed = dropped_thinking_tokens
@@ -6866,7 +6869,7 @@ fn renew(
     }
     if zeroes_sums(request) {
         for sum in renewed.thinking_sums.values_mut() {
-            *sum = 0;
+            sum.tokens = 0;
         }
     }
     let renewed = renewed.clone();

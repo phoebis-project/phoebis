@@ -19,7 +19,7 @@ use phoebis_store::{
     Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, ModelWeekHourRow,
     OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RegistryLoad,
     ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding, SlowDown,
-    Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow, WarmSessions,
+    Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow, ThinkingSum, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -28150,7 +28150,13 @@ fn output_pricer(ratio: u64) -> SharePricer {
 fn thinking_pin(session: &str, burn: f64, warm: bool, prompt: u64, own: u64) -> PinRow {
     PinRow {
         last_input_tokens: prompt,
-        thinking_sums: BTreeMap::from([("a".to_string(), own)]),
+        thinking_sums: BTreeMap::from([(
+            "a".to_string(),
+            ThinkingSum {
+                incarnation: 1,
+                tokens: own,
+            },
+        )]),
         ..burning(session, "a", burn, warm, T)
     }
 }
@@ -30510,7 +30516,14 @@ fn the_pin_that_replaces_a_row_idle_past_the_ttl_carries_the_row_s_thinking_sums
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
-    let sums = BTreeMap::from([("a".to_string(), 40_000), ("b".to_string(), 5_000)]);
+    let sum = |tokens| ThinkingSum {
+        incarnation: 1,
+        tokens,
+    };
+    let sums = BTreeMap::from([
+        ("a".to_string(), sum(40_000)),
+        ("b".to_string(), sum(5_000)),
+    ]);
     let mut st = loaded(vec![PinRow {
         thinking_sums: sums.clone(),
         ..seeded_pin("s1", "a", T)
@@ -30522,7 +30535,7 @@ fn the_pin_that_replaces_a_row_idle_past_the_ttl_carries_the_row_s_thinking_sums
         d.record.pin.as_ref().map(|pin| pin.found),
         Some("expired_idle")
     );
-    let written: Vec<&BTreeMap<String, u64>> = d
+    let written: Vec<&BTreeMap<String, ThinkingSum>> = d
         .writes
         .iter()
         .filter_map(|write| match write {

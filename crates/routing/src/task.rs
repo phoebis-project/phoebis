@@ -11,6 +11,7 @@ use phoebis_oauth::{Clock, LandedMark, UsageSnapshot};
 use phoebis_store::{
     AccountState, Cancellation, CooldownRow, CooldownScope, PinBurn, PinKey, PinRow, PoolRow,
     RegistryLoad, RekeyWrite, RoutingLoad, RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
+    ThinkingSum,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -2202,7 +2203,7 @@ pub fn spawn(
     let load_counts = LoadCounts::of(&load, &initial, now);
     let mut state = RoutingState::from_load(load);
     state.drop_usage_based_overage(&initial);
-    state.drop_absent_thinking_sums(&initial);
+    state.drop_thinking_sums_of_gone_holders(&initial);
     let snapshot = Arc::new(RwLock::new(initial));
     // A restored wall keeps the anchor its stored pair gives it: without the seed every within-margin head after a
     // restart would move the clamp's anchor onto its own instant and hold the account spent past the window's length.
@@ -4426,12 +4427,20 @@ impl Task {
                                 );
                                 renewed.last_input_tokens = usage.prompt_tokens();
                                 if let Some(tokens) = thinking_tokens.filter(|tokens| *tokens > 0) {
+                                    // A sum of the id's previous holder holds none of this holder's blocks, so
+                                    // the holder's own entry starts again.
                                     match renewed.thinking_sums.get_mut(&renewed.account_id) {
-                                        Some(sum) => *sum += tokens,
-                                        None => {
-                                            renewed
-                                                .thinking_sums
-                                                .insert(renewed.account_id.clone(), tokens);
+                                        Some(sum) if sum.incarnation == renewed.incarnation => {
+                                            sum.tokens += tokens;
+                                        }
+                                        _ => {
+                                            renewed.thinking_sums.insert(
+                                                renewed.account_id.clone(),
+                                                ThinkingSum {
+                                                    incarnation: renewed.incarnation,
+                                                    tokens,
+                                                },
+                                            );
                                         }
                                     }
                                 }
@@ -5052,8 +5061,7 @@ impl Task {
         let held = stood_on
             .thinking_sums
             .get(&stood_on.account_id)
-            .copied()
-            .unwrap_or(0);
+            .map_or(0, |sum| sum.tokens);
         if moved && held > 0 {
             self.observations.insert(
                 key.clone(),

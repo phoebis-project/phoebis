@@ -20,7 +20,7 @@ use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
     CompanionPermissions, CooldownRow, CooldownScope, MemberWrite, ModelRule, OveragePolicy,
     OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding,
-    StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow, WindowSetRow,
+    StateCause, StorageKey, Store, Strategy, SubscriptionRow, ThinkingSum, WindowRow, WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -17682,11 +17682,15 @@ async fn a_placement_that_releases_the_pin_off_a_cooled_account_hands_its_sums_o
 #[tokio::test]
 async fn a_start_drops_a_loaded_pins_sum_of_an_account_the_registry_no_longer_holds() {
     let store = thinking_store(&["a", "b", "c"], &[]);
+    let sum = |tokens| ThinkingSum {
+        incarnation: 1,
+        tokens,
+    };
     store
         .upsert_pin(&PinRow {
             thinking_sums: std::collections::BTreeMap::from([
-                ("a".to_string(), 40_000),
-                ("c".to_string(), 5_000),
+                ("a".to_string(), sum(40_000)),
+                ("c".to_string(), sum(5_000)),
             ]),
             ..stored_pin(&store, "s1", "a", 1, 10.0)
         })
@@ -17697,7 +17701,7 @@ async fn a_start_drops_a_loaded_pins_sum_of_an_account_the_registry_no_longer_ho
     let pin = handle.pins().await.unwrap().pop().expect("s1's pin");
     assert_eq!(
         pin.thinking_sums,
-        std::collections::BTreeMap::from([("a".to_string(), 40_000)])
+        std::collections::BTreeMap::from([("a".to_string(), sum(40_000))])
     );
 }
 
@@ -18092,6 +18096,84 @@ async fn an_answer_behind_the_swap_that_gave_the_left_id_a_new_holder_teaches_th
     assert!(
         close(booked, 0.01),
         "b's new holder has no pair with a: the whole 100,000: {booked:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_move_onto_an_id_deleted_and_created_again_prices_none_of_the_thinking_its_previous_holder_produced(
+) {
+    // s1 holds 40,000 tokens of thinking from b's first holder and answers once on a. The bound pair of a and c makes
+    // the pair of a and b read bound, and c spent leaves b's new holder the move's one destination.
+    let store = thinking_store(&["a", "b", "c"], &[("a", "c", true)]);
+    store
+        .upsert_pin(&PinRow {
+            thinking_sums: std::collections::BTreeMap::from([(
+                "b".to_string(),
+                ThinkingSum {
+                    incarnation: 1,
+                    tokens: 40_000,
+                },
+            )]),
+            ..stored_pin(&store, "s1", "a", 1, 10.0)
+        })
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), priced_config()).unwrap();
+    handle
+        .report(answered(
+            session_pin(&handle, "s1").await,
+            100_000,
+            Some(20_000),
+            None,
+        ))
+        .await;
+    store.delete_account("b", "test").unwrap();
+    store
+        .insert_account(&AccountRow::for_tests("b", AccountKind::Oauth))
+        .unwrap();
+    with_tier(&store, "b");
+    store
+        .set_pool_members(
+            "p",
+            &["a", "b", "c"]
+                .iter()
+                .enumerate()
+                .map(|(priority, id)| MemberWrite {
+                    account_id: id.to_string(),
+                    priority: priority as u32,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                })
+                .collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    handle.report(windows("a", 1.0, 0.3, AT)).await;
+    handle.report(windows("c", 1.0, 0.3, AT)).await;
+    let Report::Sample {
+        account_id,
+        sample,
+        source_request_id,
+        ..
+    } = windows("b", 0.1, 0.1, AT)
+    else {
+        unreachable!("a usage sample")
+    };
+    handle
+        .report(Report::Sample {
+            account_id,
+            sample,
+            incarnation: 2,
+            source_request_id,
+        })
+        .await;
+    handle.samples().await.unwrap();
+    let (account, booked) = spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT)).await;
+    assert_eq!(account, "b");
+    assert!(
+        close(booked, 0.008),
+        "100,000 less a's 20,000, and nothing for b's first holder: {booked:?}"
     );
 }
 

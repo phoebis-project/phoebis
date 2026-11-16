@@ -2334,12 +2334,13 @@ impl RoutingState {
             .retain(|account_id, _| !snapshot.usage_based(account_id));
     }
 
-    /// Drops each loaded pin's thinking sum of an account the registry no longer holds: no move can land there to
-    /// read it again.
-    pub fn drop_absent_thinking_sums(&mut self, snapshot: &RegistrySnapshot) {
+    /// Drops each pin's thinking sum whose holder `snapshot` no longer carries: the id left the registry, or it was
+    /// deleted and created again since the sum was summed, and a new holder produced none of those blocks. The pass
+    /// writes nothing: the row's next write carries the map, and a start drops a stored sum of a gone holder again.
+    pub fn drop_thinking_sums_of_gone_holders(&mut self, snapshot: &RegistrySnapshot) {
         for pin in self.pins.values_mut() {
             pin.thinking_sums
-                .retain(|account_id, _| snapshot.account(account_id).is_some());
+                .retain(|account_id, sum| snapshot.holder(account_id, sum.incarnation).is_some());
         }
     }
 
@@ -4278,6 +4279,7 @@ impl RoutingState {
             });
         }
         self.thinking_bindings.retain(|_, pairs| !pairs.is_empty());
+        self.drop_thinking_sums_of_gone_holders(snapshot);
         // Unlike the rows above, the hours take a written cut: the task writes this age cut beside the purge, and a
         // previous holder's hours cascade with its account.
         let oldest = oldest_kept_hour(now);

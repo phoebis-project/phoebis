@@ -126,7 +126,15 @@ pub struct PinRow {
     /// agent the companion released. The pool's keep leaves such a pin out of every figure until that request.
     pub ended: bool,
     /// The thinking tokens each account produced for the session on the pin's model, by account id.
-    pub thinking_sums: BTreeMap<String, u64>,
+    pub thinking_sums: BTreeMap<String, ThinkingSum>,
+}
+
+/// One account's entry in a pin's thinking sums. An id is reusable, and a holder created under it later produced none
+/// of these blocks, so the entry names the incarnation it was summed under.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ThinkingSum {
+    pub incarnation: u64,
+    pub tokens: u64,
 }
 
 impl PinRow {

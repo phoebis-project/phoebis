@@ -7120,7 +7120,13 @@ async fn a_session_row_and_its_line_answer_the_size_and_the_drop_a_round_reads_a
             model: model.into(),
             lane: phoebis_routing::lane_key(model, "standard", "none", "-"),
             last_input_tokens: prompt,
-            thinking_sums: std::collections::BTreeMap::from([("business".to_string(), own)]),
+            thinking_sums: std::collections::BTreeMap::from([(
+                "business".to_string(),
+                phoebis_store::ThinkingSum {
+                    incarnation: 1,
+                    tokens: own,
+                },
+            )]),
             ..burning_opus_pin(session, "business", generation, now, 100.0, 145.0)
         }
     };
