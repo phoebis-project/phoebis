@@ -1560,6 +1560,31 @@ async fn an_account_that_reached_its_wall_under_a_ceiling_holds_the_condition_wi
     );
 }
 
+/// `direct`, the API-key member of `main`, is no live subject of an account's conditions, which take OAuth accounts
+/// alone, so its row reads the values of no pool.
+#[tokio::test]
+async fn a_wall_row_with_no_pool_on_an_api_key_member_reads_no_setting_values() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    routing_event(
+        &rig,
+        NOW - HOUR,
+        "window_spent",
+        "direct",
+        None,
+        json!({ "window": "five_hour", "source": "head" }),
+    );
+    fold_at(&rig, NOW).await;
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::WallReached, "direct").unwrap();
+    assert_eq!(
+        (held.holds, held.detail.get("setting_values")),
+        (true, None),
+        "the wall holds and names its settings with no values: {}",
+        held.detail
+    );
+}
+
 #[tokio::test]
 async fn an_account_slowed_past_twice_its_pools_threshold_in_the_day_holds_the_condition_on_that_account(
 ) {
