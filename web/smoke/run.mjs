@@ -19426,7 +19426,8 @@ await forView('/analytics', async () => {
 
 // Every filter control moves the window's end, and a custom range that has ended keeps its window while the clock runs
 // on, so there only the retry's generation sends the reads again. The account rollups on the Accounts tab and the burn
-// read on the Burn tab read the window alone, so a read of either is a moved end.
+// read on the Burn tab read the window alone, so a read of either is a moved end. The group-by stands disabled on the
+// Accounts tab, so its change is read on Traffic, through the page's series read under the new grouping.
 await forView('/analytics', async () => {
   const at14 = Date.UTC(2026, 8, 16, 14);
   // 12:00 to the end of the window the popover opens on, the mount's instant, which Apply keeps: an hour bucket at
@@ -19442,6 +19443,7 @@ await forView('/analytics', async () => {
   let page = await mount('/analytics#accounts', { now: CLOCK_ORIGIN });
   let spy = countCalls('listAccountRollups');
   let endOf = ([, to]) => to;
+  let only = () => true;
   let at = CLOCK_ORIGIN;
   const moved = [];
   const act = async (name, change) => {
@@ -19450,17 +19452,12 @@ await forView('/analytics', async () => {
     const before = spy.calls.length;
     await change();
     await page.settle();
-    const ends = spy.calls.slice(before).map(endOf);
+    const ends = spy.calls.slice(before).filter(only).map(endOf);
     if (JSON.stringify(ends) !== JSON.stringify([new Date(at).toISOString()])) moved.push(`${name}: ${ends.join(',') || 'no read'}`);
   };
   await act('a Key pick', async () => {
     await pick(page, 'Key', 'desktop');
     await closeBoxes(page);
-  });
-  await act('Group by', async () => {
-    const select = groupBySelect(page);
-    if (select) Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
-    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
   await act('Include probes', async () => addFilter(page, 'Include probes'));
   // The clock moves first, so a flag chosen again that slipped past the no-op guard would move the end and read.
@@ -19482,6 +19479,18 @@ await forView('/analytics', async () => {
     if (!select) return;
     Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
     select.dispatchEvent(new window.Event('change', { bubbles: true }));
+  });
+  spy.restore();
+  page.unmount();
+  // The tab reads the speed series beside the page's own, and the new grouping tells the page's apart.
+  page = await mount('/analytics', { now: at });
+  spy = countCalls('getAnalyticsSeries');
+  only = ([q]) => q?.groupBy === 'model';
+  endOf = ([q]) => q?.to;
+  await act('the group-by on the Traffic tab', async () => {
+    const select = groupBySelect(page);
+    if (select) Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set.call(select, 'model');
+    select?.dispatchEvent(new window.Event('change', { bubbles: true }));
   });
   results.push({ name: handlersCheck, ok: moved.length === 0, missing: moved });
   spy.restore();
@@ -20037,7 +20046,7 @@ await forView('/analytics', async () => {
     results.push({
       name: sessionCheck,
       ok:
-        subtitleOf(scoped) === `${SUBTITLE}. 1 request presented a fallback token. The session filter does not apply here` &&
+        subtitleOf(scoped) === `${SUBTITLE}. 1 request presented a fallback token. The Session filter above does not apply here` &&
         JSON.stringify(countsOf(scoped)) === JSON.stringify([['sonnet-5-5 · cyber', '3'], ['sonnet-4-5 · none', '1'], ['sonnet-4-5 · harmful', '1'], ['sonnet-5-5 · harmful', '1']]) &&
         scopedLinks.length === 4 &&
         scopedLinks.every((l) => l !== null && !('session' in l)),
@@ -22715,7 +22724,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // The Account filter offers the accounts with traffic in range, which `legacy`, the first row, is not among.
     const picked = 'primary';
     const subtitle = () => accountTable()?.querySelector('.card__subtitle')?.textContent?.trim() ?? '';
-    const ignored = 'Totals for the selected range and accounts. The key, pool, model, client and session filters and the probes toggle do not apply here';
+    const totals = 'Totals for the whole hours the range touches and the selected accounts';
     await toggle('Account', picked);
     const narrowed = accountRows();
     const plain = subtitle();
@@ -22725,7 +22734,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await toggle('Account', picked);
     results.push({
       name: '/analytics the accounts section takes the account selection and names the filters it ignores',
-      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === 'Totals for the selected range and accounts' && noted === ignored && JSON.stringify(accountRows()) === JSON.stringify(every),
+      ok: every.length > 1 && JSON.stringify(narrowed) === JSON.stringify([picked]) && plain === totals && noted === `${totals}. The Keys filter above does not apply here` && JSON.stringify(accountRows()) === JSON.stringify(every),
       missing: [`every ${every.join(',')}`, `narrowed ${narrowed.join(',')}`, plain, noted],
     });
     // A session view reads the request log for every other section, while this one keeps the range's rollups,
@@ -22741,7 +22750,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await removeChip(m, 'include probes');
     results.push({
       name: '/analytics the accounts section says the session filter and the probes toggle do not reach it',
-      ok: bySession === ignored && JSON.stringify(sessionRows) === JSON.stringify(every) && byProbes === ignored && subtitle() === 'Totals for the selected range and accounts',
+      ok: bySession === `${totals}. The Session filter above does not apply here` && JSON.stringify(sessionRows) === JSON.stringify(every) && byProbes === `${totals}. The Include probes toggle above does not apply here` && subtitle() === totals,
       missing: [`session ${bySession}`, `rows ${sessionRows.join(',')}`, `probes ${byProbes}`, `after ${subtitle()}`],
     });
   }
@@ -23946,6 +23955,25 @@ await forView('/analytics', async () => {
     };
     results.push({ name, ok: JSON.stringify({ high, low }) === JSON.stringify(want), missing: [`high ${JSON.stringify(high)}`, `low ${JSON.stringify(low)}`] });
   }
+  {
+    // No figure of the Accounts tab or of the Cache warming tab reads the grouping, so the bar's group-by stands
+    // disabled there with the tab's reason, and Traffic, whose tables it splits, keeps it.
+    const name = '/analytics the group-by stands disabled with its reason on the Accounts tab and on the Cache warming tab, and enabled on Traffic';
+    const page = await mount('/analytics', { now: CLOCK_ORIGIN });
+    const traffic = { disabled: groupBySelect(page)?.disabled ?? null };
+    await tab(page, 'Accounts');
+    const accounts = { disabled: groupBySelect(page)?.disabled ?? null, title: groupBySelect(page)?.getAttribute('title') ?? null };
+    await tab(page, 'Cache warming');
+    const warming = { disabled: groupBySelect(page)?.disabled ?? null, title: groupBySelect(page)?.getAttribute('title') ?? null };
+    page.unmount();
+    const want = {
+      traffic: { disabled: false },
+      accounts: { disabled: true, title: 'The Accounts tab draws one line and one row per account' },
+      warming: { disabled: true, title: 'The Cache warming tab draws the total and one row per pool' },
+    };
+    const got = { traffic, accounts, warming };
+    results.push({ name, ok: JSON.stringify(got) === JSON.stringify(want), missing: Object.entries(got).map(([key, value]) => `${key} ${JSON.stringify(value)} against ${JSON.stringify(want[key])}`) });
+  }
 });
 
 await forView('/analytics', async () => {
@@ -24713,7 +24741,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     // from 02:30 to 09:30, inside its first and its last hourly bucket, and the clock stands at 14:30: the fold's 02:00
     // bucket holds its traffic from 02:30 and its 09:00 bucket up to 09:30, both partial, while the route's two cover
     // 02:00 to 03:00 and 09:00 to 10:00 and are whole. A session counts among the filters the rewrites route passes by,
-    // so that card names them.
+    // so that card names the Session filter.
     const name = "/analytics a past session span starting and ending inside an hour notes the folded outcome chart's cut first and last buckets, and Migration rewrites, whole on its route, carries no note";
     const session = requests.find((r) => r.agentId === 'c21e')?.sessionId ?? '';
     const page = await mount(`/analytics?session=${encodeURIComponent(session)}&from=2026-09-16T02:30:00.000Z&to=2026-09-16T09:30:00.000Z`, { now: CLOCK_ORIGIN });
@@ -24722,7 +24750,7 @@ await forView(['/analytics', '/keys', '/pools', '/quota', '/routing-log', '/sess
     page.unmount();
     results.push({
       name,
-      ok: JSON.stringify(read) === JSON.stringify({ outcome: "Per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end", rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The filters above do not apply here' }),
+      ok: JSON.stringify(read) === JSON.stringify({ outcome: "Per bucket, stacked. The first bucket is partial: it holds the traffic from the window's start. The last bucket is partial: it holds the traffic up to the range's end", rewrites: 'Cache-write tokens the first request after a move wrote, per bucket. The Session filter above does not apply here' }),
       missing: [JSON.stringify(read)],
     });
   }

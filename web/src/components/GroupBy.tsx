@@ -19,18 +19,25 @@ export function boundPatterns(text: string): { cut: boolean; text: string } {
 }
 
 export interface GroupByProps<G extends string> {
+  /** Greys the select out with this as its reason, for a view state whose figures no grouping splits. */
+  disabledTitle?: string;
   /** The options in the page's order, the label the select prints, and a title where an option needs a word on itself. */
   options: readonly { label: string; title?: string; value: G }[];
   onChange: (next: G) => void;
+  /** The select's title while it stands enabled: what a grouping splits. */
+  title?: string;
   value: G;
 }
 
-/** `label.row` holding `span.muted` "Group by" and a 32 px Select (aria-label "Group by", class groupby-select, 160 px). */
-export function GroupBy<G extends string>({ onChange, options, value }: GroupByProps<G>): JSX.Element {
+/**
+ * `label.row` holding `span.muted` "Group by" and a 32 px Select (aria-label "Group by", class groupby-select, 160 px).
+ * `disabledTitle` greys the select out under that title, and `title` is its title otherwise.
+ */
+export function GroupBy<G extends string>({ disabledTitle, onChange, options, title, value }: GroupByProps<G>): JSX.Element {
   return (
     <label className="row">
       <span className="muted">Group by</span>
-      <Select aria-label="Group by" value={value} onChange={(e) => onChange(e.target.value as G)} className="groupby-select">
+      <Select aria-label="Group by" value={value} onChange={(e) => onChange(e.target.value as G)} className="groupby-select" disabled={disabledTitle !== undefined} title={disabledTitle ?? title}>
         {options.map((o) => (
           <option key={o.value} value={o.value} title={o.title}>
             {o.label}

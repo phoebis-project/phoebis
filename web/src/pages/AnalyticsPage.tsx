@@ -25,6 +25,7 @@ import { SortControl } from '@/components/SortControl';
 import { accountHref, addressWindow, ANALYTICS_CODEC, analyticsKeysOf, sortDirOf, type AnalyticsAddress, type SortDir } from '@/lib/address';
 import { NO_RESET_IN_RANGE, allowanceRows, fleetFigures, rangeAllowanceSpan, resetInstant, weeklyKeys, weeklyResetsKey, type AllowanceFigure } from '@/lib/allowance';
 import { CONVERSATION_CLASSES, NATIVE_SUBSET, UNIT_SUBSET, analyticsPatch, burnColorOrder, costHeadOf, coveredWindow, dollarsOf, equivalentOrDash, errorRateOf, failureHead, figuredGroups, firstBucketPartial, foldBurn, heldBars, heldHover, heldSpan, isolatedSlots, keptWarmNote, keptWarmTokens, lastBucketPartial, moveLabel, nativeCellOf, nativeFiguresOf, netSaving, niceAxisTop, oneAccountGroupOf, ownShareHint, peakLines, placementCells, placementRungLabel, probeParts, readBurn, scalePoints, sentences, sidesLine, sidesOf, sizedAccounts, slotIndex, slotUnpriced, UNPRICED_TITLE, unpricedNote, upstreamProbes, windowLines, type BurnFigure, type BurnLine, type BurnLineUnit, type BurnRow, type CostFigure, type DollarPosition, type WeekReading } from '@/lib/analytics';
+import { ignoredNote, type AnalyticsControl } from '@/lib/analyticsControls';
 import { bucketSizeFor } from '@/lib/buckets';
 import { CACHE_MISS_REASONS, WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missLabel, missReasonOrder, missShort } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -597,10 +598,9 @@ export function AnalyticsPage() {
   const rowHint = (g: AnalyticsGroup): string | null => (groupBy === 'account' ? hintOf(g.key, g.costShares) : namedAccount === null ? null : hintOf(namedAccount, g.costShares));
   const oneGroup = useMemo(() => (namedAccount === null ? null : oneAccountGroupOf(costTotals, costGroups)), [costGroups, costTotals, namedAccount]);
   const tileHint = namedAccount === null || oneGroup === null ? null : hintOf(namedAccount, oneGroup.costShares);
-  const otherFilters = filters.keyId.length > 0 || filters.poolId.length > 0 || filters.model.length > 0 || a.userAgents.length > 0 || a.clients.length > 0 || sessionId !== null || includeProbes;
-  // The burn route reads the Accounts, Keys and Pools filters with the user agent groups, and the rewrites route the
-  // Accounts and Pools filters.
-  const unfiltered = otherFilters || filters.accountId.length > 0;
+  // The agent stands in force in a session view alone, the one view whose reads send it.
+  const controls: Record<AnalyticsControl, boolean> = { accounts: filters.accountId.length > 0, agent: sessionAgent !== null, clients: a.clients.length > 0, keys: filters.keyId.length > 0, models: filters.model.length > 0, pools: filters.poolId.length > 0, probes: includeProbes, session: sessionId !== null, userAgents: a.userAgents.length > 0 };
+  const inForce = new Set((Object.keys(controls) as AnalyticsControl[]).filter((c) => controls[c]));
   const burnAccount = filters.accountId.length === 1 ? filters.accountId[0] : null;
   // The plan chart sizes its lines by tier where each group holds one account's rows.
   const burnSizes = pageBy === 'account' || burnAccount !== null;
@@ -719,7 +719,7 @@ export function AnalyticsPage() {
           sticky
           update={update}
         >
-          <GroupByControl onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
+          <GroupByControl {...GROUP_BY_TITLES[tab]} onChange={changeGroupBy} options={GROUP_OPTIONS} value={pageBy} />
           {/* A pick reorders the rows the page holds, so it writes the address alone and moves no window's end. */}
           <SortControl disabledTitle={tabKeys.length === 1 ? "This tab's tables keep their own order" : undefined} keys={tabKeys} onChange={rawUpdate} value={{ dir: sort === a.sort ? a.dir : '', sort }} />
           {groupBy === 'user_agent' && <GroupsButton onCommit={commitGroups} value={clientGroups} />}
@@ -767,7 +767,7 @@ export function AnalyticsPage() {
                   answer is stale, so no figure stands under links for filters it was not read for. */}
               <Card
                 title={REFUSAL_CATEGORIES_TITLE}
-                subtitle={sentences(['Answers the upstream refused in range, by model and category, each a request that succeeded', refusalCategories.current === null ? null : `${plural(refusalCategories.current.fallbacks, 'request')} presented a fallback token`, refusalsNote(sessionId !== null)])}
+                subtitle={sentences(['Answers the upstream refused in range, by model and category, each a request that succeeded', refusalCategories.current === null ? null : `${plural(refusalCategories.current.fallbacks, 'request')} presented a fallback token`, ignoredNote('refusals', inForce)])}
               >
                 {refusalCategories.error !== null ? (
                   <ErrorState title="Could not load refusals by category" body={refusalCategories.error} retry={refusalCategories.reload} />
@@ -788,7 +788,7 @@ export function AnalyticsPage() {
                 </LineChart>
               </ChartCard>
 
-              <RewritesCard answer={rewrites.current?.answer ?? null} error={rewrites.error} axis={axis} partial={stampedPartial(rewrites.current, (answer) => answer.points)} unfiltered={unfiltered} />
+              <RewritesCard answer={rewrites.current?.answer ?? null} error={rewrites.error} axis={axis} partial={stampedPartial(rewrites.current, (answer) => answer.points)} inForce={inForce} />
 
               <SpeedCard points={speedPoints} error={speedError} loading={speedLoading} axis={axis} partial={sessionId === null ? stampedPartial(bySpeed.current, (points) => points) : partial} />
 
@@ -803,7 +803,7 @@ export function AnalyticsPage() {
               </Card>
             </div>
             {/* Below the grid at full width, so the four columns read as the table under it does. */}
-            <GuardrailsCard answer={guardrailCounts.current} error={guardrailCounts.error} />
+            <GuardrailsCard answer={guardrailCounts.current} error={guardrailCounts.error} inForce={inForce} />
             <BreakdownTable
               title={`Traffic by ${groupLabel.toLowerCase()}`}
               loading={loading}
@@ -832,7 +832,7 @@ export function AnalyticsPage() {
         )}
 
         {tab === 'burn' && (
-          <Section id="burn" shown={shown} title="Burn" meta={`Tokens, spend and plan share over the range${otherFilters ? BURN_UNFILTERED_NOTE : ''}`}>
+          <Section id="burn" shown={shown} title="Burn" meta={sentences(['Tokens, spend and plan share over the range', ignoredNote('burn', inForce), includeProbes ? null : 'Probe rows are always counted here'])}>
             {/* Each plan card's figure waits on its own scale, read off the cost model's revisions at the burn read's
                 instant, and takes its failure from `burnReadings`. Where the lines are one account's, the week card's
                 reading waits on the tiers that pick their category too. Spend per minute sizes nothing, and neither
@@ -997,11 +997,7 @@ export function AnalyticsPage() {
             )}
             {/* The route reads no session, so a session view has no placements of its own to show. */}
             {sessionId === null && (
-              <PlacementTable
-                error={placements.error}
-                rows={placements.current}
-                unfiltered={filters.accountId.length > 0 || filters.model.length > 0 || a.userAgents.length > 0 || a.clients.length > 0}
-              />
+              <PlacementTable error={placements.error} inForce={inForce} rows={placements.current} />
             )}
           </Section>
         )}
@@ -1163,7 +1159,7 @@ export function AnalyticsPage() {
               allowance={{ answer: unusedAllowance.current, costs: costSettings.data?.subscriptionCosts ?? null, error: unusedAllowance.error ?? costSettings.error }}
               bucketMs={bucketMs}
               error={accountRollups.error}
-              otherFilters={otherFilters}
+              inForce={inForce}
               registry={registry.data}
               rollups={accountRollups.current}
               slotOf={slotOf}
@@ -1202,6 +1198,20 @@ const SECTIONS = [
   { id: 'accounts', label: 'Accounts' },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
+const TABLES_SPLIT = "Splits this tab's tables. Its charts draw the total";
+/**
+ * The group-by's title per tab: what a grouping splits there, or, where no figure of the tab reads the grouping, the
+ * reason the control stands disabled.
+ */
+const GROUP_BY_TITLES: Record<SectionId, { disabledTitle: string } | { title: string }> = {
+  accounts: { disabledTitle: 'The Accounts tab draws one line and one row per account' },
+  burn: { title: "Splits the Burn cards' lines" },
+  cache: { title: TABLES_SPLIT },
+  'cache-warming': { disabledTitle: 'The Cache warming tab draws the total and one row per pool' },
+  cost: { title: "Splits this tab's tables and the Cost by chart" },
+  latency: { title: TABLES_SPLIT },
+  traffic: { title: TABLES_SPLIT },
+};
 
 /** `metaTitle` is the meta line's hover text, such as the estimate's sentence for a marked figure. */
 function Section({ id, title, meta, metaTitle, shown = true, children }: { children: ReactNode; id: SectionId; meta?: string; metaTitle?: string; shown?: boolean; title: string }) {
@@ -2059,7 +2069,6 @@ function CostByGroup({ axis, failure, points, groupBy, groupSlot, loading, parti
   return dollarCard(stack, title, noted(`USD per bucket, stacked, ${UNIT_SUBSET[dollarsOf(unit)]}`, partial));
 }
 
-const UNFILTERED_NOTE = '. The filters above do not apply here';
 const FIRST_PARTIAL_NOTE = "The first bucket is partial: it holds the traffic from the window's start";
 const SUMMED_PARTIAL_NOTE = "The last bucket is partial: it holds the traffic up to the range's end";
 /** A bucket chart's subtitle, with a note for each end bucket that is partial, the first ahead of the last as the chart
@@ -2088,11 +2097,6 @@ function rangeSentenceOf(tab: SectionId, session: boolean, wholeHours: { fromMs:
   if (tab === 'traffic') return `Reads the range itself. ${MIGRATION_REWRITES_TITLE}, ${REFUSAL_CATEGORIES_TITLE} and ${GUARDRAILS_TITLE} read whole hours: ${spanWords(wholeHours)}`;
   return 'Reads the range itself';
 }
-/** The refusals card's note: the session filter, the one filter of the page the refusal route does not read, if set. */
-function refusalsNote(session: boolean): string | null {
-  return session ? 'The session filter does not apply here' : null;
-}
-const BURN_UNFILTERED_NOTE = '. Of the filters above, the Accounts filter and the user agent groups alone apply here';
 type TimeAxis = { axisLine: { stroke: string }; dataKey: 'at'; height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; minTickGap: number; tickFormatter: (v: number) => string; tickLine: false };
 /**
  * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their ticks print the
@@ -2148,7 +2152,7 @@ const fitRank = (fit: string) => (MOVE_FITS.includes(fit) ? MOVE_FITS.indexOf(fi
  */
 const fitColor = (ink: ChartInk, fit: string): string => (fit === 'fits' ? ink.good : fit === 'rewrite_only' ? ink.warning : fit === 'least_bad' ? ink.critical : ink.muted);
 
-function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; partial: PartialEnds; unfiltered: boolean }) {
+function RewritesCard({ answer, axis, error, inForce, partial }: { answer: RewritesAnswer | null; axis: TimeAxis; error: string | null; inForce: ReadonlySet<AnalyticsControl>; partial: PartialEnds }) {
   const ink = useChartInk();
   const loading = answer === null;
   const data = useMemo(() => (answer?.points ?? []).map((p) => ({ at: Date.parse(p.at), rewriteTokens: p.rewriteTokens })), [answer]);
@@ -2163,7 +2167,7 @@ function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: Re
   return (
     <ChartCard
       title={MIGRATION_REWRITES_TITLE}
-      subtitle={noted(`Cache-write tokens the first request after a move wrote, per bucket${unfiltered ? UNFILTERED_NOTE : ''}`, partial)}
+      subtitle={noted(sentences(['Cache-write tokens the first request after a move wrote, per bucket', ignoredNote('rewrites', inForce)]), partial)}
       failure={failed(error)}
       loading={loading}
       legend={[{ color: ink.series[1], label: 'Rewrite tokens', value: fmtCompact(total) }]}
@@ -2203,7 +2207,7 @@ function RewritesCard({ answer, axis, error, partial, unfiltered }: { answer: Re
               })}
             </ul>
           )}
-          {answer && <HeldChart answer={answer} axis={axis} />}
+          {answer && <HeldChart answer={answer} axis={axis} note={ignoredNote('rewritesHeld', inForce)} />}
         </>
       }
     >
@@ -2223,9 +2227,10 @@ type HeldRow = { at: number; heldMs: number; requests: number };
 /**
  * The slow-down's held time per bucket, which the rewrites card draws under its moves: a bar per bucket in the
  * warning tone a held request's marker wears, its hover the requests that waited and their time, and its legend line
- * the range's sum. A range that held nothing says so on the legend line and draws no chart.
+ * the range's sum. A range that held nothing says so on the legend line and draws no chart. `note` closes the legend
+ * line, since the chart carries no subtitle of its own.
  */
-function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis }) {
+function HeldChart({ answer, axis, note }: { answer: RewritesAnswer; axis: TimeAxis; note: string | null }) {
   const ink = useChartInk();
   const held = useMemo(() => heldBars(answer), [answer]);
   const data = useMemo(() => held.bars.map((b): HeldRow => ({ at: Date.parse(b.at), heldMs: b.heldMs, requests: b.requests })), [held]);
@@ -2242,6 +2247,7 @@ function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis })
             <span className="legend__value num">{heldSpan(held.totalMs)}</span>
           </li>
         )}
+        {note !== null && <li className="muted">{note}</li>}
       </ul>
       {held.totalRequests > 0 && (
         <ResponsiveContainer width="100%" height={120}>
@@ -2262,10 +2268,10 @@ function HeldChart({ answer, axis }: { answer: RewritesAnswer; axis: TimeAxis })
  * The guardrails that matched a request in the range: the observed matches, the blocks and the blocked requests'
  * bytes, each guardrail by its current name, or its id marked deleted where the registry no longer holds it.
  */
-function GuardrailsCard({ answer, error }: { answer: GuardrailCounts | null; error: string | null }) {
+function GuardrailsCard({ answer, error, inForce }: { answer: GuardrailCounts | null; error: string | null; inForce: ReadonlySet<AnalyticsControl> }) {
   const rows = answer?.guardrails ?? [];
   return (
-    <Card title={GUARDRAILS_TITLE} subtitle="Matches by guardrail in range, every key" padded={false} className="card--table analytics-guardrails">
+    <Card title={GUARDRAILS_TITLE} subtitle={sentences(['Matches by guardrail in range, every key', ignoredNote('guardrails', inForce)])} padded={false} className="card--table analytics-guardrails">
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -2657,13 +2663,12 @@ function BurnCharts({
 }
 
 const PLACEMENT_HINT = "A placement by the conversation's own messages is a hit when the response read the prefix it was promised, and one by the static prefix when it read at all";
-const PLACEMENT_UNFILTERED_NOTE = '. The account, model and pattern filters above do not apply here';
 
 /** Placements by rung over the range, narrowed by the Accounts, Keys, Pools, Models, Clients and User agents
  *  filters. */
-function PlacementTable({ error, rows, unfiltered }: { error: string | null; rows: PlacementRow[] | null; unfiltered: boolean }) {
+function PlacementTable({ error, inForce, rows }: { error: string | null; inForce: ReadonlySet<AnalyticsControl>; rows: PlacementRow[] | null }) {
   return (
-    <Card title="Placements by rung" subtitle={`${PLACEMENT_HINT}${unfiltered ? PLACEMENT_UNFILTERED_NOTE : ''}`} padded={false} className="card--table">
+    <Card title="Placements by rung" subtitle={sentences([PLACEMENT_HINT, ignoredNote('placements', inForce)])} padded={false} className="card--table">
       <div className="table-wrap">
         <table className="table placements-table">
           <thead>
@@ -2793,7 +2798,7 @@ function AccountsSection({
   axis,
   bucketMs,
   error,
-  otherFilters,
+  inForce,
   registry,
   rollups: all,
   slotOf,
@@ -2806,7 +2811,7 @@ function AccountsSection({
   axis: TimeAxis;
   bucketMs: number;
   error: string | null;
-  otherFilters: boolean;
+  inForce: ReadonlySet<AnalyticsControl>;
   /** The registry read's accounts, null until its first answer and while that first read has failed. */
   registry: Account[] | null;
   rollups: AccountRollup[] | null;
@@ -2906,7 +2911,7 @@ function AccountsSection({
       <BreakdownTable
         className="accounts-range"
         title="Accounts in range"
-        subtitle={`Totals for the selected range and accounts${otherFilters ? '. The key, pool, model, client and session filters and the probes toggle do not apply here' : ''}`}
+        subtitle={sentences(['Totals for the whole hours the range touches and the selected accounts', ignoredNote('accountsTab', inForce)])}
         failure={failed(error)}
         loading={loading}
         groupLabel="Account"
@@ -2926,7 +2931,7 @@ function AccountsSection({
           ],
         }))}
       />
-      <AllowanceTable {...allowance} span={span} week={week} />
+      <AllowanceTable {...allowance} inForce={inForce} span={span} week={week} />
     </>
   );
 }
@@ -2954,12 +2959,17 @@ const allowanceCell = (key: string, figure: AllowanceFigure | undefined) => (
  * range, ranked most left first, with the fleet's two figures over the table. A failed read, its own or the cost
  * model's, draws in place of the rows and the figures, so no figure stands without the read it prices.
  */
-function AllowanceTable({ answer, costs, error, span, week }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; span: { fromMs: number; toMs: number }; week: WeekPosition }) {
+function AllowanceTable({ answer, costs, error, inForce, span, week }: { answer: UnusedAllowanceAnswer | null; costs: SubscriptionCosts | null; error: string | null; inForce: ReadonlySet<AnalyticsControl>; span: { fromMs: number; toMs: number }; week: WeekPosition }) {
   const rows = useMemo(() => (answer === null || costs === null ? null : allowanceRows(answer, costs, week, span)), [answer, costs, span, week]);
   const windows = useMemo(() => weeklyKeys(answer?.accounts ?? []), [answer]);
   const fleet = rows === null ? null : fleetFigures(rows, week, weekScale(costs, week));
   return (
-    <Card title="Unused allowance by account" subtitle="Each subscription account's weekly windows left unused at their resets in the range, under the Accounts filter. Last is the newest reset at or before the range's end" padded={false} className="card--table accounts-range allowance-table">
+    <Card
+      title="Unused allowance by account"
+      subtitle={sentences(["Each subscription account's weekly windows left unused at their resets in the range, under the Accounts filter. Last is the newest reset at or before the range's end", ignoredNote('unusedAllowance', inForce)])}
+      padded={false}
+      className="card--table accounts-range allowance-table"
+    >
       {error === null && (
         <div className="req-totals">
           <div>

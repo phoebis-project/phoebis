@@ -161,6 +161,12 @@ test('the first bucket is partial only where the covered start lies inside it', 
   assert.deepEqual([d.firstBucketPartial(buckets, Date.UTC(2026, 8, 9, 18)), d.firstBucketPartial(buckets, Date.UTC(2026, 8, 9, 19))], [false, true]);
 });
 
+test("a card's note names the controls in force that it ignores, in the bar's order", () => {
+  // The Accounts tab applies the Accounts filter alone. The bar holds Clients between Keys and User agents, where the
+  // alphabet puts it first.
+  assert.equal(d.ignoredNote('accountsTab', new Set(['accounts', 'clients', 'keys', 'userAgents'])), 'The Keys, Clients and User agents filters above do not apply here');
+});
+
 test('a capped axis top rises to the last of the five ticks recharts would draw over it', () => {
   // The expected tops are recharts-scale's last value of getNiceTickValues([0, top], 5) for each top.
   const tops = [[1_023, 1_200], [1_000, 1_000], [61.5, 80], [9.2, 12], [0.004, 0.004], [0.0013, 0.0014]];
