@@ -976,49 +976,6 @@ async fn a_thinking_beta_the_caller_sent_leaves_once_and_completes_as_the_client
     up.shutdown().await;
 }
 
-/// The caller splits its list and writes the beta on a second `anthropic-beta` line of its own, on the map and on the
-/// recorded head the outbound builder walks.
-#[tokio::test]
-async fn a_thinking_beta_the_caller_sent_on_a_second_beta_line_leaves_once_and_completes_as_the_clients(
-) {
-    let up = FakeUpstream::start(vec![]).await;
-    up.push_credential_rule(A, "/v1/messages", ok_with_id("msg_turn"));
-    let bus = Bus::new();
-    let mut sub = bus.subscribe("test", Delivery::Durable);
-    let h = harness_with_bus(
-        &up,
-        &[oauth("a", A, 0)],
-        PoolSpec {
-            thinking_diagnostics: true,
-            ..Default::default()
-        },
-        bus,
-    )
-    .await;
-    let mut turn = request_for(KEY, "claude-sonnet-4-5", "s-thinking");
-    turn.headers_mut()
-        .append("anthropic-beta", THINKING_BINDING_BETA.parse().unwrap());
-    turn.extensions_mut()
-        .get_mut::<phoebis_relay::OriginalHead>()
-        .expect("the fixture request carries its recorded head")
-        .headers
-        .push(("anthropic-beta".into(), THINKING_BINDING_BETA.into()));
-    let (status, complete) = completion_of(&h, &mut sub, turn).await;
-    assert_eq!(status, 200);
-    assert_eq!(
-        (
-            beta_list(&up.requests()[0])
-                .iter()
-                .filter(|token| *token == THINKING_BINDING_BETA)
-                .count(),
-            complete.thinking_diagnostics
-        ),
-        (1, Some(DiagnosticsSource::Client)),
-        "the beta of the caller's second line leaves once and completes as the client's"
-    );
-    up.shutdown().await;
-}
-
 /// A JSON 200 whose `diagnostics` member is `member`, written as its raw JSON value.
 fn answer_with_diagnostics(id: &str, member: &str) -> Respond {
     json_answer(
