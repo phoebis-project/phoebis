@@ -2495,11 +2495,7 @@ async fn a_restored_both_park_keeps_its_deadline_and_its_wake() {
         (main.state, main.park),
         (
             AgentState::Parked,
-            Some(Park {
-                deadline: Some(deadline),
-                kind: ParkKind::Both,
-                wake_at: Some(wake)
-            })
+            Some(Park::new(ParkKind::Both, Some(deadline), Some(wake)))
         ),
         "the restored both park keeps its deadline and its wake: {main:?}"
     );
@@ -2578,19 +2574,11 @@ async fn a_restored_park_drops_a_saved_part_its_kind_does_not_take() {
         vec![
             (
                 "main".to_string(),
-                Some(Park {
-                    deadline: Some(deadline),
-                    kind: ParkKind::Background,
-                    wake_at: None
-                })
+                Some(Park::new(ParkKind::Background, Some(deadline), None))
             ),
             (
                 "worker".to_string(),
-                Some(Park {
-                    deadline: None,
-                    kind: ParkKind::Scheduled,
-                    wake_at: Some(wake)
-                })
+                Some(Park::new(ParkKind::Scheduled, None, Some(wake)))
             ),
         ],
         "each restored park keeps the parts its kind takes"

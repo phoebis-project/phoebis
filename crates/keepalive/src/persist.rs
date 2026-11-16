@@ -24,7 +24,7 @@ use crate::engine::{
     MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::AttemptFunding;
+use crate::savings::{AttemptFunding, RowClient};
 use crate::usage::ProbeUsage;
 
 /// The payloads' shape. A row of an older version is dropped at the load: version 1 carried no funding and version 2
@@ -267,8 +267,8 @@ pub(crate) struct PersistedCharge {
     pub band: String,
     /// Absent from a payload written before the client and the user agent rode the probe, each read as `None`, which
     /// settles under the reserved one.
-    #[serde(default)]
-    pub client: Option<String>,
+    #[serde(flatten)]
+    pub client: RowClient,
     pub in_overage: bool,
     pub kind: Option<phoebis_store::AccountKind>,
     pub tier: Option<String>,
@@ -276,8 +276,6 @@ pub(crate) struct PersistedCharge {
     /// Absent from a payload written before the class rode the probe, which reads false and settles as before.
     #[serde(default)]
     pub usage_based: bool,
-    #[serde(default)]
-    pub user_agent: Option<String>,
 }
 
 impl PersistedCharge {
@@ -292,7 +290,6 @@ impl PersistedCharge {
             tier: charge.tier.clone(),
             usage: persisted_usage(&charge.usage),
             usage_based: charge.funding.usage_based,
-            user_agent: charge.user_agent.clone(),
         }
     }
 
@@ -309,7 +306,6 @@ impl PersistedCharge {
             },
             tier: self.tier,
             usage: probe_usage(self.usage),
-            user_agent: self.user_agent,
         }
     }
 }
@@ -529,7 +525,7 @@ impl PersistedAgent {
             pool_id: agent.pool_id.clone(),
             canonical_model: agent.canonical_model.clone(),
             entrypoint: agent.entrypoint.clone(),
-            client_label: agent.client_label.clone(),
+            client_label: agent.current.as_ref().and_then(|o| o.client_label.clone()),
             reason: agent.reason,
             last_guard: agent.last_guard,
             hold_counted: agent.hold_counted,
@@ -577,11 +573,11 @@ impl PersistedAgent {
         }
     }
 
-    /// The agent the payload describes, without its observation, and the observation's own fields apart, since the
-    /// recipe they ride on comes from the row's columns. `None` when a word in the payload is one this build does not
-    /// know. The timing is the engine's, the binary's fixed numbers, which the build a restart brings may have
-    /// changed.
-    fn restore(self, timing: KeepaliveTiming) -> Option<(Agent, Option<PersistedObservation>)> {
+    /// The agent the payload describes, without its observation, and the observation's own fields apart with its
+    /// client label, since the recipe they ride on comes from the row's columns. `None` when a word in the payload is
+    /// one this build does not know. The timing is the engine's, the binary's fixed numbers, which the build a restart
+    /// brings may have changed.
+    fn restore(self, timing: KeepaliveTiming) -> Option<Decoded> {
         let mut agent = Agent::new(
             &self.id,
             &self.key_id,
@@ -597,11 +593,7 @@ impl PersistedAgent {
             .map(|(kind, began)| HeldPark {
                 began,
                 // A row that an earlier build saved can hold a part that the parser now refuses.
-                park: Park {
-                    deadline: self.deadline.filter(|_| kind.background()),
-                    kind,
-                    wake_at: self.wake_at.filter(|_| kind.scheduled()),
-                },
+                park: Park::new(kind, self.deadline, self.wake_at),
             });
         agent.park_ended_at = self.park_ended_at;
         agent.idle_episode = self.idle_episode.map(|episode| IdleEpisode {
@@ -635,7 +627,6 @@ impl PersistedAgent {
         agent.reason = self.reason;
         agent.last_guard = self.last_guard;
         agent.entrypoint = self.entrypoint;
-        agent.client_label = self.client_label;
         agent.hold_counted = self.hold_counted;
         agent.paused = self.paused;
         agent.probes = self.probes;
@@ -682,14 +673,20 @@ impl PersistedAgent {
         agent.probes_today = self.probes_today;
         agent.credited_today = self.credited_today;
         agent.counters_day = self.counters_day;
-        Some((agent, self.current))
+        let current = self.current.map(|current| (current, self.client_label));
+        Some((agent, current))
     }
 }
 
 impl PersistedObservation {
     /// The observation over the recipe the row's columns carry: the opened prompt, the header block, the size, the
     /// speed and the dispatch TTL.
-    fn restore(self, row: &KeepaliveAgentRow, body: Vec<u8>) -> Option<Observation> {
+    fn restore(
+        self,
+        row: &KeepaliveAgentRow,
+        body: Vec<u8>,
+        client_label: Option<String>,
+    ) -> Option<Observation> {
         let headers: Vec<(String, String)> = serde_json::from_str(&row.headers).ok()?;
         let prior = match self.prior {
             None => None,
@@ -733,6 +730,7 @@ impl PersistedObservation {
                 usage_based: self.usage_based,
                 in_overage: self.in_overage,
             },
+            client_label,
         })
     }
 }
@@ -828,8 +826,8 @@ type Loaded = (
     Vec<IdleReturnsRow>,
 );
 
-/// An agent row read back: the agent, and its observation's fields when it carried a recipe.
-type Decoded = (Agent, Option<PersistedObservation>);
+/// An agent row read back: the agent, and its observation's fields with its client label when it carried a recipe.
+type Decoded = (Agent, Option<(PersistedObservation, Option<String>)>);
 
 /// The agent a row describes, `None` when its version or a word in its payload is one this build does not read.
 fn decode_agent(row: &KeepaliveAgentRow, timing: KeepaliveTiming) -> Option<Decoded> {
@@ -1263,8 +1261,8 @@ impl Inner {
                 // The observation's restore reads the row's other columns alone, so the opened prompt moves out.
                 match (observation, agent_row.body.take()) {
                     (None, _) => {}
-                    (Some(observation), Some(body)) => {
-                        match observation.restore(&agent_row, body) {
+                    (Some((observation, client_label)), Some(body)) => {
+                        match observation.restore(&agent_row, body, client_label) {
                             Some(observation) => held.push((
                                 agent_row.updated_at,
                                 key.clone(),
@@ -1592,11 +1590,13 @@ mod tests {
                 account: Some("o".into()),
                 at: 0,
                 band: Band::Standard,
-                client: None,
+                client: RowClient {
+                    client: None,
+                    user_agent: None,
+                },
                 funding: AttemptFunding::default(),
                 tier: Some("default_claude_max_20x".into()),
                 usage: ProbeUsage::default(),
-                user_agent: None,
             },
             unit: Some(SavingsUnit::WindowShare),
             window: SEVEN_DAY,

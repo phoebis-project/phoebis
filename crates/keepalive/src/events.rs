@@ -258,19 +258,14 @@ impl TryFrom<Event> for EventReport {
                         .as_deref()
                         .ok_or(err("invalid_event", 400))?;
                     let kind = ParkKind::parse(kind).ok_or(err("invalid_state", 400))?;
-                    if kind.scheduled() && event.wake_at.is_none() {
-                        return Err(err("invalid_event", 400));
-                    }
-                    if (!kind.scheduled() && event.wake_at.is_some())
-                        || (!kind.background() && event.deadline.is_some())
+                    let park = Park::new(kind, event.deadline, event.wake_at);
+                    if (kind.scheduled() && event.wake_at.is_none())
+                        || park.deadline() != event.deadline
+                        || park.wake_at() != event.wake_at
                     {
                         return Err(err("invalid_event", 400));
                     }
-                    Some(Park {
-                        deadline: event.deadline,
-                        kind,
-                        wake_at: event.wake_at,
-                    })
+                    Some(park)
                 } else if event.park_kind.is_some()
                     || event.wake_at.is_some()
                     || event.deadline.is_some()
@@ -609,7 +604,9 @@ impl Inner {
                 // which the parked ceiling counts from.
                 let began = agent
                     .park
-                    .filter(|held| agent.state == AgentState::Parked && held.park.kind == park.kind)
+                    .filter(|held| {
+                        agent.state == AgentState::Parked && held.park.kind() == park.kind()
+                    })
                     .map_or(now, |held| held.began);
                 agent.set_state(AgentState::Parked);
                 agent.park = Some(HeldPark { began, park: *park });
@@ -818,13 +815,11 @@ impl Inner {
         }
         // A previous holder's traffic says nothing about this key's session, so only a start of the same
         // generation inherits whether the session took its slots and when it last carried a real request.
-        let (last_real_at, slotted) = if mine {
-            self.sessions
-                .get(&key)
-                .map_or((None, false), |s| (s.last_real_at, s.slotted))
-        } else {
-            (None, false)
-        };
+        let (last_real_at, slotted) = self
+            .sessions
+            .get(&key)
+            .filter(|_| mine)
+            .map_or((None, false), |s| (s.last_real_at, s.slotted));
         let mut agents = BTreeMap::new();
         let incarnation = self.incarnation();
         agents.insert(

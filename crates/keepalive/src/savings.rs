@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use phoebis_ledger::{Band, KeepaliveDelta, PlanTables, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, SEVEN_DAY};
 use phoebis_store::AccountKind;
+use serde::{Deserialize, Serialize};
 
 use crate::engine::{Credit, Engine, SavingsUnit, SessionKey, Settlement, Skipped};
 use crate::usage::ProbeUsage;
@@ -20,6 +21,16 @@ pub(crate) struct AttemptFunding {
     pub usage_based: bool,
     /// Whether the attempt's answer reported overage in use.
     pub in_overage: bool,
+}
+
+/// The client label and the user agent a keepalive row keys, as the relay observed them on the request the row
+/// describes. A saved charge flattens it, and a payload written before the pair rode the probe reads each as `None`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct RowClient {
+    #[serde(default)]
+    pub client: Option<String>,
+    #[serde(default)]
+    pub user_agent: Option<String>,
 }
 
 /// A probe's estimated cost as the share of the `tier`'s 7-day window at `at` (the band inside the price) under the
@@ -119,8 +130,7 @@ fn delta(
     account: Option<&str>,
     canonical_model: &str,
     kind: &str,
-    client: Option<&str>,
-    user_agent: Option<&str>,
+    client: &RowClient,
     fast: bool,
     funding: AttemptFunding,
 ) -> KeepaliveDelta {
@@ -135,8 +145,8 @@ fn delta(
             .to_string(),
         canonical_model: canonical_model.to_string(),
         kind: kind.to_string(),
-        client: client.unwrap_or(UNATTRIBUTED).to_string(),
-        user_agent: user_agent.map(String::from),
+        client: client.client.as_deref().unwrap_or(UNATTRIBUTED).to_string(),
+        user_agent: client.user_agent.clone(),
         speed: if fast { Speed::Fast } else { Speed::Standard },
         account_kind: funding.kind,
         usage_based: funding.usage_based,
@@ -164,8 +174,7 @@ impl Engine {
             credit.account.as_deref(),
             &credit.model,
             "inference",
-            credit.client.as_deref(),
-            credit.user_agent.as_deref(),
+            &credit.client,
             credit.fast,
             credit.funding,
         );
@@ -195,8 +204,7 @@ impl Engine {
             charge.account.as_deref(),
             &settlement.canonical_model,
             "probe",
-            charge.client.as_deref(),
-            charge.user_agent.as_deref(),
+            &charge.client,
             // The speed the probe's answer reported, so the waste prices at the cells and files under the funding its
             // own cost row took even when a fast recipe's answer came back at standard speed.
             charge.usage.speed == Speed::Fast,
@@ -224,8 +232,7 @@ impl Engine {
             skip.account.as_deref(),
             &skip.canonical_model,
             "probe",
-            skip.client.as_deref(),
-            skip.user_agent.as_deref(),
+            &skip.client,
             skip.fast,
             skip.funding,
         );
@@ -336,8 +343,10 @@ mod tests {
                 account,
                 "claude-sonnet-5",
                 "probe",
-                None,
-                None,
+                &RowClient {
+                    client: None,
+                    user_agent: None,
+                },
                 false,
                 AttemptFunding::default(),
             )

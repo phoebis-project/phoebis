@@ -131,11 +131,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (r.agent("worker").state, r.agent("worker").park),
         (
             AgentState::Parked,
-            Some(Park {
-                deadline: None,
-                kind: ParkKind::Background,
-                wake_at: None
-            })
+            Some(Park::new(ParkKind::Background, None, None))
         )
     );
     // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent

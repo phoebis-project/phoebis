@@ -20,7 +20,9 @@ use crate::engine::{
     SessionKey, UnansweredProbe, Verdict, Wasted, AGENT_HELD, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, settlement_unit, typed, unpriced_reason, AttemptFunding};
+use crate::savings::{
+    probe_cost, settlement_unit, typed, unpriced_reason, AttemptFunding, RowClient,
+};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -44,8 +46,8 @@ pub(crate) struct ProbeJob {
     /// The agent's entrypoint at dispatch, which the probe's headers carry, so the probe settles under the regime it
     /// was sent with even when the agent observes another before it lands.
     pub entrypoint: Option<String>,
-    /// The agent's client label at dispatch, taken beside `entrypoint` for the same reason: the probe's own request row
-    /// keys the client of the headers it replays, and its mark and its settlement key that client too.
+    /// The observation's client label at dispatch, taken beside `entrypoint` for the same reason: the probe's own
+    /// request row keys the client of the headers it replays, and its mark and its settlement key that client too.
     pub client_label: Option<String>,
     pub recipe: Recipe,
     pub expected: u64,
@@ -131,32 +133,9 @@ pub(crate) fn covers(usage: &ProbeUsage, expected: u64) -> bool {
 /// carry it either way.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ProbeRecord {
-    pub(crate) account: String,
-    pub(crate) agent_id: String,
-    pub(crate) canonical_model: String,
-    /// The client and the user agent the probe's own request row keys: the job's label, and `user_agent_of` over the
-    /// headers the probe replayed, the read the ledger makes for that row. The charge carries both on to a settlement.
-    pub(crate) client: Option<String>,
-    /// The served account's kind and class as the leg that answered stamped them, off the answer rather than the
-    /// registry, and whether the answer reported overage in use: the facts its request row files under, so the credit
-    /// row keys the same funding even when the account leaves while the probe is in flight, and the settlement unit
-    /// follows the same side. No kind where no leg answered, which prices nothing.
-    pub(crate) funding: AttemptFunding,
+    /// What the probe is charged under, as its own request row files it, carried whole to its settlement.
+    pub(crate) charge: ProbeCharge,
     pub(crate) outcome: ProbeOutcome,
-    pub(crate) pool_id: String,
-    pub(crate) usage: ProbeUsage,
-    pub(crate) user_agent: Option<String>,
-    /// The instant the relay received the probe's request, the one its request row files under, so the settlement
-    /// keys the same hour and prices at the same revision whenever the answer lands. The instant the engine sent the
-    /// request, on the same clock, where the relay built no answer.
-    pub(crate) at: i64,
-    /// The probe's prompt-length band: `table.band_of` on the prompt `PinUsage::prompt_tokens` reads from the answer's
-    /// counts, on the revision in force at `at`.
-    pub(crate) band: Band,
-    /// The account tier the settlement read at the exchange, which a probe settling in the window share reads from
-    /// the router's snapshot: its settlement's credit row keys the tier the probe ran under. `None` where the probe's
-    /// funding is not the window share or the snapshot prices no tier.
-    pub(crate) tier: Option<String>,
 }
 
 /// How an upstream `Retry-After` bears on a rung's wait.
@@ -308,38 +287,40 @@ pub(crate) async fn run_job(engine: Arc<Engine>, mut job: ProbeJob) {
     // A fast answer draws usage credits whatever the account's funding, so it settles in dollars. The answer's speed
     // decides rather than the recipe's: a fast recipe answered at standard speed spent the plan, as its request row
     // files it.
-    let default_unit = match record.funding.kind {
-        Some(kind) if record.usage.speed != Speed::Fast => {
-            SavingsUnit::of(kind, record.funding.usage_based, record.funding.in_overage)
+    let funding = record.charge.funding;
+    let default_unit = match funding.kind {
+        Some(kind) if record.charge.usage.speed != Speed::Fast => {
+            SavingsUnit::of(kind, funding.usage_based, funding.in_overage)
         }
         _ => SavingsUnit::Usd,
     };
     let snapshot = engine.parts.router.snapshot();
+    let account = record.charge.account.as_deref().unwrap_or_default();
     // The tier the router prices the account by, as its snapshot holds it, the read the kept-warm credit makes, so
     // the probe's row, its cost and its credit carry one tier. None for a free organization, a usage-based seat and
     // a plan the cost model does not price, which settle in dollars.
-    record.tier = (default_unit == SavingsUnit::WindowShare)
-        .then(|| snapshot.priced_tier(&record.account).map(String::from))
+    record.charge.tier = (default_unit == SavingsUnit::WindowShare)
+        .then(|| snapshot.priced_tier(account).map(String::from))
         .flatten();
     let unit = settled_unit(
         default_unit,
         &tables,
         job.entrypoint.as_deref(),
-        record.tier.as_deref(),
-        &record.account,
-        &record.canonical_model,
-        record.usage,
+        record.charge.tier.as_deref(),
+        account,
+        &job.canonical_model,
+        record.charge.usage,
         at,
     );
-    let covered_unit = record.funding.kind.map(|_| unit);
+    let covered_unit = funding.kind.map(|_| unit);
     engine
         .lock()
         .apply_probe(&job, exchange, &record, covered_unit, now);
     // Read off the answer rather than off what the fenced half did with it, so a probe whose recipe moved on while it
     // was in flight, or paused on its answer, still counts as the upstream served it.
-    let cache_read = covers(&record.usage, job.expected);
+    let cache_read = covers(&record.charge.usage, job.expected);
     engine.parts.metrics.observe_probe(
-        &record.pool_id,
+        &job.pool_id,
         probe_outcome_label(record.outcome, cache_read),
     );
     engine.flush();
@@ -360,18 +341,20 @@ impl Inner {
         at: i64,
     ) -> ProbeRecord {
         let mut record = ProbeRecord {
-            account: job.account.clone(),
-            agent_id: job.agent_id.clone(),
-            canonical_model: job.canonical_model.clone(),
-            client: job.client_label.clone(),
-            funding: AttemptFunding::default(),
+            charge: ProbeCharge {
+                account: Some(job.account.clone()),
+                at,
+                band: Band::Standard,
+                client: RowClient {
+                    client: job.client_label.clone(),
+                    // The read the ledger makes for the probe's own request row.
+                    user_agent: phoebis_bus::user_agent_of(&job.recipe.headers),
+                },
+                funding: AttemptFunding::default(),
+                tier: None,
+                usage: ProbeUsage::default(),
+            },
             outcome: ProbeOutcome::Failed,
-            pool_id: job.pool_id.clone(),
-            usage: ProbeUsage::default(),
-            user_agent: phoebis_bus::user_agent_of(&job.recipe.headers),
-            at,
-            band: Band::Standard,
-            tier: None,
         };
         let result = match exchange {
             Exchange::Canceled => {
@@ -384,18 +367,18 @@ impl Inner {
             }
             Exchange::Answered(result) => result,
         };
-        record.funding = result.funding;
+        record.charge.funding = result.funding;
         if let Some(account) = &result.account {
-            record.account = account.clone();
+            record.charge.account = Some(account.clone());
         }
         record.outcome = classify_status(result.status, result.error_code.as_deref());
         if record.outcome != ProbeOutcome::Ok {
             return record;
         }
         if let Some(usage) = result.body.as_deref().and_then(ProbeUsage::parse) {
-            record.usage = usage;
+            record.charge.usage = usage;
             let counts = typed(usage);
-            record.band = table.band_of(&job.canonical_model, counts.prompt_tokens());
+            record.charge.band = table.band_of(&job.canonical_model, counts.prompt_tokens());
         }
         record
     }
@@ -414,16 +397,7 @@ impl Inner {
     ) {
         let key = &job.key;
         let agent_id = job.agent_id.as_str();
-        let charge = ProbeCharge {
-            account: Some(record.account.clone()),
-            at: record.at,
-            band: record.band,
-            client: record.client.clone(),
-            funding: record.funding,
-            tier: record.tier.clone(),
-            usage: record.usage,
-            user_agent: record.user_agent.clone(),
-        };
+        let charge = record.charge.clone();
         // The worker slot comes back to the record the probe started on whatever the fence says. A result
         // orphaned on a record that is still alive, by a superseding request or by a discard, would otherwise
         // leave `in_flight` set, and `step` skips an agent that has a probe in flight for good.
@@ -475,7 +449,7 @@ impl Inner {
                         .filter(|agent| agent.incarnation == job.incarnation)
                     {
                         let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
-                        let ttl = record.usage.ttl_ms(agent.ttl_ms, requested_ms);
+                        let ttl = record.charge.usage.ttl_ms(agent.ttl_ms, requested_ms);
                         agent.kept.push(Kept {
                             key_generation: job.key_generation,
                             pool_id: job.pool_id.clone(),
@@ -533,7 +507,7 @@ impl Inner {
         // pauses still settles by its own entry.
         let previous_ms = agent.ttl_ms;
         let requested_ms = result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms);
-        let ttl = record.usage.ttl_ms(previous_ms, requested_ms);
+        let ttl = record.charge.usage.ttl_ms(previous_ms, requested_ms);
         agent.unanswered.push(UnansweredProbe {
             id: result.request_id.clone().unwrap_or_default(),
             charge,
@@ -608,7 +582,7 @@ impl Inner {
             previous_ms,
             ttl,
             requested_ms,
-            &record.usage,
+            &record.charge.usage,
         );
         agent.cache_started = job.started;
         agent.expires = Some(job.started + ttl);
@@ -864,10 +838,10 @@ pub(crate) fn ceiling(
                 return Verdict::End(Reason::ParkedLimit);
             };
             let park = held.park;
-            if park.kind.background() && now - held.began < ceilings.parked_ms {
+            if park.kind().background() && now - held.began < ceilings.parked_ms {
                 return Verdict::Probe;
             }
-            match park.wake_at.filter(|_| park.kind.scheduled()) {
+            match park.wake_at() {
                 Some(wake) if wake - now <= ceilings.horizon_ms => Verdict::Probe,
                 // The wake is a certain return the hold keeps the prompt for, so it outranks a command's part
                 // whose ceiling ran out.

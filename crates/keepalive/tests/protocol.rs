@@ -1336,11 +1336,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         park(&r),
         (
             AgentState::Parked,
-            Some(Park {
-                deadline: Some(deadline),
-                kind: ParkKind::Background,
-                wake_at: None
-            })
+            Some(Park::new(ParkKind::Background, Some(deadline), None))
         )
     );
     let both = state(
@@ -1352,11 +1348,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         park(&r),
         (
             AgentState::Parked,
-            Some(Park {
-                deadline: Some(deadline + 1),
-                kind: ParkKind::Both,
-                wake_at: Some(wake)
-            })
+            Some(Park::new(ParkKind::Both, Some(deadline + 1), Some(wake)))
         )
     );
     assert_eq!(
@@ -1421,11 +1413,7 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         (
             r.now(),
             AgentState::Parked,
-            Some(Park {
-                deadline: None,
-                kind: ParkKind::Scheduled,
-                wake_at: Some(wake)
-            }),
+            Some(Park::new(ParkKind::Scheduled, None, Some(wake))),
             1
         ),
         "presence moves the idle clock and nothing else: the agent stays parked"
@@ -1526,11 +1514,7 @@ async fn a_both_park_whose_deadline_passes_first_narrows_to_scheduled_and_keeps_
         (worker.state, worker.park),
         (
             AgentState::Parked,
-            Some(Park {
-                deadline: None,
-                kind: ParkKind::Scheduled,
-                wake_at: Some(wake)
-            })
+            Some(Park::new(ParkKind::Scheduled, None, Some(wake)))
         ),
         "the passed deadline leaves the wake's part of the park"
     );
@@ -1587,11 +1571,7 @@ async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its
         (worker.state, worker.park),
         (
             AgentState::Parked,
-            Some(Park {
-                deadline: Some(deadline),
-                kind: ParkKind::Background,
-                wake_at: None
-            })
+            Some(Park::new(ParkKind::Background, Some(deadline), None))
         ),
         "the passed wake leaves the deadline's part of the park"
     );

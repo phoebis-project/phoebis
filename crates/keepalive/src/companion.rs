@@ -16,9 +16,9 @@ use phoebis_ledger::{funding_of, Speed};
 use phoebis_relay::is_valid_id as valid_id;
 use phoebis_relay::{authenticated_key, new_request_id, no_store_answer};
 use phoebis_routing::{
-    ceiling, warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot,
+    warm, warm_until, AccountProjection, Obstacle, PinStanding, RegistrySnapshot,
 };
-use phoebis_store::{AccountRow, AccountState, CompanionKey, PoolRow};
+use phoebis_store::{AccountRow, AccountState, CompanionKey};
 use serde::Serialize;
 
 use crate::engine::Engine;
@@ -169,7 +169,7 @@ async fn allowance(
                 },
                 strategy: pool.strategy.as_str(),
             },
-            accounts: accounts(&companion_key, &snapshot, pool, projections),
+            accounts: accounts(&companion_key, &snapshot, projections),
             pins: session_pins(&companion_key, pins, now),
         };
         return json(
@@ -197,7 +197,6 @@ fn refusal(status: StatusCode, code: &'static str) -> Response {
 fn accounts(
     companion_key: &CompanionKey,
     snapshot: &RegistrySnapshot,
-    pool: &PoolRow,
     projections: Vec<AccountProjection>,
 ) -> Vec<AccountView> {
     let mut accounts: Vec<AccountView> = projections
@@ -205,7 +204,7 @@ fn accounts(
         .filter_map(|projection| {
             let row = snapshot.account(&projection.account_id)?;
             active(row, projection.obstacle.as_ref())
-                .then(|| account_view(companion_key, snapshot, pool, row, projection))
+                .then(|| account_view(companion_key, snapshot, row, projection))
         })
         .collect();
     accounts.sort_by(|a, b| a.id.cmp(&b.id));
@@ -221,7 +220,6 @@ fn active(row: &AccountRow, obstacle: Option<&Obstacle>) -> bool {
 fn account_view(
     companion_key: &CompanionKey,
     snapshot: &RegistrySnapshot,
-    pool: &PoolRow,
     row: &AccountRow,
     projection: AccountProjection,
 ) -> AccountView {
@@ -236,14 +234,13 @@ fn account_view(
         .windows
         .into_iter()
         .map(|(window, w)| {
-            let line = ceiling(pool, &window);
             let view = WindowView {
                 utilization: w.predicted,
                 horizon_at: w.wall.map(stamp),
                 burn_per_hour: w.burn,
                 demand_per_hour: w.demand,
                 projected_at_horizon: w.projection,
-                ceiling: line,
+                ceiling: w.ceiling,
                 fit: w.fit,
                 runway_minutes: runway_minutes(w.runway_ms),
             };

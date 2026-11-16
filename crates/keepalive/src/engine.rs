@@ -31,7 +31,7 @@ use crate::config::{
 use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::AttemptFunding;
+use crate::savings::{AttemptFunding, RowClient};
 use crate::usage::ProbeUsage;
 use crate::view::{recipe_state, RecipeState};
 
@@ -109,14 +109,36 @@ impl ParkKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Park {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deadline: Option<i64>,
+    deadline: Option<i64>,
     #[serde(rename = "park_kind")]
-    pub kind: ParkKind,
+    kind: ParkKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wake_at: Option<i64>,
+    wake_at: Option<i64>,
 }
 
 impl Park {
+    /// The park of `kind`, keeping the deadline only on a background kind and the wake only on a scheduled one, so no
+    /// park holds a part its kind does not take.
+    pub fn new(kind: ParkKind, deadline: Option<i64>, wake_at: Option<i64>) -> Park {
+        Park {
+            deadline: deadline.filter(|_| kind.background()),
+            kind,
+            wake_at: wake_at.filter(|_| kind.scheduled()),
+        }
+    }
+
+    pub fn kind(self) -> ParkKind {
+        self.kind
+    }
+
+    pub fn deadline(self) -> Option<i64> {
+        self.deadline
+    }
+
+    pub fn wake_at(self) -> Option<i64> {
+        self.wake_at
+    }
+
     /// The park left at `now` once each part whose return came without a request drops out with its half: a deadline
     /// the harness stopped the command at, or a wake that passed. `None` when no half is left, which is when it ended.
     pub(crate) fn passed(self, now: i64) -> Option<Park> {
@@ -126,10 +148,12 @@ impl Park {
             self.kind.background() && !deadline_passed,
             self.kind.scheduled() && !wake_passed,
         )
-        .map(|kind| Park {
-            deadline: self.deadline.filter(|_| !deadline_passed),
-            kind,
-            wake_at: self.wake_at.filter(|_| !wake_passed),
+        .map(|kind| {
+            Park::new(
+                kind,
+                self.deadline.filter(|_| !deadline_passed),
+                self.wake_at.filter(|_| !wake_passed),
+            )
         })
     }
 
@@ -682,10 +706,6 @@ pub(crate) struct Agent {
     /// The entrypoint of the observed request's `client` label, what its probes price under, and `None` for a label
     /// that names none.
     pub entrypoint: Option<String>,
-    /// The client label of the last turn admitted, whole, set with `entrypoint`. That turn's kept-warm credit keys it,
-    /// a probe takes it at dispatch for its mark and its settlement, and a skip reads it, since a probe replays that
-    /// turn's headers. A save carries it, and an aside recipe keeps its own and takes it back where it is re-armed.
-    pub client_label: Option<String>,
     pub reason: Reason,
     /// The guard's verdict on the last request the agent observed, `None` before the first one. Never `reason`
     /// itself: an auxiliary or a foreign request never reaches `reason`, which stays the recipe's own gating
@@ -768,7 +788,6 @@ impl Agent {
             pool_id: String::new(),
             canonical_model: String::new(),
             entrypoint: None,
-            client_label: None,
             reason: Reason::AwaitingRequest,
             last_guard: None,
             hold_counted: false,
@@ -835,7 +854,7 @@ impl Agent {
     pub(crate) fn take_unanswered(&mut self) -> Vec<Kept> {
         let unanswered = std::mem::take(&mut self.unanswered);
         unanswered
-            .iter()
+            .into_iter()
             .map(|probe| Kept::of(self, probe))
             .collect()
     }
@@ -1034,8 +1053,7 @@ pub(crate) struct OpenCompaction {
     /// What the previous recipe had proved at the admission, as a turn's observation takes it.
     pub prior: Option<PriorCoverage>,
     /// The compaction request's own client label and user agent, the ones its kept-warm credit keys.
-    pub client_label: String,
-    pub user_agent: Option<String>,
+    pub client: RowClient,
 }
 
 /// What a request that completed answers the probes before it with: when it reached the cache, the lineage it read on
@@ -1051,9 +1069,9 @@ struct Answer {
 /// A kept-warm credit a completion earned, its keys read under the lock and recorded once the lock is released. `at` is
 /// the credited request's receipt, the instant its row files under, so the credit sits in that row's hour and revision
 /// whenever the answer completes, and `ttl_ms` the TTL its own write would have taken. `funding` is its serving
-/// attempt's, so the credit files under the funding word its request row took, and `client` and `user_agent` its client
-/// label and user agent as the relay observed them, so the credit keys its request row's client and agent and prices
-/// under that client's regime.
+/// attempt's, so the credit files under the funding word its request row took, and `client` its client label and user
+/// agent as the relay observed them, so the credit keys its request row's client and agent and prices under that
+/// client's regime.
 pub(crate) struct Credit {
     pub(crate) at: i64,
     pub(crate) key: SessionKey,
@@ -1065,8 +1083,7 @@ pub(crate) struct Credit {
     pub(crate) ttl_ms: i64,
     pub(crate) fast: bool,
     pub(crate) funding: AttemptFunding,
-    pub(crate) client: Option<String>,
-    pub(crate) user_agent: Option<String>,
+    pub(crate) client: RowClient,
 }
 
 /// What a walk whose caller just read the agent under the same lock expects of it.
@@ -1197,6 +1214,9 @@ pub(crate) struct Observation {
     /// whether that attempt's head reported overage in use, the fact the request's own row files under, so a skip and a
     /// kept-warm credit file under the funding this request ran under whatever the registry holds by then.
     pub funding: AttemptFunding,
+    /// The request's client label, whole. Its kept-warm credit keys it, a probe takes it at dispatch for its mark and
+    /// its settlement, and a skip reads it, since a probe replays this request's headers.
+    pub client_label: Option<String>,
 }
 
 /// A main request whose chain held none of the anchor's boundaries at its arrival, kept until its completion.
@@ -1219,9 +1239,6 @@ pub(crate) struct AsideRecipe {
     pub failures: u32,
     pub canonical_model: String,
     pub entrypoint: Option<String>,
-    /// The label of the turn that armed the recipe, which its probes key since they replay that turn's headers. The
-    /// arrival that set the recipe aside wrote its own label to the agent.
-    pub client_label: Option<String>,
     pub account: Option<String>,
     pub pool_id: String,
     pub key_generation: i64,
@@ -1238,7 +1255,7 @@ pub(crate) struct ProbeCharge {
     pub band: Band,
     /// The client and the user agent the probe's own request row keys, off its `ProbeRecord`, so a settlement filed
     /// after its recipe ended or past a restart keys them too.
-    pub client: Option<String>,
+    pub client: RowClient,
     /// The kind and the class the probe was served under and whether its answer reported overage, as the probe's own
     /// cost row took them, so the waste files under the same funding word whatever the registry holds now.
     pub funding: AttemptFunding,
@@ -1246,7 +1263,6 @@ pub(crate) struct ProbeCharge {
     pub tier: Option<String>,
     /// The probe's own usage, which the rollup carries as the wasted counts and prices when read.
     pub usage: ProbeUsage,
-    pub user_agent: Option<String>,
 }
 
 /// One unanswered probe with the label that settles it as wasted. Queued under the lock and written to the ledger by
@@ -1273,32 +1289,27 @@ pub(crate) struct Skipped {
     /// The kind, the class and the overage of the request the recipe came from, off its observation, so the skip files
     /// under the funding that request ran under.
     pub funding: AttemptFunding,
-    /// The agent's client label and `user_agent_of` over the recipe's headers, the client and the user agent the
+    /// The observation's client label and `user_agent_of` over the recipe's headers, the client and the user agent the
     /// withheld probe's own request row would have keyed.
-    pub client: Option<String>,
-    pub user_agent: Option<String>,
+    pub client: RowClient,
 }
 
 impl Skipped {
     fn of(key: &SessionKey, agent: &Agent, state: RecipeState) -> Skipped {
+        let observation = agent.current.as_ref();
         Skipped {
             key: key.clone(),
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
             account: agent.account.clone(),
             canonical_model: agent.canonical_model.clone(),
-            fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+            fast: observation.is_some_and(|o| o.recipe.fast),
             state,
-            funding: agent
-                .current
-                .as_ref()
-                .map(|o| o.funding)
-                .unwrap_or_default(),
-            client: agent.client_label.clone(),
-            user_agent: agent
-                .current
-                .as_ref()
-                .and_then(|o| user_agent_of(&o.recipe.headers)),
+            funding: observation.map(|o| o.funding).unwrap_or_default(),
+            client: RowClient {
+                client: observation.and_then(|o| o.client_label.clone()),
+                user_agent: observation.and_then(|o| user_agent_of(&o.recipe.headers)),
+            },
         }
     }
 }
@@ -1354,12 +1365,12 @@ pub(crate) struct Kept {
 }
 
 impl Kept {
-    pub(crate) fn of(agent: &Agent, probe: &UnansweredProbe) -> Kept {
+    pub(crate) fn of(agent: &Agent, probe: UnansweredProbe) -> Kept {
         Kept {
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
-            canonical_model: probe.model.clone(),
-            charge: probe.charge.clone(),
+            canonical_model: probe.model,
+            charge: probe.charge,
             fast: probe.fast,
             entry_expires: probe.expires,
             covered: probe.covered,
@@ -1379,6 +1390,46 @@ impl Kept {
             charge: self.charge,
         }
     }
+
+    fn link(&self) -> ChainLink<'_> {
+        ChainLink {
+            at: self.charge.at,
+            model: &self.canonical_model,
+            fast: self.fast,
+            account: self.charge.account.as_deref(),
+            read: self.charge.usage.read,
+            covered: self.covered,
+            expires: self.entry_expires,
+        }
+    }
+}
+
+impl UnansweredProbe {
+    /// The link the probe makes as a kept one, from the fields `Kept::of` carries over.
+    fn link(&self) -> ChainLink<'_> {
+        ChainLink {
+            at: self.charge.at,
+            model: &self.model,
+            fast: self.fast,
+            account: self.charge.account.as_deref(),
+            read: self.charge.usage.read,
+            covered: self.covered,
+            expires: self.expires,
+        }
+    }
+}
+
+/// What `chain_expires` reads of one probe, borrowed off a kept or an unanswered probe so the per-tick lapse sweep
+/// clones no probe to read its chain.
+#[derive(Clone, Copy)]
+struct ChainLink<'a> {
+    at: i64,
+    model: &'a str,
+    fast: bool,
+    account: Option<&'a str>,
+    read: u64,
+    covered: bool,
+    expires: i64,
 }
 
 /// What ending an observation does with the probes the recipe leaves unanswered.
@@ -1782,7 +1833,6 @@ impl Inner {
                     failures: agent.failures,
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
-                    client_label: agent.client_label.clone(),
                     account: agent.account.clone(),
                     pool_id: agent.pool_id.clone(),
                     key_generation: agent.key_generation,
@@ -1829,7 +1879,6 @@ impl Inner {
         agent.failures = aside.failures;
         agent.canonical_model = aside.canonical_model;
         agent.entrypoint = aside.entrypoint;
-        agent.client_label = aside.client_label;
         agent.account = aside.account;
         agent.pool_id = aside.pool_id;
         agent.key_generation = aside.key_generation;
@@ -1847,29 +1896,30 @@ impl Inner {
     }
 
     /// The entry a kept probe is judged against: the greatest `entry_expires` among the probes of its chain. The chain
-    /// is the probe and each later probe of its lineage (model, speed, account) in `kept`, in exchange order, up to the
-    /// first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
+    /// is the probe and each later probe of its lineage (model, speed, account) in `chain`, in exchange order, up to
+    /// the first whose read did not cover the entry: a probe that read the whole entry back extended it, while one that
     /// read nothing or only part of the prefix found the entry gone, whole or in part, and wrote a new one, which
     /// starts a chain of its own. The read is tested beside `covered`, since the landing marks a cold complete rewrite
     /// covered too. The chain also runs through the lineage's unanswered probes where the caller hands them in beside
     /// the kept ones, as a compaction's completion, a lapse and the sweep do, since the recipe a failed turn re-arms
     /// keeps probing the entry its kept probes paid for.
-    fn chain_expires(kept: &[Kept], probe: &Kept) -> i64 {
-        let mut later: Vec<&Kept> = kept
+    fn chain_expires(chain: &[ChainLink], probe: ChainLink) -> i64 {
+        let mut later: Vec<ChainLink> = chain
             .iter()
+            .copied()
             .filter(|other| {
-                other.charge.at > probe.charge.at
-                    && other.canonical_model == probe.canonical_model
+                other.at > probe.at
+                    && other.model == probe.model
                     && other.fast == probe.fast
-                    && other.charge.account == probe.charge.account
+                    && other.account == probe.account
             })
             .collect();
-        later.sort_by_key(|other| other.charge.at);
+        later.sort_by_key(|other| other.at);
         later
             .into_iter()
-            .take_while(|other| other.charge.usage.read > 0 && other.covered)
-            .map(|other| other.entry_expires)
-            .fold(probe.entry_expires, i64::max)
+            .take_while(|other| other.read > 0 && other.covered)
+            .map(|other| other.expires)
+            .fold(probe.expires, i64::max)
     }
 
     /// The decision `discard_keeping_unanswered` defers, taken by the successful completion of the request that
@@ -1907,9 +1957,10 @@ impl Inner {
         answer: Answer,
     ) {
         self.touch_agent(key, agent_id);
-        let chain_ends: Vec<i64> = probes
+        let links: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
+        let chain_ends: Vec<i64> = links
             .iter()
-            .map(|probe| Self::chain_expires(&probes, probe))
+            .map(|&probe| Self::chain_expires(&links, probe))
             .collect();
         for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
             let lineage = kept.canonical_model == answer.model
@@ -2006,16 +2057,16 @@ impl Inner {
                 {
                     continue;
                 }
-                let chain: Vec<Kept> = agent
+                let chain: Vec<ChainLink> = agent
                     .kept
                     .iter()
-                    .cloned()
-                    .chain(agent.unanswered.iter().map(|probe| Kept::of(agent, probe)))
+                    .map(Kept::link)
+                    .chain(agent.unanswered.iter().map(UnansweredProbe::link))
                     .collect();
                 let chain_ends: Vec<i64> = agent
                     .kept
                     .iter()
-                    .map(|probe| Self::chain_expires(&chain, probe))
+                    .map(|probe| Self::chain_expires(&chain, probe.link()))
                     .collect();
                 if !agent
                     .kept
@@ -2174,9 +2225,10 @@ impl Inner {
             .into_iter()
             .chain(unanswered)
             .collect();
-        let chain_ends: Vec<i64> = probes
+        let links: Vec<ChainLink> = probes.iter().map(Kept::link).collect();
+        let chain_ends: Vec<i64> = links
             .iter()
-            .map(|probe| Self::chain_expires(&probes, probe))
+            .map(|&probe| Self::chain_expires(&links, probe))
             .collect();
         for (kept, chain_end) in probes.into_iter().zip(chain_ends) {
             if chain_end <= now {
@@ -2993,8 +3045,10 @@ impl Engine {
                 read: 0,
                 ttl_ms: 0,
                 prior: prior_coverage(agent, now),
-                client_label: observed.client.class.clone(),
-                user_agent: user_agent_of(&observed.headers),
+                client: RowClient {
+                    client: Some(observed.client.class.clone()),
+                    user_agent: user_agent_of(&observed.headers),
+                },
             };
             agent_mut(&mut inner.sessions, &key, &agent_id)
                 .expect(AGENT_HELD)
@@ -3049,11 +3103,17 @@ impl Engine {
         // The recipe set aside waits for this request's completion, so each return below that takes no observation
         // drops it: nothing would complete to restore it.
         inner.set_aside(&key, &agent_id, now);
+        // A request refused the slot below moves the session's request time too, which is saved, since the expiry
+        // counts from it across a restart.
+        let session = inner.sessions.get_mut(&key).unwrap();
+        session.last_real_at = Some(now);
+        let slotted = session.slotted;
+        inner.touch_session(&key);
         // A session takes its slots at its first real request, so both caps are read here, the session cap first as a
         // registration reads them, and the session's agents join the agent count only where they all fit. A first
         // request over either cap is refused the slot as a registration over it is: it keeps nothing and leaves
         // `slotted` false, so the session's next request reads the caps again.
-        if !inner.sessions[&key].slotted {
+        if !slotted {
             let joining = inner.sessions[&key].agents.len();
             let refused = if inner.live_sessions() >= inner.limits.max_sessions {
                 Some(Reason::SessionLimit)
@@ -3063,23 +3123,17 @@ impl Engine {
                 None
             };
             if let Some(reason) = refused {
-                // The agent saw a real request, so the view lists its line with the cause. The session's request time
-                // moves too and is saved, since the expiry counts from it across a restart, and `slotted` stays false,
+                // The agent saw a real request, so the view lists its line with the cause, and `slotted` stays false,
                 // so the session holds no slot.
-                inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
                 let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
                 agent.last_real_at = Some(now);
                 agent.canonical_model = observed.canonical_model.clone();
-                inner.touch_session(&key);
                 inner.drop_aside(&key, &agent_id);
                 inner.set_reason(&key, &agent_id, reason);
                 return;
             }
+            inner.sessions.get_mut(&key).unwrap().slotted = true;
         }
-        let session = inner.sessions.get_mut(&key).unwrap();
-        session.last_real_at = Some(now);
-        session.slotted = true;
-        inner.touch_session(&key);
         let agent = agent_mut(&mut inner.sessions, &key, &agent_id).expect(AGENT_HELD);
         if agent.state == AgentState::Unknown {
             inner.drop_aside(&key, &agent_id);
@@ -3141,7 +3195,6 @@ impl Engine {
         // The probe replays this request's headers, so it meters under the entrypoint they carry.
         agent.entrypoint =
             phoebis_ledger::entrypoint_of_client(&observed.client.class).map(String::from);
-        agent.client_label = Some(observed.client.class.clone());
         agent.current = Some(Observation {
             id: observed.request_id.clone(),
             attempt: 0,
@@ -3155,6 +3208,7 @@ impl Engine {
             poisoned,
             dispatched_ms: None,
             funding: AttemptFunding::default(),
+            client_label: Some(observed.client.class.clone()),
         });
         agent.body_dirty = true;
         // The mark is retired only by a save at the row's revision, so the new body takes a revision of its own.
@@ -3416,8 +3470,10 @@ impl Engine {
                         ttl_ms: 0,
                         fast,
                         funding: served.map(|o| o.funding).unwrap_or_default(),
-                        client: agent.client_label.clone(),
-                        user_agent: served.and_then(|o| user_agent_of(&o.recipe.headers)),
+                        client: RowClient {
+                            client: served.and_then(|o| o.client_label.clone()),
+                            user_agent: served.and_then(|o| user_agent_of(&o.recipe.headers)),
+                        },
                     }
                 })
         };
@@ -3645,8 +3701,7 @@ impl Inner {
                 ttl_ms,
                 fast: compaction.fast,
                 funding: compaction.funding,
-                client: Some(compaction.client_label.clone()),
-                user_agent: compaction.user_agent.clone(),
+                client: compaction.client.clone(),
             });
         if credit.is_some() {
             agent.count_credit(now);
@@ -3982,7 +4037,7 @@ impl Engine {
                     pool_id: agent.pool_id.clone(),
                     canonical_model: agent.canonical_model.clone(),
                     entrypoint: agent.entrypoint.clone(),
-                    client_label: agent.client_label.clone(),
+                    client_label: observation.client_label.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
                     counted_idle_tick: idle,
@@ -4627,6 +4682,7 @@ mod tests {
             poisoned: false,
             dispatched_ms: None,
             funding: AttemptFunding::default(),
+            client_label: None,
         }
     }
 

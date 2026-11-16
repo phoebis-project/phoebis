@@ -1513,6 +1513,8 @@ pub struct WindowProjection {
     pub burn: f64,
     /// The pins' burn over the speed with the live bookings' burn undivided, in share per hour.
     pub demand: f64,
+    /// The pool's ceiling on the window, the line `runway_ms` reads to, so a reader of the runway takes the same line.
+    pub ceiling: f64,
     /// The milliseconds the achieved burn takes to bring the window to its ceiling, read by `runway` as a pin's runway
     /// is: `Some(0)` at or past the ceiling, `None` with no burn or where the runway reaches the earlier of the
     /// reading's reset and the account's end that lies after the ask's instant.
@@ -3000,6 +3002,7 @@ fn projections(
                     let projection = achieved.get(window)?;
                     let demand = demands.get(window)?;
                     let word = words.get(window).copied()?;
+                    let line = ceiling(pool, window);
                     Some((
                         window.to_string(),
                         WindowProjection {
@@ -3009,10 +3012,11 @@ fn projections(
                             wall: projection.reset.into_iter().chain(end).min(),
                             burn: projection.burn * 3_600.0,
                             demand: demand.burn * 3_600.0,
+                            ceiling: line,
                             runway_ms: runway(
                                 projection.predicted,
                                 &projection.banded,
-                                ceiling(pool, window),
+                                line,
                                 now,
                                 projection.reset,
                                 end,
