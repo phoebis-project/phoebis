@@ -72,7 +72,7 @@ pub(crate) struct AgentRequests {
     /// The canonical model of the agent's newest served client request, or of its newest served probe where the ledger
     /// holds no served client request of the agent.
     pub model: String,
-    /// The newest request's agent type.
+    /// The newest served client request's agent type.
     pub agent_type: Option<String>,
     /// The newest served client request's serving account.
     pub account_id: Option<String>,

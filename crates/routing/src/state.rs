@@ -2033,8 +2033,9 @@ impl RoutingState {
             if row.window == RETRY_AFTER_WINDOW {
                 return false;
             }
-            // A model row recovers on the model's own week: its window keeps the upstream's claim, which the
-            // client reads, and the spend cap's claim names no family's week.
+            // A model row recovers on the model's own week, or on the shared week for a model with no week of its
+            // own: its window keeps the upstream's claim, which the client reads, and the spend cap's claim names no
+            // family's week.
             if let CooldownScope::Model(model) = &row.scope {
                 return below(window_for(model));
             }
