@@ -141,8 +141,8 @@ pub struct LedgerGone;
 
 /// A model the cost model in force gave no weight on the 7-day window when a plan-funded account's catalog listing
 /// added it or a plan-funded request on it landed, so its figure is null. The run ends at a read at or after its
-/// opening whose instant a revision that weighs the model governs, or at a landing that finds the model weighted. Kept once seen, so its gauge
-/// series reads 0 rather than vanishing.
+/// opening whose instant a revision that weighs the model governs, or at a landing that finds the model weighted. Kept
+/// once seen, so its gauge series reads 0 rather than vanishing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct UnpricedModel {
     /// The undated model id.
@@ -158,8 +158,8 @@ pub struct UnpricedModel {
 
 /// The unpriced models by undated id, written by the landing after its commit, by a plan-funded account's catalog
 /// listing that adds a model and by `unpriced_served`, which clears an entry whose run opened at or before its instant
-/// where the revision in force then weighs the model, and read by the attention reader. A `std` mutex, since the reader asks synchronously from inside the
-/// runtime, where a tokio lock would have to block.
+/// where the revision in force then weighs the model, and read by the attention reader. A `std` mutex, since the reader
+/// asks synchronously from inside the runtime, where a tokio lock would have to block.
 type Unpriced = Arc<std::sync::Mutex<BTreeMap<String, UnpricedModel>>>;
 
 /// What a replay of the parked records did.
