@@ -14715,7 +14715,11 @@ fn the_banded_shares_of_an_account_whose_set_lacks_the_five_hour_window_name_no_
 
 #[test]
 fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does_not_shed() {
-    let s = tiered(shedding_pool(Shedding::default()));
+    // A weekly ceiling apart from the 5-hour one, so the line's two ceiling facts read apart.
+    let s = tiered(Pool {
+        weekly_ceiling: 1.0,
+        ..shedding_pool(Shedding::default())
+    });
     let mut st = two_pins_on_a();
     // An hour left of five: 0.85 plus the pins' 0.05 an hour reaches 0.9 at the reset, under the ceiling, and the
     // week at 0.1 with no reset takes five hours of a sixth of that burn, far under it.
@@ -14750,6 +14754,7 @@ fn a_five_hour_window_whose_projection_stays_under_the_ceiling_at_its_reset_does
     );
     assert_eq!(fact(shed, "horizon_five_hour"), &FactValue::Int(T + HOUR));
     assert!((number(fact(shed, "five_hour_ceiling")) - 0.95).abs() < 1e-9);
+    assert!((number(fact(shed, "weekly_ceiling")) - 1.0).abs() < 1e-9);
     assert!(shed.facts.iter().all(|f| f.key != "trigger"));
 }
 
