@@ -23,6 +23,7 @@
 //! That pass runs before the band re-fold and resumes from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use indexmap::IndexMap;
 use rusqlite::{params, Connection, Transaction};
@@ -30,12 +31,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::bodies::{first_kept_hour, request_cutoff};
 use crate::db::{
-    begin_write, row_to_request, with_attempts, LedgerDb, LANDING_STAMP_SQL, REQUEST_SELECT,
+    begin_write, newest_landing_stamp, row_to_request, with_attempts, LedgerDb, REQUEST_COLUMNS,
 };
 use crate::generations::PAGE;
 use crate::pricing::{LongContext, ModelPrice, ModelRow, PriceRevisions, PriceTable};
 use crate::record::{AttemptRecord, RequestRecord};
-use crate::rollup::{deltas_of, fold_delta, read_rollup, unfold, FoldRules, RollupRow};
+use crate::rollup::{
+    deltas_of, deltas_under, fold_delta, read_rollup, refold_delta, unfold, FoldRules, RollupRow,
+};
 use crate::LedgerError;
 
 /// One `meta` row per fold rule, `fold_rule_<name>`: `{"mark": <landing stamp>, "done": <bool>}`.
@@ -44,28 +47,61 @@ pub const FOLD_RULE_KEY_PREFIX: &str = "fold_rule_";
 /// The `meta` key of a rules pass in progress, written by every page's transaction.
 pub const FOLD_RULES_REFOLD_KEY: &str = "fold_rules_refold";
 
-/// A rule's step from the rules a fold applied to the same rules less that one.
-type Without = fn(FoldRules) -> FoldRules;
+/// A fold rule, named by `as_str` in its `meta` row's key and in a rules cursor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FoldRule {
+    HitSplit,
+    SlowDownHold,
+    ThroughputFloor,
+    WideEdges,
+}
 
-/// Each fold rule by the name its `meta` row carries, with the rules a request folded without it was folded under.
-const FOLD_RULES: [(&str, Without); 4] = [
-    ("hit_split", |rules| FoldRules {
-        hit_split: false,
-        ..rules
-    }),
-    ("slow_down_hold", |rules| FoldRules {
-        slow_down_hold: false,
-        ..rules
-    }),
-    ("throughput_floor", |rules| FoldRules {
-        throughput_floor: false,
-        ..rules
-    }),
-    ("wide_edges", |rules| FoldRules {
-        wide_edges: false,
-        ..rules
-    }),
-];
+impl FoldRule {
+    const EVERY: [FoldRule; 4] = [
+        FoldRule::HitSplit,
+        FoldRule::SlowDownHold,
+        FoldRule::ThroughputFloor,
+        FoldRule::WideEdges,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            FoldRule::HitSplit => "hit_split",
+            FoldRule::SlowDownHold => "slow_down_hold",
+            FoldRule::ThroughputFloor => "throughput_floor",
+            FoldRule::WideEdges => "wide_edges",
+        }
+    }
+
+    /// The rule a stored name carries, `None` for a name this build holds no rule for.
+    fn parse(name: &str) -> Option<FoldRule> {
+        FoldRule::EVERY
+            .into_iter()
+            .find(|rule| rule.as_str() == name)
+    }
+
+    /// The rules a request folded without this one was folded under, from the rules a fold applied.
+    fn without(self, rules: FoldRules) -> FoldRules {
+        match self {
+            FoldRule::HitSplit => FoldRules {
+                hit_split: false,
+                ..rules
+            },
+            FoldRule::SlowDownHold => FoldRules {
+                slow_down_hold: false,
+                ..rules
+            },
+            FoldRule::ThroughputFloor => FoldRules {
+                throughput_floor: false,
+                ..rules
+            },
+            FoldRule::WideEdges => FoldRules {
+                wide_edges: false,
+                ..rules
+            },
+        }
+    }
+}
 
 /// A fold rule's `meta` row. Until the pass is `done`, a request whose `landed_at` is under `mark`, or null, holds
 /// the samples of a fold without the rule.
@@ -84,20 +120,11 @@ fn rule_key(name: &str) -> String {
 pub fn mark_fold_rules(db: &LedgerDb) -> Result<(), LedgerError> {
     db.write(|c| {
         let tx = begin_write(c)?;
-        let newest: i64 = tx
-            .prepare_cached(LANDING_STAMP_SQL)?
-            .query_row([], |r| r.get(0))?;
-        for (name, _) in FOLD_RULES {
-            let key = rule_key(name);
+        let mark = newest_landing_stamp(&tx)? + 1;
+        for rule in FoldRule::EVERY {
+            let key = rule_key(rule.as_str());
             if read_meta::<RuleMark>(&tx, &key)?.is_none() {
-                write_meta(
-                    &tx,
-                    &key,
-                    &RuleMark {
-                        mark: newest + 1,
-                        done: false,
-                    },
-                )?;
+                write_meta(&tx, &key, &RuleMark { mark, done: false })?;
             }
         }
         tx.commit()?;
@@ -130,9 +157,9 @@ pub fn refold_rules(
     };
     let mut moved = 0;
     if let Some(cursor) = cursor {
-        moved += rules_pass(db, &walk, Some(cursor.rules.as_slice()), Some(cursor.after))?;
+        moved += rules_pass(db, &walk, Some(cursor))?;
     }
-    moved += rules_pass(db, &walk, None, None)?;
+    moved += rules_pass(db, &walk, None)?;
     Ok(moved)
 }
 
@@ -145,103 +172,98 @@ struct RulesWalk {
 
 /// A rule whose pass is not done.
 struct OpenRule {
-    name: &'static str,
+    rule: FoldRule,
     mark: RuleMark,
-    without: Without,
 }
 
 fn open_rules(conn: &Connection) -> Result<Vec<OpenRule>, LedgerError> {
     let mut open = Vec::new();
-    for (name, without) in FOLD_RULES {
-        let mark = read_meta::<RuleMark>(conn, &rule_key(name))?;
+    for rule in FoldRule::EVERY {
+        let mark = read_meta::<RuleMark>(conn, &rule_key(rule.as_str()))?;
         if let Some(mark) = mark.filter(|mark| !mark.done) {
-            open.push(OpenRule {
-                name,
-                mark,
-                without,
-            });
+            open.push(OpenRule { rule, mark });
         }
     }
     Ok(open)
 }
 
-/// One pass for the open rules `named` lists, every open rule where it lists none, resuming after `after`: a page per
-/// transaction with its cursor, the targets marked done and the cursor cleared by the last.
+/// One pass for the open rules the cursor `resume` lists, resuming after its last request, or for every open rule from
+/// the walk's start where none resumes: a page per transaction with its cursor, the targets marked done and the cursor
+/// cleared by the last.
 fn rules_pass(
     db: &LedgerDb,
     walk: &RulesWalk,
-    named: Option<&[String]>,
-    mut after: Option<After>,
+    resume: Option<RulesCursor>,
 ) -> Result<usize, LedgerError> {
+    let (named, mut after) = resume
+        .map(|cursor| {
+            let rules: Vec<FoldRule> = cursor
+                .rules
+                .iter()
+                .map(String::as_str)
+                .filter_map(FoldRule::parse)
+                .collect();
+            (rules, cursor.after)
+        })
+        .unzip();
     let open = db.write(|c| open_rules(c))?;
     let targets: Vec<&OpenRule> = open
         .iter()
-        .filter(|rule| named.is_none_or(|names| names.iter().any(|name| name == rule.name)))
+        .filter(|rule| {
+            named
+                .as_deref()
+                .is_none_or(|rules| rules.contains(&rule.rule))
+        })
         .collect();
     if targets.is_empty() {
         return Ok(0);
     }
-    let names: Vec<String> = targets.iter().map(|rule| rule.name.to_string()).collect();
+    let rules: Vec<FoldRule> = targets.iter().map(|rule| rule.rule).collect();
     let mut moved = 0;
     loop {
         let done = db.write(|c| {
             let tx = begin_write(c)?;
             let requests = requests_after(&tx, walk.from, after.as_ref(), PAGE)?;
-            let stamps = landed_after(&tx, walk.from, after.as_ref(), PAGE)?;
-            for ((request, attempts), landed_at) in requests.iter().zip(stamps) {
-                let (old, new) = folded_under(&open, &names, landed_at);
+            for (request, attempts, landed_at) in &requests {
+                let (old, new) = folded_under(&open, &rules, *landed_at);
                 if old == new {
                     continue;
                 }
-                let Some(prices) = walk.bands.of(request, landed_at) else {
+                let Some(prices) = walk.bands.of(request, *landed_at) else {
                     continue;
                 };
                 let (was, now) = (
-                    deltas_of(request, attempts, prices, old),
-                    deltas_of(request, attempts, prices, new),
+                    deltas_under(request, attempts, prices, old),
+                    deltas_under(request, attempts, prices, new),
                 );
-                if was == now {
-                    continue;
+                if moves(&tx, walk.guard, request.received_at, &was, &now)? {
+                    // A rule moves no band, speed or funding, so the two folds' deltas at one index name the same row.
+                    for (was, now) in was.iter().zip(&now) {
+                        refold_delta(&tx, was, now)?;
+                    }
+                    moved += 1;
                 }
-                if walk.guard.is_some_and(|guard| request.received_at < guard)
-                    && !rows_stand(&tx, &was)?
-                {
-                    continue;
-                }
-                for delta in &was {
-                    unfold(&tx, delta)?;
-                }
-                for delta in &now {
-                    fold_delta(&tx, delta)?;
-                }
-                moved += 1;
             }
             let last = requests.len() < PAGE;
             if last {
-                tx.execute(
-                    "DELETE FROM meta WHERE key = ?1",
-                    params![FOLD_RULES_REFOLD_KEY],
-                )?;
+                delete_meta(&tx, FOLD_RULES_REFOLD_KEY)?;
                 for rule in &targets {
                     write_meta(
                         &tx,
-                        &rule_key(rule.name),
+                        &rule_key(rule.rule.as_str()),
                         &RuleMark {
                             done: true,
                             ..rule.mark
                         },
                     )?;
                 }
-            } else if let Some((request, _)) = requests.last() {
-                let next = After {
-                    received_at: request.received_at,
-                    id: request.id.clone(),
-                };
+            } else if let Some((request, _, _)) = requests.last() {
+                let next = After::of(request);
                 write_meta(
                     &tx,
                     FOLD_RULES_REFOLD_KEY,
                     &RulesCursor {
-                        rules: names.clone(),
+                        rules: rules.iter().map(|rule| rule.as_str().to_string()).collect(),
                         after: next.clone(),
                     },
                 )?;
@@ -261,7 +283,7 @@ fn rules_pass(
 /// second too where the pass does not target it.
 fn folded_under(
     open: &[OpenRule],
-    targets: &[String],
+    targets: &[FoldRule],
     landed_at: Option<i64>,
 ) -> (FoldRules, FoldRules) {
     let (mut old, mut new) = (FoldRules::ALL, FoldRules::ALL);
@@ -269,9 +291,9 @@ fn folded_under(
         if landed_at.is_some_and(|at| at >= rule.mark.mark) {
             continue;
         }
-        old = (rule.without)(old);
-        if !targets.iter().any(|name| name == rule.name) {
-            new = (rule.without)(new);
+        old = rule.rule.without(old);
+        if !targets.contains(&rule.rule) {
+            new = rule.rule.without(new);
         }
     }
     (old, new)
@@ -281,20 +303,38 @@ fn folded_under(
 struct Bands {
     /// A list with no threshold, which bands every prompt `standard`.
     standard: PriceRevisions,
-    /// The band mark's `since` and thresholds, where a mark stands.
-    mark: Option<(i64, PriceRevisions)>,
-    /// A band re-fold that stopped mid-way: its source, its target and the last request it moved.
+    /// The band mark, where one stands.
+    mark: Option<BandMark>,
+}
+
+/// The band mark's `since` and thresholds, with the cursor a band re-fold that stopped mid-way left, which `pass`
+/// writes under a mark alone.
+struct BandMark {
+    since: i64,
+    list: PriceRevisions,
+    /// The stopped band re-fold's source, its target and the last request it moved.
     cursor: Option<(PriceRevisions, PriceRevisions, After)>,
 }
 
 impl Bands {
     fn read(conn: &Connection) -> Result<Bands, LedgerError> {
         let mark = read_meta::<Mark>(conn, PRICE_BANDS_KEY)?
-            .map(|mark| Ok::<_, LedgerError>((mark.since, revisions_of(&mark.revisions)?)))
-            .transpose()?;
-        let cursor = read_meta::<Cursor>(conn, PRICE_BANDS_REFOLD_KEY)?
-            .map(|c| {
-                Ok::<_, LedgerError>((revisions_of(&c.source)?, revisions_of(&c.target)?, c.after))
+            .map(|mark| {
+                let list = revisions_of(&mark.revisions)?;
+                let cursor = read_meta::<Cursor>(conn, PRICE_BANDS_REFOLD_KEY)?
+                    .map(|c| {
+                        Ok::<_, LedgerError>((
+                            revisions_of(&c.source)?,
+                            revisions_of(&c.target)?,
+                            c.after,
+                        ))
+                    })
+                    .transpose()?;
+                Ok::<_, LedgerError>(BandMark {
+                    since: mark.since,
+                    list,
+                    cursor,
+                })
             })
             .transpose()?;
         Ok(Bands {
@@ -303,7 +343,6 @@ impl Bands {
                 bands: BTreeMap::new(),
             }])?,
             mark,
-            cursor,
         })
     }
 
@@ -311,16 +350,15 @@ impl Bands {
     /// before the mark's `since` landed under the migration's `standard` where it landed before `since` too, and a
     /// band re-fold that stopped mid-way moved the requests up to its cursor to its target alone.
     fn of(&self, request: &RequestRecord, landed_at: Option<i64>) -> Option<&PriceRevisions> {
-        let Some((since, mark)) = &self.mark else {
+        let Some(mark) = &self.mark else {
             return Some(&self.standard);
         };
-        let since = *since;
-        if request.received_at < since {
+        if request.received_at < mark.since {
             return landed_at
-                .is_none_or(|at| at < since)
+                .is_none_or(|at| at < mark.since)
                 .then_some(&self.standard);
         }
-        Some(match &self.cursor {
+        Some(match &mark.cursor {
             Some((source, target, after)) => {
                 if (request.received_at, request.id.as_str())
                     <= (after.received_at, after.id.as_str())
@@ -330,7 +368,7 @@ impl Bands {
                     source
                 }
             }
-            None => mark,
+            None => &mark.list,
         })
     }
 }
@@ -367,6 +405,15 @@ struct Mark {
 struct After {
     received_at: i64,
     id: String,
+}
+
+impl After {
+    fn of(request: &RequestRecord) -> After {
+        After {
+            received_at: request.received_at,
+            id: request.id.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -488,34 +535,24 @@ fn pass(
                 Some(first) => requests_after(&tx, first, after.as_ref(), page)?,
                 None => Vec::new(),
             };
-            for (request, attempts) in &requests {
+            for (request, attempts, _) in &requests {
                 let (was, now) = (
-                    deltas_of(request, attempts, &old, FoldRules::ALL),
-                    deltas_of(request, attempts, &new, FoldRules::ALL),
+                    deltas_of(request, attempts, &old),
+                    deltas_of(request, attempts, &new),
                 );
-                if was == now {
-                    continue;
+                if moves(&tx, guard, request.received_at, &was, &now)? {
+                    for delta in &was {
+                        unfold(&tx, delta)?;
+                    }
+                    for delta in &now {
+                        fold_delta(&tx, delta)?;
+                    }
+                    moved += 1;
                 }
-                // The purge removes a member's hour whole, so a request whose rows are gone stays out of the hour
-                // rather than writing the new band's rows into it.
-                if guard.is_some_and(|guard| request.received_at < guard) && !rows_stand(&tx, &was)?
-                {
-                    continue;
-                }
-                for delta in &was {
-                    unfold(&tx, delta)?;
-                }
-                for delta in &now {
-                    fold_delta(&tx, delta)?;
-                }
-                moved += 1;
             }
             let last = requests.len() < page;
             if last {
-                tx.execute(
-                    "DELETE FROM meta WHERE key = ?1",
-                    params![PRICE_BANDS_REFOLD_KEY],
-                )?;
+                delete_meta(&tx, PRICE_BANDS_REFOLD_KEY)?;
                 write_meta(
                     &tx,
                     PRICE_BANDS_KEY,
@@ -524,11 +561,8 @@ fn pass(
                         revisions: target.clone(),
                     },
                 )?;
-            } else if let Some((request, _)) = requests.last() {
-                let next = After {
-                    received_at: request.received_at,
-                    id: request.id.clone(),
-                };
+            } else if let Some((request, _, _)) = requests.last() {
+                let next = After::of(request);
                 write_meta(
                     &tx,
                     PRICE_BANDS_REFOLD_KEY,
@@ -549,6 +583,25 @@ fn pass(
             return Ok(moved);
         }
     }
+}
+
+/// Whether a request's rows move from `was` to `now`: never where the two match, and for a request received before
+/// `guard` only where every row of `was` stands. The purge removes a member's hour whole, so a request whose rows are
+/// gone stays out of the hour rather than writing the new band's rows into it.
+fn moves(
+    tx: &Transaction<'_>,
+    guard: Option<i64>,
+    received_at: i64,
+    was: &[RollupRow],
+    now: &[RollupRow],
+) -> Result<bool, LedgerError> {
+    if was == now {
+        return Ok(false);
+    }
+    if guard.is_some_and(|guard| received_at < guard) {
+        return rows_stand(tx, was);
+    }
+    Ok(true)
 }
 
 /// Whether the row each delta names stands.
@@ -651,44 +704,31 @@ pub(crate) fn first_difference(
 const WALK_PAGE: &str =
     "WHERE received_at >= ?1 AND (received_at, id) > (?2, ?3) ORDER BY received_at, id LIMIT ?4";
 
-/// The `(received_at, id)` a page starts past.
-fn past(after: Option<&After>) -> (i64, &str) {
-    after.map_or((i64::MIN, ""), |a| (a.received_at, a.id.as_str()))
-}
+/// A request of a walk's page with its attempts and its `landed_at`.
+type Walked = (RequestRecord, Vec<AttemptRecord>, Option<i64>);
 
-/// The next page of requests received at or after `from`, past `after`, in `(received_at, id)` order, each with its
-/// attempts.
+/// The next page of requests received at or after `from`, past `after`, in `(received_at, id)` order.
 fn requests_after(
     conn: &Connection,
     from: i64,
     after: Option<&After>,
     page: usize,
-) -> Result<Vec<(RequestRecord, Vec<AttemptRecord>)>, LedgerError> {
-    let (after_at, after_id) = past(after);
-    let mut stmt = conn.prepare(&format!("{REQUEST_SELECT} {WALK_PAGE}"))?;
-    let requests = stmt
-        .query_map(
-            params![from, after_at, after_id, page as i64],
-            row_to_request,
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    with_attempts(conn, requests)
-}
-
-/// The `landed_at` of each request `requests_after` answers for the same arguments, in its order: run in the same
-/// transaction, the two statements read the same rows.
-fn landed_after(
-    conn: &Connection,
-    from: i64,
-    after: Option<&After>,
-    page: usize,
-) -> Result<Vec<Option<i64>>, LedgerError> {
-    let (after_at, after_id) = past(after);
-    let mut stmt = conn.prepare(&format!("SELECT landed_at FROM requests {WALK_PAGE}"))?;
-    let stamps = stmt
-        .query_map(params![from, after_at, after_id, page as i64], |r| r.get(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(stamps)
+) -> Result<Vec<Walked>, LedgerError> {
+    static STATEMENT: LazyLock<String> =
+        LazyLock::new(|| format!("SELECT {REQUEST_COLUMNS}, landed_at FROM requests {WALK_PAGE}"));
+    let (after_at, after_id) = after.map_or((i64::MIN, ""), |a| (a.received_at, a.id.as_str()));
+    let (requests, stamps): (Vec<RequestRecord>, Vec<Option<i64>>) = conn
+        .prepare_cached(&STATEMENT)?
+        .query_map(params![from, after_at, after_id, page as i64], |r| {
+            // `landed_at` follows the request's own columns, which `row_to_request` reads as 0 to 72.
+            Ok((row_to_request(r)?, r.get::<_, Option<i64>>(73)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(with_attempts(conn, requests)?
+        .into_iter()
+        .zip(stamps)
+        .map(|((request, attempts), landed_at)| (request, attempts, landed_at))
+        .collect())
 }
 
 pub(crate) fn read_meta<T: for<'de> Deserialize<'de>>(
@@ -708,6 +748,11 @@ pub(crate) fn write_meta(
         "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
         params![key, serde_json::to_string(value)?],
     )?;
+    Ok(())
+}
+
+pub(crate) fn delete_meta(tx: &Transaction<'_>, key: &str) -> Result<(), LedgerError> {
+    tx.execute("DELETE FROM meta WHERE key = ?1", params![key])?;
     Ok(())
 }
 
@@ -860,7 +905,7 @@ mod tests {
             .unwrap();
         let filed: Vec<(&str, Vec<(u32, &str)>)> = page
             .iter()
-            .map(|(r, attempts)| {
+            .map(|(r, attempts, _)| {
                 (
                     r.id.as_str(),
                     attempts
@@ -1446,7 +1491,7 @@ mod tests {
         db.write(|c| {
             let tx = begin_write(c)?;
             insert_request_in(&tx, &request.0, &request.1, None, now)?;
-            for delta in deltas_of(&request.0, &request.1, prices, rules) {
+            for delta in deltas_under(&request.0, &request.1, prices, rules) {
                 fold_delta(&tx, &delta)?;
             }
             tx.commit()?;

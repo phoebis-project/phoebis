@@ -43,6 +43,20 @@ pub(crate) struct Answer {
     pub message_id: Option<String>,
 }
 
+const MISS_REASON_NONE: &str = "none";
+const MISS_REASON_NOT_REQUESTED: &str = "not_requested";
+const MISS_REASON_NOT_RETURNED: &str = "not_returned";
+const MISS_REASON_PENDING: &str = "pending";
+
+/// Every word the relay itself files as an answer's cache miss reason, alphabetical, so a reader can tell them from
+/// the reasons the upstream names.
+pub const RELAY_MISS_REASONS: [&str; 4] = [
+    MISS_REASON_NONE,
+    MISS_REASON_NOT_REQUESTED,
+    MISS_REASON_NOT_RETURNED,
+    MISS_REASON_PENDING,
+];
+
 /// The usage block, the cache diagnostics beside it, and what the answer says about itself, from one parse.
 /// `path` names the object that holds them (`["message"]` for `message_start`, empty for a JSON answer or
 /// `message_delta`). A document that does not parse, or has none of them, yields empty members, never zeros.
@@ -89,10 +103,10 @@ pub(crate) fn answer_from_json(body: &[u8], path: &[&str], named: bool) -> Answe
     usage.cache_miss_reason = match at.get("diagnostics") {
         None => None,
         // A null member answers the message the body named, and says nothing where the body named none.
-        Some(Value::Null) => named.then(|| "none".to_string()),
+        Some(Value::Null) => named.then(|| MISS_REASON_NONE.to_string()),
         Some(diagnostics) => match diagnostics.get("cache_miss_reason") {
             // The upstream's comparison was still running when the answer went out.
-            Some(Value::Null) => Some("pending".to_string()),
+            Some(Value::Null) => Some(MISS_REASON_PENDING.to_string()),
             reason => text(reason.and_then(|r| r.get("type"))),
         },
     };
@@ -151,9 +165,9 @@ pub(crate) fn close_miss_reason(usage: &mut Usage, diagnostics_sent: bool) {
         || usage.cache_write_1h_tokens.is_some();
     if reported && usage.cache_miss_reason.is_none() {
         let word = if diagnostics_sent {
-            "not_returned"
+            MISS_REASON_NOT_RETURNED
         } else {
-            "not_requested"
+            MISS_REASON_NOT_REQUESTED
         };
         usage.cache_miss_reason = Some(word.to_string());
     }

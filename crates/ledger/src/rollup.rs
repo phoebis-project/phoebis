@@ -10,7 +10,7 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, T
 
 use phoebis_bus::Kind;
 use phoebis_relay::{identifier_byte, EFFORT_LEVELS};
-use phoebis_routing::{window_length_ms, PinUsage, DAY_MS, HOUR_MS, WEEK_MS};
+use phoebis_routing::{under_account_reason, window_length_ms, PinUsage, DAY_MS, HOUR_MS, WEEK_MS};
 
 use crate::db::LedgerDb;
 #[cfg(test)]
@@ -148,6 +148,18 @@ pub fn fold_identifier(raw: &str) -> String {
     } else {
         OTHER_DIMENSION.into()
     }
+}
+
+/// A user agent as the hour key folds it, `UNATTRIBUTED` where none was sent. Every reader that matches the key folds
+/// through this one rule.
+pub(crate) fn fold_user_agent_of(raw: Option<&str>) -> String {
+    raw.map_or_else(|| UNATTRIBUTED.into(), fold_user_agent)
+}
+
+/// A class, classifier or client as the hour key folds it, `none` where the value is absent. Every reader that matches
+/// the key folds through this one rule.
+pub(crate) fn fold_identifier_of(raw: Option<&str>, none: &str) -> String {
+    raw.map_or_else(|| none.into(), fold_identifier)
 }
 
 /// How far past its announcement a cooldown is booked. The deadline is the upstream's to set, and the
@@ -351,15 +363,29 @@ impl RollupRow {
 
     pub fn add(&mut self, o: &RollupRow) {
         self.each_count(o, |a, b| *a += b);
-        add_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
-        self.ttfb_hist.merge(&o.ttfb_hist);
-        self.ttfc_hist.merge(&o.ttfc_hist);
-        self.duration_hist.merge(&o.duration_hist);
-        self.output_tps_hist.merge(&o.output_tps_hist);
-        add_counts(&mut self.errors, &o.errors);
-        add_counts(&mut self.refusals, &o.refusals);
-        add_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
-        add_counts(&mut self.input_transformations, &o.input_transformations);
+        self.each_map(o, add_counts);
+        self.each_hist(o, Histogram::merge);
+    }
+
+    /// Every count map of the row paired with `o`'s, so `add` and `subtract` list them once.
+    fn each_map(
+        &mut self,
+        o: &RollupRow,
+        mut f: impl FnMut(&mut BTreeMap<String, u64>, &BTreeMap<String, u64>),
+    ) {
+        f(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
+        f(&mut self.errors, &o.errors);
+        f(&mut self.input_transformations, &o.input_transformations);
+        f(&mut self.refusals, &o.refusals);
+        f(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
+    }
+
+    /// Every histogram of the row paired with `o`'s, so `add` and `subtract` list them once.
+    fn each_hist(&mut self, o: &RollupRow, mut f: impl FnMut(&mut Histogram, &Histogram)) {
+        f(&mut self.ttfb_hist, &o.ttfb_hist);
+        f(&mut self.ttfc_hist, &o.ttfc_hist);
+        f(&mut self.duration_hist, &o.duration_hist);
+        f(&mut self.output_tps_hist, &o.output_tps_hist);
     }
 
     /// Every counter of the row paired with `o`'s, so `add` and `subtract` list them once.
@@ -530,15 +556,8 @@ impl RollupRow {
     /// drifted cannot go negative, and a count that reaches zero leaves the map.
     pub fn subtract(&mut self, o: &RollupRow) {
         self.each_count(o, |a, b| *a = a.saturating_sub(b));
-        subtract_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
-        self.ttfb_hist.subtract(&o.ttfb_hist);
-        self.ttfc_hist.subtract(&o.ttfc_hist);
-        self.duration_hist.subtract(&o.duration_hist);
-        self.output_tps_hist.subtract(&o.output_tps_hist);
-        subtract_counts(&mut self.errors, &o.errors);
-        subtract_counts(&mut self.refusals, &o.refusals);
-        subtract_counts(&mut self.cache_miss_reasons, &o.cache_miss_reasons);
-        subtract_counts(&mut self.input_transformations, &o.input_transformations);
+        self.each_map(o, subtract_counts);
+        self.each_hist(o, Histogram::subtract);
     }
 }
 
@@ -598,8 +617,19 @@ impl FoldRules {
 /// `failovers`, the cache figures, the histograms and the errors sit on the serving attempt's delta alone (its band,
 /// its speed, its funding). A request with no attempt with usage files one delta under `STANDARD_BAND` keyed by the
 /// serving attempt's speed and funding. The tier is the serving attempt's on every delta, so a fast retry beside a
-/// standard answer prices at the fast cells and a standard one at the standard cells. The samples follow `rules`.
+/// standard answer prices at the fast cells and a standard one at the standard cells. The samples follow every fold
+/// rule, as the landing folds them.
 pub fn deltas_of(
+    request: &RequestRecord,
+    attempts: &[AttemptRecord],
+    prices: &PriceRevisions,
+) -> Vec<RollupRow> {
+    deltas_under(request, attempts, prices, FoldRules::ALL)
+}
+
+/// The deltas `deltas_of` answers with the samples under `rules`, for the rules pass, which folds a stored request
+/// again under the rules it was folded under.
+pub(crate) fn deltas_under(
     request: &RequestRecord,
     attempts: &[AttemptRecord],
     prices: &PriceRevisions,
@@ -622,27 +652,15 @@ pub fn deltas_of(
         last.map(|a| a.account_id.as_str()).unwrap_or(UNATTRIBUTED),
         &request.canonical_model,
         &request.kind,
-        &request
-            .user_agent
-            .as_deref()
-            .map_or_else(|| UNATTRIBUTED.into(), fold_user_agent),
-        &request
-            .client
-            .as_deref()
-            .map_or_else(|| UNATTRIBUTED.into(), fold_identifier),
+        &fold_user_agent_of(request.user_agent.as_deref()),
+        &fold_identifier_of(request.client.as_deref(), UNATTRIBUTED),
         fold_effort(request.effort.as_deref()),
-        &request
-            .request_class
-            .as_deref()
-            .map_or_else(|| NO_CLASS.into(), fold_identifier),
+        &fold_identifier_of(request.request_class.as_deref(), NO_CLASS),
         STANDARD_SPEED,
         PLAN_FUNDING,
         STANDARD_BAND,
         last.and_then(|a| a.tier.as_deref()).unwrap_or(UNATTRIBUTED),
-        &request
-            .classifier
-            .as_deref()
-            .map_or_else(|| NO_CLASS.into(), fold_identifier),
+        &fold_identifier_of(request.classifier.as_deref(), NO_CLASS),
     );
     let mut deltas: Vec<RollupRow> = Vec::new();
     // Every answered attempt adds its own counts at the cells its own prompt, speed and funding selected, so the row
@@ -683,7 +701,7 @@ pub fn deltas_of(
     // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
     let held = request.kind == Kind::Probe.as_str()
         && request.status == Some(503)
-        && request.error_code.as_deref() == Some("ledger_behind");
+        && request.error_code.as_deref() == Some(phoebis_relay::LEDGER_BEHIND);
     // A refusal before any account was asked files under the map alone, its slow-down hold among the figures it
     // leaves, so every other figure of the row reads the requests an account was asked for. A probe is never flagged,
     // so the probe arms stand.
@@ -692,7 +710,7 @@ pub fn deltas_of(
     // is the keepalive's own request, whose cancel stays a failure.
     let client_left = request.outcome == "canceled"
         && request.kind != Kind::Probe.as_str()
-        && request.error_code.as_deref() == Some("client_gone");
+        && request.error_code.as_deref() == Some(phoebis_relay::CLIENT_GONE_CODE);
     if held {
         d.probes_held = 1;
     } else if request.refused {
@@ -745,7 +763,7 @@ pub fn deltas_of(
                 .entry(TRANSFORMATIONS_NONE.into())
                 .or_default() += 1;
         }
-        if moved(a) && dropped.keys().any(|key| under_account_reason(key)) {
+        if dropped.keys().any(|key| under_account_reason(key)) && moved(a) {
             *d.input_transformations
                 .entry(TRANSFORMATIONS_MOVED.into())
                 .or_default() += 1;
@@ -820,15 +838,12 @@ pub fn deltas_of(
 /// from the cache, compared in whole tokens. An attempt that read nothing is no hit, an empty prompt included.
 fn read_most_of_its_prompt(a: &AttemptRecord) -> bool {
     let prompt = a.usage();
-    prompt.cache_read > 0
-        && 100 * prompt.cache_read
-            >= HIT_SHARE_PERCENT
-                * (prompt.cache_read + prompt.write_5m + prompt.write_1h + prompt.input)
+    prompt.cache_read > 0 && 100 * prompt.cache_read >= HIT_SHARE_PERCENT * prompt.prompt_tokens()
 }
 
 /// The miss reasons that leave a short read to the cache's expiry: none, and the relay's own words. A reason the
 /// upstream names says why its comparison missed.
-const EXPIRY_REASONS: [&str; 4] = ["none", "not_requested", "not_returned", "pending"];
+const EXPIRY_REASONS: [&str; 4] = phoebis_relay::RELAY_MISS_REASONS;
 
 /// Whether the cache of `request`'s session expired between its previous request and this one: a request that is
 /// neither a probe nor a token count, whose serving attempt carries a usage report and the size the selection handed
@@ -1018,11 +1033,11 @@ pub fn fold_request(
     // in both rows, and a later request's row otherwise, where the counters saturate at zero while the totals still
     // balance. Accepted for a record replaced across one restart.
     if let Some((old_request, old_attempts)) = previous {
-        for old in deltas_of(old_request, old_attempts, prices, FoldRules::ALL) {
+        for old in deltas_of(old_request, old_attempts, prices) {
             unfold(tx, &old)?;
         }
     }
-    for delta in deltas_of(request, attempts, prices, FoldRules::ALL) {
+    for delta in deltas_of(request, attempts, prices) {
         fold_delta(tx, &delta)?;
     }
     for a in attempts {
@@ -1102,6 +1117,27 @@ pub(crate) fn unfold(tx: &Transaction<'_>, delta: &RollupRow) -> Result<(), Ledg
     Ok(())
 }
 
+/// Moves a request from `was` to `now`, two deltas of one key, in one read and one write, with the row `unfold` and
+/// then `fold_delta` would leave: `now` where no row stands or where the row holds nothing once `was` is out.
+pub(crate) fn refold_delta(
+    tx: &Transaction<'_>,
+    was: &RollupRow,
+    now: &RollupRow,
+) -> Result<(), LedgerError> {
+    match read_rollup(tx, was)? {
+        Some(mut row) => {
+            row.subtract(was);
+            if row.holds_nothing() {
+                write_rollup(tx, now)
+            } else {
+                row.add(now);
+                write_rollup(tx, &row)
+            }
+        }
+        None => write_rollup(tx, now),
+    }
+}
+
 fn reads_utilization(a: &AttemptRecord) -> bool {
     a.ratelimit_5h_utilization.is_some()
         || a.ratelimit_7d_utilization.is_some()
@@ -1116,17 +1152,6 @@ fn moved(a: &AttemptRecord) -> bool {
         .as_deref()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .is_some_and(|v| !v["moved"].is_null())
-}
-
-/// Whether a dropped-blocks key names one of the two account reasons, read off the key's suffix: `identifier_byte`
-/// admits a dot inside a word, so a split at a dot could cut the type or the reason.
-fn under_account_reason(key: &str) -> bool {
-    [
-        ".end_user_binding_mismatch",
-        ".organization_binding_mismatch",
-    ]
-    .iter()
-    .any(|reason| key.ends_with(reason))
 }
 
 /// The serving attempt (the last one; `finish` writes usage there and nowhere else) and its cache-write
@@ -1184,17 +1209,13 @@ pub fn fold_keepalive(tx: &Transaction<'_>, delta: &KeepaliveDelta) -> Result<()
         &delta.account_id,
         &delta.canonical_model,
         &delta.kind,
-        &delta
-            .user_agent
-            .as_deref()
-            .map_or_else(|| UNATTRIBUTED.into(), fold_user_agent),
+        &fold_user_agent_of(delta.user_agent.as_deref()),
         // Folded as `deltas_of` folds the request row's, so a delta lands on the label its request's row keys, and an
         // empty client, a default-built delta's, where an unlabeled request does.
-        &if delta.client.is_empty() {
-            UNATTRIBUTED.into()
-        } else {
-            fold_identifier(&delta.client)
-        },
+        &fold_identifier_of(
+            (!delta.client.is_empty()).then_some(delta.client.as_str()),
+            UNATTRIBUTED,
+        ),
         NO_EFFORT,
         NO_CLASS,
         delta.speed.as_str(),
@@ -1596,17 +1617,9 @@ pub fn fold_routing_conditions(
             )
         })
         .collect();
-    let refunded_after = |index: usize, account: &str, window: &str| {
+    let later_on = |index: usize, account: &str, refunds_window: &dyn Fn(&Row) -> bool| {
         refunds.iter().any(|(position, e)| {
-            *position > index
-                && e.account_id.as_deref() == Some(account)
-                && if e.kind == LIMIT_RESET_CLAIMED {
-                    e.detail["cleared"]
-                        .as_array()
-                        .is_some_and(|cleared| cleared.iter().any(|named| named == window))
-                } else {
-                    e.detail["window"] == window
-                }
+            *position > index && e.account_id.as_deref() == Some(account) && refunds_window(e)
         })
     };
     let mut rounds: BTreeMap<&str, (i64, u64, BTreeSet<&str>)> = BTreeMap::new();
@@ -1624,7 +1637,17 @@ pub fn fold_routing_conditions(
             .account_id
             .as_deref()
             .zip(event.detail["window"].as_str())
-            .is_some_and(|(account, window)| refunded_after(index, account, window))
+            .is_some_and(|(account, window)| {
+                later_on(index, account, &|e| {
+                    if e.kind == LIMIT_RESET_CLAIMED {
+                        e.detail["cleared"]
+                            .as_array()
+                            .is_some_and(|cleared| cleared.iter().any(|named| named == window))
+                    } else {
+                        e.detail["window"] == window
+                    }
+                })
+            })
         {
             continue;
         }
@@ -1648,18 +1671,6 @@ pub fn fold_routing_conditions(
         );
     }
 
-    let cleared: Vec<(usize, &str, &str)> = events
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.kind == WINDOW_CLEARED)
-        .filter_map(|(index, e)| {
-            Some((
-                index,
-                e.account_id.as_deref()?,
-                e.detail["window"].as_str().unwrap_or("unknown"),
-            ))
-        })
-        .collect();
     // Each spent window with whether a `window_cleared` on the same account and window came after it in the events'
     // order. Every clear the query reads sits at or before `now`, so a spent window a clear followed reaches no move.
     let spent: Vec<(&str, i64, &str, &serde_json::Value, bool)> = events
@@ -1669,11 +1680,10 @@ pub fn fold_routing_conditions(
         .filter_map(|(index, e)| {
             let account = e.account_id.as_deref()?;
             let window = e.detail["window"].as_str().unwrap_or("unknown");
-            let ended = cleared
-                .iter()
-                .any(|(position, cleared_on, cleared_window)| {
-                    *position > index && *cleared_on == account && *cleared_window == window
-                });
+            let ended = later_on(index, account, &|e| {
+                e.kind == WINDOW_CLEARED
+                    && e.detail["window"].as_str().unwrap_or("unknown") == window
+            });
             Some((account, e.at, window, &e.detail, ended))
         })
         .collect();
@@ -2797,7 +2807,7 @@ mod tests {
         attempts: &[AttemptRecord],
         prices: &PriceRevisions,
     ) -> RollupRow {
-        let mut deltas = deltas_of(r, attempts, prices, FoldRules::ALL);
+        let mut deltas = deltas_of(r, attempts, prices);
         assert_eq!(deltas.len(), 1, "{deltas:?}");
         deltas.remove(0)
     }
@@ -3937,7 +3947,6 @@ mod tests {
                 },
             ],
             &prices(),
-            FoldRules::ALL,
         );
         let seen: Vec<_> = deltas
             .iter()
@@ -4030,7 +4039,6 @@ mod tests {
             &r,
             &[prompted(1, "a", over + 1), unanswered(2, "b")],
             &prices(),
-            FoldRules::ALL,
         );
         let seen: Vec<_> = deltas
             .iter()
@@ -4148,7 +4156,6 @@ mod tests {
             &r,
             &[million(1, "fast"), million(2, STANDARD_SPEED)],
             &prices(),
-            FoldRules::ALL,
         );
         let seen: Vec<_> = deltas
             .iter()

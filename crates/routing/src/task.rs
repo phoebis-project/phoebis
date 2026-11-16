@@ -178,7 +178,7 @@ impl Observation {
 
 /// Whether a dropped-blocks key names one of the two account reasons, read off the key's suffix: a word of the key can
 /// hold a dot, so a split at a dot could cut the type or the reason.
-fn under_account_reason(key: &str) -> bool {
+pub fn under_account_reason(key: &str) -> bool {
     [
         ".end_user_binding_mismatch",
         ".organization_binding_mismatch",

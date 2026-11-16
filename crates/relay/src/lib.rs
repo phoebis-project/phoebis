@@ -47,7 +47,7 @@ pub use classify::{Cooldown, Verdict, SPEND_CAP_REASON};
 pub use drift::DriftKind;
 pub use errors::{
     anthropic_error, no_store, no_store_answer, ACCOUNTS_AT_CAP, ACCOUNTS_EXHAUSTED,
-    ACCOUNTS_UNAVAILABLE, ERROR_CODE_HEADER, LEDGER_BEHIND,
+    ACCOUNTS_UNAVAILABLE, BODY_OVER_BUDGET, CLIENT_GONE_CODE, ERROR_CODE_HEADER, LEDGER_BEHIND,
 };
 pub use hold::INSPECT_BUFFER;
 pub use identity::{identifier_byte, is_valid_id};
@@ -56,6 +56,7 @@ pub use messages::{
     new_request_id, router, Accounting, AccountingSource, Limits, Probe, ProbeObstacle, Relay,
     RelayOutcome, ShutdownMark, MEMORY_FLUSH_INTERVAL,
 };
+pub use observe::RELAY_MISS_REASONS;
 pub use portability::portable_of;
 pub use ratelimit::{retry_after, UnifiedHeaders, FAST_INPUT, FAST_OUTPUT};
 pub use serve::{

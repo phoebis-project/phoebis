@@ -537,7 +537,7 @@ pub async fn no_store_answer(response: Response) -> Response {
 /// The error code for a request the bound account's removal cut short.
 pub(crate) const ACCOUNT_CANCELED_CODE: &str = "account_canceled";
 /// The error code for a request the client's leaving cut short.
-pub(crate) const CLIENT_GONE_CODE: &str = "client_gone";
+pub const CLIENT_GONE_CODE: &str = "client_gone";
 /// The error code for a request the router's shutdown cut short.
 pub(crate) const ROUTER_SHUTDOWN_CODE: &str = "router_shutdown";
 

@@ -21,7 +21,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Params, Transaction};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{begin_write, LANDING_STAMP_SQL};
+use crate::db::{begin_write, newest_landing_stamp};
 use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
 use crate::price::{is_free_classifier, RowKey};
 use crate::pricing::{Band, PriceRevisions, Speed};
@@ -32,10 +32,10 @@ use crate::query::{
 };
 use crate::record::{AttemptRecord, RequestRecord};
 use crate::refold::{
-    first_difference, read_meta, revisions_of, thresholds_of, write_meta, Thresholds,
+    delete_meta, first_difference, read_meta, revisions_of, thresholds_of, write_meta, Thresholds,
 };
 use crate::rollup::{
-    fold_identifier, hour_of, last_millisecond, serving_speed, trailing_day_hours, NO_CLASS,
+    fold_identifier_of, hour_of, last_millisecond, serving_speed, trailing_day_hours, NO_CLASS,
     PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
 };
 use crate::{LedgerDb, LedgerError};
@@ -226,8 +226,6 @@ pub(crate) fn sums_of(
     }
     let serving = request.serving.as_ref();
     let answered = serving.filter(|s| s.answered());
-    let folded =
-        |raw: Option<&str>, none: &str| raw.map_or_else(|| none.to_string(), fold_identifier);
     let key = SumsKey {
         agent_id: request
             .agent_id
@@ -263,9 +261,9 @@ pub(crate) fn sums_of(
         tier: serving
             .and_then(|s| s.tier.clone())
             .unwrap_or_else(|| UNATTRIBUTED.to_string()),
-        client: folded(request.client.as_deref(), UNATTRIBUTED),
-        classifier: folded(request.classifier.as_deref(), NO_CLASS),
-        request_class: folded(request.request_class.as_deref(), NO_CLASS),
+        client: fold_identifier_of(request.client.as_deref(), UNATTRIBUTED),
+        classifier: fold_identifier_of(request.classifier.as_deref(), NO_CLASS),
+        request_class: fold_identifier_of(request.request_class.as_deref(), NO_CLASS),
         received_hour: hour_of(request.received_at),
         completed_hour: hour_of(serving.map_or(request.received_at, |s| s.completed_at)),
     };
@@ -598,10 +596,9 @@ pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, 
             }
             let walked = walk(&read, cursor)?;
             let summed = match &walked.unmarked {
-                Some((key, _)) => Some((
-                    totals_of(&read, key, prices)?,
-                    read.query_row(LANDING_STAMP_SQL, [], |r| r.get::<_, i64>(0))?,
-                )),
+                Some((key, _)) => {
+                    Some((totals_of(&read, key, prices)?, newest_landing_stamp(&read)?))
+                }
                 None => None,
             };
             (walked, summed)
@@ -627,7 +624,7 @@ pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, 
 /// meets again, so the fill walks from the top.
 pub(crate) fn drop_cursor_under_way(tx: &Transaction<'_>) -> Result<(), LedgerError> {
     if read_meta::<FillCursor>(tx, FILL_CURSOR_KEY)?.is_some_and(|cursor| !cursor.ended) {
-        tx.execute("DELETE FROM meta WHERE key = ?1", params![FILL_CURSOR_KEY])?;
+        delete_meta(tx, FILL_CURSOR_KEY)?;
     }
     Ok(())
 }
@@ -662,7 +659,7 @@ pub fn unmark_rebanded_sessions(
                         cleared += 1;
                     }
                 }
-                tx.execute("DELETE FROM meta WHERE key = ?1", params![FILL_CURSOR_KEY])?;
+                delete_meta(&tx, FILL_CURSOR_KEY)?;
             }
             None => {}
         }

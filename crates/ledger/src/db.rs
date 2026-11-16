@@ -818,14 +818,18 @@ pub(crate) fn insert_samples_in(
 /// column, which no `landed_after` filter answers. The previous stamp is read in the row's own transaction, so a
 /// writer that starts again under a clock set back still stamps above every row written before.
 fn landing_stamp(tx: &Transaction<'_>, now: i64) -> Result<i64, LedgerError> {
-    let previous: i64 = tx
-        .prepare_cached(LANDING_STAMP_SQL)?
-        .query_row([], |r| r.get(0))?;
-    Ok(now.max(previous + 1))
+    Ok(now.max(newest_landing_stamp(tx)? + 1))
 }
 
 /// The writer's landing stamp read, a `MAX` the landed-at index answers from its last entry.
 pub(crate) const LANDING_STAMP_SQL: &str = "SELECT COALESCE(MAX(landed_at), 0) FROM requests";
+
+/// The newest `landed_at` the ledger holds, 0 where it holds none.
+pub(crate) fn newest_landing_stamp(conn: &Connection) -> Result<i64, LedgerError> {
+    Ok(conn
+        .prepare_cached(LANDING_STAMP_SQL)?
+        .query_row([], |r| r.get(0))?)
+}
 
 /// The serving facts' columns of the request row, in the order `serving_values` binds them, so the landing and the
 /// backfill write one list.
@@ -1224,7 +1228,14 @@ pub(crate) fn update_cache_map_in(
         .execute(params![write.request_id, write.seq, entries])?)
 }
 
-pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused, fallback_digest, serving_account_id, reached_upstream, outcome_class, speed, cache_miss_reason, stop_reason, refusal_category, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, input_transformations, cache_marker, thinking_diagnostics_source FROM requests";
+/// The `requests` columns in the order `row_to_request` reads them, a literal so a constant statement can `concat!` it.
+macro_rules! request_columns {
+    () => {
+        "id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held, stream_end_at, diagnostics_source, guardrail_id, classifier, client_contract, refused, fallback_digest, serving_account_id, reached_upstream, outcome_class, speed, cache_miss_reason, stop_reason, refusal_category, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, input_transformations, cache_marker, thinking_diagnostics_source"
+    };
+}
+pub(crate) const REQUEST_COLUMNS: &str = request_columns!();
+pub(crate) const REQUEST_SELECT: &str = concat!("SELECT ", request_columns!(), " FROM requests");
 pub(crate) const ATTEMPT_SELECT: &str = "SELECT request_id, attempt, account_id, account_kind, pin_epoch, started_at, finished_at, ttfb_ms, ttfc_ms, upstream_status, upstream_request_id, outcome, cooldown_scope, cooldown_until, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, service_tier, cache_miss_reason, client_drift, ratelimit_5h_utilization, ratelimit_5h_reset, ratelimit_7d_utilization, ratelimit_7d_reset, ratelimit_7d_oi_utilization, ratelimit_7d_oi_reset, overage_in_use, overage_utilization, thinking_tokens, web_search_requests, web_fetch_requests, stop_reason, stop_sequence, served_model, speed, inference_geo, cleared_input_tokens, refusal_category, refusal_recommended_model, selection, upstream_message_id, written_at, tier, usage_based, issued_digest, input_transformations, previous_input_tokens FROM attempts";
 
 /// Column `i` as an optional count, `None` where it is null.

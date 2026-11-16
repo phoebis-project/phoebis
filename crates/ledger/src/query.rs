@@ -32,9 +32,9 @@ use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
 use crate::rollup::{
-    add_counts, deltas_of, detail_json, fold_identifier, fold_user_agent, hour_end, hour_of,
+    add_counts, deltas_of, detail_json, fold_identifier_of, fold_user_agent_of, hour_end, hour_of,
     last_millisecond, migration_reason, read_account_rollups, read_rollups_paged, row_to_rollup_at,
-    trailing_day_hours, visit_rollups, CostSplit, FoldRules, KeySelector, RollupRow, RollupSelect,
+    trailing_day_hours, visit_rollups, CostSplit, KeySelector, RollupRow, RollupSelect,
     RoutingKind, COLUMNS as ROLLUP_COLUMNS, DIMENSION_MAX_BYTES, EXPIRED_BETWEEN_TURNS, HIT_SUFFIX,
     NO_CLASS, NO_EFFORT, NO_PLAN_PROBES, OTHER_DIMENSION, TRANSFORMATIONS_MOVED,
     TRANSFORMATIONS_NONE, UNATTRIBUTED,
@@ -864,14 +864,15 @@ fn passes_request_patterns(
     client: Option<&str>,
     user_agent: Option<&str>,
 ) -> bool {
-    let passes = |patterns: &[String], raw: Option<&str>, fold: fn(&str) -> String| {
+    let passes = |patterns: &[String], raw: Option<&str>, fold: fn(Option<&str>) -> String| {
         if patterns.is_empty() {
             return true;
         }
-        let value = raw.map_or_else(|| UNATTRIBUTED.to_string(), fold);
+        let value = fold(raw);
         patterns.iter().any(|p| crate::pattern::matches(p, &value))
     };
-    passes(user_agents, user_agent, fold_user_agent) && passes(clients, client, fold_identifier)
+    passes(user_agents, user_agent, fold_user_agent_of)
+        && passes(clients, client, |raw| fold_identifier_of(raw, UNATTRIBUTED))
 }
 
 /// The same three queries `LedgerDb::request` runs, over a connection the caller already holds.
@@ -3723,12 +3724,12 @@ const SIDE_CHUNK: usize = 500;
 
 /// The earlier sides of the hour that starts at `hour` (seconds), one per instant of `instants` (milliseconds,
 /// ascending, as `boundary_instants` answers them), folded from the hour's request rows and their attempts as
-/// `refold_bands` folds a request: through `deltas_of` on `prices` under `FoldRules::ALL`, since the rules move no key
-/// and no token count. The read takes the requests received from the hour's first millisecond up to its last instant,
-/// since each later request belongs to the stored row's remainder. A request that arrives on an entry's own
+/// `refold_bands` folds a request: through `deltas_of` on `prices` under the landing's rules, since the rules move no
+/// key and no token count. The read takes the requests received from the hour's first millisecond up to its last
+/// instant, since each later request belongs to the stored row's remainder. A request that arrives on an entry's own
 /// millisecond joins the side after it, as `in_force` reads that entry from its instant on. An hour whose request rows
-/// the purge took answers sides that hold no count. The sides assume that today's `deltas_of` names the key under
-/// which a kept request's tokens stand, so a request whose stored row keeps an older band can split a row of today's.
+/// the purge took answers sides that hold no count. The sides assume that today's `deltas_of` names the key under which
+/// a kept request's tokens stand, so a request whose stored row keeps an older band can split a row of today's.
 pub(crate) fn earlier_sides(
     conn: &Connection,
     hour: i64,
@@ -3748,7 +3749,7 @@ pub(crate) fn earlier_sides(
     let mut fold = |requests: Vec<RequestRecord>| -> Result<(), LedgerError> {
         for (request, attempts) in with_attempts(conn, requests)? {
             let side = &mut sides[instants.partition_point(|at| *at <= request.received_at)];
-            for mut delta in deltas_of(&request, &attempts, prices, FoldRules::ALL) {
+            for mut delta in deltas_of(&request, &attempts, prices) {
                 let usage = delta.usage();
                 let counts = side.counts.entry(SideKey::take(&mut delta)).or_default();
                 *counts = usage_sum(*counts, usage);
