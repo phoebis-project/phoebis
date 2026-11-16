@@ -3567,7 +3567,7 @@ async fn a_reading_reported_for_a_previous_incarnation_changes_nothing() {
     handle
         .report(Report::Sample {
             account_id: "a".into(),
-            sample: sample_with(1_500, FIVE_HOUR, 1.0, None),
+            sample: as_poll(sample_with(1_500, FIVE_HOUR, 1.0, None)),
             incarnation: 1,
             source_request_id: None,
         })
@@ -5559,7 +5559,10 @@ async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
     handle.report(rejection()).await;
     // The poll behind this reading read the endpoint before the second rejection and landed after it.
     handle
-        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(2_000, FIVE_HOUR, 0.4, None)),
+        ))
         .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
@@ -11384,7 +11387,12 @@ async fn a_later_reset_reads_the_stored_reset_passed_only_within_the_slack_of_th
     handle
         .report(observed(
             "a",
-            sample_with(1_000, FIVE_HOUR, 0.6, Some(2_000 + RESET_SLACK_MS + 1)),
+            as_poll(sample_with(
+                1_000,
+                FIVE_HOUR,
+                0.6,
+                Some(2_000 + RESET_SLACK_MS + 1),
+            )),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -11481,8 +11489,7 @@ fn reset_pair(event: &phoebis_routing::RouterEvent) -> (Option<&str>, Option<&st
 }
 
 #[tokio::test]
-async fn a_poll_s_and_a_head_s_reading_carry_the_plan_and_the_tier_the_account_held_when_each_was_taken(
-) {
+async fn two_heads_readings_carry_the_plan_and_the_tier_the_account_held_when_each_was_taken() {
     let store = seeded_oauth(&["a"]);
     with_tier(&store, "a");
     let now = Arc::new(AtomicI64::new(4_000));
@@ -11666,7 +11673,7 @@ async fn a_poll_naming_a_head_s_reset_to_the_millisecond_names_the_same_reset() 
     handle
         .report(observed(
             "a",
-            sample_with(2_000, FIVE_HOUR, 0.4, Some(reset + 400)),
+            as_poll(sample_with(2_000, FIVE_HOUR, 0.4, Some(reset + 400))),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -11767,7 +11774,7 @@ async fn a_clock_reset_then_a_new_sample_names_one_row() {
     handle
         .report(observed(
             "a",
-            sample_with(3_000, FIVE_HOUR, 0.1, Some(2_000 + 5 * HOUR)),
+            as_poll(sample_with(3_000, FIVE_HOUR, 0.1, Some(2_000 + 5 * HOUR))),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -11809,7 +11816,7 @@ async fn a_clock_reset_a_later_poll_names_to_the_millisecond_is_announced_once()
     handle
         .report(observed(
             "a",
-            sample_with(2_100, FIVE_HOUR, 0.1, Some(2_400)),
+            as_poll(sample_with(2_100, FIVE_HOUR, 0.1, Some(2_400))),
         ))
         .await;
     handle.samples().await.unwrap();
@@ -14480,7 +14487,10 @@ async fn the_spent_state_reads_the_raised_reading_through_a_head_within_the_marg
     now.store(2_000, Ordering::SeqCst);
     let reset = Some(10 * HOUR);
     handle
-        .report(observed("a", sample_with(2_000, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(2_000, FIVE_HOUR, 1.0, reset)),
+        ))
         .await;
     assert!(matches!(
         next_spent(&mut events).await,
@@ -14513,7 +14523,10 @@ async fn the_spent_state_reads_the_raised_reading_through_a_head_within_the_marg
     );
     now.store(4_000, Ordering::SeqCst);
     handle
-        .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(4_000, FIVE_HOUR, 1.0, reset)),
+        ))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
@@ -14686,7 +14699,10 @@ async fn a_wall_announced_by_a_sample_is_not_announced_again_under_its_reset() {
     let mut events = handle.subscribe_events();
     let reset = Some(10 * HOUR);
     handle
-        .report(observed("a", sample_with(2_000, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(2_000, FIVE_HOUR, 1.0, reset)),
+        ))
         .await;
     assert!(matches!(
         next_spent(&mut events).await,
@@ -14700,7 +14716,10 @@ async fn a_wall_announced_by_a_sample_is_not_announced_again_under_its_reset() {
     // The poll names the wall's reset again, the cycle the first poll's announcement was recorded for.
     now.store(4_000, Ordering::SeqCst);
     handle
-        .report(observed("a", sample_with(4_000, FIVE_HOUR, 1.0, reset)))
+        .report(observed(
+            "a",
+            as_poll(sample_with(4_000, FIVE_HOUR, 1.0, reset)),
+        ))
         .await;
     handle.samples().await.unwrap();
     no_further_event(&mut events).await;
@@ -14747,7 +14766,7 @@ async fn a_head_raised_to_the_wall_keeps_the_stored_reset_so_a_later_reset_reads
     handle
         .report(observed(
             "a",
-            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+            as_poll(sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR))),
         ))
         .await;
     match next_window_edge(&mut events).await {
@@ -14850,7 +14869,7 @@ async fn a_clear_that_names_no_reset_is_stored_under_the_stored_reset_so_a_later
     handle
         .report(observed(
             "a",
-            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+            as_poll(sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR))),
         ))
         .await;
     match next_window_edge(&mut events).await {
@@ -14923,7 +14942,7 @@ async fn a_wall_read_by_a_head_that_names_no_reset_is_stored_under_the_stored_re
     handle
         .report(observed(
             "a",
-            sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR)),
+            as_poll(sample_with(reset + 1_000, FIVE_HOUR, 0.1, Some(15 * HOUR))),
         ))
         .await;
     match next_window_edge(&mut events).await {
@@ -15234,7 +15253,7 @@ async fn a_wall_that_outlives_its_reset_is_held_for_the_windows_length_from_the_
     handle
         .report(observed(
             "a",
-            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+            as_poll(sample_with(2_000, FIVE_HOUR, 1.0, Some(reset))),
         ))
         .await;
     assert!(matches!(
@@ -15396,7 +15415,7 @@ async fn a_head_within_the_margin_inside_the_slack_past_the_announced_reset_re_b
     handle
         .report(observed(
             "a",
-            sample_with(2_000, FIVE_HOUR, 1.0, Some(reset)),
+            as_poll(sample_with(2_000, FIVE_HOUR, 1.0, Some(reset))),
         ))
         .await;
     assert!(matches!(

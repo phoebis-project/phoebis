@@ -23318,13 +23318,21 @@ fn the_cedar_window_of_2026_10_12_replays_with_one_rewrite() {
     // T + 271 min 14 s: the poll reads alder's Fable week spent, its reset six days out.
     st.record_sample(
         "alder",
-        with_fable(
-            UtilizationSample {
+        UtilizationSample {
+            observed_at: T + 271 * MINUTE + 14_000,
+            poll: true,
+            ..Default::default()
+        }
+        .with(
+            SEVEN_DAY_FABLE,
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(alder_fable_reset),
                 observed_at: T + 271 * MINUTE + 14_000,
-                ..Default::default()
+                source: WindowSource::Poll,
+                plan: None,
+                tier: None,
             },
-            1.0,
-            Some(alder_fable_reset),
         ),
         0,
     );

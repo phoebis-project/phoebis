@@ -6840,7 +6840,9 @@ mod tests {
             "both spellings have passed"
         );
         let mut state = fresh();
-        read(&mut state, FIVE_HOUR, 0.5, Some(R + 500), R - HOUR_MS);
+        let mut poll = sampled(&[FIVE_HOUR], 0.5, R - HOUR_MS, true);
+        poll.windows.get_mut(FIVE_HOUR).unwrap().reset = Some(R + 500);
+        state.record_sample("a", poll, R - HOUR_MS);
         let entry = written(&mut state, Some(R), R - MINUTE);
         assert_eq!(entry.reset, Some(R));
         assert!(
@@ -6859,7 +6861,11 @@ mod tests {
         let mut state = fresh();
         read(&mut state, FIVE_HOUR, 0.5, Some(R), R - HOUR_MS);
         let entry = written(&mut state, Some(R), R - 30 * MINUTE);
-        read(&mut state, FIVE_HOUR, 0.0, None, R + MINUTE);
+        state.record_sample(
+            "a",
+            sampled(&[FIVE_HOUR], 0.0, R + MINUTE, true),
+            R + MINUTE,
+        );
         assert!(
             state.slow_down_stale("a", &entry, R + 2 * MINUTE),
             "its own reset passed under a reading naming none"
