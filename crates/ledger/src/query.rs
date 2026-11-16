@@ -4986,9 +4986,11 @@ pub struct SeriesFilter {
     /// Milliseconds; the range is `from` inclusive to `to` exclusive.
     pub from: i64,
     pub to: i64,
-    /// One point per bucket, from `bucket_seconds(from, to)`; buckets align with the hour edges as `series` aligns them.
+    /// One point per bucket, from `bucket_seconds(from, to)`; buckets align with the hour edges as `series` aligns
+    /// them.
     pub bucket_seconds: i64,
-    /// Account ids; empty means every account. The one scope `rewrite_series` and `moves_by_reason` read, since the account rollups carry no other dimension.
+    /// Account ids; empty means every account. The one scope `rewrite_series` and `moves_by_reason` read, since the
+    /// account rollups carry no other dimension.
     pub accounts: Vec<String>,
     /// Key selectors as a `keys=` filter names them: a bare id names the live generation, `<id>@<generation>` that one,
     /// and the reserved id its rows at any generation. Empty means every key, and selectors none of which names a
@@ -5289,9 +5291,9 @@ pub struct RequestPrice {
     /// row.
     pub equivalent: Option<f64>,
     /// A plan row's shares of its tier's windows as `Priced::plan_shares` answers them, keyed `five_hour`,
-    /// `seven_day`, `seven_day_<family>`, a window the tables do not size `None`, and a billed row's zero on each window
-    /// its tier sizes, none for an api_key row. A free classifier call spends no window, so it leaves out a window its
-    /// tier does not size. `None` without a tier and for a free call on a tier the revision does not size.
+    /// `seven_day`, `seven_day_<family>`, a window the tables do not size `None`, and a billed row's zero on each
+    /// window its tier sizes, none for an api_key row. A free classifier call spends no window, so it leaves out a
+    /// window its tier does not size. `None` without a tier and for a free call on a tier the revision does not size.
     pub shares: Option<WindowShares>,
 }
 

@@ -2069,9 +2069,9 @@ async fn a_request_whose_answer_spells_the_overage_header_in_mixed_case_reads_th
     assert_eq!(skipped, ["overage"], "the head put the agent in overage");
 }
 
-/// Each wasted probe files under the funding its own answer took, as its cost row does: one probe on the plan and one in
-/// overage, both wasted at one cost, write one settlement row per funding, and each funding's waste reads against its
-/// own probe dollars at a ratio of one.
+/// Each wasted probe files under the funding its own answer took, as its cost row does: one probe on the plan and one
+/// in overage, both wasted at one cost, write one settlement row per funding, and each funding's waste reads against
+/// its own probe dollars at a ratio of one.
 #[tokio::test]
 async fn a_plan_probe_and_an_overage_probe_both_wasted_file_one_row_per_funding_at_a_ratio_of_one()
 {
@@ -2275,8 +2275,8 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_expired
 }
 
 /// The rig of the pending-probe cases: an api_key account under a 500-second idle window, a request at 0 s whose
-/// five-minute entry the probe at 270 s reads back and keeps to 570 s, and the tick at 540 s, past the window, that ends
-/// the recipe. The session went silent after its lease, so the window counts from the request.
+/// five-minute entry the probe at 270 s reads back and keeps to 570 s, and the tick at 540 s, past the window, that
+/// ends the recipe. The session went silent after its lease, so the window counts from the request.
 async fn ended_by_the_idle_limit() -> Rig {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
@@ -2868,9 +2868,9 @@ fn a_turn_failed_with_a_500(r: &Rig, id: &str) {
 }
 
 /// A turn the upstream failed is no evidence about the cache, so a retry reads the gap from the last turn that
-/// answered. A request at 0 s, a covering probe at 270 s keeping its entry to 570 s, and a turn at 330 s that fails with
-/// a 500: a retry inside the entry, past the first request's five-minute TTL, earns the credit the failed turn could
-/// not, and a retry past the entry reads nothing the probe kept, earns none, and settles the probe `expired`.
+/// answered. A request at 0 s, a covering probe at 270 s keeping its entry to 570 s, and a turn at 330 s that fails
+/// with a 500: a retry inside the entry, past the first request's five-minute TTL, earns the credit the failed turn
+/// could not, and a retry past the entry reads nothing the probe kept, earns none, and settles the probe `expired`.
 #[tokio::test]
 async fn a_retry_after_a_failed_turn_earns_the_credit_inside_the_probes_entry_and_none_past_it() {
     for (retry_after, expected) in [

@@ -2399,8 +2399,8 @@ impl RoutingState {
     }
 
     /// Stamps the account's retry `interval_ms` past `now` under the mark's `incarnation` and the account's next
-    /// ordinal, frees the slot, since the attempt that held it ended in this mark, and answers the ordinal: two marks in
-    /// one millisecond, or either side of a clock stepped back, still name two entries, so the first one's
+    /// ordinal, frees the slot, since the attempt that held it ended in this mark, and answers the ordinal: two marks
+    /// in one millisecond, or either side of a clock stepped back, still name two entries, so the first one's
     /// acknowledgment cannot credit the second.
     pub fn funding_marked(
         &mut self,

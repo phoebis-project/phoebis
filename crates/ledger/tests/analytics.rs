@@ -6403,7 +6403,8 @@ fn a_session_series_under_a_key_or_a_pool_ranks_and_prices_its_requests_alone() 
 }
 
 /// On six-hour buckets a range that starts inside a bucket reads back to the bucket's edge, and a session whose tokens
-/// lie there alone leaves the answer, so it takes none of the twenty slots: the twenty sessions of the range itself stay.
+/// lie there alone leaves the answer, so it takes none of the twenty slots: the twenty sessions of the range itself
+/// stay.
 #[test]
 fn a_session_with_tokens_before_the_ranges_first_hour_alone_takes_no_slot_of_the_twenty() {
     let db = LedgerDb::open_in_memory().unwrap();

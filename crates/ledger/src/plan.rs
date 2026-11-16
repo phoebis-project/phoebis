@@ -1161,8 +1161,8 @@ impl PlanTables {
     }
 
     /// The Pro share of `window`: `usage`'s units at the revision in force at `at` with the band read at `band_at`
-    /// (a completion where the reader has one, a rollup row's hour start, else `at`), over the anchor tier's capacity on
-    /// the window in the revision in force at `now`, the read's instant, so every figure a page sums divides by one
+    /// (a completion where the reader has one, a rollup row's hour start, else `at`), over the anchor tier's capacity
+    /// on the window in the revision in force at `now`, the read's instant, so every figure a page sums divides by one
     /// whole whatever revision priced its tokens. `None` where either side prices nothing.
     #[allow(clippy::too_many_arguments)]
     pub fn equivalent_at(

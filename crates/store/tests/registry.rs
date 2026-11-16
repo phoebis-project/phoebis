@@ -600,7 +600,7 @@ fn a_pool_inserted_without_a_placement_reads_by_strategy() {
 }
 
 #[test]
-fn a_pin_with_a_distinct_value_in_every_integer_column_and_every_optional_group_set_reads_back_as_written(
+fn a_pin_with_a_distinct_value_in_every_integer_field_and_every_optional_group_set_reads_back_as_written(
 ) {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store

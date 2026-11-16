@@ -3633,9 +3633,9 @@ pub(crate) struct FitRead {
     pub end: Option<i64>,
     /// The word of each window the request's model draws that the account holds a reading of, one its set no longer
     /// holds included, by three tests in order: `spent` at a prediction of 1.0 or more, `ending` inside the account's
-    /// wind-down, else `fits`, `rewrite_only` or `least_bad` on the window's own runway. A window outside the set has no
-    /// runway read, so the third test reads `fits` there. A paid source and, on a placement, an untiered account give
-    /// each window the read's verdict.
+    /// wind-down, else `fits`, `rewrite_only` or `least_bad` on the window's own runway. A window outside the set has
+    /// no runway read, so the third test reads `fits` there. A paid source and, on a placement, an untiered account
+    /// give each window the read's verdict.
     pub words: BTreeMap<String, &'static str>,
 }
 

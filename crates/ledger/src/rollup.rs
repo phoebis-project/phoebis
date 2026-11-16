@@ -3675,8 +3675,8 @@ mod tests {
     #[test]
     fn folding_two_requests_adds_a_replacement_subtracts_its_old_self_and_the_row_round_trips() {
         let db = crate::LedgerDb::open_in_memory().unwrap();
-        // The replaced request is a client's cancel beside a success, its answer dropped a block, and its body marked no
-        // cache it read or wrote, so its counts must leave with it.
+        // The replaced request is a client's cancel beside a success, its answer dropped a block, and its body marked
+        // no cache it read or wrote, so its counts must leave with it.
         let (req, attempts) = (
             RequestRecord {
                 canonical_model: SONNET.into(),

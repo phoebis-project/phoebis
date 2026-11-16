@@ -2379,8 +2379,8 @@ pub(crate) struct AccountContext {
     /// The router's samples per account as the poll or a head reported them, no charge added and no reset rolled:
     /// the readings an account's windows draw.
     pub reported: BTreeMap<String, UtilizationSample>,
-    /// Each account's uses of a limit reset by grant id and holder: the instant of the newest claim the upstream answered
-    /// `reset` under each incarnation of the account's id, and under none for the claims recorded without one.
+    /// Each account's uses of a limit reset by grant id and holder: the instant of the newest claim the upstream
+    /// answered `reset` under each incarnation of the account's id, and under none for the claims recorded without one.
     pub reset_uses: BTreeMap<String, ResetUses>,
     /// The router's spend window per usage-based account, at its clock.
     pub spend_windows: BTreeMap<String, SpendWindow>,
@@ -2840,8 +2840,8 @@ pub(crate) struct AccountLimitResetGrant {
     pub starts_at: i64,
     /// `blocked`, `cooldown`, `ended`, `paused`, `usable`, `used` or `waiting`.
     pub state: String,
-    /// Epoch milliseconds: the use through this router, null on a grant with a reset left and on one used elsewhere. The
-    /// use is the newest `limit_reset_claimed` row whose `incarnation` is the account row's, or that carries no
+    /// Epoch milliseconds: the use through this router, null on a grant with a reset left and on one used elsewhere.
+    /// The use is the newest `limit_reset_claimed` row whose `incarnation` is the account row's, or that carries no
     /// `incarnation` and is not older than the account row, so a use by an earlier holder of the id does not show.
     pub used_at: Option<i64>,
 }

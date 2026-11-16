@@ -1580,8 +1580,8 @@ async fn a_session_row_on_a_usage_based_seat_reads_its_burn_in_dollars() {
     );
 }
 
-/// A conversation pin of `agent` on `session` on `business` under `model`, used five milliseconds before the rig's clock
-/// and holding a last prompt.
+/// A conversation pin of `agent` on `session` on `business` under `model`, used five milliseconds before the rig's
+/// clock and holding a last prompt.
 fn line_pin(session: &str, agent: &str, model: &str, key_generation: i64) -> phoebis_store::PinRow {
     let now = common::NOW;
     phoebis_store::PinRow {

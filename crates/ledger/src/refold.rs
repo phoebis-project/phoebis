@@ -16,11 +16,11 @@
 //! keep the band they settled or were recorded in, which leaves the waste of a probe whose prompt falls between the old
 //! and the new threshold, inside the retained window, priced at the band it settled in.
 //!
-//! A fold rule (the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples, the
-//! tokens-per-second floor, the wide edge set) changes what a request adds to its hour, so the first start of a build
-//! that holds a rule folds again each retained request that landed before the rule's mark: its deltas under the rules
-//! it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand under. That
-//! pass runs before the band re-fold and resumes from a cursor of its own.
+//! A fold rule (the hits split off under each miss reason, the slow-down's hold left out of the millisecond samples,
+//! the tokens-per-second floor, the wide edge set) changes what a request adds to its hour, so the first start of a
+//! build that holds a rule folds again each retained request that landed before the rule's mark: its deltas under the
+//! rules it was folded under come out and its deltas under every rule go in, at the thresholds its rows stand under.
+//! That pass runs before the band re-fold and resumes from a cursor of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 

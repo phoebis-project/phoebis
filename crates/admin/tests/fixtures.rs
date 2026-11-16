@@ -1309,8 +1309,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 "succeeded",
             )
         },
-        // Pending beside the other rows' `none`, so the capture carries both words the relay reads from the member. With
-        // no breakpoint the answer read and wrote no cache.
+        // Pending beside the other rows' `none`, so the capture carries both words the relay reads from the member.
+        // With no breakpoint the answer read and wrote no cache.
         attempts: vec![AttemptRecord {
             cache_miss_reason: Some("pending".into()),
             cache_read_tokens: Some(0),

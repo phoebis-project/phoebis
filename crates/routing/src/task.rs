@@ -5347,17 +5347,17 @@ impl Task {
     /// reading's reset passed, is of that reset's cycle and takes that reset, raised or not, so the reading the fold
     /// stores keeps it and the next edge reads it passed. A reading within `SPENT_MARGIN` of 1.0 over a stored reading
     /// at the wall under the same reset cycle is then raised to the stored utilization with its own instant and source,
-    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. The cycle
-    /// is the announcement's for the account and window where one stands and the stored reading's reset and instant
-    /// where none does, and since no raised reading moves the announcement's instant, readings with no reset on either
-    /// side are held for the window's length from it and no longer. A reading under the margin is a real clear and
-    /// lands at its own utilization, so `window_edges` reads the window cleared and forgets the announcement, and the
-    /// next crossing announces anew. A reading of another cycle lands as read. Only a reading newer than the stored one
-    /// counts, since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as read.
-    /// Then a head truncates the percent a poll rounds, so a head's reading under the stored reading's reset takes the
-    /// stored figure plus the charges booked since where that figure lies inside the head's percent, else the nearer
-    /// edge of that percent, and the fold stores it as it comes. A head that reads a stored figure at the wall, or
-    /// more, a raised one among them, keeps its figure, and so does a poll.
+    /// so a head after a poll at 1.0 neither clears the window nor lets the next poll announce the wall again. The
+    /// cycle is the announcement's for the account and window where one stands and the stored reading's reset and
+    /// instant where none does, and since no raised reading moves the announcement's instant, readings with no reset on
+    /// either side are held for the window's length from it and no longer. A reading under the margin is a real clear
+    /// and lands at its own utilization, so `window_edges` reads the window cleared and forgets the announcement, and
+    /// the next crossing announces anew. A reading of another cycle lands as read. Only a reading newer than the stored
+    /// one counts, since the fold drops any other: an older reading, or one of the stored instant, goes to the fold as
+    /// read. Then a head truncates the percent a poll rounds, so a head's reading under the stored reading's reset
+    /// takes the stored figure plus the charges booked since where that figure lies inside the head's percent, else the
+    /// nearer edge of that percent, and the fold stores it as it comes. A head that reads a stored figure at the wall,
+    /// or more, a raised one among them, keeps its figure, and so does a poll.
     fn held_at_the_wall(
         &self,
         account_id: &str,
