@@ -87,11 +87,14 @@ const pin = (accountId, sessionId, burn, warm, over = {}) => ({
   burnUnit: 'window_share',
   burnWindow: 'five_hour',
   cacheTtlMs: 5 * MINUTE,
+  ended: false,
+  fast: false,
   keyId: 'desktop',
   lastInputTokens: 1_000,
   lastRefreshAt: at(warm ? NOW - MINUTE : NOW - 10 * MINUTE),
   mark: null,
   model: 'claude-sonnet-5',
+  moveCost: null,
   pinned: true,
   sessionId,
   ...over,
@@ -491,8 +494,13 @@ test('with load shedding off the preview opens by saying no round runs, then nam
 test('the round marks cold pins first, then warm ones by burn over the prompt they would rewrite, all by that under always, and cold ones alone under never', () => {
   // The cap is half of the 4.9 points an hour the three pins burn, which no pin covers alone. By burn over rewrite
   // warm-b's 2 over 100 tokens leads warm-e's 0.9 over 1000 and cold-a's 2 over 5000. Once one pin is marked, each pin
-  // left covers the rest of 0.45 points, and the round marks the cheapest move among those it may mark.
-  const pins = [pin('hot', 'cold-a', 0.02, false, { lastInputTokens: 5_000 }), pin('hot', 'warm-b', 0.02, true, { lastInputTokens: 100 }), pin('hot', 'warm-e', 0.009, true)];
+  // left covers the rest of 0.45 points, and the round marks the cheapest move among those it may mark, each move
+  // costing its prompt's tokens at 1e-7 apiece.
+  const pins = [
+    pin('hot', 'cold-a', 0.02, false, { lastInputTokens: 5_000, moveCost: 0.0005 }),
+    pin('hot', 'warm-b', 0.02, true, { lastInputTokens: 100, moveCost: 0.00001 }),
+    pin('hot', 'warm-e', 0.009, true, { moveCost: 0.0001 }),
+  ];
   const read = (warmSessions) => {
     const p = d.shedPreview(pool([hot, cool], { warmSessions }), [hot, cool], pins, NOW);
     return [p.sessions, p.warm];
@@ -504,9 +512,9 @@ test('the round marks cold pins first, then warm ones by burn over the prompt th
 
 test("the round marks the covering pin whose rewrite costs the least, though another stands before it in the order", () => {
   // A cap of a quarter puts the target at 1.75 of the 7 points an hour the two warm pins burn, and each covers it.
-  // warm-x leads the order by burn over prompt, 4 over 1,000 tokens against warm-y's 3 over 800, and warm-y's rewrite
-  // of 800 tokens is the cheaper move, so the round marks warm-y and removes its 3 points.
-  const pins = [pin('hot', 'warm-x', 0.04, true), pin('hot', 'warm-y', 0.03, true, { lastInputTokens: 800 })];
+  // warm-x leads the order by burn over prompt, 4 over 1,000 tokens against warm-y's 3 over 800, and warm-y's move,
+  // 0.00008 against warm-x's 0.0001, is the cheaper, so the round marks warm-y and removes its 3 points.
+  const pins = [pin('hot', 'warm-x', 0.04, true, { moveCost: 0.0001 }), pin('hot', 'warm-y', 0.03, true, { lastInputTokens: 800, moveCost: 0.00008 })];
   const preview = d.shedPreview(pool([hot, cool], { shedCap: 0.25 }), [hot, cool], pins, NOW);
   assert.deepEqual([preview.sessions, preview.warm, preview.covered], [1, 1, 0.03]);
 });
@@ -522,14 +530,74 @@ test("the round decays each pin's served burn from the instant it was served to 
   assert.deepEqual([unpriced.sessions, unpriced.covered], [1, 0.03], 'the unpriced pin stays unmarked and counts among the pins, so the priced one is not the last');
 });
 
+/**
+ * A line as the Sessions route serves it, its own pin's figures: its burn on `burnWindow` decayed to `burnAt`, the
+ * instant of the read, warm until four minutes after it or cold since five minutes before it.
+ */
+const agentLine = (accountId, agentId, burn, warm, over = {}) => ({
+  accountId,
+  agentId,
+  burn,
+  burnAt: at(NOW),
+  burnUnit: 'window_share',
+  burnWindow: 'five_hour',
+  ended: false,
+  fast: false,
+  lastInputTokens: 1_000,
+  model: 'claude-sonnet-5',
+  moveCost: null,
+  warm,
+  warmUntil: at(warm ? NOW + 4 * MINUTE : NOW - 5 * MINUTE),
+  ...over,
+});
+
 test("the preview's round leaves out a pin whose line reads its agent ended, from its order, its sum and its count", () => {
   // With both pins walked the cap's half of their 5 points an hour is 2.5, which a's 3 covers, leaving b's 2 on hot.
-  // With b's agent ended the round walks a alone, and its mark would leave none of the burn on hot.
-  const b = (ended) => pin('hot', 'b', 0.02, false, { agentContexts: [{ agentId: 'main', ended, model: 'claude-sonnet-5' }] });
+  // With b's agent ended the round walks a alone, and its mark would leave none of the burn on hot. b walks as its
+  // line, which holds its agent and model, so the line's own mark is the one read.
+  const b = (ended) => pin('hot', 'b', 0.02, false, { agentContexts: [agentLine('hot', 'main', 0.02, false, { ended })] });
   const read = (sessions) => {
     const preview = d.shedPreview(pool([hot, cool]), [hot, cool], sessions, NOW);
     return [preview.sessions, preview.covered, preview.quiet];
   };
   assert.deepEqual(read([pin('hot', 'a', 0.03, false), b(false)]), [1, 0.03, null]);
   assert.deepEqual(read([pin('hot', 'a', 0.03, false), b(true)]), [0, 0, 'last']);
+});
+
+/**
+ * The round's sentence over `hot` where it marks the one cold pin of 3 points an hour beside t's 2: the cap's half of
+ * their 5 is 2.5, which the 3 alone covers, and its mark leaves t's 2 on hot, over the guard's tenth of 0.5.
+ */
+const markedOne = '1 member projects over the ceiling: hot. A round there would mark 1 session (0 warm), 3.0 %/h of the excess, to move to a sibling with runway.';
+/** The second priced pin on hot, which keeps the 3-point pin from being its member's last. */
+const second = pin('hot', 't', 0.02, false);
+
+test("the preview walks a subagent's pin on its own member", () => {
+  // The row's display pin and its line stand on cool, and its subagent's line burns 3 points an hour on hot.
+  const split = pin('cool', 's', 0.01, false, { agentContexts: [agentLine('cool', 'main', 0.01, false), agentLine('hot', 'sub', 0.03, false)] });
+  assert.equal(line([hot, cool], [split, second]), markedOne);
+  // The row's display pin on hot is the pin its own line holds, so the round walks one pin of 3 points an hour there.
+  const own = pin('hot', 'r', 0.03, false, { agentContexts: [agentLine('hot', 'main', 0.03, false)] });
+  assert.equal(line([hot, cool], [own, second]), markedOne, 'a display pin and its own line count as one pin');
+});
+
+test('a fast-lane pin is out of the round', () => {
+  const read = (fast) => line([hot, cool], [pin('hot', 'f', 0.03, false, { fast }), second]);
+  assert.equal(read(true), quiet("each is its member's last."), "on the fast lane f is out, and t is its member's last");
+  assert.equal(read(false), markedOne);
+});
+
+test('an ended row with no line is out of the round', () => {
+  const read = (ended) => line([hot, cool], [pin('hot', 'e', 0.03, false, { ended }), second]);
+  assert.equal(read(true), quiet("each is its member's last."), "with its agent ended e is out, and t is its member's last");
+  assert.equal(read(false), markedOne);
+});
+
+test('the pick compares the served cost of a move', () => {
+  // Under always both pins rank by burn over prompt: cold's 3 points an hour over 1,000 tokens ahead of warm's 3 over
+  // 2,000. The cap's half of their 6 is 3, which each covers, and each mark leaves the other's 3 on hot. warm's move
+  // costs a third of cold's though its prompt is twice cold's, so the round marks warm.
+  const pins = [pin('hot', 'cold', 0.03, false, { moveCost: 0.0003 }), pin('hot', 'warm', 0.03, true, { lastInputTokens: 2_000, moveCost: 0.0001 })];
+  const preview = d.shedPreview(pool([hot, cool], { warmSessions: 'always' }), [hot, cool], pins, NOW);
+  assert.deepEqual([preview.sessions, preview.warm], [1, 1]);
 });

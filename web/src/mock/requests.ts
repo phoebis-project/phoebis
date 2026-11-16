@@ -899,8 +899,11 @@ function liftCooldowns(rows: RequestLog[]) {
   }
 }
 
-/** A turn the story runs in fast mode: the desktop key's Opus inference. */
-const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => keyId === 'desktop' && model.includes('opus') && kind === 'inference';
+/**
+ * A turn the story runs in fast mode: the desktop key's Opus inference. A pin of that key and model rides the fast lane
+ * by the same rule, so the session rows read their lane here.
+ */
+export const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => keyId === 'desktop' && model.includes('opus') && kind === 'inference';
 
 /** The window a 429's cooldown names: the spent plan window its head read, else the retry-after. */
 const windowOfReason = (reason: string) => (reason.startsWith('429 on 5h') ? 'five_hour' : reason.startsWith('429 on 7d') ? 'seven_day' : 'retry_after');

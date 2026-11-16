@@ -9011,10 +9011,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 }
 {
   // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
-  // work's two primary pins (the busy laptop sessions) are its slice, so its preview reads them alone, whatever
-  // desktop, still all's key, holds there. Their Sonnet 4.5 has no weight in the cost model, so neither burn is priced
-  // and the round marks none. Studio, whose sessions project it past any ceiling under 95 %, leaves work for the check,
-  // and the annex is the sibling with runway.
+  // work's three primary pins are its slice, the two busy laptop sessions' Sonnet 4.5 pins and the Haiku 4.5 pin of one
+  // session's subagent, so its preview reads them alone, whatever desktop, still all's key, holds there. Sonnet 4.5
+  // has no weight in the cost model, so neither Sonnet burn is priced, and the subagent's burn scales its row's
+  // unpriced one, so the round marks none. Studio, whose sessions project it past any ceiling under 95 %, leaves work
+  // for the check, and the annex is the sibling with runway.
   const pools = await api.listPools();
   const story = (id) => pools.find((p) => p.id === id);
   const written = (p, members) => ({ ...poolInput(p), members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
@@ -9050,7 +9051,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
-    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool, and marks neither of laptop's two Sonnet 4.5 pins, which price nothing",
+    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool, and marks none of laptop's three pins there, which price nothing",
     ok: line === '1 member projects over the ceiling: primary. A round there would mark no session: none is priced.',
     missing: [line],
   });

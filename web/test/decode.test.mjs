@@ -2287,9 +2287,17 @@ test("a session row reads main's effort and every agent line with all its member
   const pinnedAt = new Date(1_791_719_000_000).toISOString();
   const warmUntil = new Date(1_791_721_300_000).toISOString();
   assert.deepEqual(s.agentContexts, [
-    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', pinnedAt, warm: false, warmUntil },
-    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', pinnedAt, warm: true, warmUntil },
+    { accountId: 'business', agentId: '7b2e', burn: 0.00104, burnAt: used, burnEquivalent: 0.0017333333333333335, burnUnit: 'window_share', burnUsd: 0.0215, burnWindow: 'five_hour', cacheTtlMs: 300_000, effort: 'low', ended: true, fast: false, lastInputTokens: 12_000, lastUsedAt: used, lifecycle: 'idle', model: 'claude-haiku-4-5', moveCost: null, pinnedAt, warm: false, warmUntil },
+    { accountId: 'direct', agentId: '4f0c', burn: 0.074, burnAt: used, burnEquivalent: null, burnUnit: 'usd', burnUsd: null, burnWindow: null, cacheTtlMs: 300_000, effort: 'high', ended: true, fast: false, lastInputTokens: 31_000, lastUsedAt: used, lifecycle: 'busy', model: 'claude-sonnet-5', moveCost: null, pinnedAt, warm: true, warmUntil },
   ]);
+});
+
+test("a session row and its line decode the round's three facts", () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  const { burn_at: _b, ...sent } = agentLine('7b2e', 'claude-haiku-4-5', { fast: true, move_cost: 0.0004 });
+  const s = d.decodeSession({ ...row, agent_contexts: [sent], ended: true, fast: true, move_cost: 0.0021 });
+  const [line] = s.agentContexts;
+  assert.deepEqual([s.ended, s.fast, s.moveCost, line.fast, line.moveCost], [true, true, 0.0021, true, 0.0004]);
 });
 
 test('an agent line reads null for each nullable member the route sends as null, and cold without warm', () => {

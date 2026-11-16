@@ -1958,17 +1958,24 @@ export interface AgentContext extends BurnFigures {
   /** The pin's account. */
   accountId: string;
   agentId: string;
+  /** The instant the pin's served burn is decayed to, as the row's `burnAt`. Null for a pin never renewed with
+   *  usage. */
+  burnAt: string | null;
   /** The cache TTL in force at the pin's last refresh. */
   cacheTtlMs: number | null;
   /** The effective effort of the request that placed or last renewed the pin, the word as the client sent it. */
   effort: string | null;
   /** Whether the pin's agent ended and its next request has not arrived. A shedding round leaves such a pin out. */
   ended: boolean;
+  /** Whether the pin's lane is the fast lane, as the row's `fast`. A round on a plan window leaves such a pin out. */
+  fast: boolean;
   lastInputTokens: number | null;
   lastUsedAt: string | null;
   /** The agent's lifecycle word from the keepalive engine's record, null where no mod reports it. */
   lifecycle: Lifecycle | null;
   model: string;
+  /** The cost a move of the pin pays as a warm pin, as the row's `moveCost`, null where the cost model sizes none. */
+  moveCost: number | null;
   /** The instant the pin was written on the account it stands on. */
   pinnedAt: string | null;
   /** The route's reading of the selector's rule: whether the pin's last refresh is inside its cache TTL. */
@@ -2045,9 +2052,13 @@ export interface Session extends BurnFigures {
   day: SessionDay;
   /** The effective effort of the pin's last turn, the word as the client sent it, and `null` with none or no pin. */
   effort: string | null;
+  /** Whether the display pin's agent ended and its next request has not arrived, null on a row with no pin. */
+  ended: boolean | null;
   /** The factor of the slow-down entry in force on the pin's account, null on a row with no pin and where no entry is
    *  in force. */
   factor: number | null;
+  /** Whether the display pin's lane is the fast lane, null on a row with no pin. */
+  fast: boolean | null;
   /** The session's first request under its key that is no probe, refused ones included, null where the ledger holds
    *  none. */
   firstRequestAt: string | null;
@@ -2085,6 +2096,9 @@ export interface Session extends BurnFigures {
    *  it. Null where the pin holds none and on a row with no pin. */
   mark: { at: string; on: string; window: string } | null;
   model: string | null;
+  /** The cost a move of the display pin pays as a warm pin, as a shedding round's pick compares it, null where the cost
+   *  model sizes none and on a row with no pin. A reader takes a null as 0. */
+  moveCost: number | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
   /** The instant the pin was written on the account it stands on, null on a row with no pin. */

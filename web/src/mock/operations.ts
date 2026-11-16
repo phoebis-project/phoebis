@@ -9,7 +9,8 @@ import { accountById, burnUnitOf, sharedWindowsOf } from './accounts';
 import { API_PRICES_WIRE, SUBSCRIPTION_COSTS_WIRE, priceFor, promptOf } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById, poolById, servedFigures } from './pools';
-import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID } from './requests';
+import { BLOCKED_SESSION_ID, CLIENTS, CLIENT_SESSION_ID, DELETED_HOLDER_GENERATION, FINISHED_AGENTS, FINISHED_SESSION_ID, FLEET_SESSION_ID, HAIKU, MARKED_SESSION_IDS, OPENING_SESSION_IDS, RELEASED_SESSION_ID, REQUESTS, REQUEST_EVENTS, SESSION_IDS, SLOWED_SESSION_ID, STORY_AGENTS, STRETCH_ROUND, WORKSHOP_SESSION_ID, fastTurn } from './requests';
+import { proWeekRewriteOf } from './rewrite';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES, tablesFor } from './samples';
 import { HOUR, MINUTE, NOW, ago, ahead, iso, startOfHour } from './time';
@@ -329,6 +330,13 @@ const burnUsdOf = (dollars: number | null, unit: BurnUnit | null, model: string)
 /** A built row's dollar burn per hour, which its lines scale: a billed pin's `burn`, a plan pin's `burnUsd`. */
 const dollarBurnOf = (pin: BurnFigures): number | null => (pin.burnUnit === 'usd' ? pin.burn : pin.burnUsd);
 /**
+ * A pin's move cost as the mock's rounds price their pick: its prompt's rewrite as the Pro-week figure, under the
+ * regime its key's client label names, null where the pin holds no prompt size or the model has no weight of its own.
+ */
+const moveCostOf = (tokens: number | null, model: string, keyId: string): number | null => (tokens === null ? null : proWeekRewriteOf(tokens, model, CLIENTS[keyId] ?? null));
+/** A pin's lane by the story's rule for its key's turns on its model, which the router stores on the pin. */
+const fastPin = (keyId: string, model: string): boolean => fastTurn(keyId, model, 'inference');
+/**
  * The served burn of a line beside its row's display pin, set from the row's figures rather than drawn, so the rows
  * after it keep their rolls: the display pin's burn scaled by the line's last prompt over the display pin's, none where
  * the display pin burns none or where a window share has no weight for the line's model to price it at. Its dollar
@@ -378,11 +386,12 @@ const warmAt = (warmUntil: string | null): boolean => pinTtlMs({ warmUntil }, NO
 type UndatedLine = Omit<AgentContext, 'pinnedAt'> & Partial<Pick<AgentContext, 'pinnedAt'>>;
 /**
  * A pin's line as the route answers it: warm until its last refresh plus its cache TTL, the refresh its caller names,
- * and its served burn and dollars priced on the pin's own account and model, in that account's unit and window, as the
- * row's are for the display pin.
+ * its served burn and dollars priced on the pin's own account and model, in that account's unit and window, as the
+ * row's are for the display pin, and its lane and move cost as the row's are. Its burn reads at its last use unless its
+ * caller names the instant, as the display pin's line takes its row's, since the route answers one instant per pin.
  */
 const pinLine = (
-  line: Omit<UndatedLine, keyof BurnFigures | 'warm' | 'warmUntil'>,
+  line: Omit<UndatedLine, keyof BurnFigures | 'burnAt' | 'fast' | 'moveCost' | 'warm' | 'warmUntil'> & Partial<Pick<AgentContext, 'burnAt'>>,
   keyId: string,
   served: { burn: number | null; dollars: number | null },
   lastRefreshAt: string | null,
@@ -390,7 +399,17 @@ const pinLine = (
   const unit = burnUnitOf(line.accountId);
   const burn = unit === null ? null : served.burn;
   const warmUntil = warmUntilOf(lastRefreshAt, line.cacheTtlMs);
-  return { ...line, burn, ...burnReadingOf(line.accountId, keyId, burn, unit), burnUsd: burnUsdOf(served.dollars, unit, line.model), warm: warmAt(warmUntil), warmUntil };
+  return {
+    ...line,
+    burn,
+    burnAt: line.burnAt === undefined ? line.lastUsedAt : line.burnAt,
+    ...burnReadingOf(line.accountId, keyId, burn, unit),
+    burnUsd: burnUsdOf(served.dollars, unit, line.model),
+    fast: fastPin(keyId, line.model),
+    moveCost: moveCostOf(line.lastInputTokens, line.model, keyId),
+    warm: warmAt(warmUntil),
+    warmUntil,
+  };
 };
 /**
  * The newest use across a row's conversation pins, its display pin's and its lines', which the route answers as the
@@ -510,6 +529,10 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     effort: pinned && !spec.noEffort ? effortAt(i) : null,
     lastInputTokens: pinned ? lastInputRoll : null,
     lastRefreshAt: pinned ? lastRefreshRoll : null,
+    // Read off the display pin's line once the lines are written.
+    ended: null,
+    fast: pinned ? fastPin(spec.keyId, spec.model) : null,
+    moveCost: pinned ? moveCostOf(lastInputRoll, spec.model, spec.keyId) : null,
     ...NO_MARK,
     shed: pinWrite?.shed ?? null,
     ...(pinned ? runwayOf(i) : { runwayBounded: null, runwayMs: null }),
@@ -551,6 +574,8 @@ SESSIONS.push({
   companion: 'reporting',
   companionSince: null,
   effort: null,
+  ended: null,
+  fast: null,
   forkDepth: null,
   forkedFrom: null,
   historical: false,
@@ -562,6 +587,7 @@ SESSIONS.push({
   lifecycle: 'registered',
   ...NO_MARK,
   model: null,
+  moveCost: null,
   pinned: false,
   pinnedAt: null,
   placements: 0,
@@ -755,7 +781,7 @@ SESSIONS.forEach((pin, i) => {
       if ((r.agentState === 'released' && pin.companion !== 'none') || r.accountId === null) return [];
       const own = { accountId: r.accountId, agentId: r.agentId, model: r.model };
       if (r.agentId === 'main') {
-        const line = { ...own, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
+        const line = { ...own, burnAt: pin.burnAt, cacheTtlMs: pin.cacheTtlMs, effort: pin.effort, ended: false, lastInputTokens: pin.lastInputTokens, lastUsedAt: pin.lastUsedAt ?? r.lastRequestAt, lifecycle: r.agentState, pinnedAt: pin.pinnedAt };
         return [pinLine(line, pin.keyId, display, pin.lastRefreshAt)];
       }
       const ended = i < sessionSpec.length && writtenSubagentAt(sessionSpec[i], j) === ENDED_SUBAGENT;
@@ -764,6 +790,10 @@ SESSIONS.forEach((pin, i) => {
     }),
   );
   pin.warm = pin.pinned ? warmAt(warmUntilOf(pin.lastRefreshAt, pin.cacheTtlMs)) : null;
+  // The row's ended mark is its display pin's line's. A row the mod released whole lists no line, and the router holds
+  // a released agent's pin as ended.
+  const ownLine = pin.agentContexts.find((c) => c.agentId === pin.agentId && c.model === pin.model);
+  pin.ended = !pin.pinned ? null : ownLine !== undefined ? ownLine.ended : RECIPES.some((r) => r.keyId === pin.keyId && r.sessionId === pin.sessionId && r.agentId === pin.agentId && r.agentState === 'released');
   pin.lastUsedAt = newestUse(pin.lastUsedAt, pin.agentContexts);
 });
 
@@ -801,7 +831,9 @@ const writtenRow = (
     companionSince: null,
     cycleMs: null,
     effort: line.effort,
+    ended: line.ended,
     factor: null,
+    fast: line.fast,
     forkDepth: null,
     forkedFrom: null,
     historical: false,
@@ -814,6 +846,7 @@ const writtenRow = (
     lifecycle: null,
     ...NO_MARK,
     model: line.model,
+    moveCost: line.moveCost,
     pinned: true,
     pinnedAt: agentContexts.find((l) => l.agentId === line.agentId && l.model === line.model)!.pinnedAt,
     // The placement the router's ledger holds for the pin, which the listing counts with the routing log's.
@@ -845,6 +878,8 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   companion: 'none',
   companionSince: null,
   effort: null,
+  ended: null,
+  fast: null,
   forkDepth: null,
   forkedFrom: null,
   keepalive: noRecipe(),
@@ -853,6 +888,7 @@ const ledgerOnlyRow = (fields: Pick<Session, 'accountId' | 'historical' | 'keyGe
   lastUsedAt: fields.lastRequestAt,
   lifecycle: null,
   ...NO_MARK,
+  moveCost: null,
   pinned: false,
   pinnedAt: null,
   placements: 0,

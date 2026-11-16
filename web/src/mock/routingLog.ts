@@ -3,7 +3,6 @@ import type {
   PoolKeepalive, RecordPin, RecordRequest, RecordSettings, Refusal, RequestEvent, RequestLog, RoutingEvent, RoutingLogPage, RoutingLogQuery, Score, SummaryFact, WalkFact, WalkStep,
 } from '@/api/types';
 import { DECISION_KIND_VALUES } from '@/api/types';
-import { shareIn, weightOf } from '@/lib/costs';
 import { lookup } from '@/lib/counts';
 import { placementHit } from '@/lib/format';
 import { SHED_MARK_SHARE } from '@/lib/presets';
@@ -18,9 +17,9 @@ import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
 import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
+import { drawnWindows, proWeekRewriteOf, rewriteWindowOf } from './rewrite';
 import { createRng } from './rng';
 import { round } from './round';
-import { TABLES, tablesFor } from './samples';
 import { DAY, HOUR, MINUTE, NIGHTLY_CAP_RAISED, NOW, OVERFLOW_LAPSED_AT, OVERFLOW_PAUSED_AT, RESEARCH_BUDGET_AT, clock, endOfMonth, iso, startOfDay, startOfMonth } from './time';
 
 /** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
@@ -38,22 +37,11 @@ const RESERVATION_MS = HOUR;
  */
 const WRITE_SHARE: Record<string, number> = { five_hour: 1.2e-7, seven_day: 1.4e-8, seven_day_fable: 2.8e-8 };
 const familyWeight = (model: string) => (model.includes('fable') ? 1 : model.includes('opus') ? 0.5 : model.includes('sonnet') ? 0.25 : 0.08);
-/** The plan windows a model draws: both shared windows, and a Fable model its week as well. */
-const drawnWindows = (model: string): string[] => (model.includes('fable') ? [...SHARED_WINDOWS, 'seven_day_fable'] : [...SHARED_WINDOWS]);
 const round3 = (x: number) => round(x, 3);
 const round5 = (x: number) => round(x, 5);
 /** A rewrite of `tokens` per plan window the model draws, in window share. */
 export const rewriteOf = (tokens: number, model: string): Record<string, number> =>
   Object.fromEntries(drawnWindows(model).map((w) => [w, round5(tokens * WRITE_SHARE[w] * familyWeight(model))]));
-/** The weekly window the pick prices a pin's rewrite in: the model's week where it draws one, else the 7-day window. */
-const rewriteWindowOf = (model: string): string => (drawnWindows(model).includes('seven_day_fable') ? 'seven_day_fable' : 'seven_day');
-/**
- * A rewrite of `tokens` as the Pro-week figure: the prompt written to the cache again, the Pro tier's share of its
- * 7-day window under the regime the pin's client label names, which no band weighs. Null for a model without a weight
- * of its own.
- */
-export const proWeekRewriteOf = (tokens: number, model: string, client: string | null): number | null =>
-  weightOf(TABLES, model, 'seven_day') !== null ? shareIn(tablesFor(client), 'seven_day', 'default_claude_ai', model, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: tokens, input: 0, output: 0 }, false) : null;
 /**
  * The tokens a request's body carries, the relay's estimate a fresh session's rewrite is priced from. The mock reads
  * the usage the request reported, so a request that ended with no usage, which the router books at its body's

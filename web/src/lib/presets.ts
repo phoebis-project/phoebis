@@ -1,4 +1,4 @@
-import type { Account, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
+import type { Account, AgentContext, MemberEligibility, Pool, RateLimitWindow, Session } from '@/api/types';
 import { byteOrder, fmtDuration, instant, noun, percentText, plural } from './format';
 import { openMark } from './keepalive';
 import { endOf, minuteSpan, windowOf } from './quota';
@@ -198,26 +198,57 @@ export interface ShedPreview {
   warm: number;
 }
 
-/** Whether the line of a row's display pin reads that the pin's agent ended and its next request has not arrived. */
-const endedPin = (s: Session): boolean => s.agentContexts.some((c) => c.agentId === s.agentId && c.model === s.model && c.ended);
+/**
+ * A conversation pin as the round walks it, its figures read off its source: the row for a display pin no line holds,
+ * else the line. A line is warm before its first cold instant, and by its served `warm` where it carries none. The
+ * row's mark serves its display pin alone, whichever source it walks as, since the route answers no mark per line.
+ */
+const walkedPin = (s: Session, line: AgentContext | null, now: number) => {
+  const source = line ?? s;
+  return {
+    accountId: line === null ? s.accountId : line.accountId,
+    agentId: line === null ? s.agentId : line.agentId,
+    burn: source.burn,
+    burnAt: source.burnAt,
+    burnUnit: source.burnUnit,
+    burnWindow: source.burnWindow,
+    ended: source.ended,
+    fast: source.fast,
+    keyId: s.keyId,
+    lastInputTokens: source.lastInputTokens,
+    model: line === null ? s.model : line.model,
+    moveCost: source.moveCost,
+    sessionId: s.sessionId,
+    standing: (line === null || (line.agentId === s.agentId && line.model === s.model)) && openMark(s) !== null,
+    warm: line === null ? s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs : line.warmUntil === null ? line.warm : now < Date.parse(line.warmUntil),
+  };
+};
+
+/** Whether a walked pin's agent ended and its next request has not arrived, as the pin's own row or line reads it. */
+const endedPin = (p: { ended: boolean | null }): boolean => p.ended === true;
 
 /**
- * The shedding round's dry run, replayed from the data the routes serve. Each member's served projection is read at
- * its served horizon on the windows its pins draw, in the trigger's order, and the first window over the round's line
- * fires its round: the wall, 1, where the window's served reset ahead of `now` or the account's end set the horizon,
- * else the window's own ceiling, 5-hour or weekly. The excess runs from that line. A 5-hour window younger than twice
- * the pool's burn average does not fire, and the member reads its next window, as the router holds the round. With no
- * member over its line, the closest window is the one with the least room to its own ceiling. The router's round on a
- * pool that slows its pins tests the 5-hour window by the stretch, which the preview reads as it reads the other
- * windows. The round walks the pool's own pins on the member, the sessions under its
- * keys, which the caller filters, since the router's round marks the triggering pool's pins alone. It orders them by
- * their served 5-hour burn, decayed from the instant it was served to `now`: cold pins first by burn, then warm ones by
- * burn over their last input size, bounded by the warm-sessions mode. It marks until the removed burn covers the excess
- * under `shedCap`, passing over a pin with no sibling that has runway for it, by `shedMarks`: a pin whose row's mark
- * stands on the member is a move pending, and a move costs the pin's last input size where the pin is warm or the
- * mode reads `always`, nothing for a cold pin. A row whose display pin's line reads its agent ended is out of the
- * round, its order, its sum and its counts, as the router's round leaves an ended agent's pin out. A member without
- * `eligible` counts as eligible, as a member of a pool not saved yet does.
+ * The shedding round's dry run, replayed from the data the routes serve. Each member's served projection is read at its
+ * served horizon on the windows its pins draw, in the trigger's order, and the first window over the round's line fires
+ * its round: the wall, 1, where the window's served reset ahead of `now` or the account's end set the horizon, else the
+ * window's own ceiling, 5-hour or weekly. The excess runs from that line. A 5-hour window younger than twice the pool's
+ * burn average does not fire, and the member reads its next window, as the router holds the round. With no member over
+ * its line, the closest window is the one with the least room to its own ceiling. The router's round on a pool that
+ * slows its pins tests the 5-hour window by the stretch, which the preview reads as it reads the other windows.
+ *
+ * The round walks the pool's own conversation pins on the member, the sessions under its keys, which the caller
+ * filters, since the router's round marks the triggering pool's pins alone. They are the pins the sessions route lists:
+ * each line on the member, and a row's display pin where the row is pinned there and no line holds its agent and model.
+ * The router's round also walks a pin only auxiliary requests used and a pin whose line the route no longer lists,
+ * which no served row holds. Each pin reads its burn, its prompt size, its lane, its ended mark and its move cost off
+ * its own row or line, and two pins of one session are marked and counted apart. A pin on the fast lane or whose agent
+ * ended is out of the round, its order, its sum and its counts, as the router's round leaves it out. The round orders
+ * the pins by their served burn, decayed from the instant it was served to `now`: cold pins first by burn, then warm
+ * ones by burn over their last input size, bounded by the warm-sessions mode. It marks until the removed burn covers
+ * the excess under `shedCap`, passing over a pin with no sibling that has runway for it, by `shedMarks`. A pin under
+ * its row's standing mark is a move pending, and a subagent's pending move still counts as burn to remove. A move costs
+ * the pin's served move cost where the pin is warm or the mode reads `always`, and nothing for a cold pin. A member
+ * without `eligible` counts as eligible, as a member of a pool not saved yet does.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnAverageSeconds' | 'fiveHourCeiling' | 'loadShedding' | 'shedCap' | 'warmSessions' | 'weeklyCeiling' | 'windDownMinutes'> & { members: { accountId: string; eligible?: MemberEligibility; priority: number }[] },
@@ -265,12 +296,17 @@ export function shedPreview(
   let stranded = 0;
   let priced = 0;
   let burning = 0;
+  const conversation = sessions.flatMap((s) => {
+    const display = s.pinned && !s.agentContexts.some((c) => c.agentId === s.agentId && c.model === s.model) ? [walkedPin(s, null, now)] : [];
+    return [...display, ...s.agentContexts.map((c) => walkedPin(s, c, now))];
+  });
   for (const { account } of listed) {
     if (account.kind === 'api_key') continue;
-    const pins = sessions
-      .filter((s) => s.pinned && s.accountId === account.id && !endedPin(s))
-      // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
-      .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.model ?? '', b.model ?? ''));
+    const pins = conversation
+      .filter((p) => p.accountId === account.id && !endedPin(p) && p.fast !== true)
+      // The router walks an account's pins in key, session, agent and model order as bytes, which settles ties in the
+      // sorts below.
+      .sort((a, b) => byteOrder(a.keyId, b.keyId) || byteOrder(a.sessionId, b.sessionId) || byteOrder(a.agentId ?? '', b.agentId ?? '') || byteOrder(a.model ?? '', b.model ?? ''));
     const five = windowOf(account, '5h');
     const start = five === null ? null : windowStart(five, now);
     // A start at or after `now`, from a reset more than five hours ahead, is no reading of a fresh window, so it holds
@@ -279,7 +315,7 @@ export function shedPreview(
     const end = endOf(account, now);
     const lineAt = (id: ShedWindow, w: RateLimitWindow, horizon: number) => lineOf(pool, id, w.resetsAt === null ? null : Date.parse(w.resetsAt), end, horizon, now);
     // A model week is read only where one of the pins draws it, as the router's trigger reads it.
-    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || pins.some((s) => drawsFable(s.model)))
+    const read = TRIGGER_ORDER.filter((id) => id !== '7d_fable' || pins.some((p) => drawsFable(p.model)))
       .filter((id) => !(id === '5h' && heldNow))
       .flatMap((id) => {
         const w = windowOf(account, id);
@@ -307,21 +343,22 @@ export function shedPreview(
     // router's partition takes it, so it is in neither the order, the counts nor the quiet reading, and a pin served in
     // dollars has no share to scale, so it reads unpriced.
     const walked = pins
-      .filter((s) => windowsOf(s.model).includes(fired.id))
-      .map((s) => {
-        const window = burnWindowOf(s.burnWindow);
+      .filter((p) => windowsOf(p.model).includes(fired.id))
+      .map((p) => {
+        const window = burnWindowOf(p.burnWindow);
         const own = window === null ? null : (windowOf(account, window)?.burn ?? null);
         const scale = fired.id === window ? 1 : own !== null && own > 0 && fired.burn !== null ? fired.burn / own : null;
-        const served = s.burn === null || s.burnUnit !== 'window_share' ? null : burnDecayed(s.burn, s.burnAt, now, windowMs);
+        const served = p.burn === null || p.burnUnit !== 'window_share' ? null : burnDecayed(p.burn, p.burnAt, now, windowMs);
         return {
           burn: served === null || scale === null ? null : served * scale,
-          id: `${s.keyId}/${s.sessionId}/${s.model ?? ''}`,
+          id: `${p.keyId}/${p.sessionId}/${p.agentId ?? ''}/${p.model ?? ''}`,
+          moveCost: p.moveCost,
           order: served,
           // A pin with no prompt size reported yet ranks as the cheapest rewrite.
-          rewrite: Math.max(s.lastInputTokens ?? 0, 1),
-          runway: hasRunway(account.id, s.model),
-          standing: openMark(s) !== null,
-          warm: s.lastRefreshAt !== null && s.cacheTtlMs !== null && now - Date.parse(s.lastRefreshAt) < s.cacheTtlMs,
+          rewrite: Math.max(p.lastInputTokens ?? 0, 1),
+          runway: hasRunway(account.id, p.model),
+          standing: p.standing,
+          warm: p.warm,
         };
       });
     type Pin = (typeof walked)[number];
@@ -336,10 +373,11 @@ export function shedPreview(
     // counts its burn among the member's unmarked pins, and is never marked.
     const open = (p: Pin) => p.burn !== null && !(pool.warmSessions === 'never' && p.warm);
     const total = walked.reduce((sum, p) => sum + (p.burn ?? 0), 0);
-    // A cold pin's move costs nothing, since its cache is rewritten wherever it runs next.
+    // A cold pin's move costs nothing, since its cache is rewritten wherever it runs next. A move the cost model sizes
+    // none of reads 0, as the router's pick reads it.
     const marks = new Set(
       shedMarks(
-        ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? p.rewrite : 0, id: p.id, skip: !open(p) || !p.runway, standing: p.standing })),
+        ordered.map((p) => ({ burn: p.burn, cost: pool.warmSessions === 'always' || p.warm ? (p.moveCost ?? 0) : 0, id: p.id, skip: !open(p) || !p.runway, standing: p.standing })),
         Math.min(excess, pool.shedCap * total),
       ),
     );
