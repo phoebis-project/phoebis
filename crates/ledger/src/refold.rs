@@ -238,8 +238,42 @@ fn rules_pass(
                 );
                 if moves(&tx, walk.guard, request.received_at, &was, &now)? {
                     // A rule moves no band, speed or funding, so the two folds' deltas at one index name the same row.
-                    for (was, now) in was.iter().zip(&now) {
-                        refold_delta(&tx, was, now)?;
+                    // Where the folds differ in length or in a key, a pair by position would drop a delta or write it
+                    // under another row, so the request leaves its old rows and joins its new ones as `fold_request`
+                    // moves a replaced request.
+                    let key = |delta: &RollupRow| {
+                        RollupRow::key(
+                            delta.hour,
+                            &delta.key_id,
+                            delta.key_generation,
+                            &delta.pool_id,
+                            &delta.account_id,
+                            &delta.canonical_model,
+                            &delta.kind,
+                            &delta.user_agent,
+                            &delta.client,
+                            &delta.effort,
+                            &delta.request_class,
+                            &delta.speed,
+                            &delta.funding,
+                            &delta.band,
+                            &delta.tier,
+                            &delta.classifier,
+                        )
+                    };
+                    if was.len() == now.len()
+                        && was.iter().zip(&now).all(|(was, now)| key(was) == key(now))
+                    {
+                        for (was, now) in was.iter().zip(&now) {
+                            refold_delta(&tx, was, now)?;
+                        }
+                    } else {
+                        for was in &was {
+                            unfold(&tx, was)?;
+                        }
+                        for now in &now {
+                            fold_delta(&tx, now)?;
+                        }
                     }
                     moved += 1;
                 }
