@@ -1600,10 +1600,17 @@ async fn a_both_park_whose_wake_passes_first_narrows_to_background_and_drops_its
 #[tokio::test]
 async fn a_park_report_with_a_part_its_kind_does_not_take_answers_invalid_event() {
     let mut r = rig(RigSpec::default()).await;
-    agent_start(&mut r, "worker", None).unwrap();
-    r.observe("worker").await;
+    // No turn runs between the start and the reports, since a completed turn moves the worker's generation, so each
+    // report carries the generation the start answered and its stray part is its one fault.
+    let generation = r
+        .event(Event {
+            event: "agent_start".into(),
+            agent_id: Some("worker".into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .request_generation;
     let base = r.sequence;
-    let generation = r.status("worker").request_generation;
     let app = keepalive_router(r.engine.clone());
     let wake = r.now() + 10 * MINUTE;
     let deadline = r.now() + 60 * MINUTE;
