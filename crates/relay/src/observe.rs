@@ -177,13 +177,14 @@ pub(crate) fn close_miss_reason(usage: &mut Usage, diagnostics_sent: bool) {
 /// words are strings and its `path` places it in a message, so each key holds a message index.
 fn input_transformations_of(at: &Value) -> Option<BTreeMap<String, InputTransformation>> {
     let entries = at.get("input_transformations")?.as_array()?;
-    let word = |w: &str| {
-        if is_filed_word(w) {
-            w.to_string()
+    // A nested `fn`, since a closure does not tie its returned borrow to its argument.
+    fn filed(word: &str) -> &str {
+        if is_filed_word(word) {
+            word
         } else {
-            "other".to_string()
+            phoebis_bus::OTHER_CLIENT
         }
-    };
+    }
     let mut map = BTreeMap::<String, InputTransformation>::new();
     for entry in entries {
         let (Some(kind), Some(reason), Some(index)) = (
@@ -197,7 +198,7 @@ fn input_transformations_of(at: &Value) -> Option<BTreeMap<String, InputTransfor
             continue;
         };
         let dropped = map
-            .entry(format!("{}.{}", word(kind), word(reason)))
+            .entry(format!("{}.{}", filed(kind), filed(reason)))
             .or_insert(InputTransformation {
                 blocks: 0,
                 first_message: index,

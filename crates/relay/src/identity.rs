@@ -29,7 +29,7 @@ pub(crate) const ITEM_COMPACTION_HEADER: &str = "compaction_header";
 pub(crate) const MAX_ID_LEN: usize = 256;
 
 /// The longest word of an upstream answer the relay files as sent.
-pub(crate) const MAX_FILED_WORD_LEN: usize = 64;
+pub const MAX_FILED_WORD_LEN: usize = 64;
 
 /// The longest the climb waits for the previous answer's affinity report to reach the map: a client that
 /// sends its next turn within milliseconds of the last chunk would otherwise be read against a map that lacks
@@ -331,8 +331,8 @@ pub fn is_valid_id(value: &str) -> bool {
 /// Whether `value` is a word the relay files as the upstream sent it: one to `MAX_FILED_WORD_LEN` bytes, each an
 /// `identifier_byte`. A word that fails reads `other` in a key and files `upstream_<status>` as a forwarded
 /// failure's code.
-pub(crate) fn is_filed_word(value: &str) -> bool {
-    (1..=MAX_FILED_WORD_LEN).contains(&value.len()) && value.bytes().all(identifier_byte)
+pub fn is_filed_word(value: &str) -> bool {
+    value.len() <= MAX_FILED_WORD_LEN && is_valid_id(value)
 }
 
 pub(crate) fn bounded_token(value: &str, allowed: impl Fn(u8) -> bool) -> bool {

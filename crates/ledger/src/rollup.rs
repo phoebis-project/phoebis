@@ -9,7 +9,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 
 use phoebis_bus::Kind;
-use phoebis_relay::{identifier_byte, EFFORT_LEVELS};
+use phoebis_relay::{identifier_byte, is_filed_word, EFFORT_LEVELS, MAX_FILED_WORD_LEN};
 use phoebis_routing::{under_account_reason, window_length_ms, PinUsage, DAY_MS, HOUR_MS, WEEK_MS};
 
 use crate::db::LedgerDb;
@@ -85,7 +85,7 @@ pub const LONG_BAND: &str = "long";
 /// `rollups_hourly` by a row per request for as long as the rollups are kept.
 pub const OTHER_DIMENSION: &str = phoebis_bus::OTHER_CLIENT;
 /// The longest identifier or user-agent token the hour row keeps.
-pub const DIMENSION_MAX_BYTES: usize = 64;
+pub const DIMENSION_MAX_BYTES: usize = MAX_FILED_WORD_LEN;
 
 /// The header's first product token (`name/version`, up to the first space), cut to `DIMENSION_MAX_BYTES`, else
 /// `OTHER_DIMENSION`: the build of a client is in the token, and the comment after it is free text.
@@ -143,7 +143,7 @@ pub fn fold_effort(raw: Option<&str>) -> &'static str {
 
 /// The value itself while it holds to the identifier charset and `DIMENSION_MAX_BYTES`, else `OTHER_DIMENSION`.
 pub fn fold_identifier(raw: &str) -> String {
-    if (1..=DIMENSION_MAX_BYTES).contains(&raw.len()) && raw.bytes().all(identifier_byte) {
+    if is_filed_word(raw) {
         raw.into()
     } else {
         OTHER_DIMENSION.into()

@@ -871,7 +871,12 @@ impl Trace {
             account_id: (!outcome.account_id.is_empty()).then(|| outcome.account_id.clone()),
             outcome: final_outcome,
             status,
-            usage: usage.filter(|u| !u.is_empty()),
+            usage: usage
+                .map(|mut usage| {
+                    close_miss_reason(&mut usage, outcome.diagnostics.is_some());
+                    usage
+                })
+                .filter(|u| !u.is_empty()),
             response,
             ttfb_ms: outcome.head_at.map(|at| at - outcome.received_at),
             ttfc_ms,
@@ -1179,22 +1184,24 @@ fn latches(trace: &Trace) -> bool {
     trace.kind == Kind::Inference
 }
 
-/// Whether the caller's `anthropic-beta` list names `beta`, read off the lines the head builder merges (the recorded
-/// head where one stands, else the map) and split as it splits them, so a token the builder leaves as sent reads as
-/// the caller's.
-fn caller_lists_beta(caller: &HeaderMap, original: Option<&OriginalHead>, beta: &str) -> bool {
-    let names = |line: &str| line.split(',').any(|token| token.trim() == beta);
-    match original {
-        Some(head) => head
-            .headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
-            .any(|(_, line)| names(line)),
-        None => caller
-            .get_all("anthropic-beta")
-            .iter()
-            .filter_map(|line| line.to_str().ok())
-            .any(names),
+/// Whether the `anthropic-beta` lines of a head the pass built name `beta`. The builder keeps each token the caller
+/// sent apart from the betas it drops and the OAuth claim, so a token it did not add is the caller's.
+fn lists_beta(headers: &[(String, String)], beta: &str) -> bool {
+    headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+        .any(|(_, line)| line.split(',').any(|token| token.trim() == beta))
+}
+
+/// The source of a member or a beta on one pass. The router's half is read first, since the head a pass built lists a
+/// beta the router added as well as one the client sent.
+fn source_of(client: bool, router: bool) -> Option<DiagnosticsSource> {
+    if router {
+        Some(DiagnosticsSource::Router)
+    } else if client {
+        Some(DiagnosticsSource::Client)
+    } else {
+        None
     }
 }
 
@@ -1594,13 +1601,18 @@ impl Relay {
         let cache_ttl_policy = pool
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
             .unwrap_or_default();
+        let markerless = if matches!(trace.kind, Kind::Inference | Kind::Probe)
+            && cache_ttl_policy.inject_when_absent
+            && !auxiliary
+        {
+            Markerless::TakesTheMember
+        } else {
+            Markerless::GoesAsSent
+        };
         // One fact for the selection and for the request's row: the body's own marker, or the one the policy adds to
         // a body that carries none.
         let marker = facts.markers_ttl_ms.is_some()
-            || (matches!(trace.kind, Kind::Inference | Kind::Probe)
-                && cache_ttl_policy.enabled
-                && cache_ttl_policy.inject_when_absent
-                && !auxiliary);
+            || (cache_ttl_policy.enabled && markerless == Markerless::TakesTheMember);
         let identified = refusal.map_or_else(|| identify(&parts.headers, &members, client), Err);
         let mut identity = match identified {
             Ok(identity) => identity,
@@ -1967,12 +1979,6 @@ impl Relay {
                 .thinking_type
                 .as_deref()
                 .is_some_and(|kind| kind != "disabled");
-        // A count's caller is read too, since a token it sent is the client's on any request.
-        let client_thinking_diagnostics = caller_lists_beta(
-            &parts.headers,
-            original,
-            Injected::ThinkingBindingBeta.wire_name(),
-        );
         let portable = facts.portable;
         let target = parts
             .uri
@@ -2004,7 +2010,6 @@ impl Relay {
             client_diagnostics,
             client_gzip,
             client_hash,
-            client_thinking_diagnostics,
             client_version,
             deadline,
             diagnostics,
@@ -2015,8 +2020,10 @@ impl Relay {
             key: &key,
             lane,
             marker,
+            markerless,
             markers_ttl_ms: facts.markers_ttl_ms,
             memory_key,
+            moves_pins: portable && trace.kind != Kind::Probe,
             original,
             pool_id: pool.map(|p| p.id.clone()),
             portable,
@@ -2533,16 +2540,6 @@ impl Relay {
                         .ttl_for(canonical_model, branch, writes_cost_money)
                 }
             };
-            let markerless = match admitted.trace.kind {
-                Kind::CountTokens => Markerless::GoesAsSent,
-                Kind::Inference | Kind::Probe => {
-                    if admitted.cache_ttl_policy.inject_when_absent && !admitted.auxiliary {
-                        Markerless::TakesTheMember
-                    } else {
-                        Markerless::GoesAsSent
-                    }
-                }
-            };
             // The one-hour body and its beta stand or fall together: a host that refused the beta cannot
             // serve the hour, so a leg that stripped it, or an account latched against it, dispatches five
             // minutes and reports that.
@@ -2622,7 +2619,7 @@ impl Relay {
                     restore: restore_with(&admitted.restore, &previous, skip),
                     diagnostics,
                     cache_ttl: ttl,
-                    markerless,
+                    markerless: admitted.markerless,
                     safeguards: if admitted.auto_mode_server {
                         SafeguardsEdit::Keep
                     } else {
@@ -2788,13 +2785,10 @@ impl Relay {
                 .collect();
             // The source of the member on this pass's body: a strip retry rebuilt the body without it, so its pass
             // reads none and remembers nothing.
-            let diagnostics = if admitted.client_diagnostics {
-                Some(DiagnosticsSource::Client)
-            } else if body_injected.contains(&Injected::Diagnostics) {
-                Some(DiagnosticsSource::Router)
-            } else {
-                None
-            };
+            let diagnostics = source_of(
+                admitted.client_diagnostics,
+                body_injected.contains(&Injected::Diagnostics),
+            );
             // Read off the body this pass sends, so the client's own member and the router's insertion are judged
             // alike.
             let diagnostics_named = diagnostics.is_some()
@@ -2805,13 +2799,10 @@ impl Relay {
                 .is_some();
             // The head builder appends the beta only where the caller's list lacks it, so the two sources never meet,
             // and a pass rebuilt after a strip of the beta asks for it no more and reads none.
-            let thinking_diagnostics = if head.injected.contains(&Injected::ThinkingBindingBeta) {
-                Some(DiagnosticsSource::Router)
-            } else if admitted.client_thinking_diagnostics {
-                Some(DiagnosticsSource::Client)
-            } else {
-                None
-            };
+            let thinking_diagnostics = source_of(
+                lists_beta(&head.headers, Injected::ThinkingBindingBeta.wire_name()),
+                head.injected.contains(&Injected::ThinkingBindingBeta),
+            );
             // After the selection's fact, so a client that leaves from here completes an attempt the ledger holds.
             admitted.trace.on_leg(*attempt, &account.id);
             let responding = Responding {
@@ -3018,23 +3009,10 @@ impl Relay {
         let framing = framing(&head);
         let reusable = keep_alive(&head, &framing);
         let mut reader = BodyReader::new(conn, leftover, framing);
-        let mut outcome = ctx.admitted.outcome(
-            &ctx.account.id,
-            head.status,
-            ctx.attempt,
-            true,
-            ctx.pin_epoch,
-            ctx.cache_ttl_ms,
-        );
+        let mut outcome = ctx.outcome(head.status);
         outcome.head_at = Some(head_at);
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         outcome.overage_in_use = reading.unified.as_ref().and_then(|u| u.overage_in_use);
-        outcome.diagnostics = ctx.diagnostics;
-        outcome.diagnostics_named = ctx.diagnostics_named;
-        outcome.thinking_diagnostics = ctx.thinking_diagnostics;
-        // The drop guard takes the word only at `Responding::answers`, since the leg may still retry or fail over past
-        // this head.
-        outcome.judged = ctx.selection.judged.as_ref().map(|judged| judged.charge);
         self.report_overage(ctx.account, reading.unified.as_ref(), observed_at)
             .await;
         self.report_head_sample(
@@ -3384,7 +3362,8 @@ impl Relay {
                             ctx.account.kind,
                             ctx.admitted.identity.canonical_model.clone(),
                             ctx.admitted.identity.folded_model.clone(),
-                            (ctx.admitted.portable && ctx.admitted.trace.kind != Kind::Probe)
+                            ctx.admitted
+                                .moves_pins
                                 .then(|| ctx.selection.pin.clone())
                                 .flatten(),
                             ctx.admitted.trace.request_id.clone(),
@@ -3393,9 +3372,8 @@ impl Relay {
                         let on_error = Box::new(move |data: Bytes, waiting: &mut Waiting| {
                             // After commit nothing fails over. A rate-limit error records the cooldown
                             // and, on a portable request, invalidates the pin so the next request
-                            // migrates. A non-portable request keeps its pin, and so does a probe, which
-                            // never moves the pin it warms. The deadline is measured from the error's
-                            // arrival, not from the selection.
+                            // migrates. A non-portable request keeps its pin. The deadline is measured
+                            // from the error's arrival, not from the selection.
                             let now = clock();
                             let verdict = classify(
                                 &head,
@@ -3494,12 +3472,8 @@ impl Relay {
         );
         // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
         // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
-        // for the siblings, and the pin stays where the retry lands. So does a probe, which never moves the pin it
-        // warms: its next selection reads the cooldown or the mark on the pinned member and answers it.
-        let hands_pin = ctx.admitted.portable
-            && ctx.admitted.trace.kind != Kind::Probe
-            && moves_pin
-            && retry_in_place.is_none();
+        // for the siblings, and the pin stays where the retry lands.
+        let hands_pin = ctx.admitted.moves_pins && moves_pin && retry_in_place.is_none();
         for report in failover_reports(
             &ctx.account.id,
             &ctx.admitted.identity.canonical_model,
@@ -4245,21 +4219,7 @@ impl Relay {
     /// completes `canceled` and the attempt keeps the outcome its head recorded, since a second head for the same
     /// attempt would overwrite that outcome in the ledger.
     async fn canceled_after_head(&self, ctx: &Responding<'_>, status: u16) -> Response {
-        let mut outcome = ctx.admitted.outcome(
-            &ctx.account.id,
-            status,
-            ctx.attempt,
-            true,
-            ctx.pin_epoch,
-            ctx.cache_ttl_ms,
-        );
-        // The upstream compared this leg's body before the account left, so the canceled completion names the
-        // member's source as the head's outcome does, and the beta's beside it.
-        outcome.diagnostics = ctx.diagnostics;
-        outcome.diagnostics_named = ctx.diagnostics_named;
-        outcome.thinking_diagnostics = ctx.thinking_diagnostics;
-        outcome.judged = ctx.selection.judged.as_ref().map(|judged| judged.charge);
-        self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, outcome)
+        self.answer_failure(ctx.admitted.trace, ACCOUNT_CANCELED, ctx.outcome(status))
             .await
     }
 
@@ -4517,10 +4477,7 @@ impl Relay {
         let answer = (head.status == 200)
             .then(|| answer_from_json(&payload, &[], outcome.diagnostics_named));
         let (usage, facts) = match answer {
-            Some(mut answer) => {
-                close_miss_reason(&mut answer.usage, outcome.diagnostics.is_some());
-                (Some(answer.usage), answer.response)
-            }
+            Some(answer) => (Some(answer.usage), answer.response),
             None => (None, ResponseFacts::default()),
         };
         let mut waiting = Waiting::default();
@@ -4680,9 +4637,32 @@ impl Responding<'_> {
     /// place or fails over, so a client that leaves from here on completes on the charge answer the relay's own
     /// completion of that answer carries.
     fn answers(&self) {
-        self.admitted
-            .trace
-            .on_head(self.selection.judged.as_ref().map(|judged| judged.charge));
+        self.admitted.trace.on_head(self.charge());
+    }
+
+    fn charge(&self) -> Option<JudgedCharge> {
+        self.selection.judged.as_ref().map(|judged| judged.charge)
+    }
+
+    /// This pass's outcome under `status`, with the leg's facts stamped on it. The upstream compared this leg's body
+    /// even where the account left after the head, so a canceled completion names the member's source as the head's
+    /// outcome does, and the beta's beside it.
+    fn outcome(&self, status: u16) -> RelayOutcome {
+        let mut outcome = self.admitted.outcome(
+            &self.account.id,
+            status,
+            self.attempt,
+            true,
+            self.pin_epoch,
+            self.cache_ttl_ms,
+        );
+        outcome.diagnostics = self.diagnostics;
+        outcome.diagnostics_named = self.diagnostics_named;
+        outcome.thinking_diagnostics = self.thinking_diagnostics;
+        // The drop guard takes the word only at `Responding::answers`, since the leg may still retry or fail over past
+        // this head.
+        outcome.judged = self.charge();
+        outcome
     }
 
     /// Both counts and the end report for a body that outlives the response half, so they are released when it
@@ -4996,10 +4976,7 @@ struct RestoreContext {
 struct Admitted<'a> {
     /// The key's override else the pool's, read once at admission.
     auto_mode_server: bool,
-    /// The request's class is auxiliary (a class header outside the refreshing classes). The cache TTL policy's
-    /// `inject_when_absent` choice leaves such a body as sent, since a one-off helper's write is a write nothing
-    /// reads, and the selection's `marker` fact reads the same flag, so the cache gate never counts on a member the
-    /// body will not get.
+    /// The request's class is auxiliary (a class header outside the refreshing classes).
     auxiliary: bool,
     /// The pool's own policy, off by default; read once at admission since a migrated attempt still prices the
     /// same request against the same policy, only the account's overage state changes per destination.
@@ -5018,8 +4995,6 @@ struct Admitted<'a> {
     client_gzip: bool,
     /// The client stamped a hash the drift check verified, which every leg re-signs (`NativeEdit::client_hash`).
     client_hash: bool,
-    /// The caller's `anthropic-beta` list carries the thinking-binding beta, which the head builder leaves as sent.
-    client_thinking_diagnostics: bool,
     client_version: Option<String>,
     /// The relay's clock past which the attempt loop answers the exhaustion rather than selecting again, and at
     /// which a wait on an account's backoff ends: admission plus `head_timeout` less `ATTEMPT_DEADLINE_MARGIN`.
@@ -5045,11 +5020,18 @@ struct Admitted<'a> {
     lane: String,
     /// The selection's `marker` fact, which the request's row keeps as well.
     marker: bool,
+    /// What every build does with a body that carries no marker. The cache TTL policy's `inject_when_absent` choice
+    /// leaves an auxiliary body as sent, since a one-off helper's write is a write nothing reads, and the `marker`
+    /// fact reads this choice, so the cache gate never counts on a member the body will not get.
+    markerless: Markerless,
     /// The largest TTL of the client's own cache markers, the renewal's TTL when no rewrite applied.
     markers_ttl_ms: Option<i64>,
     /// The session memory key this request reads under, absent when the request carries no session; a probe
     /// reads under its session's key and the response half records nothing for it.
     memory_key: Option<MemoryKey>,
+    /// Whether a failover report hands this request's pin on: a portable request's, never a probe's, which never moves
+    /// the pin it warms. A probe's next selection reads the cooldown or the mark on the pinned member and answers it.
+    moves_pins: bool,
     /// The caller's head as it arrived, absent for an in-process caller and for a connection the recorder
     /// gave up on.
     original: Option<&'a OriginalHead>,
