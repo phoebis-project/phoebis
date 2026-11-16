@@ -236,8 +236,7 @@ impl Ledger {
         // landing instead of taking up the date and the count of the run this read ended.
         for entry in served.values_mut() {
             if !unweighted(costs, &entry.model) {
-                entry.since = None;
-                entry.requests = 0;
+                close_run(entry);
             }
         }
         served.values().cloned().collect()
@@ -516,15 +515,9 @@ pub fn spawn(
                 .condition_folds
                 .fetch_add(1, Ordering::Relaxed);
             // The session totals fill ahead of the first wait and behind each pass, until a run finds none left.
-            let mut due = false;
             if filling {
-                match fill_sessions(&purging.db, &purging.pricing, &mut tick).await {
-                    Filled::Done => filling = false,
-                    Filled::Due => due = true,
-                    Filled::Refused => {}
-                }
-            }
-            if !due {
+                filling = fill_sessions(&purging.db, &purging.pricing, &mut tick).await;
+            } else {
                 tick.tick().await;
             }
             run_purge(
@@ -1785,8 +1778,7 @@ fn note_unpriced(
         // A cleared entry starts a new run.
         open_run(&mut served, model, request.received_at).requests += 1;
     } else if let Some(entry) = served.get_mut(model) {
-        entry.since = None;
-        entry.requests = 0;
+        close_run(entry);
     }
 }
 
@@ -1812,6 +1804,12 @@ fn open_run<'m>(
         });
     entry.since.get_or_insert(at);
     entry
+}
+
+/// Clears `entry`'s run: it reads with no `since` and no requests until a listing or a landing opens the next.
+fn close_run(entry: &mut UnpricedModel) {
+    entry.since = None;
+    entry.requests = 0;
 }
 
 /// One fold of the routing conditions at `now` on the purge task's connection, off the runtime thread. The windows
@@ -1927,38 +1925,34 @@ async fn continue_backfill(db: &Arc<LedgerDb>, mut written: usize) -> Option<usi
     }
 }
 
-/// How a run of the session totals' fill ended.
-enum Filled {
-    /// A call found no session left, so the task asks no more until the next start.
-    Done,
-    /// The purge's tick came due between two sessions and was taken, so its pass runs at once.
-    Due,
-    /// The ledger refused a call, and the run behind the next pass goes on from the cursor.
-    Refused,
-}
-
 /// The fill of the sessions no landing marked, one session per blocking call, so a shutdown's abort lands between two
-/// sessions and a due purge pass waits for one session at most.
+/// sessions and a due purge pass waits for one session at most. Every exit leaves the purge's tick taken, and the
+/// answer says whether the fill goes on behind the pass: a call that finds no session left ends it until the next
+/// start, and a call the ledger refused leaves the run to go on from the cursor.
 async fn fill_sessions(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     tick: &mut tokio::time::Interval,
-) -> Filled {
+) -> bool {
     loop {
         let prices = pricing.revisions();
         match blocking(db, move |db| crate::session_totals::fill_step(db, &prices)).await {
             Ok(true) => {}
-            Ok(false) => return Filled::Done,
+            Ok(false) => {
+                tick.tick().await;
+                return false;
+            }
             Err(error) => {
                 tracing::warn!(
                     %error,
                     "a session's totals could not be filled, so the fill goes on behind the next pass"
                 );
-                return Filled::Refused;
+                tick.tick().await;
+                return true;
             }
         }
         if tick_due(tick).await {
-            return Filled::Due;
+            return true;
         }
     }
 }

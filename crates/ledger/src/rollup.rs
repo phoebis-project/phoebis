@@ -464,18 +464,16 @@ impl RollupRow {
     /// before the instant of each earlier side. The rollup keeps no completion either, so the peak band reads at the
     /// hour's start whatever `at` names.
     pub(crate) fn price_key(&self, at: i64, now: i64) -> RowKey<'_> {
-        RowKey {
+        StoredWords {
             model: &self.canonical_model,
-            speed: Speed::of(Some(self.speed.as_str())),
-            band: Band::of_rollup(&self.band),
-            funding: self.funding_kind(),
-            tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
-            entrypoint: entrypoint_of_client(&self.client),
-            classifier: is_free_classifier(Some(self.classifier.as_str())),
-            at,
-            band_at: Some(self.hour * 1_000),
-            now,
+            speed: &self.speed,
+            band: &self.band,
+            funding: &self.funding,
+            tier: &self.tier,
+            client: &self.client,
+            classifier: &self.classifier,
         }
+        .key(at, self.hour * 1_000, now)
     }
 
     /// The row's counts as the five-count usage `price_row` takes.
@@ -558,6 +556,36 @@ impl RollupRow {
         self.each_count(o, |a, b| *a = a.saturating_sub(b));
         self.each_map(o, subtract_counts);
         self.each_hist(o, Histogram::subtract);
+    }
+}
+
+/// The seven stored words a price key reads, borrowed from an hourly row or from a session's sums row, so both read
+/// them back under one rule.
+pub(crate) struct StoredWords<'a> {
+    pub(crate) model: &'a str,
+    pub(crate) speed: &'a str,
+    pub(crate) band: &'a str,
+    pub(crate) funding: &'a str,
+    pub(crate) tier: &'a str,
+    pub(crate) client: &'a str,
+    pub(crate) classifier: &'a str,
+}
+
+impl<'a> StoredWords<'a> {
+    /// The price key at `at`, read at `now`, with the peak band read at `band_at`.
+    pub(crate) fn key(&self, at: i64, band_at: i64, now: i64) -> RowKey<'a> {
+        RowKey {
+            model: self.model,
+            speed: Speed::of(Some(self.speed)),
+            band: Band::of_rollup(self.band),
+            funding: Funding::of_rollup(self.funding),
+            tier: (self.tier != UNATTRIBUTED).then_some(self.tier),
+            entrypoint: entrypoint_of_client(self.client),
+            classifier: is_free_classifier(Some(self.classifier)),
+            at,
+            band_at: Some(band_at),
+            now,
+        }
     }
 }
 

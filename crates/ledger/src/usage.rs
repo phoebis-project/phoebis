@@ -67,10 +67,7 @@ fn add(tokens: &mut UsageTokens, row: &RollupRow) {
 }
 
 /// The two windows the self-service answer carries, from one read: the day is the tail of the week's own
-/// rows, so a caller polling the route costs one scan of its own key rather than two of every key's. While a
-/// boundary hour of the price list lies in the trailing week, a call also reads that hour's requests of every key
-/// received ahead of its last instant, to load the hour's sides. The answer still shows the caller's key alone,
-/// since the pairing starts from the key's own rows.
+/// rows, so a caller polling the route costs one scan of its own key rather than two of every key's.
 ///
 /// The key is bound in SQL from the authenticated id and from nothing the caller sent: the ceiling on what
 /// this route may show is that one argument. The ledger files what it could not attribute under `-`, which
@@ -92,7 +89,14 @@ pub fn key_usage_windows(
 ) -> Result<(KeyUsageWindow, KeyUsageWindow), LedgerError> {
     let day_hour = hour_of(now - DAY_MS);
     let week_hour = hour_of(now - WEEK_MS);
-    let sides = Sides::on(conn, prices, None, week_hour, hour_ceil(now))?;
+    let sides = Sides::on_key(
+        conn,
+        prices,
+        key_id,
+        key_generation,
+        week_hour,
+        hour_ceil(now),
+    )?;
     let rows = read_rollups_for_key(conn, key_id, key_generation, week_hour, hour_ceil(now))?;
     let (mut day, mut week) = (
         WindowSum::new(day_hour, now),

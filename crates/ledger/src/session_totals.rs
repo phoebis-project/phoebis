@@ -17,26 +17,28 @@ use std::sync::LazyLock;
 use phoebis_bus::Kind;
 use phoebis_routing::{PinUsage, HOUR_MS};
 use phoebis_store::AccountKind;
-use rusqlite::types::Value;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Params, Transaction};
+use rusqlite::{
+    params, params_from_iter, Connection, OptionalExtension, Params, ToSql, Transaction,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{begin_write, newest_landing_stamp};
-use crate::plan::{entrypoint_of_client, funding_of, Funding, PlanTables};
-use crate::price::{is_free_classifier, RowKey};
-use crate::pricing::{Band, PriceRevisions, Speed};
+use crate::plan::{funding_of, Funding, PlanTables};
+use crate::price::RowKey;
+use crate::pricing::{PriceRevisions, Speed};
 use crate::query::{
-    add_figures, boundary_instants, price_request, session_facts_statement, session_hour_statement,
-    session_requests_of, session_spend_of_statement, session_sums_statement, RequestPrice,
-    SessionSpendKey, SERVING_ATTEMPT_NUMBER, SESSION_IDENTITY_CHUNK,
+    add_figures, boundary_instants, clamped_count, price_request, session_facts_statement,
+    session_hour_statement, session_requests_of, session_spend_of_statement,
+    session_sums_statement, usage_sum, RequestPrice, SessionSpendKey, SERVING_ATTEMPT_NUMBER,
+    SESSION_IDENTITY_CHUNK,
 };
 use crate::record::{AttemptRecord, RequestRecord};
 use crate::refold::{
     delete_meta, first_difference, read_meta, revisions_of, thresholds_of, write_meta, Thresholds,
 };
 use crate::rollup::{
-    fold_identifier_of, hour_of, last_millisecond, serving_speed, trailing_day_hours, NO_CLASS,
-    PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
+    fold_identifier_of, hour_of, last_millisecond, serving_speed, trailing_day_hours, StoredWords,
+    NO_CLASS, PLAN_FUNDING, STANDARD_BAND, UNATTRIBUTED,
 };
 use crate::{LedgerDb, LedgerError};
 
@@ -92,31 +94,10 @@ pub(crate) struct Serving {
     pub(crate) tier: Option<String>,
     /// The attempt's finish, else the request's, else the attempt's start, where the meter charges it.
     pub(crate) completed_at: i64,
-    pub(crate) input_tokens: Option<u64>,
-    pub(crate) cache_read_tokens: Option<u64>,
-    pub(crate) cache_write_5m_tokens: Option<u64>,
-    pub(crate) cache_write_1h_tokens: Option<u64>,
-    pub(crate) output_tokens: Option<u64>,
-}
-
-impl Serving {
-    fn answered(&self) -> bool {
-        self.input_tokens.is_some()
-            || self.cache_read_tokens.is_some()
-            || self.cache_write_5m_tokens.is_some()
-            || self.cache_write_1h_tokens.is_some()
-            || self.output_tokens.is_some()
-    }
-
-    fn usage(&self) -> PinUsage {
-        PinUsage {
-            input: self.input_tokens.unwrap_or(0),
-            cache_read: self.cache_read_tokens.unwrap_or(0),
-            write_5m: self.cache_write_5m_tokens.unwrap_or(0),
-            write_1h: self.cache_write_1h_tokens.unwrap_or(0),
-            output: self.output_tokens.unwrap_or(0),
-        }
-    }
+    /// Whether the attempt carries any of its five token counts.
+    pub(crate) answered: bool,
+    /// The five counts, a missing one read as 0.
+    pub(crate) usage: PinUsage,
 }
 
 impl SessionRequest {
@@ -156,17 +137,21 @@ impl SessionRequest {
                     .finished_at
                     .or(request.finished_at)
                     .unwrap_or(a.started_at),
-                input_tokens: a.input_tokens,
-                cache_read_tokens: a.cache_read_tokens,
-                cache_write_5m_tokens: a.cache_write_5m_tokens,
-                cache_write_1h_tokens: a.cache_write_1h_tokens,
-                output_tokens: a.output_tokens,
+                answered: a.has_usage(),
+                usage: a.usage(),
             }),
         }
     }
 
     fn probe(&self) -> bool {
         self.kind == Kind::Probe.as_str()
+    }
+
+    /// The serving attempt's completion, else the receipt of a request no account served.
+    fn completed_at(&self) -> i64 {
+        self.serving
+            .as_ref()
+            .map_or(self.received_at, |s| s.completed_at)
     }
 }
 
@@ -193,21 +178,26 @@ pub(crate) struct SumsKey {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Counts {
     pub(crate) requests: u64,
-    pub(crate) input_tokens: u64,
-    pub(crate) cache_read_tokens: u64,
-    pub(crate) cache_write_5m_tokens: u64,
-    pub(crate) cache_write_1h_tokens: u64,
-    pub(crate) output_tokens: u64,
+    pub(crate) usage: PinUsage,
 }
 
 impl Counts {
     pub(crate) fn add(&mut self, other: Counts) {
         self.requests += other.requests;
-        self.input_tokens += other.input_tokens;
-        self.cache_read_tokens += other.cache_read_tokens;
-        self.cache_write_5m_tokens += other.cache_write_5m_tokens;
-        self.cache_write_1h_tokens += other.cache_write_1h_tokens;
-        self.output_tokens += other.output_tokens;
+        self.usage = usage_sum(self.usage, other.usage);
+    }
+
+    /// The six counts in `SUMS_COLUMNS`' order, as a sums row stores them.
+    fn columns(&self) -> [i64; 6] {
+        [
+            self.requests,
+            self.usage.input,
+            self.usage.cache_read,
+            self.usage.write_5m,
+            self.usage.write_1h,
+            self.usage.output,
+        ]
+        .map(|n| n as i64)
     }
 }
 
@@ -225,7 +215,7 @@ pub(crate) fn sums_of(
         return None;
     }
     let serving = request.serving.as_ref();
-    let answered = serving.filter(|s| s.answered());
+    let answered = serving.filter(|s| s.answered);
     let key = SumsKey {
         agent_id: request
             .agent_id
@@ -235,7 +225,7 @@ pub(crate) fn sums_of(
         account_id: serving.map_or_else(|| RESERVED_ID.to_string(), |s| s.account_id.clone()),
         canonical_model: request.canonical_model.clone(),
         speed: serving_speed(
-            serving.map(|s| (s.speed.as_deref(), s.answered())),
+            serving.map(|s| (s.speed.as_deref(), s.answered)),
             request.requested_speed.as_deref(),
         )
         .to_string(),
@@ -254,7 +244,7 @@ pub(crate) fn sums_of(
             .map_or(STANDARD_BAND, |s| {
                 prices
                     .in_force(request.received_at)
-                    .band_of(&request.canonical_model, s.usage().prompt_tokens())
+                    .band_of(&request.canonical_model, s.usage.prompt_tokens())
                     .as_str()
             })
             .to_string(),
@@ -265,47 +255,59 @@ pub(crate) fn sums_of(
         classifier: fold_identifier_of(request.classifier.as_deref(), NO_CLASS),
         request_class: fold_identifier_of(request.request_class.as_deref(), NO_CLASS),
         received_hour: hour_of(request.received_at),
-        completed_hour: hour_of(serving.map_or(request.received_at, |s| s.completed_at)),
+        completed_hour: hour_of(request.completed_at()),
     };
-    let usage = serving.map(Serving::usage).unwrap_or_default();
     Some((
         key,
         Counts {
             requests: 1,
-            input_tokens: usage.input,
-            cache_read_tokens: usage.cache_read,
-            cache_write_5m_tokens: usage.write_5m,
-            cache_write_1h_tokens: usage.write_1h,
-            output_tokens: usage.output,
+            usage: serving.map(|s| s.usage).unwrap_or_default(),
         },
     ))
 }
 
-/// One `session_facts` row's columns beside its key. The session's own row holds the first five, an agent's row the
+/// One `session_facts` row's columns beside its key. The session's own row holds the first three, an agent's row the
 /// rest.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Facts {
     pub(crate) last_request_at: Option<i64>,
     pub(crate) last_inference_at: Option<i64>,
-    pub(crate) served_at: Option<i64>,
-    pub(crate) served_id: Option<String>,
-    pub(crate) user_agent: Option<String>,
+    pub(crate) served: Option<Served>,
     pub(crate) first_request_at: Option<i64>,
-    pub(crate) newest_at: Option<i64>,
-    pub(crate) newest_id: Option<String>,
-    pub(crate) newest_model: Option<String>,
-    pub(crate) newest_agent_type: Option<String>,
-    pub(crate) newest_account_id: Option<String>,
-    pub(crate) probe_at: Option<i64>,
-    pub(crate) probe_id: Option<String>,
-    pub(crate) probe_model: Option<String>,
+    pub(crate) newest: Option<Newest>,
+    pub(crate) probe: Option<Probed>,
 }
 
-/// Whether `request` is newer than the pick at `at` with `id`, by receipt and then id, so two requests of one instant
-/// resolve the same whichever order a read visits them.
-fn newer(request: &SessionRequest, at: Option<i64>, id: Option<&str>) -> bool {
-    at.zip(id)
-        .is_none_or(|pick| (request.received_at, request.id.as_str()) > pick)
+/// The session's newest served client request, with its own user agent, null included.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Served {
+    pub(crate) at: i64,
+    pub(crate) id: String,
+    pub(crate) user_agent: Option<String>,
+}
+
+/// An agent's newest served client request.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Newest {
+    pub(crate) at: i64,
+    pub(crate) id: String,
+    pub(crate) model: String,
+    pub(crate) agent_type: Option<String>,
+    pub(crate) account_id: Option<String>,
+}
+
+/// An agent's newest served probe.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Probed {
+    pub(crate) at: i64,
+    pub(crate) id: String,
+    pub(crate) model: String,
+}
+
+/// Whether `request` is newer than `pick`, its instant and its id, by receipt and then id, so two requests of one
+/// instant resolve the same whichever order a read visits them.
+fn newer(request: &SessionRequest, pick: Option<(i64, &str)>) -> bool {
+    pick.is_none_or(|pick| (request.received_at, request.id.as_str()) > pick)
 }
 
 impl Facts {
@@ -319,10 +321,12 @@ impl Facts {
         if request.kind != Kind::CountTokens.as_str() {
             self.last_inference_at = self.last_inference_at.max(Some(request.received_at));
         }
-        if !request.refused && newer(request, self.served_at, self.served_id.as_deref()) {
-            self.served_at = Some(request.received_at);
-            self.served_id = Some(request.id.clone());
-            self.user_agent = request.user_agent.clone();
+        if !request.refused && newer(request, self.served.as_ref().map(|s| (s.at, s.id.as_str()))) {
+            self.served = Some(Served {
+                at: request.received_at,
+                id: request.id.clone(),
+                user_agent: request.user_agent.clone(),
+            });
         }
     }
 
@@ -339,17 +343,21 @@ impl Facts {
             return;
         }
         if request.probe() {
-            if newer(request, self.probe_at, self.probe_id.as_deref()) {
-                self.probe_at = Some(request.received_at);
-                self.probe_id = Some(request.id.clone());
-                self.probe_model = Some(request.canonical_model.clone());
+            if newer(request, self.probe.as_ref().map(|p| (p.at, p.id.as_str()))) {
+                self.probe = Some(Probed {
+                    at: request.received_at,
+                    id: request.id.clone(),
+                    model: request.canonical_model.clone(),
+                });
             }
-        } else if newer(request, self.newest_at, self.newest_id.as_deref()) {
-            self.newest_at = Some(request.received_at);
-            self.newest_id = Some(request.id.clone());
-            self.newest_model = Some(request.canonical_model.clone());
-            self.newest_agent_type = request.agent_type.clone();
-            self.newest_account_id = request.serving.as_ref().map(|s| s.account_id.clone());
+        } else if newer(request, self.newest.as_ref().map(|n| (n.at, n.id.as_str()))) {
+            self.newest = Some(Newest {
+                at: request.received_at,
+                id: request.id.clone(),
+                model: request.canonical_model.clone(),
+                agent_type: request.agent_type.clone(),
+                account_id: request.serving.as_ref().map(|s| s.account_id.clone()),
+            });
         }
     }
 
@@ -358,24 +366,23 @@ impl Facts {
         match pick {
             Pick::LastRequest => self.last_request_at,
             Pick::LastInference => self.last_inference_at,
-            Pick::Served => self.served_at,
+            Pick::Served => self.served.as_ref().map(|s| s.at),
             Pick::FirstRequest => self.first_request_at,
-            Pick::Newest => self.newest_at,
-            Pick::Probe => self.probe_at,
+            Pick::Newest => self.newest.as_ref().map(|n| n.at),
+            Pick::Probe => self.probe.as_ref().map(|p| p.at),
         }
     }
 
     /// Whether `request` is the one `pick` names: its id is the pick's, or its receipt the pick's instant where the
     /// pick keeps no id.
     fn held(&self, pick: Pick, request: &SessionRequest) -> bool {
-        let id = Some(request.id.as_str());
         match pick {
             Pick::LastRequest | Pick::LastInference | Pick::FirstRequest => {
                 self.instant(pick) == Some(request.received_at)
             }
-            Pick::Served => self.served_id.as_deref() == id,
-            Pick::Newest => self.newest_id.as_deref() == id,
-            Pick::Probe => self.probe_id.as_deref() == id,
+            Pick::Served => self.served.as_ref().is_some_and(|s| s.id == request.id),
+            Pick::Newest => self.newest.as_ref().is_some_and(|n| n.id == request.id),
+            Pick::Probe => self.probe.as_ref().is_some_and(|p| p.id == request.id),
         }
     }
 }
@@ -403,11 +410,13 @@ impl Pick {
     ];
 }
 
-/// One session's totals: its sums rows by key and its facts rows by agent, the session's own row under `RESERVED_ID`.
+/// One session's totals: its sums rows by key, its own facts row, which the table keys under `RESERVED_ID`, and its
+/// agents' facts rows by agent.
 #[derive(Debug)]
 pub(crate) struct Totals {
     pub(crate) sums: BTreeMap<SumsKey, Counts>,
-    pub(crate) facts: BTreeMap<String, Facts>,
+    pub(crate) own: Facts,
+    pub(crate) agents: BTreeMap<String, Facts>,
 }
 
 impl Totals {
@@ -415,17 +424,15 @@ impl Totals {
     fn new() -> Totals {
         Totals {
             sums: BTreeMap::new(),
-            facts: BTreeMap::from([(RESERVED_ID.to_string(), Facts::default())]),
+            own: Facts::default(),
+            agents: BTreeMap::new(),
         }
     }
 
     fn add(&mut self, request: &SessionRequest, prices: &PriceRevisions) {
-        self.facts
-            .entry(RESERVED_ID.to_string())
-            .or_default()
-            .add_to_session(request);
+        self.own.add_to_session(request);
         if let Some(agent_id) = &request.agent_id {
-            self.facts
+            self.agents
                 .entry(agent_id.clone())
                 .or_default()
                 .add_to_agent(request);
@@ -465,43 +472,62 @@ pub(crate) fn land(
     prices: &PriceRevisions,
 ) -> Result<(), LedgerError> {
     if let Some((record, record_attempts)) = previous {
-        let old = SessionRequest::of(record, record_attempts);
-        if let Some(key) = &old.key {
-            if marked(tx, key)? {
-                if let Some((sums, counts)) = sums_of(&old, prices) {
-                    take_sums(tx, key, &sums, counts)?;
-                }
-                for agent in std::iter::once(RESERVED_ID).chain(old.agent_id.as_deref()) {
-                    if let Some(facts) = read_facts(tx, key, agent)? {
-                        reread(tx, key, agent, facts, |facts, pick| facts.held(pick, &old))?;
-                    }
-                }
-            }
-        }
+        leave(tx, record, record_attempts, prices)?;
     }
     let new = SessionRequest::of(request, attempts);
     let Some(key) = &new.key else {
         return Ok(());
     };
-    if !marked(tx, key)? {
-        if !holds_another(tx, key, &new.id)? {
+    let Some(mut own) = read_facts(tx, key, RESERVED_ID)? else {
+        if !exists(tx, HOLDS_ANOTHER, key, Some(&new.id))? {
             let mut totals = Totals::new();
             totals.add(&new, prices);
             write_totals(tx, key, &totals)?;
         }
         return Ok(());
-    }
+    };
     if let Some((sums, counts)) = sums_of(&new, prices) {
         add_sums(tx, key, &sums, counts)?;
     }
-    for agent in std::iter::once(RESERVED_ID).chain(new.agent_id.as_deref()) {
-        let mut facts = read_facts(tx, key, agent)?.unwrap_or_default();
-        if agent == RESERVED_ID {
-            facts.add_to_session(&new);
-        } else {
-            facts.add_to_agent(&new);
+    // A probe moves no pick of the session's own row.
+    if !new.probe() {
+        own.add_to_session(&new);
+        write_facts(tx, key, RESERVED_ID, &own)?;
+    }
+    if let Some(agent) = new.agent_id.as_deref() {
+        let stored = read_facts(tx, key, agent)?;
+        let mut facts = stored.clone().unwrap_or_default();
+        facts.add_to_agent(&new);
+        if stored.as_ref() != Some(&facts) {
+            write_facts(tx, key, agent, &facts)?;
         }
-        write_facts(tx, key, agent, &facts)?;
+    }
+    Ok(())
+}
+
+/// The replaced record of a request landed again, taken back out of a marked session's totals.
+fn leave(
+    tx: &Transaction<'_>,
+    record: &RequestRecord,
+    attempts: &[AttemptRecord],
+    prices: &PriceRevisions,
+) -> Result<(), LedgerError> {
+    let old = SessionRequest::of(record, attempts);
+    let Some(key) = &old.key else {
+        return Ok(());
+    };
+    let Some(own) = read_facts(tx, key, RESERVED_ID)? else {
+        return Ok(());
+    };
+    if let Some((sums, counts)) = sums_of(&old, prices) {
+        take_sums(tx, key, &sums, counts)?;
+    }
+    let held = |facts: &Facts, pick| facts.held(pick, &old);
+    reread(tx, key, RESERVED_ID, own, held)?;
+    if let Some(agent) = old.agent_id.as_deref() {
+        if let Some(facts) = read_facts(tx, key, agent)? {
+            reread(tx, key, agent, facts, held)?;
+        }
     }
     Ok(())
 }
@@ -527,11 +553,11 @@ const FILL_WALK_SQL: &str = "SELECT rowid, received_at, key_id, key_generation, 
     INDEXED BY requests_received WHERE (received_at, rowid) < (?1, ?2) ORDER BY received_at DESC, rowid DESC LIMIT ?3";
 
 /// One walk's result: the last row it passed and the first session it met with no mark, beside that session's row.
+/// A walk that meets none marks its last row ended where it read fewer rows than `FILL_WALK`, since no row lies below
+/// the ones it read.
 struct Walk {
     passed: FillCursor,
     unmarked: Option<(SessionSpendKey, FillCursor)>,
-    /// The walk read fewer rows than `FILL_WALK`, so no row lies below the ones it read.
-    ended: bool,
 }
 
 fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
@@ -560,7 +586,6 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
                     return Ok(Walk {
                         passed,
                         unmarked: Some((key, at)),
-                        ended: false,
                     });
                 }
                 seen.insert(key);
@@ -569,9 +594,11 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
         passed = at;
     }
     Ok(Walk {
-        passed,
+        passed: FillCursor {
+            ended: read < FILL_WALK,
+            ..passed
+        },
         unmarked: None,
-        ended: read < FILL_WALK,
     })
 }
 
@@ -588,34 +615,33 @@ fn walk(conn: &Connection, from: FillCursor) -> Result<Walk, LedgerError> {
 /// reader sums it from its request rows until then. Answers whether the walk left rows below the cursor.
 pub(crate) fn fill_step(db: &LedgerDb, prices: &PriceRevisions) -> Result<bool, LedgerError> {
     db.purge(|conn| {
-        let (walked, summed) = {
+        let (passed, summed) = {
             let read = conn.transaction()?;
             let cursor = read_meta::<FillCursor>(&read, FILL_CURSOR_KEY)?.unwrap_or(FILL_TOP);
             if cursor.ended {
                 return Ok(false);
             }
             let walked = walk(&read, cursor)?;
-            let summed = match &walked.unmarked {
-                Some((key, _)) => {
-                    Some((totals_of(&read, key, prices)?, newest_landing_stamp(&read)?))
+            let summed = match walked.unmarked {
+                Some((key, at)) => {
+                    let totals = totals_of(&read, &key, prices)?;
+                    Some((key, at, totals, newest_landing_stamp(&read)?))
                 }
                 None => None,
             };
-            (walked, summed)
+            (walked.passed, summed)
         };
         let tx = begin_write(conn)?;
-        let mut cursor = walked.passed;
-        if let (Some((key, at)), Some((totals, noted))) = (&walked.unmarked, summed) {
-            if !landed_since(&tx, key, noted)? {
-                write_totals(&tx, key, &totals)?;
-                cursor = *at;
+        let mut cursor = passed;
+        if let Some((key, at, totals, noted)) = summed {
+            if !exists(&tx, LANDED_SINCE, &key, Some(&noted))? {
+                write_totals(&tx, &key, &totals)?;
+                cursor = at;
             }
         }
-        let left = walked.unmarked.is_some() || !walked.ended;
-        cursor.ended = !left;
         write_meta(&tx, FILL_CURSOR_KEY, &cursor)?;
         tx.commit()?;
-        Ok(left)
+        Ok(!cursor.ended)
     })
 }
 
@@ -747,7 +773,7 @@ fn sum_hour_again(
     let mut deleted = 0;
     for sums in stored.keys().filter(|sums| !summed.contains_key(*sums)) {
         tx.prepare_cached(&DELETE_SUMS)?
-            .execute(params_from_iter(row_binds(key, sums)))?;
+            .execute(sums_params(key, sums))?;
         deleted += 1;
     }
     for (sums, counts) in &summed {
@@ -763,7 +789,7 @@ fn settle_session(
     key: &SessionSpendKey,
     cutoff: i64,
 ) -> Result<usize, LedgerError> {
-    if !holds(tx, HOLDS_ANY, key, None)? {
+    if !exists(tx, HOLDS_ANY, key, None)? {
         return clear_session(tx, key);
     }
     let mut deleted = 0;
@@ -775,7 +801,7 @@ fn settle_session(
     Ok(deleted)
 }
 
-/// The predicate on a session's key in both tables, bound as `session_binds` binds it.
+/// The predicate on a session's key in both tables, bound as `SessionSpendKey::params` binds it.
 const SESSION_KEY: &str = "key_id = ?1 AND key_generation = ?2 AND session_id = ?3";
 
 /// The sums table's primary key in its order: the terms of `SUMS_ROW_KEY` and the row values the retention purge
@@ -799,7 +825,7 @@ pub(crate) const SUMS_KEY_COLUMNS: [&str; 16] = [
     "completed_hour",
 ];
 
-/// A sums row's key bound as `row_binds` binds it.
+/// A sums row's key bound as `sums_params` binds it.
 static SUMS_ROW_KEY: LazyLock<String> = LazyLock::new(|| {
     SUMS_KEY_COLUMNS
         .iter()
@@ -862,9 +888,19 @@ static READ_SUMS_OF_HOUR: LazyLock<String> = LazyLock::new(|| {
     format!("SELECT {SUMS_COLUMNS} FROM session_sums WHERE {SESSION_KEY} AND received_hour = ?4")
 });
 
+/// A facts row's key: the session's, and its agent as `?4`.
+static FACTS_ROW_KEY: LazyLock<String> =
+    LazyLock::new(|| format!("{SESSION_KEY} AND agent_id = ?4"));
+
 static READ_FACTS: LazyLock<String> = LazyLock::new(|| {
-    format!("SELECT {FACTS_COLUMNS} FROM session_facts WHERE {SESSION_KEY} AND agent_id = ?4")
+    format!(
+        "SELECT {FACTS_COLUMNS} FROM session_facts WHERE {}",
+        *FACTS_ROW_KEY
+    )
 });
+
+static DELETE_FACTS_ROW: LazyLock<String> =
+    LazyLock::new(|| format!("DELETE FROM session_facts WHERE {}", *FACTS_ROW_KEY));
 
 static READ_ALL_FACTS: LazyLock<String> = LazyLock::new(|| {
     format!("SELECT agent_id, {FACTS_COLUMNS} FROM session_facts WHERE {SESSION_KEY}")
@@ -878,9 +914,8 @@ static PUT_FACTS: LazyLock<String> = LazyLock::new(|| {
 });
 
 /// The session's own facts row, its mark, with `RESERVED_ID` bound as `?4`.
-const MARKED: &str =
-    "SELECT 1 FROM session_facts WHERE key_id = ?1 AND key_generation = ?2 AND session_id = ?3 \
-    AND agent_id = ?4";
+static MARKED: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT 1 FROM session_facts WHERE {}", *FACTS_ROW_KEY));
 
 /// A request of the session under its key other than `?4`. The reads of a session's requests walk the session index of
 /// its id and check the key on each row.
@@ -947,50 +982,40 @@ const SESSIONS_WITH_FACTS_BEFORE: &str = "SELECT DISTINCT key_id, key_generation
     WHERE last_request_at < ?1 OR last_inference_at < ?1 OR served_at < ?1 OR first_request_at < ?1 \
     OR newest_at < ?1 OR probe_at < ?1";
 
-fn session_binds(key: &SessionSpendKey) -> [Value; 3] {
+/// The sums row's sixteen key parts in `SUMS_ROW_KEY`'s order.
+fn sums_params<'a>(key: &'a SessionSpendKey, sums: &'a SumsKey) -> [&'a dyn ToSql; 16] {
+    let [key_id, key_generation, session_id] = key.params();
     [
-        Value::Text(key.key_id.clone()),
-        Value::Integer(key.key_generation),
-        Value::Text(key.session_id.clone()),
+        key_id,
+        key_generation,
+        session_id,
+        &sums.agent_id,
+        &sums.probe,
+        &sums.account_id,
+        &sums.canonical_model,
+        &sums.speed,
+        &sums.funding,
+        &sums.band,
+        &sums.tier,
+        &sums.client,
+        &sums.classifier,
+        &sums.request_class,
+        &sums.received_hour,
+        &sums.completed_hour,
     ]
 }
 
-/// The sums row's sixteen key parts in `SUMS_ROW_KEY`'s order.
-fn row_binds(key: &SessionSpendKey, sums: &SumsKey) -> Vec<Value> {
-    let mut binds = session_binds(key).to_vec();
-    binds.extend([
-        Value::Text(sums.agent_id.clone()),
-        Value::Integer(i64::from(sums.probe)),
-        Value::Text(sums.account_id.clone()),
-        Value::Text(sums.canonical_model.clone()),
-        Value::Text(sums.speed.clone()),
-        Value::Text(sums.funding.clone()),
-        Value::Text(sums.band.clone()),
-        Value::Text(sums.tier.clone()),
-        Value::Text(sums.client.clone()),
-        Value::Text(sums.classifier.clone()),
-        Value::Text(sums.request_class.clone()),
-        Value::Integer(sums.received_hour),
-        Value::Integer(sums.completed_hour),
-    ]);
-    binds
-}
-
-/// `row_binds` with the six counts after them, as the writes of a sums row bind them.
-fn counted_binds(key: &SessionSpendKey, sums: &SumsKey, counts: Counts) -> Vec<Value> {
-    let mut binds = row_binds(key, sums);
-    binds.extend(
-        [
-            counts.requests,
-            counts.input_tokens,
-            counts.cache_read_tokens,
-            counts.cache_write_5m_tokens,
-            counts.cache_write_1h_tokens,
-            counts.output_tokens,
-        ]
-        .map(|n| Value::Integer(n as i64)),
-    );
-    binds
+/// `sums_params` with the six counts of `Counts::columns` after them, as the writes of a sums row bind them.
+fn counted_params<'a>(
+    key: &'a SessionSpendKey,
+    sums: &'a SumsKey,
+    counts: &'a [i64; 6],
+) -> [&'a dyn ToSql; 22] {
+    let row = sums_params(key, sums);
+    std::array::from_fn(|i| match row.get(i) {
+        Some(bind) => *bind,
+        None => &counts[i - row.len()],
+    })
 }
 
 fn add_sums(
@@ -1000,7 +1025,7 @@ fn add_sums(
     counts: Counts,
 ) -> Result<(), LedgerError> {
     tx.prepare_cached(&ADD_SUMS)?
-        .execute(params_from_iter(counted_binds(key, sums, counts)))?;
+        .execute(counted_params(key, sums, &counts.columns()))?;
     Ok(())
 }
 
@@ -1011,7 +1036,7 @@ fn put_sums(
     counts: Counts,
 ) -> Result<(), LedgerError> {
     tx.prepare_cached(&PUT_SUMS)?
-        .execute(params_from_iter(counted_binds(key, sums, counts)))?;
+        .execute(counted_params(key, sums, &counts.columns()))?;
     Ok(())
 }
 
@@ -1023,9 +1048,9 @@ fn take_sums(
     counts: Counts,
 ) -> Result<(), LedgerError> {
     tx.prepare_cached(&TAKE_SUMS)?
-        .execute(params_from_iter(counted_binds(key, sums, counts)))?;
+        .execute(counted_params(key, sums, &counts.columns()))?;
     tx.prepare_cached(&EMPTIED_SUMS)?
-        .execute(params_from_iter(row_binds(key, sums)))?;
+        .execute(sums_params(key, sums))?;
     Ok(())
 }
 
@@ -1034,17 +1059,17 @@ fn read_sums(
     key: &SessionSpendKey,
     hour: i64,
 ) -> Result<BTreeMap<SumsKey, Counts>, LedgerError> {
-    let mut binds = session_binds(key).to_vec();
-    binds.push(Value::Integer(hour));
+    let [key_id, key_generation, session_id] = key.params();
     let mut stmt = conn.prepare_cached(&READ_SUMS_OF_HOUR)?;
-    let rows = stmt.query_map(params_from_iter(binds), |row| sums_row(row, 0))?;
+    let rows = stmt.query_map(params![key_id, key_generation, session_id, hour], |row| {
+        sums_row(row, 0)
+    })?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// The sums row from column `first` on, in `SUMS_COLUMNS`' order.
 fn sums_row(row: &rusqlite::Row, first: usize) -> rusqlite::Result<(SumsKey, Counts)> {
-    let count =
-        |i: usize| -> rusqlite::Result<u64> { Ok(row.get::<_, i64>(first + i)?.max(0) as u64) };
+    let count = |i: usize| clamped_count(row, first + i);
     Ok((
         SumsKey {
             agent_id: row.get(first)?,
@@ -1063,32 +1088,47 @@ fn sums_row(row: &rusqlite::Row, first: usize) -> rusqlite::Result<(SumsKey, Cou
         },
         Counts {
             requests: count(13)?,
-            input_tokens: count(14)?,
-            cache_read_tokens: count(15)?,
-            cache_write_5m_tokens: count(16)?,
-            cache_write_1h_tokens: count(17)?,
-            output_tokens: count(18)?,
+            usage: PinUsage {
+                input: count(14)?,
+                cache_read: count(15)?,
+                write_5m: count(16)?,
+                write_1h: count(17)?,
+                output: count(18)?,
+            },
         },
     ))
 }
 
-/// The facts from column `first` on, in `FACTS_COLUMNS`' order.
+/// The facts from column `first` on, in `FACTS_COLUMNS`' order. A pick reads where its instant and its id are both
+/// set, since this module writes a pick's columns together.
 fn facts_of(row: &rusqlite::Row, first: usize) -> rusqlite::Result<Facts> {
+    let at = |i: usize| row.get::<_, Option<i64>>(first + i);
+    let text = |i: usize| row.get::<_, Option<String>>(first + i);
+    let (last_request_at, last_inference_at) = (at(0)?, at(1)?);
+    let served = at(2)?.zip(text(3)?);
+    let user_agent = text(4)?;
+    let first_request_at = at(5)?;
+    let newest = at(6)?.zip(text(7)?);
+    let (model, agent_type, account_id) = (text(8)?, text(9)?, text(10)?);
+    let probe = at(11)?.zip(text(12)?);
+    let probe_model = text(13)?;
     Ok(Facts {
-        last_request_at: row.get(first)?,
-        last_inference_at: row.get(first + 1)?,
-        served_at: row.get(first + 2)?,
-        served_id: row.get(first + 3)?,
-        user_agent: row.get(first + 4)?,
-        first_request_at: row.get(first + 5)?,
-        newest_at: row.get(first + 6)?,
-        newest_id: row.get(first + 7)?,
-        newest_model: row.get(first + 8)?,
-        newest_agent_type: row.get(first + 9)?,
-        newest_account_id: row.get(first + 10)?,
-        probe_at: row.get(first + 11)?,
-        probe_id: row.get(first + 12)?,
-        probe_model: row.get(first + 13)?,
+        last_request_at,
+        last_inference_at,
+        served: served.map(|(at, id)| Served { at, id, user_agent }),
+        first_request_at,
+        newest: newest.map(|(at, id)| Newest {
+            at,
+            id,
+            model: model.unwrap_or_default(),
+            agent_type,
+            account_id,
+        }),
+        probe: probe.map(|(at, id)| Probed {
+            at,
+            id,
+            model: probe_model.unwrap_or_default(),
+        }),
     })
 }
 
@@ -1097,11 +1137,12 @@ fn read_facts(
     key: &SessionSpendKey,
     agent: &str,
 ) -> Result<Option<Facts>, LedgerError> {
-    let mut binds = session_binds(key).to_vec();
-    binds.push(Value::Text(agent.to_string()));
+    let [key_id, key_generation, session_id] = key.params();
     Ok(conn
         .prepare_cached(&READ_FACTS)?
-        .query_row(params_from_iter(binds), |row| facts_of(row, 0))
+        .query_row(params![key_id, key_generation, session_id, agent], |row| {
+            facts_of(row, 0)
+        })
         .optional()?)
 }
 
@@ -1110,9 +1151,7 @@ fn read_all_facts(
     key: &SessionSpendKey,
 ) -> Result<Vec<(String, Facts)>, LedgerError> {
     let mut stmt = conn.prepare_cached(&READ_ALL_FACTS)?;
-    let rows = stmt.query_map(params_from_iter(session_binds(key)), |row| {
-        Ok((row.get(0)?, facts_of(row, 1)?))
-    })?;
+    let rows = stmt.query_map(key.params(), |row| Ok((row.get(0)?, facts_of(row, 1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -1122,26 +1161,32 @@ fn write_facts(
     agent: &str,
     facts: &Facts,
 ) -> Result<(), LedgerError> {
-    let mut binds = session_binds(key).to_vec();
-    binds.extend([
-        Value::Text(agent.to_string()),
-        facts.last_request_at.into(),
-        facts.last_inference_at.into(),
-        facts.served_at.into(),
-        facts.served_id.clone().into(),
-        facts.user_agent.clone().into(),
-        facts.first_request_at.into(),
-        facts.newest_at.into(),
-        facts.newest_id.clone().into(),
-        facts.newest_model.clone().into(),
-        facts.newest_agent_type.clone().into(),
-        facts.newest_account_id.clone().into(),
-        facts.probe_at.into(),
-        facts.probe_id.clone().into(),
-        facts.probe_model.clone().into(),
-    ]);
-    tx.prepare_cached(&PUT_FACTS)?
-        .execute(params_from_iter(binds))?;
+    let (served, newest, probe) = (
+        facts.served.as_ref(),
+        facts.newest.as_ref(),
+        facts.probe.as_ref(),
+    );
+    let [key_id, key_generation, session_id] = key.params();
+    tx.prepare_cached(&PUT_FACTS)?.execute(params![
+        key_id,
+        key_generation,
+        session_id,
+        agent,
+        facts.last_request_at,
+        facts.last_inference_at,
+        served.map(|s| s.at),
+        served.map(|s| &s.id),
+        served.and_then(|s| s.user_agent.as_ref()),
+        facts.first_request_at,
+        newest.map(|n| n.at),
+        newest.map(|n| &n.id),
+        newest.map(|n| &n.model),
+        newest.and_then(|n| n.agent_type.as_ref()),
+        newest.and_then(|n| n.account_id.as_ref()),
+        probe.map(|p| p.at),
+        probe.map(|p| &p.id),
+        probe.map(|p| &p.model),
+    ])?;
     Ok(())
 }
 
@@ -1156,7 +1201,8 @@ fn write_totals(
     for (sums, counts) in &totals.sums {
         put_sums(tx, key, sums, *counts)?;
     }
-    for (agent, facts) in &totals.facts {
+    write_facts(tx, key, RESERVED_ID, &totals.own)?;
+    for (agent, facts) in &totals.agents {
         write_facts(tx, key, agent, facts)?;
     }
     Ok(())
@@ -1168,47 +1214,26 @@ fn clear_session(tx: &Transaction<'_>, key: &SessionSpendKey) -> Result<usize, L
     for table in ["session_sums", "session_facts"] {
         deleted += tx
             .prepare_cached(&format!("DELETE FROM {table} WHERE {SESSION_KEY}"))?
-            .execute(params_from_iter(session_binds(key)))?;
+            .execute(key.params())?;
     }
     Ok(deleted)
 }
 
 fn marked(conn: &Connection, key: &SessionSpendKey) -> Result<bool, LedgerError> {
-    let mut binds = session_binds(key).to_vec();
-    binds.push(Value::Text(RESERVED_ID.to_string()));
-    Ok(conn
-        .prepare_cached(MARKED)?
-        .query_row(params_from_iter(binds), |_| Ok(()))
-        .optional()?
-        .is_some())
+    exists(conn, &MARKED, key, Some(&RESERVED_ID))
 }
 
-/// Whether the session holds a request through `sql`, `HOLDS_ANY` or `HOLDS_ANOTHER` with the id `other`.
-fn holds(
+/// Whether `sql` answers a row under the session's binds, with `fourth` bound as `?4` where one is given.
+fn exists(
     conn: &Connection,
     sql: &str,
     key: &SessionSpendKey,
-    other: Option<&str>,
+    fourth: Option<&dyn ToSql>,
 ) -> Result<bool, LedgerError> {
-    let mut binds = session_binds(key).to_vec();
-    binds.extend(other.map(|id| Value::Text(id.to_string())));
+    let binds = params_from_iter(key.params().into_iter().chain(fourth));
     Ok(conn
         .prepare_cached(sql)?
-        .query_row(params_from_iter(binds), |_| Ok(()))
-        .optional()?
-        .is_some())
-}
-
-fn holds_another(conn: &Connection, key: &SessionSpendKey, id: &str) -> Result<bool, LedgerError> {
-    holds(conn, HOLDS_ANOTHER, key, Some(id))
-}
-
-fn landed_since(conn: &Connection, key: &SessionSpendKey, stamp: i64) -> Result<bool, LedgerError> {
-    let mut binds = session_binds(key).to_vec();
-    binds.push(Value::Integer(stamp));
-    Ok(conn
-        .prepare_cached(LANDED_SINCE)?
-        .query_row(params_from_iter(binds), |_| Ok(()))
+        .query_row(binds, |_| Ok(()))
         .optional()?
         .is_some())
 }
@@ -1230,66 +1255,62 @@ fn reread(
     if picks.is_empty() {
         return Ok(0);
     }
-    let session = session_binds(key).to_vec();
-    let mut agent_binds = session.clone();
-    agent_binds.push(Value::Text(agent.to_string()));
-    let one = |sql: &str, binds: &[Value]| -> Result<Option<i64>, LedgerError> {
-        Ok(tx
-            .prepare_cached(sql)?
-            .query_row(params_from_iter(binds), |r| r.get(0))
-            .optional()?)
-    };
+    let session = key.params();
+    let [key_id, key_generation, session_id] = session;
+    let agent_binds = params![key_id, key_generation, session_id, agent];
+    fn read_pick<T>(
+        tx: &Transaction<'_>,
+        sql: &str,
+        binds: &[&dyn ToSql],
+        row: impl FnOnce(&rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Option<T>, LedgerError> {
+        Ok(tx.prepare_cached(sql)?.query_row(binds, row).optional()?)
+    }
     for pick in picks {
         match pick {
-            Pick::LastRequest => facts.last_request_at = one(SESSION_NEWEST, &session)?,
+            Pick::LastRequest => {
+                facts.last_request_at = read_pick(tx, SESSION_NEWEST, &session, |r| r.get(0))?
+            }
             Pick::LastInference => {
-                facts.last_inference_at = one(SESSION_NEWEST_INFERENCE, &session)?
+                facts.last_inference_at =
+                    read_pick(tx, SESSION_NEWEST_INFERENCE, &session, |r| r.get(0))?
             }
             Pick::Served => {
-                let served: Option<(i64, String, Option<String>)> = tx
-                    .prepare_cached(SESSION_SERVED)?
-                    .query_row(params_from_iter(&session), |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                facts.served = read_pick(tx, SESSION_SERVED, &session, |r| {
+                    Ok(Served {
+                        at: r.get(0)?,
+                        id: r.get(1)?,
+                        user_agent: r.get(2)?,
                     })
-                    .optional()?;
-                facts.served_at = served.as_ref().map(|s| s.0);
-                facts.served_id = served.as_ref().map(|s| s.1.clone());
-                facts.user_agent = served.and_then(|s| s.2);
+                })?
             }
-            Pick::FirstRequest => facts.first_request_at = one(AGENT_FIRST, &agent_binds)?,
+            Pick::FirstRequest => {
+                facts.first_request_at = read_pick(tx, AGENT_FIRST, agent_binds, |r| r.get(0))?
+            }
             Pick::Newest => {
-                type Newest = (i64, String, String, Option<String>, Option<String>);
-                let newest: Option<Newest> = tx
-                    .prepare_cached(&AGENT_NEWEST)?
-                    .query_row(params_from_iter(&agent_binds), |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                facts.newest = read_pick(tx, &AGENT_NEWEST, agent_binds, |r| {
+                    Ok(Newest {
+                        at: r.get(0)?,
+                        id: r.get(1)?,
+                        model: r.get(2)?,
+                        agent_type: r.get(3)?,
+                        account_id: r.get(4)?,
                     })
-                    .optional()?;
-                facts.newest_at = newest.as_ref().map(|n| n.0);
-                facts.newest_id = newest.as_ref().map(|n| n.1.clone());
-                facts.newest_model = newest.as_ref().map(|n| n.2.clone());
-                facts.newest_agent_type = newest.as_ref().and_then(|n| n.3.clone());
-                facts.newest_account_id = newest.and_then(|n| n.4);
+                })?
             }
             Pick::Probe => {
-                let probe: Option<(i64, String, String)> = tx
-                    .prepare_cached(AGENT_PROBE)?
-                    .query_row(params_from_iter(&agent_binds), |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                facts.probe = read_pick(tx, AGENT_PROBE, agent_binds, |r| {
+                    Ok(Probed {
+                        at: r.get(0)?,
+                        id: r.get(1)?,
+                        model: r.get(2)?,
                     })
-                    .optional()?;
-                facts.probe_at = probe.as_ref().map(|p| p.0);
-                facts.probe_id = probe.as_ref().map(|p| p.1.clone());
-                facts.probe_model = probe.map(|p| p.2);
+                })?
             }
         }
     }
     if agent != RESERVED_ID && facts == Facts::default() {
-        return Ok(tx
-            .prepare_cached(&format!(
-                "DELETE FROM session_facts WHERE {SESSION_KEY} AND agent_id = ?4"
-            ))?
-            .execute(params_from_iter(agent_binds))?);
+        return Ok(tx.prepare_cached(&DELETE_FACTS_ROW)?.execute(agent_binds)?);
     }
     write_facts(tx, key, agent, &facts)?;
     Ok(0)
@@ -1302,13 +1323,7 @@ fn keys_of(
     binds: impl Params,
 ) -> Result<BTreeSet<SessionSpendKey>, LedgerError> {
     let mut stmt = conn.prepare_cached(sql)?;
-    let rows = stmt.query_map(binds, |row| {
-        Ok(SessionSpendKey {
-            key_id: row.get(0)?,
-            key_generation: row.get(1)?,
-            session_id: row.get(2)?,
-        })
-    })?;
+    let rows = stmt.query_map(binds, |row| SessionSpendKey::read(row, 0))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -1448,7 +1463,7 @@ pub fn session_figures(
         let (sql, binds) = session_sums_statement(chunk);
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(binds), |row| {
-            Ok((session_key_of(row)?, sums_row(row, 3)?))
+            Ok((SessionSpendKey::read(row, 0)?, sums_row(row, 3)?))
         })?;
         for row in rows {
             let (key, (sums_key, counts)) = row?;
@@ -1458,7 +1473,7 @@ pub fn session_figures(
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(params_from_iter(binds), |row| {
             Ok((
-                session_key_of(row)?,
+                SessionSpendKey::read(row, 0)?,
                 row.get::<_, String>(3)?,
                 facts_of(row, 4)?,
             ))
@@ -1470,12 +1485,14 @@ pub fn session_figures(
     }
     let mut out = BTreeMap::new();
     for key in sessions {
-        let totals = match facts.remove(key) {
-            Some(facts) if facts.contains_key(RESERVED_ID) => Totals {
+        let mut agents = facts.remove(key).unwrap_or_default();
+        let totals = match agents.remove(RESERVED_ID) {
+            Some(own) => Totals {
                 sums: sums.remove(key).unwrap_or_default(),
-                facts,
+                own,
+                agents,
             },
-            _ => totals_of(conn, key, prices)?,
+            None => totals_of(conn, key, prices)?,
         };
         let figures = priced(conn, key, &totals, prices, tables, now)?;
         out.insert(key.clone(), figures);
@@ -1483,60 +1500,61 @@ pub fn session_figures(
     Ok(out)
 }
 
-/// The figure a sums row adds to: the session's spend or its probes', its agent's, or the session's day.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Target {
-    Session { probe: bool },
-    Agent { agent_id: String, probe: bool },
+/// The figure a sums row adds to: the session's spend or its probes', its agent's, each by the account that served
+/// the row, or the session's day, whose money keys no account.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Target<'a> {
+    Session {
+        probe: bool,
+        account_id: &'a str,
+    },
+    Agent {
+        agent_id: &'a str,
+        probe: bool,
+        account_id: &'a str,
+    },
     Day,
 }
 
-/// The targets a row of `sums` adds to, the day where the row is a client one received inside the day's hours. The
-/// day's money keys no account, so it names the reserved one.
-fn targets(sums: &SumsKey, in_day: bool) -> Vec<(Target, &str)> {
-    let mut targets = vec![(
-        Target::Session { probe: sums.probe },
-        sums.account_id.as_str(),
-    )];
-    if sums.agent_id != RESERVED_ID {
-        targets.push((
-            Target::Agent {
-                agent_id: sums.agent_id.clone(),
-                probe: sums.probe,
-            },
-            sums.account_id.as_str(),
-        ));
-    }
-    if !sums.probe && in_day {
-        targets.push((Target::Day, RESERVED_ID));
-    }
-    targets
+/// The targets a row of `sums` adds to, the day where the row is a client one received inside the day's hours.
+fn targets(sums: &SumsKey, in_day: bool) -> impl Iterator<Item = Target<'_>> {
+    let session = Target::Session {
+        probe: sums.probe,
+        account_id: &sums.account_id,
+    };
+    let agent = (sums.agent_id != RESERVED_ID).then_some(Target::Agent {
+        agent_id: &sums.agent_id,
+        probe: sums.probe,
+        account_id: &sums.account_id,
+    });
+    let day = (!sums.probe && in_day).then_some(Target::Day);
+    [Some(session), agent, day].into_iter().flatten()
 }
 
 /// The parts of a sums key a price reads, so the rows that hold the same ones add their counts and price once.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct PriceParts {
-    canonical_model: String,
-    speed: String,
-    funding: String,
-    band: String,
-    tier: String,
-    client: String,
-    classifier: String,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PriceParts<'a> {
+    canonical_model: &'a str,
+    speed: &'a str,
+    funding: &'a str,
+    band: &'a str,
+    tier: &'a str,
+    client: &'a str,
+    classifier: &'a str,
     received_hour: i64,
     completed_hour: i64,
 }
 
-impl PriceParts {
-    fn of(sums: &SumsKey) -> PriceParts {
+impl<'a> PriceParts<'a> {
+    fn of(sums: &'a SumsKey) -> PriceParts<'a> {
         PriceParts {
-            canonical_model: sums.canonical_model.clone(),
-            speed: sums.speed.clone(),
-            funding: sums.funding.clone(),
-            band: sums.band.clone(),
-            tier: sums.tier.clone(),
-            client: sums.client.clone(),
-            classifier: sums.classifier.clone(),
+            canonical_model: &sums.canonical_model,
+            speed: &sums.speed,
+            funding: &sums.funding,
+            band: &sums.band,
+            tier: &sums.tier,
+            client: &sums.client,
+            classifier: &sums.classifier,
             received_hour: sums.received_hour,
             completed_hour: sums.completed_hour,
         }
@@ -1544,29 +1562,17 @@ impl PriceParts {
 
     /// The price key at the instant `at` that selects both entries and the instant `band_at` that selects the peak
     /// band, the stored words read back as the hourly rows' are.
-    fn key(&self, at: i64, band_at: i64, now: i64) -> RowKey<'_> {
-        RowKey {
-            model: &self.canonical_model,
-            speed: Speed::of(Some(self.speed.as_str())),
-            band: Band::of_rollup(&self.band),
-            funding: Funding::of_rollup(&self.funding),
-            tier: (self.tier != UNATTRIBUTED).then_some(self.tier.as_str()),
-            entrypoint: entrypoint_of_client(&self.client),
-            classifier: is_free_classifier(Some(self.classifier.as_str())),
-            at,
-            band_at: Some(band_at),
-            now,
+    fn key(&self, at: i64, band_at: i64, now: i64) -> RowKey<'a> {
+        StoredWords {
+            model: self.canonical_model,
+            speed: self.speed,
+            band: self.band,
+            funding: self.funding,
+            tier: self.tier,
+            client: self.client,
+            classifier: self.classifier,
         }
-    }
-}
-
-fn usage_of(counts: Counts) -> PinUsage {
-    PinUsage {
-        input: counts.input_tokens,
-        cache_read: counts.cache_read_tokens,
-        write_5m: counts.cache_write_5m_tokens,
-        write_1h: counts.cache_write_1h_tokens,
-        output: counts.output_tokens,
+        .key(at, band_at, now)
     }
 }
 
@@ -1600,30 +1606,31 @@ fn priced(
     let (day_from, day_to) = trailing_day_hours(now);
     let in_day = |hour: i64| (day_from..day_to).contains(&hour);
     let mut accrued = Accrued::default();
-    let mut grouped: BTreeMap<(Target, String, PriceParts), Counts> = BTreeMap::new();
+    let mut grouped: BTreeMap<(Target<'_>, PriceParts<'_>), Counts> = BTreeMap::new();
     let mut split: BTreeSet<i64> = BTreeSet::new();
     for (sums, counts) in &totals.sums {
         if boundary_row(prices, tables, sums) {
             split.insert(sums.received_hour);
             continue;
         }
-        let day = in_day(sums.received_hour);
-        accrued.count_day(sums, counts.requests, day);
-        for (target, account_id) in targets(sums, day) {
+        for target in targets(sums, in_day(sums.received_hour)) {
+            if target == Target::Day {
+                accrued.count_day(&sums.request_class, counts.requests);
+            }
             grouped
-                .entry((target, account_id.to_string(), PriceParts::of(sums)))
+                .entry((target, PriceParts::of(sums)))
                 .or_default()
                 .add(*counts);
         }
     }
-    for ((target, account_id, parts), counts) in &grouped {
+    for ((target, parts), counts) in &grouped {
         let key = parts.key(
             parts.received_hour * 1_000,
             parts.completed_hour * 1_000,
             now,
         );
-        let price = price_request(prices, tables, key, usage_of(*counts));
-        accrued.add(target, counts.requests, account_id, price.as_ref());
+        let price = price_request(prices, tables, key, counts.usage);
+        accrued.add(target, counts.requests, price.as_ref());
     }
     for hour in &split {
         let (sql, binds) = session_hour_statement(key, *hour);
@@ -1634,25 +1641,22 @@ fn priced(
             if !boundary_row(prices, tables, &sums) {
                 continue;
             }
-            let completed = request
-                .serving
-                .as_ref()
-                .map_or(request.received_at, |s| s.completed_at);
             let parts = PriceParts::of(&sums);
             let price = price_request(
                 prices,
                 tables,
-                parts.key(request.received_at, completed, now),
-                usage_of(counts),
+                parts.key(request.received_at, request.completed_at(), now),
+                counts.usage,
             );
-            let day = in_day(sums.received_hour);
-            accrued.count_day(&sums, 1, day);
-            for (target, account_id) in targets(&sums, day) {
-                accrued.add(&target, 1, account_id, price.as_ref());
+            for target in targets(&sums, in_day(sums.received_hour)) {
+                if target == Target::Day {
+                    accrued.count_day(&sums.request_class, 1);
+                }
+                accrued.add(&target, 1, price.as_ref());
             }
         }
     }
-    Ok(accrued.answer(&totals.facts))
+    Ok(accrued.answer(&totals.own, &totals.agents))
 }
 
 /// The figures one session's rows add up to, before its facts name the agents' entries.
@@ -1666,23 +1670,26 @@ struct Accrued {
 }
 
 impl Accrued {
-    fn add(
-        &mut self,
-        target: &Target,
-        requests: u64,
-        account_id: &str,
-        price: Option<&RequestPrice>,
-    ) {
-        let figures = match target {
-            Target::Session { probe: false } => &mut self.spend,
-            Target::Session { probe: true } => &mut self.probes,
-            Target::Agent { agent_id, probe } => {
-                let (spend, probes) = self.agents.entry(agent_id.clone()).or_default();
-                if *probe {
-                    probes
-                } else {
-                    spend
-                }
+    fn add(&mut self, target: &Target, requests: u64, price: Option<&RequestPrice>) {
+        let (figures, account_id) = match target {
+            Target::Session {
+                probe: false,
+                account_id,
+            } => (&mut self.spend, account_id),
+            Target::Session {
+                probe: true,
+                account_id,
+            } => (&mut self.probes, account_id),
+            Target::Agent {
+                agent_id,
+                probe,
+                account_id,
+            } => {
+                let (spend, probes) = match self.agents.get_mut(*agent_id) {
+                    Some(entry) => entry,
+                    None => self.agents.entry(agent_id.to_string()).or_default(),
+                };
+                (if *probe { probes } else { spend }, account_id)
             }
             Target::Day => {
                 if let Some(price) = price {
@@ -1695,36 +1702,26 @@ impl Accrued {
     }
 
     /// The day's count of a client row by its class, priced or not.
-    fn count_day(&mut self, sums: &SumsKey, requests: u64, in_day: bool) {
-        if !sums.probe && in_day {
-            *self
-                .day
-                .requests
-                .entry(sums.request_class.clone())
-                .or_default() += requests;
-        }
+    fn count_day(&mut self, class: &str, requests: u64) {
+        *self.day.requests.entry(class.to_string()).or_default() += requests;
     }
 
-    fn answer(mut self, facts: &BTreeMap<String, Facts>) -> SessionFigures {
-        let own = facts.get(RESERVED_ID).cloned().unwrap_or_default();
-        let agents = facts
+    fn answer(mut self, own: &Facts, agents: &BTreeMap<String, Facts>) -> SessionFigures {
+        let agents = agents
             .iter()
-            .filter(|(agent_id, row)| {
-                agent_id.as_str() != RESERVED_ID
-                    && (row.newest_id.is_some() || row.probe_id.is_some())
-            })
+            .filter(|(_, row)| row.newest.is_some() || row.probe.is_some())
             .map(|(agent_id, row)| {
                 let (spend, probes) = self.agents.remove(agent_id).unwrap_or_default();
+                let newest = row.newest.as_ref();
                 AgentFigures {
                     agent_id: agent_id.clone(),
-                    model: row
-                        .newest_model
-                        .clone()
-                        .or_else(|| row.probe_model.clone())
+                    model: newest
+                        .map(|n| n.model.clone())
+                        .or_else(|| row.probe.as_ref().map(|p| p.model.clone()))
                         .unwrap_or_default(),
-                    agent_type: row.newest_agent_type.clone(),
-                    account_id: row.newest_account_id.clone(),
-                    last_request_at: row.newest_at,
+                    agent_type: newest.and_then(|n| n.agent_type.clone()),
+                    account_id: newest.and_then(|n| n.account_id.clone()),
+                    last_request_at: newest.map(|n| n.at),
                     first_request_at: row.first_request_at,
                     spend,
                     probes,
@@ -1734,22 +1731,13 @@ impl Accrued {
         SessionFigures {
             last_request_at: own.last_request_at,
             last_inference_at: own.last_inference_at,
-            user_agent: own.served_id.is_some().then_some(own.user_agent),
+            user_agent: own.served.as_ref().map(|s| s.user_agent.clone()),
             spend: self.spend,
             probes: self.probes,
             day: self.day,
             agents,
         }
     }
-}
-
-/// The session's key from a row's first three columns.
-fn session_key_of(row: &rusqlite::Row) -> rusqlite::Result<SessionSpendKey> {
-    Ok(SessionSpendKey {
-        key_id: row.get(0)?,
-        key_generation: row.get(1)?,
-        session_id: row.get(2)?,
-    })
 }
 
 #[cfg(test)]

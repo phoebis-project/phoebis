@@ -3729,12 +3729,14 @@ const SIDE_CHUNK: usize = 500;
 /// instant, since each later request belongs to the stored row's remainder. A request that arrives on an entry's own
 /// millisecond joins the side after it, as `in_force` reads that entry from its instant on. An hour whose request rows
 /// the purge took answers sides that hold no count. The sides assume that today's `deltas_of` names the key under which
-/// a kept request's tokens stand, so a request whose stored row keeps an older band can split a row of today's.
+/// a kept request's tokens stand, so a request whose stored row keeps an older band can split a row of today's. A
+/// `key` of `(key_id, key_generation)` reads that key's requests alone and no probe, for a reader of that key's rows.
 pub(crate) fn earlier_sides(
     conn: &Connection,
     hour: i64,
     instants: &[i64],
     prices: &PriceRevisions,
+    key: Option<(&str, i64)>,
 ) -> Result<Vec<Side>, LedgerError> {
     let mut sides: Vec<Side> = instants
         .iter()
@@ -3757,11 +3759,23 @@ pub(crate) fn earlier_sides(
         }
         Ok(())
     };
+    let one_key = if key.is_some() {
+        " AND key_id = ?3 AND key_generation = ?4 AND kind != 'probe'"
+    } else {
+        ""
+    };
     let mut stmt = conn.prepare_cached(&format!(
-        "{REQUEST_SELECT} WHERE received_at >= ?1 AND received_at < ?2"
+        "{REQUEST_SELECT} WHERE received_at >= ?1 AND received_at < ?2{one_key}"
     ))?;
+    let requests = match key {
+        Some((key_id, key_generation)) => stmt.query_map(
+            params![hour * 1_000, last, key_id, key_generation],
+            row_to_request,
+        )?,
+        None => stmt.query_map(params![hour * 1_000, last], row_to_request)?,
+    };
     let mut chunk = Vec::with_capacity(SIDE_CHUNK);
-    for request in stmt.query_map(params![hour * 1_000, last], row_to_request)? {
+    for request in requests {
         chunk.push(request?);
         if chunk.len() == SIDE_CHUNK {
             fold(std::mem::take(&mut chunk))?;
@@ -3772,7 +3786,7 @@ pub(crate) fn earlier_sides(
 }
 
 /// The five counts of `a` and `b` added.
-fn usage_sum(a: PinUsage, b: PinUsage) -> PinUsage {
+pub(crate) fn usage_sum(a: PinUsage, b: PinUsage) -> PinUsage {
     PinUsage {
         input: a.input + b.input,
         cache_read: a.cache_read + b.cache_read,
@@ -3806,10 +3820,11 @@ impl Sides {
         conn: &Connection,
         prices: &PriceRevisions,
         hours: &[(i64, Vec<i64>)],
+        key: Option<(&str, i64)>,
     ) -> Result<Sides, LedgerError> {
         let mut sides = BTreeMap::new();
         for (hour, instants) in hours {
-            sides.insert(*hour, earlier_sides(conn, *hour, instants, prices)?);
+            sides.insert(*hour, earlier_sides(conn, *hour, instants, prices, key)?);
         }
         Ok(Sides(sides))
     }
@@ -3827,6 +3842,25 @@ impl Sides {
             conn,
             prices,
             &boundary_hours(prices, costs, from_hour, to_hour),
+            None,
+        )
+    }
+
+    /// `on` for a reader of one key's rows that prices dollars alone: the sides hold that key's requests and no probe,
+    /// since a side pairs with a row of its own key and the reader takes no probe row.
+    pub(crate) fn on_key(
+        conn: &Connection,
+        prices: &PriceRevisions,
+        key_id: &str,
+        key_generation: i64,
+        from_hour: i64,
+        to_hour: i64,
+    ) -> Result<Sides, LedgerError> {
+        Sides::load(
+            conn,
+            prices,
+            &boundary_hours(prices, None, from_hour, to_hour),
+            Some((key_id, key_generation)),
         )
     }
 
@@ -3843,7 +3877,8 @@ impl Sides {
             return Ok(Sides::default());
         }
         let prices = prices.clone();
-        db.read(move |c| Sides::load(c, &prices, &hours)).await
+        db.read(move |c| Sides::load(c, &prices, &hours, None))
+            .await
     }
 
     /// A priced SQL sum over `spans` (ascending, as `revision_spans` answers them) with the loaded boundary hours bound
@@ -4000,7 +4035,7 @@ const PRICE_GROUP_SUMS: &str = "SUM(requests), SUM(input_tokens), SUM(cache_read
      SUM(cache_write_5m_tokens), SUM(cache_write_1h_tokens), SUM(output_tokens)";
 
 /// A summed count read from column `i`, clamped at zero.
-fn clamped_count(r: &Row<'_>, i: usize) -> rusqlite::Result<u64> {
+pub(crate) fn clamped_count(r: &Row<'_>, i: usize) -> rusqlite::Result<u64> {
     Ok(r.get::<_, i64>(i)?.max(0) as u64)
 }
 
@@ -4367,11 +4402,7 @@ fn named_sessions_with(
     let values: Vec<String> = sessions
         .iter()
         .map(|key| {
-            let mut tuple = vec![
-                rusqlite::types::Value::Text(key.key_id.clone()),
-                rusqlite::types::Value::Integer(key.key_generation),
-                rusqlite::types::Value::Text(key.session_id.clone()),
-            ];
+            let mut tuple = key.binds().to_vec();
             tuple.extend(extra_of(key));
             format!("({})", bind_all(&tuple, &mut binds))
         })
@@ -4499,14 +4530,7 @@ fn session_placements_chunk(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(binds), |r| {
-        Ok((
-            SessionSpendKey {
-                key_id: r.get(0)?,
-                key_generation: r.get(1)?,
-                session_id: r.get(2)?,
-            },
-            clamped_count(r, 3)?,
-        ))
+        Ok((SessionSpendKey::read(r, 0)?, clamped_count(r, 3)?))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -6073,6 +6097,32 @@ pub struct SessionSpendKey {
     pub session_id: String,
 }
 
+impl SessionSpendKey {
+    /// The key's values in the order of its columns, `key_id`, `key_generation` and `session_id`, as the session
+    /// statements bind them.
+    pub(crate) fn binds(&self) -> [rusqlite::types::Value; 3] {
+        [
+            rusqlite::types::Value::Text(self.key_id.clone()),
+            rusqlite::types::Value::Integer(self.key_generation),
+            rusqlite::types::Value::Text(self.session_id.clone()),
+        ]
+    }
+
+    /// `binds` borrowed, for a statement that binds each value in place.
+    pub(crate) fn params(&self) -> [&dyn rusqlite::ToSql; 3] {
+        [&self.key_id, &self.key_generation, &self.session_id]
+    }
+
+    /// The key from the row's three columns from `first` on, in `binds`' order.
+    pub(crate) fn read(row: &Row, first: usize) -> rusqlite::Result<SessionSpendKey> {
+        Ok(SessionSpendKey {
+            key_id: row.get(first)?,
+            key_generation: row.get(first + 1)?,
+            session_id: row.get(first + 2)?,
+        })
+    }
+}
+
 /// The request half of the session reads, ahead of `PRICED_ATTEMPT_COLUMNS`, in the order `session_request_of` reads
 /// them.
 const SESSION_SPEND_COLUMNS: &str =
@@ -6186,22 +6236,28 @@ fn session_request_of(row: &Row) -> rusqlite::Result<SessionRequest> {
             .map(|n| n.max(0) as u64))
     };
     let serving = match row.get::<_, Option<String>>(8)? {
-        Some(account_id) => Some(Serving {
-            account_id,
-            account_kind: AccountKind::parse(
-                &row.get::<_, String>(first + PricedAttempt::ACCOUNT_KIND)?,
-            ),
-            usage_based: row.get(first + PricedAttempt::USAGE_BASED)?,
-            overage_in_use: row.get(first + PricedAttempt::OVERAGE_IN_USE)?,
-            speed: row.get(first + PricedAttempt::SPEED)?,
-            tier: row.get(first + PricedAttempt::TIER)?,
-            completed_at: row.get(first + PricedAttempt::COMPLETED)?,
-            input_tokens: tokens(0)?,
-            cache_read_tokens: tokens(1)?,
-            cache_write_5m_tokens: tokens(2)?,
-            cache_write_1h_tokens: tokens(3)?,
-            output_tokens: tokens(4)?,
-        }),
+        Some(account_id) => {
+            let counts = [tokens(0)?, tokens(1)?, tokens(2)?, tokens(3)?, tokens(4)?];
+            Some(Serving {
+                account_id,
+                account_kind: AccountKind::parse(
+                    &row.get::<_, String>(first + PricedAttempt::ACCOUNT_KIND)?,
+                ),
+                usage_based: row.get(first + PricedAttempt::USAGE_BASED)?,
+                overage_in_use: row.get(first + PricedAttempt::OVERAGE_IN_USE)?,
+                speed: row.get(first + PricedAttempt::SPEED)?,
+                tier: row.get(first + PricedAttempt::TIER)?,
+                completed_at: row.get(first + PricedAttempt::COMPLETED)?,
+                answered: counts.iter().any(Option::is_some),
+                usage: PinUsage {
+                    input: counts[0].unwrap_or(0),
+                    cache_read: counts[1].unwrap_or(0),
+                    write_5m: counts[2].unwrap_or(0),
+                    write_1h: counts[3].unwrap_or(0),
+                    output: counts[4].unwrap_or(0),
+                },
+            })
+        }
         None => None,
     };
     Ok(SessionRequest {
