@@ -10431,18 +10431,27 @@ fn the_key_totals_price_each_request_of_a_split_hour_at_the_entry_in_force_when_
     assert_eq!((first.cost_usd, first.requests), (15.0, 2));
 }
 
-/// A pool's traffic prices the split hour from its stored rows, so the first pool's bucket reads $15.
+/// A pool's traffic prices the split hour from its stored rows, so the first pool's bucket reads $15. The hour ahead of
+/// it sums whole: one more million of the first scope at 17:10 reads $5 there.
 #[test]
 fn a_pools_traffic_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
     let db = LedgerDb::open_in_memory().unwrap();
     let prices = plant_a_split_hour(&db);
+    plant_billed(
+        &db,
+        "ahead",
+        FIRST_SCOPE,
+        ms(2026, 1, 15, 17, 10),
+        1_000_000,
+        &prices,
+    );
     let hour = split_hour() / 1_000;
     let traffic = db
         .read_blocking(|c| {
             pools_traffic(
                 c,
                 &[FIRST_SCOPE.1.to_string()],
-                hour,
+                hour - 3_600,
                 hour + 3_600,
                 3_600,
                 &prices,
@@ -10456,7 +10465,7 @@ fn a_pools_traffic_prices_each_request_of_a_split_hour_at_the_entry_in_force_whe
             .iter()
             .map(|b| b.cost_usd)
             .collect::<Vec<_>>(),
-        [15.0]
+        [5.0, 15.0]
     );
 }
 
