@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { api } from '@/api';
 import { iso } from '@/api/decode';
-import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings, Usage } from '@/api/types';
+import type { Account, Attempt, AttemptResponse, CapturedBodies, CohortHold, DiagnosticsSource, Guardrail, RequestLog, RequestOutcome, RequestPage, RequestQuery, Settings } from '@/api/types';
 import { CLASSIFIER_VALUES, REFUSAL_CATEGORIES, REQUEST_OUTCOME_VALUES, STOP_REASONS } from '@/api/types';
 import { useAppSettings } from '@/app/settings';
 import { useFollow, usePaging } from '@/app/useFollow';
@@ -12,7 +12,7 @@ import { FilterBar } from '@/components/FilterBar';
 import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { SortControl } from '@/components/SortControl';
 import { TokenBar } from '@/components/TokenBar';
-import { AttemptCount, StatusBadge } from '@/components/ui/AttemptTrail';
+import { AttemptCount, cooldownLine, OUTCOME_LABEL, StatusBadge } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostTd } from '@/components/ui/CostTd';
 import type { Option } from '@/components/ui/OptionList';
@@ -646,7 +646,7 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                 ...(serving
                   ? [
                       { label: 'Answer', value: answer.length ? <Chips chips={answer} /> : <span className="muted">none</span> },
-                      { label: 'Cache', value: <CacheValue attempt={serving} usage={r.usage} /> },
+                      { label: 'Cache', value: <CacheValue attempt={serving} request={r} /> },
                       { label: 'Diagnostics', title: 'Who put diagnostics.previous_message_id on the body the upstream compared', value: <DiagnosticsValue source={r.diagnosticsSource} /> },
                     ]
                   : []),
@@ -741,13 +741,16 @@ function RequestDrawer({ context, guardrails, request, requestId, now, onClose, 
                 { label: 'Key', value: r.keyId ?? '-', mono: true },
                 { label: 'Pool', value: r.poolId ?? '-', mono: true },
                 { label: 'Kind', value: `${words(r.kind)}, ${transportLabel(r)}` },
-                ...r.attempts.flatMap((a) => {
-                  const ids = upstreamIdChips(a);
-                  return ids.length ? [{ label: `Attempt ${a.index + 1}`, value: <Chips chips={ids} /> }] : [];
-                }),
               ]}
             />
           </section>
+
+          {r.attempts.length > 0 && (
+            <section>
+              <h3 className="section-title">Attempts</h3>
+              <KeyValue rows={r.attempts.map((a) => ({ label: `Attempt ${a.index + 1}`, value: <AttemptValue attempt={a} /> }))} />
+            </section>
+          )}
 
           <section>
             <h3 className="section-title">Request shape</h3>
@@ -842,22 +845,41 @@ const upstreamIdChips = (a: Attempt): Chip[] => [
 
 /**
  * The serving attempt's cache diagnostics. The usage is the request's: diagnostics and the token counts both come off
- * the response the final attempt drew.
+ * the response the final attempt drew. The relay files its own word only on an answer that held a usage report, so a
+ * null on such an answer is a row stored before it filed them, and it reads the word a new row files, by who sent the
+ * diagnostics member.
  */
-function CacheValue({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
-  const reason = attempt.cacheMissReason;
+function CacheValue({ attempt, request }: { attempt: Attempt; request: RequestLog }) {
+  const answered = attempt.upstreamStatus === 200;
+  const reason = attempt.cacheMissReason ?? (answered && request.storedTokens.input !== null ? (request.diagnosticsSource === null ? 'not_requested' : 'not_returned') : null);
+  const relayWord = reason === 'not_requested' || reason === 'not_returned';
+  const { usage } = request;
   const detail =
     reason === null
-      ? 'no response to read'
-      : reason === 'none'
+      ? answered
+        ? 'no usage report'
+        : 'no response to read'
+      : reason === 'none' || relayWord
         ? `${fmtCompact(usage.cacheRead)} read, ${fmtCompact(usage.cacheWrite5m + usage.cacheWrite1h)} written`
         : isDivergence(reason)
           ? `diverged at ${reason.slice(0, -'_changed'.length)}`
           : '';
   return (
     <>
-      <span className={reason === null || reason === 'not_requested' ? 'muted' : undefined}>{reason === null ? 'n/a' : missLabel(reason)}</span>
+      <span className={reason === null || relayWord ? 'muted' : undefined}>{reason === null ? 'n/a' : missLabel(reason)}</span>
       {detail && <span className="muted">, {detail}</span>}
+    </>
+  );
+}
+
+/** One attempt in the words the trail's hover gives it, so the hover and the drawer read alike, its upstream ids last. */
+function AttemptValue({ attempt: a }: { attempt: Attempt }) {
+  const ids = upstreamIdChips(a);
+  return (
+    <>
+      <Link to={accountHref(a.accountId)}>{a.accountId}</Link> <StatusBadge status={a.upstreamStatus} /> {OUTCOME_LABEL[a.outcome]}, {fmtMs(a.durationMs)}
+      {a.cooldownSet && <div className="secondary">{cooldownLine(a.cooldownSet)}</div>}
+      {ids.length > 0 && <Chips chips={ids} />}
     </>
   );
 }

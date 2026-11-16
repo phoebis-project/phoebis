@@ -16,7 +16,8 @@ export interface TrailAttempt {
   upstreamStatus: number | null;
 }
 
-const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
+/** An attempt's outcome in words, which the trail's lines and the request drawer's Attempts rows share. */
+export const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
   auth_failed: 'auth failed',
   canceled: 'canceled',
   rate_limited: 'rate limited',
@@ -24,6 +25,9 @@ const OUTCOME_LABEL: Record<AttemptOutcome, string> = {
   transport_error: 'transport error',
   upstream_error: 'upstream error',
 };
+
+/** The words of a cooldown an attempt set, which the trail's lines and the request drawer's Attempts rows share. */
+export const cooldownLine = (c: { reason: string; until: string }): string => `cooldown set, ${c.reason}, until ${fmtAbsolute(c.until)}`;
 
 const statusTone = (status: number | null): BadgeTone => (status === null ? 'neutral' : status === 200 ? 'good' : status === 429 ? 'warning' : status === 529 ? 'serious' : 'critical');
 
@@ -37,7 +41,7 @@ export function StatusBadge({ status, attempts = 1 }: { attempts?: number; statu
 }
 
 const lineFor = (a: TrailAttempt) =>
-  [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? `cooldown set, ${a.cooldownSet.reason}, until ${fmtAbsolute(a.cooldownSet.until)}` : 'no cooldown set'].join(', ');
+  [`${a.index + 1}. ${a.accountId}: ${OUTCOME_LABEL[a.outcome]}`, a.upstreamStatus === null ? 'no status' : `HTTP ${a.upstreamStatus}`, a.cooldownSet ? cooldownLine(a.cooldownSet) : 'no cooldown set'].join(', ');
 
 /** The trail's lines, one per attempt, the text the count's title and description carry. */
 export const trailLines = (attempts: TrailAttempt[]): string => attempts.map(lineFor).join('\n');

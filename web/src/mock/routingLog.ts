@@ -16,7 +16,7 @@ import { GUARDRAILS } from './guardrails';
 import { leadOf, leftPerHour, paceDeadline, paceHours } from './lead';
 import { SESSIONS } from './operations';
 import { KEY_REVOKED_AT, WORST_BUCKET, keyById, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, CLIENTS, COUNTED_BODY_TOKENS, FORCED_MOVE_ID, HAIKU, JUDGED_TURN_IDS, MARKED_SESSION_IDS, OPENING_SESSION_IDS, OVERAGE_FROM, RELEASED_SESSION_ID, RENEWED_ON_PIN, REQUEST_EVENTS, REQUESTS, REWRITE_HELD_ID, SECONDARY_WEEK_OVER_AT, SESSION_IDS, SHED_ROUND, SLOWED_SESSION_ID, STORY_HOUR_FROM, STORY_IDS, STRETCH_ROUND, TIE_STORY_ID, UNSEEDED_IDS, attemptEnd, cooldownOf, failsOver, holds, migrationAt, oauthWindows, requestById, resentInPlace } from './requests';
 import { cooldownRefusal, FABLE_USE, RESET_BLOCKS, type MockGrant, type MockUse } from './resets';
 import { createRng } from './rng';
 import { round } from './round';
@@ -1848,6 +1848,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
   let seq = 0;
   let pinOn: string | null = null;
   r.attempts.forEach((a, i) => {
+    if (resentInPlace(r, i)) return;
     const s = a.selection;
     const start = Date.parse(a.startedAt);
     const attempted = r.attempts.slice(0, i).map((x) => x.accountId);
@@ -2319,12 +2320,13 @@ function buildDecisions() {
     }
   }
   // A written row's attempt names every member its selection passed over, out under its obstacle or passed over by the
-  // pick, as the record that dispatched the attempt holds them.
+  // pick, as the record that dispatched the attempt holds them. A resend carries the trace of the attempt it resends.
   for (const id of UNSEEDED_IDS) {
     const r = requestById.get(id);
     if (!r) continue;
     for (const [i, a] of r.attempts.entries()) {
-      const dispatched = summaries.filter((s) => s.requestId === id && s.attempt === i + 1 && s.kind !== 'held').pop();
+      const by = resentInPlace(r, i) ? i : i + 1;
+      const dispatched = summaries.filter((s) => s.requestId === id && s.attempt === by && s.kind !== 'held').pop();
       const record = dispatched && decisions.get(`${id}/${dispatched.seq}`);
       const trace = dispatched && record && a.selection ? traceOf(record, dispatched, a.selection.cohortHold) : null;
       if (trace && a.selection) a.selection = { ...a.selection, skipped: trace.skipped };

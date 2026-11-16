@@ -966,8 +966,14 @@ function holdFirst(r: RequestLog, hold: CohortHold): boolean {
 
 /** Whether the relay fails the attempt over: a 429, or a model the account refuses, each of which sets a cooldown. */
 export const failsOver = (a: Attempt) => a.upstreamStatus === 429 || a.cooldownSet?.reason === 'model_rejected';
+/**
+ * Whether attempt `i` is the relay's resend of an attempt that never reached the upstream: it goes out once more on the
+ * same account under the decision that chose it, so the router writes no decision for it and the ledger counts no
+ * failover.
+ */
+export const resentInPlace = (r: Pick<RequestLog, 'attempts'>, i: number): boolean => i > 0 && r.attempts[i - 1].upstreamStatus === null && r.attempts[i - 1].accountId === r.attempts[i].accountId;
 /** The instant an attempt's answer lands, which its cooldown, its events and its completion date from. */
-export const attemptEnd = (a: Pick<Attempt, 'durationMs' | 'startedAt'>): number => Date.parse(a.startedAt) + (a.durationMs ?? 0);
+export const attemptEnd =(a: Pick<Attempt, 'durationMs' | 'startedAt'>): number => Date.parse(a.startedAt) + (a.durationMs ?? 0);
 
 /** The rejection story's refused attempt: an account refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
@@ -1016,8 +1022,13 @@ interface StoryAttempt {
    * story reads its own figure rather than the walk back's.
    */
   head5h?: number;
+  /**
+   * An attempt no head reached: the router's own stop cut it first, whatever status its seed names, or its connection
+   * failed before the body went out, which names none.
+   */
+  headless?: true;
   ms: number;
-  status: number;
+  status?: number;
 }
 
 /** The geography an answer reported, where the model does not take the parameter. */
@@ -1053,8 +1064,6 @@ interface StorySeed {
   geo?: StoryGeo;
   /** The guardrails that matched, in the order they ran. The one marked blocked refused the request. */
   guardrails?: GuardrailMatch[];
-  /** A request the router's own stop cut before any head reached the client. */
-  headless?: true;
   held?: CohortHold;
   id: string;
   keyId: string;
@@ -1079,6 +1088,11 @@ interface StorySeed {
   status?: number;
   /** The tier the answer ran on, where it is not the standard one. */
   tier?: 'priority';
+  /**
+   * A row the ledger stored before the relay filed its own words on an answer that named no reason, so its serving
+   * attempt keeps the null the route still answers for it.
+   */
+  unfiled?: true;
   /**
    * A story row the routing log derives its records for, as it does a drawn row's, that takes no draw from the streams
    * the drawn rows read, so it keeps its written class and instants and every drawn figure stays where it was: the
@@ -1173,6 +1187,11 @@ const CLIENT_ERROR_SESSION_ID = 'f40a2c7e-9b31-4d58-8e06-1a7c3b5d9e24';
 const UNAVAILABLE_TURN_ID = 'req_4c1e8b27-d93';
 /** A laptop turn of the day before whose upstream answered 502 with a body that names no error type. */
 const BARE_502_TURN_ID = 'req_8f5a2d16-c47';
+/**
+ * A laptop request of the day before whose connection to primary failed before its body went out, which the relay sent
+ * once more on primary a second later.
+ */
+const RESENT_REQUEST_ID = 'req_0e5a7c3b-f92';
 /** The laptop session of the relay's 502 and the client's retry of that turn. */
 export const CLIENT_SESSION_ID = '7d3e1c20-5b4a-4e8f-9c61-0a2b3c4d5e6f';
 /** The desktop session the mod released whole after its one turn, written out as its row lists past the drawn ids. */
@@ -1215,20 +1234,21 @@ function storyRow(seed: StorySeed): RequestLog {
     const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
     const oauth = accountById.get(a.accountId)?.kind === 'oauth';
     const usageBased = usageBasedOf(a.accountId);
-    // A headless cut read no head, so it carries none of an answer's facts, whatever status its seed's attempt names.
-    const answer = a.status === 200 && !seed.headless;
+    // A headless attempt read no head, so it carries none of an answer's facts.
+    const answer = a.status === 200 && !a.headless;
     const upstreamIdOf = storyUpstreamIds(seed.id, index);
     return {
       accountId: a.accountId,
       accountKind: kindOf(a.accountId),
       // A failover's leg and a placement after the session's row expired wait for `walkSessionTurns`, which reads where
       // they landed.
-      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh ? null : filedReason(!oauth ? null : seed.pending ? 'pending' : 'none', source, kind),
+      cacheMissReason: !answer || kind === 'count_tokens' || index > 0 || seed.landsAfresh || seed.unfiled ? null : filedReason(!oauth ? null : seed.pending ? 'pending' : 'none', source, kind),
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
       issuedDigest: null,
-      outcome: cut ? 'canceled' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
+      // The ledger files an attempt with no head as a transport failure unless the request ended canceled.
+      outcome: cut ? 'canceled' : a.headless ? 'transport_error' : a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       // A usage-based seat's head names no overage, so its attempt stores no flag, as an API key's does.
       overageInUse: oauth && !usageBased ? false : null,
       // Read off the day's rows once each stands as it ends (`handPreviousSizes`).
@@ -1242,8 +1262,8 @@ function storyRow(seed: StorySeed): RequestLog {
       tier: accountTier(a.accountId),
       upstreamMessageId: answer ? upstreamIdOf('msg_01') : null,
       // The upstream's request id rides on its head.
-      upstreamRequestId: seed.headless ? null : upstreamIdOf('req_011C'),
-      upstreamStatus: seed.headless ? null : a.status,
+      upstreamRequestId: a.headless ? null : upstreamIdOf('req_011C'),
+      upstreamStatus: a.headless ? null : (a.status ?? null),
       usageBased,
       // A head reads the windows as they stand, or the 5-hour reading the seed gives where the answer moved past it.
       windows: windows.map((w) => (w.id === '5h' && a.head5h !== undefined ? { ...w, utilization: a.head5h } : w)),
@@ -1254,9 +1274,9 @@ function storyRow(seed: StorySeed): RequestLog {
   const headRoom = durationMs === null ? 0 : durationMs - STREAM_TAIL;
   // A request the relay answered with an error of its own forwarded no head, whatever the upstream's head was, and a
   // headless cut had none to forward.
-  const ttfbMs = answered && !seed.headless && (seed.status ?? 200) === 200 && kind !== 'count_tokens' ? Math.min(last.at - seed.at + 640, headRoom) : null;
+  const ttfbMs = answered && !last.headless && (seed.status ?? 200) === 200 && kind !== 'count_tokens' ? Math.min(last.at - seed.at + 640, headRoom) : null;
   const ttftMs = ttfbMs === null ? null : kind === 'inference' ? Math.min(ttfbMs + 270, headRoom) : ttfbMs;
-  const status = seed.headless ? null : (seed.status ?? last?.status ?? 429);
+  const status = last?.headless ? null : (seed.status ?? last?.status ?? 429);
   return {
     ...REQUEST_SAMPLE,
     // The account whose answer the request ended on, a refusal's as much as a success's, as a drawn row reads it.
@@ -1535,7 +1555,7 @@ function storySeeds(): StorySeed[] {
     },
     // Two turns of nightly's Fable session in the morning, before its overage: the first places the session, and the
     // second's renewal runs the round its 7-day Fable window fires while the 5-hour window is under the hold.
-    { agentId: 'main', at: t(8, 21, 40), attempts: [{ accountId: 'nightly', at: t(8, 21, 40), ms: 11_200, status: 200 }], id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } },
+    { agentId: 'main', at: t(8, 21, 40), attempts: [{ accountId: 'nightly', at: t(8, 21, 40), ms: 11_200, status: 200 }], id: 'req_3e2b9d47-c18', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', unfiled: true, usage: { cacheWrite1h: 78_400, input: 2_600, output: 1_720, thinking: 610 } },
     { agentId: 'main', at: t(8, 30), attempts: [{ accountId: 'nightly', at: t(8, 30), ms: 9_400, status: 200 }], id: 'req_3e7a5c19-f84', keyId: 'desktop', model: 'claude-fable-5-1', requestClass: 'main', session: '89cd1c92', usage: { cacheRead: 81_000, cacheWrite1h: 2_600, input: 2_400, output: 1_480, thinking: 520 } },
     // A fresh session placed by the spare rate: secondary falls short of the ceiling and its burn outruns its pace.
     { agentId: 'main', at: t(13, 45), attempts: [{ accountId: 'primary', at: t(13, 45), ms: 3_800, status: 200 }], id: 'req_2c7d9f15-b63', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: 'b81e4f2a-7c3d-4a90-8e65-2d1f0c9b7a34', usage: { cacheWrite5m: 24_500, input: 2_900, output: 640 } },
@@ -1563,7 +1583,7 @@ function storySeeds(): StorySeed[] {
     // Studio's sessions in work, each 5-hour reading the story's own. The closed span: a session placed at 09:11:24
     // whose first turn after the placement reads the account and opens the span in the last 77 minutes of the window
     // that resets at 10:29.
-    { agentId: 'main', at: t(9, 11, 24), attempts: [{ accountId: 'studio', at: t(9, 11, 24), head5h: 0.7987, ms: 6_000, status: 200 }], id: 'req_5c7e2a9d-b14', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheWrite1h: 33_000, input: 1_900, output: 820 } },
+    { agentId: 'main', at: t(9, 11, 24), attempts: [{ accountId: 'studio', at: t(9, 11, 24), head5h: 0.7987, ms: 6_000, status: 200 }], id: 'req_5c7e2a9d-b14', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], unfiled: true, usage: { cacheWrite1h: 33_000, input: 1_900, output: 820 } },
     { agentId: 'main', at: t(9, 12), attempts: [{ accountId: 'studio', at: t(9, 12), head5h: 0.8, ms: 5_800, status: 200 }], id: 'req_a3d8f1b6-c25', keyId: 'notebook', model: 'claude-sonnet-5-5', requestClass: 'main', session: OPENING_SESSION_IDS[0], usage: { cacheRead: 34_900, cacheWrite1h: 1_600, input: 1_500, output: 640 } },
     // The morning session: its placement's head reads room for a fresh session to the 10:29 reset, so the engine
     // keeps it on studio over the annex. Its second turn after the placement waits 36 s for the slow-down and then
@@ -1642,7 +1662,7 @@ function storySeeds(): StorySeed[] {
     // The router's one stop of the day cut two laptop requests as its drain window closed, before it went down at
     // 06:11:58: a stream whose head had gone out, and a request no head had reached yet.
     { agentId: 'main', at: t(6, 11, 55), attempts: [{ accountId: 'primary', at: t(6, 11, 55), ms: 2_900, status: 200 }], errorCode: 'router_shutdown', id: 'req_7a2c4e91-d03', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 18_200, input: 900, output: 140 } },
-    { agentId: 'main', at: t(6, 11, 57), attempts: [{ accountId: 'primary', at: t(6, 11, 57), ms: 400, status: 200 }], capturedBodies: false, errorCode: 'router_shutdown', headless: true, id: 'req_c58d1f3a-e67', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1' },
+    { agentId: 'main', at: t(6, 11, 57), attempts: [{ accountId: 'primary', at: t(6, 11, 57), headless: true, ms: 400, status: 200 }], capturedBodies: false, errorCode: 'router_shutdown', id: 'req_c58d1f3a-e67', keyId: 'laptop', model: HAIKU, outcome: 'canceled', requestClass: 'main', session: '4ef130f1' },
     // A fresh desktop session the Overflow workspace's static prefix places there, whose 429 fails it over to primary
     // on a tie with nightly the runway breaks.
     {
@@ -1701,6 +1721,25 @@ function storySeeds(): StorySeed[] {
     // since the body names no error type.
     { agentId: 'main', at: firstHour + 20 * MINUTE, attempts: [], capturedBodies: false, chosen: 'secondary', errorCode: 'accounts_unavailable', id: UNAVAILABLE_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', outcome: 'rejected', requestClass: 'main', session: 'b3e8f14c-6a27-4d95-8c10-7e2a5d9f3b61', status: 503 },
     { agentId: 'main', at: firstHour + 35 * MINUTE, attempts: [{ accountId: 'primary', at: firstHour + 35 * MINUTE, ms: 1_200, status: 502 }], capturedBodies: false, errorCode: 'upstream_502', id: BARE_502_TURN_ID, keyId: 'laptop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'e5c27a9d-1f48-4b63-a0d7-9c3e6b2f8a15', unseeded: true },
+    // The log's oldest row, in a lane hour of its own: it names no session, so it holds no pin and every seeded draw
+    // stays where it was. The relay sends a request that never reached the upstream once more on the same account, a
+    // second after a failed connect, under the one decision that chose the account.
+    {
+      agentId: 'main',
+      at: firstHour + 10 * MINUTE,
+      attempts: [
+        { accountId: 'primary', at: firstHour + 10 * MINUTE, headless: true, ms: 1_000 },
+        { accountId: 'primary', at: firstHour + 10 * MINUTE + 1_000, ms: 6_200, status: 200 },
+      ],
+      capturedBodies: false,
+      id: RESENT_REQUEST_ID,
+      keyId: 'laptop',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: null,
+      unseeded: true,
+      usage: { input: 2_400, output: 610 },
+    },
   ];
 }
 const storyRequests = () => storySeeds().map(storyRow);
@@ -1781,6 +1820,8 @@ STORY_IDS.add(UNAVAILABLE_TURN_ID);
 export const UNSEEDED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unseeded).map((s) => s.id));
 /** The story's rows whose stream ended before the answer reported its output count. */
 const OUTPUT_UNREPORTED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.outputUnreported).map((s) => s.id));
+/** The story's rows the ledger stored before the relay filed its own words. */
+const UNFILED_IDS: ReadonlySet<string> = new Set(storySeeds().filter((s) => s.unfiled).map((s) => s.id));
 /**
  * A row the seeded passes may draw for or seat a story fact on: neither a routing-log story row nor one written whole.
  */
@@ -2436,7 +2477,8 @@ const byArrival = () => [...REQUESTS].sort((a, b) => Date.parse(a.at) - Date.par
  * attempt that lands off the account the selection leaves (the pin's last report's, else on a failover's leg the
  * account the failover left) and on every probe. An answered attempt whose body carried a member and named no message
  * files `not_returned`. One the build left unfiled (a failover's leg, a placement after the session's row expired) that
- * named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing.
+ * named one draws the comparison a turn that stayed draws, `none` on a story row, which draws nothing. A row stored
+ * before the relay filed its words keeps its null.
  */
 function walkSessionTurns() {
   const reports = new Map<string, { accountId: string; size: number }>();
@@ -2449,7 +2491,7 @@ function walkSessionTurns() {
     const firstTurn = turn && !answered.has(agent) && r.agentType !== 'fork' && r.forkedFrom === null;
     r.attempts.forEach((a, i) => {
       if (r.sessionId !== null) a.previousInputTokens = report !== undefined && r.contextCompacted === null && report.size > 0 && a.accountId === report.accountId ? report.size : null;
-      if (a.upstreamStatus !== 200 || r.kind === 'count_tokens') return;
+      if (a.upstreamStatus !== 200 || r.kind === 'count_tokens' || UNFILED_IDS.has(r.id)) return;
       const left = report?.accountId ?? (i > 0 ? r.attempts[i - 1].accountId : undefined);
       const named = !firstTurn && r.kind !== 'probe' && (left === undefined || left === a.accountId);
       if (r.diagnosticsSource === null) a.cacheMissReason = 'not_requested';
@@ -2570,6 +2612,9 @@ function hourShares(accountId: string, model: string, client: string | null, pri
 // counts once, under its code.
 const upstreamFailed = (r: RequestLog) => r.outcome !== 'canceled' && r.status !== 200 && r.status !== 429 && r.status !== 529;
 
+/** A request's failovers: every attempt after the first but a resend in place. */
+const failoversOf = (r: RequestLog): number => r.attempts.filter((_, i) => i > 0 && !resentInPlace(r, i)).length;
+
 /**
  * A client that left before its answer ended, which the ledger counts apart from the failures and files under no error
  * code. A probe is the keepalive's own request, whose cancel stays a failure.
@@ -2600,7 +2645,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
     // Roughly a third of warm reads on the desktop and laptop keys follow a probe
     // closely enough to credit the probe with the hit.
     const kept = new Set(isProbe || !warmsCaches(keyId, poolId) ? [] : okRows.filter((r) => r.usage.cacheRead > 0 && h.chance(0.35)));
-    const moved = list.filter((r) => r.attempts.length > 1 && r.status === 200);
+    const moved = list.filter((r) => failoversOf(r) > 0 && r.status === 200);
     const migrations = moved.length > 0 && h.chance(0.5) ? 1 : 0;
     const probeCostUsd = isProbe ? sumOf(list, (r) => r.costUsd) : 0;
     const probes = isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : null;
@@ -2676,8 +2721,7 @@ export function rollups(rows: RequestLog[]): HourlyRollup[] {
         },
         errors,
         refusals,
-        // Every attempt but the last one moved the request to another member.
-        failovers: sumOf(served, (r) => Math.max(0, r.attempts.length - 1)),
+        failovers: sumOf(served, failoversOf),
         // The lane hour draws one migration, filed with the first request that moved.
         migrations: partRows.includes(moved[0]) ? migrations : 0,
         effort,

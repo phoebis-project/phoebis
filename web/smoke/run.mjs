@@ -309,8 +309,10 @@ const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
  * changed, so a write built from the listing leaves it out.
  */
 const poolInput = ({ guardrails: _, ...pool }) => pool;
-/** The request drawer's sections, in the order it draws them. */
+/** The request drawer's sections, in the order it draws them, for a request no account was asked for. */
 const DRAWER_SECTIONS = ['Outcome', 'Phases', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
+/** The drawer's sections for a request an account was asked for, whose attempts follow the Request section. */
+const ATTEMPTED_SECTIONS = ['Outcome', 'Phases', 'Usage', 'Request', 'Attempts', 'Request shape', 'Client hints', 'Captured bodies'];
 /** A row of the request drawer by its label, wherever its section is. */
 const drawerRowOf = (page, label) => [...page.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
 /** A drawer row's chips: the label, whether the chip is mono, its hover and the value after the label. */
@@ -12776,7 +12778,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
   }
 }
 {
-  // The two ids sit in the Request section's row for the served attempt, the request id first, each a mono chip.
+  // The two ids sit in the Attempts section's row for the served attempt, the request id first, each a mono chip.
   const served = laptopRow.attempts[laptopRow.attempts.length - 1];
   const row = drawerRowOf(m, `Attempt ${served.index + 1}`);
   const section = row?.closest('section')?.querySelector('.section-title')?.textContent?.trim() ?? 'no section';
@@ -12786,7 +12788,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
     ok:
       /^req_/.test(served.upstreamRequestId ?? '') &&
       /^msg_/.test(served.upstreamMessageId ?? '') &&
-      section === 'Request' &&
+      section === 'Attempts' &&
       JSON.stringify(chips) === JSON.stringify([
         { label: null, mono: true, title: "The upstream's request id", value: served.upstreamRequestId },
         { label: null, mono: true, title: "The upstream's message id", value: served.upstreamMessageId },
@@ -13356,25 +13358,54 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
     const rows = cacheRows();
     results.push({ name: '/requests cache row reads read and write tokens when nothing diverged', ok: rows.some((r) => /^Cache No divergence, [\d.,]+[KMB]? read, [\d.,]+[KMB]? written$/.test(r)), missing: rows });
   }
-  const notAsked = requests.find((r) => serving(r)?.cacheMissReason === 'not_requested');
-  results.push({ name: 'fixture has an attempt the client asked no diagnostics for', ok: Boolean(notAsked), missing: [] });
+  // The fleet seat's Opus worker req_3f6a9c21-d48 read 20,000 tokens and wrote 2,200 to the five-minute cache, and its
+  // body carried no diagnostics member.
+  const notAsked = requests.find((r) => r.id === 'req_3f6a9c21-d48');
+  results.push({ name: 'fixture has an attempt the client asked no diagnostics for', ok: serving(notAsked)?.cacheMissReason === 'not_requested', missing: [String(serving(notAsked)?.cacheMissReason)] });
   if (notAsked) {
     await m.navigate(`/requests/${notAsked.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row reads Not requested, muted, with no detail', ok: rows.includes('Cache Not requested'), missing: rows });
+    results.push({ name: '/requests cache row reads a stored Not requested with its read and written counts', ok: rows.includes('Cache Not requested, 20K read, 2.2K written'), missing: rows });
     results.push({ name: '/requests Not requested is muted', ok: reasonInk() === 'muted', missing: [reasonInk()] });
   }
   // The story's 429 on secondary that req_b8c3e9d4-e61 fails over to primary: the leg lands off the account its pin's
-  // last report stood on, so the relay detaches the member's message and the answer names no reason.
+  // last report stood on, so the relay detaches the member's message and the answer names no reason. It wrote 54,800
+  // tokens to the hour cache and read none.
   const failedOver = requests.find((r) => r.id === 'req_b8c3e9d4-e61');
   results.push({ name: "fixture files a failover that leaves its pin's account as No reason returned", ok: serving(failedOver)?.cacheMissReason === 'not_returned', missing: [String(serving(failedOver)?.cacheMissReason)] });
   if (failedOver) {
     await m.navigate(`/requests/${failedOver.id}`);
     const rows = cacheRows();
-    results.push({ name: "/requests cache row names a failover leg's word", ok: rows.includes('Cache No reason returned'), missing: rows });
+    results.push({ name: "/requests cache row reads a failover leg's No reason returned, muted, with its read and written counts", ok: rows.includes('Cache No reason returned, 0 read, 54.8K written') && reasonInk() === 'muted', missing: [...rows, reasonInk()] });
   }
-  // A request whose last attempt failed has no answer to read diagnostics from.
-  const unanswered = requests.find((r) => r.attempts.length > 0 && serving(r).cacheMissReason === null);
+  // Two rows the ledger stored before the relay filed its own words, each answered 200 with a usage report and a null
+  // reason, read by who sent the diagnostics member. Studio's req_5c7e2a9d-b14 on notebook, whose body carried none,
+  // wrote 33,000 tokens to the hour cache. Nightly's req_3e2b9d47-c18 on desktop, whose client sends its own member,
+  // wrote 78,400.
+  for (const { id, name, source, wanted } of [
+    { id: 'req_5c7e2a9d-b14', name: '/requests a stored null reason on an answered request with no diagnostics source reads Not requested, muted, with its counts', source: null, wanted: 'Cache Not requested, 0 read, 33K written' },
+    { id: 'req_3e2b9d47-c18', name: '/requests a stored null reason on an answered request whose client sent the diagnostics member reads No reason returned, muted, with its counts', source: 'client', wanted: 'Cache No reason returned, 0 read, 78.4K written' },
+  ]) {
+    const stored = requests.find((r) => r.id === id);
+    await m.navigate(`/requests/${id}`);
+    const rows = cacheRows();
+    results.push({
+      name,
+      ok: serving(stored)?.upstreamStatus === 200 && serving(stored)?.cacheMissReason === null && stored?.storedTokens.input !== null && stored?.diagnosticsSource === source && rows.includes(wanted) && reasonInk() === 'muted',
+      missing: [String(serving(stored)?.cacheMissReason), String(stored?.diagnosticsSource), ...rows, reasonInk()],
+    });
+  }
+  // The story's token count req_3b8e51f4-0a9 answered 200, and the router stores no usage report for a count.
+  const counted = requests.find((r) => r.id === 'req_3b8e51f4-0a9');
+  await m.navigate('/requests/req_3b8e51f4-0a9');
+  const countRows = cacheRows();
+  results.push({
+    name: '/requests a token count answered 200 with no usage report reads n/a, no usage report, muted',
+    ok: counted?.kind === 'count_tokens' && serving(counted)?.upstreamStatus === 200 && counted?.storedTokens.input === null && countRows.includes('Cache n/a, no usage report') && reasonInk() === 'muted',
+    missing: [...countRows, reasonInk()],
+  });
+  // A request whose last attempt answered no 200 has no answer to read diagnostics from.
+  const unanswered = requests.find((r) => r.attempts.length > 0 && serving(r).upstreamStatus !== 200);
   if (!unanswered) results.push({ name: '/requests an attempt with no response reads n/a', ok: false, missing: ['fixture'] });
   else {
     await m.navigate(`/requests/${unanswered.id}`);
@@ -13525,57 +13556,53 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   });
 }
 {
-  // The drawer draws its seven sections and nothing of the attempts, however many the request made. Each attempt's
-  // routing is read in the routing log. A blocked row draws an eighth, which its own check reads.
+  // A request an account was asked for draws its attempts after Request, however many it made, and one no account was
+  // asked for draws no Attempts section. No section draws an attempt's routing, which the routing log reads. A blocked
+  // row draws a Guardrails section, which its own check reads.
   const several = requests.find((r) => r.attempts.length >= 3);
   const none = requests.find((r) => r.attempts.length === 0 && r.guardrails.length === 0);
   const read = [];
-  for (const r of [several, none, laptopRow].filter(Boolean)) {
+  for (const [r, wanted] of [
+    [several, ATTEMPTED_SECTIONS],
+    [none, DRAWER_SECTIONS],
+    [laptopRow, ATTEMPTED_SECTIONS],
+  ].filter(([r]) => r)) {
     await m.navigate(`/requests/${r.id}`);
     await m.settle(300);
     read.push({
       attempts: m.container.querySelectorAll('.drawer .attempt, .drawer .selection-trace').length,
       id: r.id,
       titles: [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? ''),
+      wanted,
     });
   }
   results.push({
-    name: '/requests the drawer draws Outcome, Phases, Usage, Request, Request shape, Client hints and Captured bodies in that order and no Attempts',
-    ok: several !== undefined && none !== undefined && read.length === 3 && read.every((d) => JSON.stringify(d.titles) === JSON.stringify(DRAWER_SECTIONS) && d.attempts === 0),
+    name: '/requests the drawer draws Attempts after Request for a request with attempts and no Attempts section for one with none',
+    ok: several !== undefined && none !== undefined && read.length === 3 && read.every((d) => JSON.stringify(d.titles) === JSON.stringify(d.wanted) && d.attempts === 0),
     missing: read.map((d) => JSON.stringify(d)),
   });
 
-  // An attempt that carries no upstream id has no row. The mock serves the row by reference, so the ids are put back.
-  const target = requests.find((r) => r.attempts.length >= 3 && r.attempts.at(-1).upstreamMessageId !== null);
-  if (!target) results.push({ name: '/requests the Request section lists one Upstream ids row per attempt that carries one', ok: false, missing: ['fixture'] });
-  else {
-    const blank = target.attempts[1];
-    const kept = { message: blank.upstreamMessageId, request: blank.upstreamRequestId };
-    blank.upstreamMessageId = null;
-    blank.upstreamRequestId = null;
-    await m.navigate(`/requests/${laptopRow.id === target.id ? desktopRow.id : laptopRow.id}`);
-    await m.navigate(`/requests/${target.id}`);
-    await m.settle(300);
-    const section = [...m.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Request');
-    const labels = [...(section?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
-    const rows = labels.filter((l) => /^Attempt \d+$/.test(l)).map((l) => ({ chips: drawerChips(drawerRowOf(m, l)), label: l }));
-    blank.upstreamMessageId = kept.message;
-    blank.upstreamRequestId = kept.request;
-    const expected = target.attempts
-      .filter((a) => a.index !== blank.index)
-      .map((a) => ({
-        chips: [
-          ...(a.upstreamRequestId === null ? [] : [{ label: null, mono: true, title: "The upstream's request id", value: a.upstreamRequestId }]),
-          ...(a.upstreamMessageId === null ? [] : [{ label: null, mono: true, title: "The upstream's message id", value: a.upstreamMessageId }]),
-        ],
-        label: `Attempt ${a.index + 1}`,
-      }));
-    results.push({
-      name: '/requests the Request section lists one Upstream ids row per attempt that carries one',
-      ok: JSON.stringify(rows) === JSON.stringify(expected) && labels.indexOf(expected[0]?.label) === labels.indexOf('Kind') + 1,
-      missing: [JSON.stringify(labels), JSON.stringify(rows)],
-    });
-  }
+  // The seed req_0e5a7c3b-f92: its connect to primary failed before the body went out, a second's attempt with no head
+  // and no upstream id, and the relay sent it once more on primary, which answered 200 in 6.2 s.
+  await m.navigate('/requests/req_0e5a7c3b-f92');
+  await m.settle(300);
+  const attemptsSection = [...m.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Attempts');
+  // A row's first line, without the id chips that close it.
+  const attemptRows = [...(attemptsSection?.querySelectorAll('.kv__row') ?? [])].map((row) => ({
+    badge: row.querySelector('dd .badge')?.textContent ?? null,
+    label: row.querySelector('dt')?.textContent?.trim() ?? '',
+    line: [...(row.querySelector('dd')?.childNodes ?? [])].filter((n) => !(n.nodeType === 1 && n.classList.contains('chips'))).map((n) => n.textContent).join(''),
+  }));
+  results.push({
+    name: "/requests the Attempts section lists a failed connect as attempt 1, a transport error with no status, ahead of the attempt that served",
+    ok:
+      JSON.stringify(attemptRows) ===
+      JSON.stringify([
+        { badge: '-', label: 'Attempt 1', line: 'primary - transport error, 1.0 s' },
+        { badge: '200', label: 'Attempt 2', line: 'primary 200 succeeded, 6.2 s' },
+      ]),
+    missing: [JSON.stringify(attemptRows)],
+  });
 }
 m.unmount();
 });
@@ -13671,7 +13698,7 @@ await forView('/requests', async () => {
 // and Try again reads the request again.
 await forView('/requests', async () => {
   const name = '/requests a drawer whose read failed draws its error with Try again, and Try again draws the request';
-  const subject = requests.find((r) => r.keyId !== null && r.keyId !== 'laptop' && r.guardrails.length === 0);
+  const subject = requests.find((r) => r.keyId !== null && r.keyId !== 'laptop' && r.guardrails.length === 0 && r.attempts.length > 0);
   if (!subject) {
     results.push({ name, ok: false, missing: ['fixture'] });
   } else {
@@ -13695,7 +13722,7 @@ await forView('/requests', async () => {
       ok:
         !listed &&
         JSON.stringify(failed) === JSON.stringify({ body: 'ledger locked', retry: true, sections: [], title: 'Could not load the request' }) &&
-        JSON.stringify(retried) === JSON.stringify({ body: null, retry: false, sections: DRAWER_SECTIONS, title: null }),
+        JSON.stringify(retried) === JSON.stringify({ body: null, retry: false, sections: ATTEMPTED_SECTIONS, title: null }),
       missing: [`${subject.id} listed ${listed}`, JSON.stringify(failed), JSON.stringify(retried)],
     });
     page.unmount();
@@ -20169,8 +20196,10 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
   // `req_a5e17c42-d19` and `req_d8f3b6e0-a74`, and the first turn of the subagent f2c8, `req_f2c8d417-a60`, each
   // answered. Desktop's Failed and the line's errors count the turn the upstream answered 400, `req_c1e40a95-b28`.
   // Laptop's Failed and the line's errors count the bare 502 of the range's first hour, `req_8f5a2d16-c47`, and the
-  // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. Ci's Failed and the line's
-  // errors leave out the stream its client closed, the drawn `req_52f62e67-839`, which counts under Client canceled.
+  // line's errors the rejection beside it, `req_4c1e8b27-d93`, which counts under Rejected. The line's requests count
+  // the hour's request the relay sent once more on primary after a failed connect, `req_0e5a7c3b-f92`, which answered.
+  // Ci's Failed and the line's errors leave out the stream its client closed, the drawn `req_52f62e67-839`, which counts
+  // under Client canceled.
   const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Refusals by code');
   const codes = [...(card?.querySelectorAll('.hbars li') ?? [])].map((li) => [li.querySelector('.mono')?.textContent?.trim(), li.querySelector('.num')?.firstChild?.textContent?.trim()]);
   const table = [...m.container.querySelectorAll('.card--table')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Traffic by key');
@@ -20183,7 +20212,7 @@ expect('/analytics', m.text(), ['Custom', 'Group by', 'Add filter', 'Traffic', '
     ok:
       JSON.stringify(keys) === JSON.stringify([['desktop', '16', '3'], ['ci', '0', '3'], ['laptop', '7', '2']]) &&
       JSON.stringify(codes) === JSON.stringify([['guardrail_blocked', '3'], ['client_not_allowed', '2'], ['auth_unknown', '1'], ['client_contract', '1'], ['client_drift', '1']]) &&
-      line === '234 requests, 16.7% errors',
+      line === '235 requests, 16.6% errors',
     missing: [JSON.stringify(keys), JSON.stringify(codes), line ?? 'no line'],
   });
 }
@@ -25247,9 +25276,9 @@ await forView('/keys', async () => {
   again.unmount();
   const shown = (arrow, rows, search, label, word, lines = [], lineTitle = null) => ({ arrow, rows, search, text: `Sort: ${label}`, title: `Sorted by ${label}, ${word}`, unit: 'native', lines, lineTitle });
   const ascending = shown('up', ['batch', 'from-pool', 'fleet', 'bench', 'ci', 'notebook', 'laptop', 'desktop'], '?sort=cost&dir=asc', 'Cost, 7d', 'ascending');
-  // Laptop's week holds the rejection and the bare 502 of the log's first hour, `req_4c1e8b27-d93` and
-  // `req_8f5a2d16-c47`, each a request the rollups count.
-  const weeks = ['228 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
+  // Laptop's week holds the rejection, the bare 502 and the request sent again after a failed connect of the log's first
+  // hour, `req_4c1e8b27-d93`, `req_8f5a2d16-c47` and `req_0e5a7c3b-f92`, each a request the rollups count.
+  const weeks = ['229 requests, 7d', '117 requests, 7d', '63 requests, 7d', '18 requests, 7d', '3 requests, 7d', '2 requests, 7d', '0 requests, 7d', '0 requests, 7d'];
   const created = ['created Sep 16, 2026', 'created Sep 15, 2026', 'created Sep 13, 2026', 'created Aug 27, 2026', 'created Aug 17, 2026', 'created Aug 13, 2026', 'created Jul 20, 2026', 'created May 19, 2026'];
   const wantPicks = {
     lastUsed: { ...shown('down', ['desktop', 'fleet', 'bench', 'ci', 'laptop', 'notebook', 'batch', 'from-pool'], '?sort=lastUsed', 'Last used', 'descending'), open: false },

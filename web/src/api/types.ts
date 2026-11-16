@@ -790,7 +790,10 @@ export interface SelectionTrace {
 export interface Attempt {
   accountId: string;
   accountKind: AccountKind;
-  /** Null when the attempt drew no response body to read diagnostics from. */
+  /**
+   * Null for an attempt whose answer held no usage report and for one recorded before the router filed its own words,
+   * `not_requested` and `not_returned`.
+   */
   cacheMissReason: CacheMissReason | null;
   cooldownSet: { reason: string; until: string } | null;
   durationMs: number | null;
