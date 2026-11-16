@@ -70,6 +70,11 @@ turn, so the next real request on the same account names the last real answer. A
 strips it and retries the probe but never latches the account, since only a real request's diagnostics latch. The next
 real request re-sends the item, takes its own 400, and latches.
 
+The thinking-binding report applies to a probe the same way. A probe replays its turn's thinking blocks whole and the
+request's headers as the bus published them, the client's `thinking-binding-controls-2026-08-01` token among them, and
+with the pool's `thinking_diagnostics` on the router adds the token where the replayed body's thinking is on and its
+line lacks it. The probe's answer files its `input_transformations` on the probe's own row, as a real request's does.
+
 ## The mod
 
 The engine learns which sessions are alive, which agents they run and what each agent is doing from the companion mod, a

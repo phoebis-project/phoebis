@@ -88,6 +88,7 @@ outside its bound gets:
 | `keepalive` | `enabled` off, over the API without the block and in the console's create form | a policy object of four fields, on [The four fields](keepalive.md#the-four-fields) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default. See Cache TTL |
 | `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
+| `thinking_diagnostics` | `false` | `true` or `false`: `thinking_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false`. See below |
 | `body_capture_hours` | `0` (off) | at most `stats.body_capture_max_hours`: `body_capture_hours exceeds stats.body_capture_max_hours`. The console proposes 24 |
 | `guardrails` | unchanged when absent | an ordered list of at most 64 ids, refused on a create, the refusals in the paragraph below |
@@ -162,6 +163,14 @@ request continues: the newest answer at the deepest message boundary the request
 own conversation, or of the conversation it forked from, on the serving account, else the newest answer of the session
 on that account and model. A fork names its parent's answer only until it has an answer of its own on that account and
 model. Off by default.
+
+The pool's `thinking_diagnostics`, a switch in a group of its own after Cache diagnostics in the pool dialog's expert
+view, turns the thinking-binding report on for this pool's requests: where thinking is on and the client sent no
+`thinking-binding-controls-2026-08-01` token, the router adds it ([The betas](relay.md#the-betas)), and the upstream's
+answer then lists in `input_transformations` each thinking block it dropped or let pass. The token changes nothing the
+model receives, and the router never sets `thinking.block_binding`. A `400` naming the token strips it for one retry and
+latches it off for the account, apart from the cache diagnostics' latch. How the router reads the report on a move is
+under [What a move drops](#what-a-move-drops). Off by default.
 
 `auto_mode_server` is whether a Claude Code session's server-side auto mode checks travel to the upstream, on by
 default, and a key's own `auto_mode_server` overrides the pool's ([Keys](#keys)). What the router cuts under the off
@@ -580,7 +589,8 @@ A live pin on a portable request moves only when its session sends a request, an
 this order: spent, overage, return to plan, drain and shed. The first rule that finds a destination moves the pin and
 names the move after itself. A pin on an account past its subscription end reaches none of them: the
 `subscription_ended` exclusion releases it, as a cooldown releases a cooled account's pin. A request sent fast takes
-neither the spent nor the overage rule, since it draws usage credits and no plan window.
+neither the spent nor the overage rule, since it draws usage credits and no plan window. What a move drops of a
+session's thinking, and how a move and a shedding round weigh it, is under [What a move drops](#what-a-move-drops).
 
 Every rule takes its destination through one gate, the destination gate. It leaves out the source, the siblings the
 rule's own test refuses and every sibling inside `wind_down_minutes` of its subscription end (see **Subscription end**,

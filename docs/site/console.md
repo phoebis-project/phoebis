@@ -93,15 +93,15 @@ at the next start ([The cost reference](#the-cost-reference)).
 
 The expert view, whose switch carries the title "Shows every field of the pool and key dialogs, the advanced ones
 included.", is stored in the browser under `phoebis.expertView` and starts off. With it on, the pool dialog's rail gains
-the groups Auto mode, Placement, Slow-down, Failover and Cache diagnostics, and its other groups show the fields Pin
-sessions, Windows' Burn average (s), Load shedding's Preset, Shed cap (%), Shed dwell (s), Warm sessions, Fable
-reservation shedding and Preview, Overage grace (min), Return to plan, Return dwell (s), Wind down (min), Add a cache
-marker to a request without one and the cache TTL's per-model overrides. The key dialog gains Server-side auto mode,
-Pool rules and List [1m] twins in the models listing, and the sidebar the Diagnostics group. With the mode off, a group
-with hidden fields closes on `{n} more settings in the expert view` (`1 more setting` for one), whose link turns the
-mode on, and a hidden field that holds a refusal shows anyway. Closing a dialog with unsaved changes asks "Discard
-changes?" with "This dialog has changes that are not saved.", "Keep editing" and "Discard". A dialog draws its fields
-afresh at each opening, so a picker's search text starts empty.
+the groups Auto mode, Placement, Slow-down, Failover, Cache diagnostics and Thinking diagnostics, and its other groups
+show the fields Pin sessions, Windows' Burn average (s), Load shedding's Preset, Shed cap (%), Shed dwell (s), Warm
+sessions, Fable reservation shedding and Preview, Overage grace (min), Return to plan, Return dwell (s), Wind down
+(min), Add a cache marker to a request without one and the cache TTL's per-model overrides. The key dialog gains
+Server-side auto mode, Pool rules and List [1m] twins in the models listing, and the sidebar the Diagnostics group. With
+the mode off, a group with hidden fields closes on `{n} more settings in the expert view` (`1 more setting` for one),
+whose link turns the mode on, and a hidden field that holds a refusal shows anyway. Closing a dialog with unsaved
+changes asks "Discard changes?" with "This dialog has changes that are not saved.", "Keep editing" and "Discard". A
+dialog draws its fields afresh at each opening, so a picker's search text starts empty.
 
 ## Dashboard
 
@@ -615,7 +615,7 @@ warm" switch starts off. The groups by rail parent, with what the expert view ad
 | Routing | Selection, Placement, Pinning | Placement, and Pin sessions under Pinning |
 | Load | Windows, Load shedding, Slow-down, Failover, Overage and plan end | Slow-down, Failover, Burn average (s) under Windows, Preset, Shed cap (%), Shed dwell (s), Warm sessions, Fable reservation shedding and Preview under Load shedding, and Overage grace (min), Return to plan, Return dwell (s) and Wind down (min) under Overage and plan end |
 | Caching | Cache TTL, Keepalive | Add a cache marker to a request without one and the per-model overrides, both under Cache TTL |
-| Visibility | Body capture, Cache diagnostics | Cache diagnostics |
+| Visibility | Body capture, Cache diagnostics, Thinking diagnostics | Cache diagnostics, Thinking diagnostics |
 
 Selection's Strategy field explains the chosen strategy under it. Under Pace it reads "Pace scores each member by its
 spare rate: the allowance left in the window it reads, the model's own 7-day Fable window where the model has one, else
@@ -914,10 +914,10 @@ across days). The search, "Search id, session, key, account, model, error, messa
 session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id,
 literally (`_` and `%` are characters), and applies 400 milliseconds after the last keystroke, on Enter, or when the
 field loses focus. Add filter opens a "Filter by" field over the filters in four groups: Routing (Account, Key, Model,
-Pool), Outcome (Cache miss reason, Fallback, Guardrail, Held only, Outcome, Refusal category, Status, Stop reason),
-Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and Subject
-(Agent, Request, Session). Choosing one opens its values: a list with a Select all row that applies on each click
-(checking it checks every option and unchecking it clears every check), a pattern field for Client and User agent
+Pool), Outcome (Cache miss reason, Dropped thinking, Fallback, Guardrail, Held only, Outcome, Refusal category, Status,
+Stop reason), Request (Agent type, Classifier, Client, Effort, Kind, Request class, Speed, Turn origin, User agent) and
+Subject (Agent, Request, Session). Choosing one opens its values: a list with a Select all row that applies on each
+click (checking it checks every option and unchecking it clears every check), a pattern field for Client and User agent
 (`claude-cli/2.1.*`, `*sdk-cli*`: `*` for any run of characters, `?` for one, a backslash quoting either, and a value
 with no wildcard matching in full), an id field for Agent, Request and Session, which match the id exactly (an agent id
 is `main` or a subagent's id, carried in the address as `agent_id`), the Kind choices (Any kind, Inference, Count
@@ -935,8 +935,9 @@ Enter or Apply. Each filter in force stands as a chip on a line under the bar, s
 "held only": a click on the chip opens its values again, its x removes it, the chips past five fold behind "+N more",
 and from two chips on "Clear all" removes them and keeps the range, the search and the page size. The account filter
 keeps the requests whose serving attempt ran on the account, so a request that failed over lists under the account that
-answered it. Every filter, the range, the page size and the order live in the page's address, so a reload or a shared
-link keeps them.
+answered it. The Dropped thinking filter keeps the requests whose serving answer listed a block under a picked kind.
+Every filter, the range, the page size and the order live in the page's address, so a reload or a shared link keeps
+them.
 
 The table offers sixteen columns, Time, Key, Pool, Account, Model, Client, Kind, Transport, Status, Attempts, TTFB,
 Duration, Tokens, Uncached input, Output tokens and Cost, with Duration, Kind, Output tokens, Pool, Transport and
@@ -1021,7 +1022,11 @@ the same on the open row closes it. The drawer holds the request's id and time, 
   and Cache (the miss reason in the Misses by reason card's words, "Not requested" and, for a request that asked and
   drew none, "No reason returned" among them, `{read} read, {written} written`, where the prompt diverged, and "no
   response to read" on an attempt that drew no answer), and a Diagnostics row naming who put the cache diagnostics
-  member on the body: "sent by the client", "added by the router" or none.
+  member on the body: "sent by the client", "added by the router" or none. A Dropped thinking row follows it for the
+  thinking blocks the serving answer dropped or let pass: a line per kind with its count of blocks and the first message
+  they reach, then a line that names who sent the thinking-binding token, "token sent by the client" or "token added by
+  the router". It says that none was dropped where the answer listed no block, that none was reported where a token went
+  out and the answer carried no list, and that no report was asked for where no token went out.
 - Guardrails: one row per guardrail that matched, in evaluation order, the guardrail's name (or `{id} (deleted)` for one
   the registry no longer holds) with a `blocked` badge in the critical tone or an `observed` badge muted, shown where
   the request carries a match ([Guardrails](guardrails.md)).
@@ -1228,22 +1233,26 @@ times leave out the time the slow-down held the request. Latency follows every f
 
 Cache reads `{pct} hit ratio, {n} expired between turns, {pct} of input read from cache` and draws Tokens (Uncached
 input, Cache read, Cache write 5m, Cache write 1h, Thinking, Output), Hit ratio and cached share, Write cost vs read
-cost, Misses by reason with its per-group table, Cache by model (Reads, Writes 5m, Writes 1h, Hit ratio, Cached share,
-Read cost, Write cost) and Placements by rung (Rung, Placements, Hits, Hit share, Tokens read, Tokens promised). The hit
-ratio counts the requests that read the cache over the requests that could read one: a token count, and a request whose
-body marked no cache breakpoint and that read and wrote nothing, stay out of its base. Write cost vs read cost and Cache
-by model's Read cost and Write cost read in the top bar's unit. Under Native they read the subscription requests' figure
-in the chosen week under every grouping, the card's subtitle naming the billed requests' dollars and each Cache by model
-cell carrying them on a line under it, and the card draws the billed dollars while no subscription request is in range.
-Under the three dollar positions they read the position's dollars. A null diagnostics member on a request that named a
-message is recorded as "No divergence", and the per-group table lists Pending after Not requested. Pending: the
-upstream's comparison was still running when the answer went out. An answered request whose answer named no reason
-counts under Not requested where its body carried no diagnostics member and under No reason returned where it carried
-one. In the hours the router stored before it filed these two words such a request counts under no reason, so those
-hours' bars add up to less than their requests. A bar draws apart the requests under its reason that read 90 % or more
-of their prompt from the cache, and the per-group table shows the same split. Every count in Misses by reason but the
-expired column links to the Requests view on those requests with the page's filters carried over, and a count the
-Requests view cannot list exactly stays plain with the reason on hover. Cache follows every filter of the bar, and
+cost, Misses by reason with its per-group table, Dropped thinking blocks with its per-group table, Cache by model
+(Reads, Writes 5m, Writes 1h, Hit ratio, Cached share, Read cost, Write cost) and Placements by rung (Rung, Placements,
+Hits, Hit share, Tokens read, Tokens promised). The hit ratio counts the requests that read the cache over the requests
+that could read one: a token count, and a request whose body marked no cache breakpoint and that read and wrote nothing,
+stay out of its base. Write cost vs read cost and Cache by model's Read cost and Write cost read in the top bar's unit.
+Under Native they read the subscription requests' figure in the chosen week under every grouping, the card's subtitle
+naming the billed requests' dollars and each Cache by model cell carrying them on a line under it, and the card draws
+the billed dollars while no subscription request is in range. Under the three dollar positions they read the position's
+dollars. A null diagnostics member on a request that named a message is recorded as "No divergence", and the per-group
+table lists Pending after Not requested. Pending: the upstream's comparison was still running when the answer went out.
+An answered request whose answer named no reason counts under Not requested where its body carried no diagnostics member
+and under No reason returned where it carried one. In the hours the router stored before it filed these two words such a
+request counts under no reason, so those hours' bars add up to less than their requests. A bar draws apart the requests
+under its reason that read 90 % or more of their prompt from the cache, and the per-group table shows the same split.
+Every count in Misses by reason but the expired column links to the Requests view on those requests with the page's
+filters carried over, and a count the Requests view cannot list exactly stays plain with the reason on hover. The
+Dropped thinking blocks card counts the requests whose answer listed a thinking block the upstream dropped or let pass,
+one bar per kind with its count as a link to those requests in the Requests view, a request counted once under each kind
+its answer lists. Under the bars it reads two plain figures, the moved requests whose answer listed a block dropped for
+the account and the answers that listed nothing, and it counts no block. Cache follows every filter of the bar, and
 Placements by rung the Account, Key, Model, Pool, Client and User agent filters.
 
 Cost reads in the top bar's unit. Under Native the tiles read Cost, the subscription requests' figure in the chosen week
@@ -1659,27 +1668,29 @@ tier, the rule or the rung, `held for the reset at 18:20` on a request that wait
 `held for the slow-down until 18:20` and `0.5x` on one the slow-down held, `held for the rewrite in flight` on one that
 waited for a moved pin's first head, `reserved 10.4% of 5h` on a move or a placement that booked a reservation, the
 pin's warmth and the cache verdict (`cache pending` before the attempt reports usage, and on a rung that promised no
-prefix the cache read over the read, the write and the input, `19.3K of 46.6K`, with the three counts on hover). "How
-the router decided" draws the walk as a strip of stations in the engine's order, each with its verdict, the path the
-decision took in the accent, every branch it did not take as a stub, a step the record does not carry dashed and reading
-"not run", and the ways out as termini, Chosen, Held for a slot and Refused, the one reached filled in its tone. Three
-more ways out, Held for the reset, Held for the slow-down and Held for the rewrite in flight, are drawn only when the
-decision took them, a spent move that waited for a reset, a request the slow-down held or one that waited for a moved
-pin's first head, each in Held for a slot's place, so the strip names six termini and draws three. A move's track
-carries the Fit station after Move, the destination gate's table: a row per candidate the gate read with its projection,
-rewrite and reserved share on each window the gate read, its runway, the window that binds, its end and its verdict, the
-station's own verdict naming the order the gate took. Reserve stands after Pick, or after the last step where no pick
-ran, and lists the booking (the account, the share reserved and the burn on each window, the expiry and the attempt), or
-reads "Nothing was booked: the pin renewed in place." on a renewal and "Nothing was booked." on any other decision that
-booked nothing. A fresh placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a
-hover on a station, a candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them
-from the keyboard. The Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as
-`ramp`, and the speed the holds `realized`, in the order the engine applies them. Its Round group reads, beside the
-trigger's facts, each window's wall (`wall 5h`, `wall 7d`, `wall Fable`), the instant the burn the projection carries
-reaches the window's whole share, absent while the window burns nothing. A pin step's `credit issuer` chip names the
-account that issued the fallback credit token the body carries, on which the request is placed ahead of the pin's
-renewal and the moves, under the credit rule of [Routing](routing.md#selection). A classifier call's pin step draws no
-pin and names the turn the call judges, that turn's account and where the call went, under the classifier rule there.
+prefix the cache read over the read, the write and the input, `19.3K of 46.6K`, with the three counts on hover). On a
+move whose answer listed a thinking block dropped for the account, the chip `account-bound thinking` follows the cache
+verdict with the count of those blocks, `154 blocks`, and its hover lists each kind with its blocks. "How the router
+decided" draws the walk as a strip of stations in the engine's order, each with its verdict, the path the decision took
+in the accent, every branch it did not take as a stub, a step the record does not carry dashed and reading "not run",
+and the ways out as termini, Chosen, Held for a slot and Refused, the one reached filled in its tone. Three more ways
+out, Held for the reset, Held for the slow-down and Held for the rewrite in flight, are drawn only when the decision
+took them, a spent move that waited for a reset, a request the slow-down held or one that waited for a moved pin's first
+head, each in Held for a slot's place, so the strip names six termini and draws three. A move's track carries the Fit
+station after Move, the destination gate's table: a row per candidate the gate read with its projection, rewrite and
+reserved share on each window the gate read, its runway, the window that binds, its end and its verdict, the station's
+own verdict naming the order the gate took. Reserve stands after Pick, or after the last step where no pick ran, and
+lists the booking (the account, the share reserved and the burn on each window, the expiry and the attempt), or reads
+"Nothing was booked: the pin renewed in place." on a renewal and "Nothing was booked." on any other decision that booked
+nothing. A fresh placement's partitions draw as the stations Spent, At cap, No fit and Winding down. A click or a hover
+on a station, a candidate or a terminus opens its facts in a popover, and Tab, Enter, Space and Escape walk them from
+the keyboard. The Shed station's Windows group reads the slow-down's `speed`, the share of it the holds apply as `ramp`,
+and the speed the holds `realized`, in the order the engine applies them. Its Round group reads, beside the trigger's
+facts, each window's wall (`wall 5h`, `wall 7d`, `wall Fable`), the instant the burn the projection carries reaches the
+window's whole share, absent while the window burns nothing. A pin step's `credit issuer` chip names the account that
+issued the fallback credit token the body carries, on which the request is placed ahead of the pin's renewal and the
+moves, under the credit rule of [Routing](routing.md#selection). A classifier call's pin step draws no pin and names the
+turn the call judges, that turn's account and where the call went, under the classifier rule there.
 
 "Candidates, by rank" lists every pool member with the chosen or held-on member tinted: Account with its plan beneath
 (the plan the router resolved from the organization type and the tier, "Free" among its words, or the tier word of a
@@ -1754,25 +1765,27 @@ over the ceiling 95%` on the same window of a pool that holds a weekly reserve, 
 reservation`, `the projection` or `the slow-down`), "Fable reservation" (the reserved share as a whole percent, on a
 round the reservation fired), Excess (`9.5 %/h`), Cap with the target and the burn removed, Mark share (`10%`, the share
 of the burn left to shed that a pin's own burn must cover before the round marks it), Unit, Burn average, Warm sessions,
-the Pins table (Session, Agent, Warmth, Burn, Last prompt, Rewrite as the share of the chosen week the pin's rewrite
-takes, `0.111% Ultra week`, with `compared on the 7-day window` on hover naming the window the pick compared on, or on
-an earlier build's round, which names no unit, the figure as stored under its old label, Destination, Mark), Skipped
-(one chip per pin, its session and its reason, `off window` for a pin whose model does not draw the window that fired,
-`Fable model` for a Fable pin of a round the reservation fired, which the round leaves where it is, `ended` for a pin
-whose agent ended before the round read it, `no burn` for a pin with no priced burn on the fired window, and `sliver`
-for a pin the round left warm under its Mark share), Planned destinations, Outcome (`marked 2`, `nothing to mark: no
-runway`, `nothing to mark: sliver`, or, for a round that walked no pin, the word of the pin it left out, such as
-`nothing to mark: off window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin,
-Reason (`healed: the 5h projection read 91% under the wall` where the heal's horizon was the window's reset or the
-account's end and at the five-hour bound on a window whose ceiling is the wall, and `under the ceiling` at the five-hour
-bound on a window whose ceiling stands under it, `healed: the stretch read 24 min under the threshold 30 min` for a mark
-the stretch made, `moved` or `released`), Marked (when, on which account) and Standing for, and a reservation expired
-panel reads Request, Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left
-the account's prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold
-after `of`), Demand (`12.0 %/h`), Reset and the Effect `requests of the account's sessions wait their cycle times the
-slow-down up to the hold`, and a slow-down ended panel Lasted, Slowest (`0.35x`), Held (the waits of the span's holds
-summed, with the count of the holds beside it, labeled "holds") and the Effect `requests of the account's sessions pass
-unheld again`. Held can pass Lasted, since the span's holds can overlap. The kinds and what each row records:
+the Pins table (Session, Agent, Warmth, Burn, Last prompt, Thinking dropped as the thinking the pin's move would drop,
+in tokens, which the round weighed at the output's weight beside the rewrite, with a dash for a pin that states none and
+no column on a round stored before the figure, Rewrite as the share of the chosen week the pin's rewrite takes, `0.111%
+Ultra week`, with `compared on the 7-day window` on hover naming the window the pick compared on, or on an earlier
+build's round, which names no unit, the figure as stored under its old label, Destination, Mark), Skipped (one chip per
+pin, its session and its reason, `off window` for a pin whose model does not draw the window that fired, `Fable model`
+for a Fable pin of a round the reservation fired, which the round leaves where it is, `ended` for a pin whose agent
+ended before the round read it, `no burn` for a pin with no priced burn on the fired window, and `sliver` for a pin the
+round left warm under its Mark share), Planned destinations, Outcome (`marked 2`, `nothing to mark: no runway`, `nothing
+to mark: sliver`, or, for a round that walked no pin, the word of the pin it left out, such as `nothing to mark: off
+window`), Next round after, Dwell and Survive a restart. A mark cleared panel reads the pin, Reason (`healed: the 5h
+projection read 91% under the wall` where the heal's horizon was the window's reset or the account's end and at the
+five-hour bound on a window whose ceiling is the wall, and `under the ceiling` at the five-hour bound on a window whose
+ceiling stands under it, `healed: the stretch read 24 min under the threshold 30 min` for a mark the stretch made,
+`moved` or `released`), Marked (when, on which account) and Standing for, and a reservation expired panel reads Request,
+Attempt, Cause, Reserved (`5h 10.4%`, `7d 1.2%`), Held for and the Effect `the booked share left the account's
+prediction`. A slow-down started panel reads Speed (`0.5x`), Stretch (`42 min of 30 min`, the threshold after `of`),
+Demand (`12.0 %/h`), Reset and the Effect `requests of the account's sessions wait their cycle times the slow-down up to
+the hold`, and a slow-down ended panel Lasted, Slowest (`0.35x`), Held (the waits of the span's holds summed, with the
+count of the holds beside it, labeled "holds") and the Effect `requests of the account's sessions pass unheld again`.
+Held can pass Lasted, since the span's holds can overlap. The kinds and what each row records:
 
 | Event | What it records |
 | --- | --- |

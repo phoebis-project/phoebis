@@ -61,26 +61,33 @@ output limit, the tool, system-block and message counts, the context edits, the 
 service tier. The row also names a session that branched from another conversation: that conversation's root and the
 matched depth. The session the row names is the client's own, and the Sessions view groups a row by it. The request row
 records who put the cache diagnostics member on the body the upstream compared: the client, the router, or none. It
-records whether the body carried a `cache_control` marker or the pool's cache TTL policy added one, so the hit ratio can
-leave out a request that could not read a cache. The request row carries its serving attempt's account, speed, outcome
-and token counts, written when the request lands. A row an earlier version wrote fills in slices of up to 10,000 rows,
-the newest first. Each start fills one slice, and its log line names the rows it filled and the rows left. While the
-router runs, the hourly purge fills the rest, slice after slice, each ending after the row in progress once a write is
-waiting, and a log line names the rows it filled once no row is left.
+records the same for the thinking-binding token: the client, the router, or none where no token went out. It records
+whether the body carried a `cache_control` marker or the pool's cache TTL policy added one, so the hit ratio can leave
+out a request that could not read a cache. The request row carries its serving attempt's account, speed, outcome, token
+counts and the thinking blocks its answer listed, written when the request lands. A row an earlier version wrote fills
+in slices of up to 10,000 rows, the newest first. Each start fills one slice, and its log line names the rows it filled
+and the rows left. While the router runs, the hourly purge fills the rest, slice after slice, each ending after the row
+in progress once a write is waiting, and a log line names the rows it filled once no row is left.
 
 The attempt row names the account and its kind, whether the account is a usage-based seat, the upstream status, request
 id and message id, the outcome, the cooldown the attempt set, the stop reason, the model the answer names when it
 differs from the one the router resolved, the speed, the region inference ran in, the tokens a context edit cleared, and
 a refusal's category and recommended model. It carries the five token counts, with the thinking share of the output and
-the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the unified
-rate-limit window readings, overage, and the serving account's rate-limit tier where the router prices by it (none for a
-free organization, a usage-based seat or an account with no plan). An answer with a usage report that named no miss
-reason reads `not_requested` where the attempt's body carried no diagnostics member and `not_returned` where it carried
-one. The attempt also carries the prompt size of the session's previous request, the size the expiry count halves,
-where the selection landed on that request's account in a turn the router read as none of `compacted`, `lane_changed`
-and `static_restart`. No dollar is stored: every price is computed when it is read, from these counts, at the price
-revision in force when the request arrived, in the hourly sums too while the request's row is kept. An hour whose
-request rows the purge took prices whole at the revision in force at the end of the hour.
+the web search and fetch calls the answer made, the cache miss reason the diagnostics beta reports, the thinking blocks
+the answer's `input_transformations` lists, per kind, the upstream's type and reason, as the blocks and the lowest
+message they reach, an empty map for an answer that listed none and nothing for an answer without the member, the
+unified rate-limit window readings, overage, and the serving account's rate-limit tier where the router prices by it
+(none for a free organization, a usage-based seat or an account with no plan). An answer with a usage report that named
+no miss reason reads `not_requested` where the attempt's body carried no diagnostics member and `not_returned` where it
+carried one. The attempt also carries the prompt size of the session's previous request, the size the expiry count
+halves, where the selection landed on that request's account in a turn the router read as none of `compacted`,
+`lane_changed` and `static_restart`. No dollar is stored: every price is computed when it is read, from these counts, at
+the price revision in force when the request arrived, in the hourly sums too while the request's row is kept. An hour
+whose request rows the purge took prices whole at the revision in force at the end of the hour.
+
+The hourly rollup counts a request once under each kind its serving attempt lists, with two counts of their own: the
+moved requests whose answer listed a block under an account reason, and the answers whose member was empty. It keeps no
+count of blocks and no token estimate.
 
 Placements are counted by rung, with a hit share from the trace and the response's cache-read tokens. A `content`
 placement, by the conversation's own messages, is a hit when the response read the prefix the entry promised. A

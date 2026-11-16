@@ -136,6 +136,7 @@ is the router's own because its upstream connection is pooled and independent of
 | `oauth-2025-04-20` | Injected first in the list for an OAuth account when the client's line lacks it (the whole line when the line is empty), dropped for an API-key account, and never added when the client sent no line at all | All three | None, the account's kind |
 | `extended-cache-ttl-2025-04-11` | Injected when the leg's TTL is one hour, dropped when it is five minutes, else passed through. Stripped and latched after a `400` naming it, after which the leg sends five minutes | Inference and probe (a count carries no TTL, so its token passes) | The pool's cache TTL policy |
 | `cache-diagnosis-2026-04-07` | Injected with the `diagnostics` member, else passed through. A client-sent one is never reported as injected | Inference and probe | The pool's `cache_diagnostics` |
+| `thinking-binding-controls-2026-08-01` | Injected where thinking is on and the client's line lacks it, else passed through. A client-sent one is never reported as injected | Inference and probe | The pool's `thinking_diagnostics` |
 | `dangerous-tool-use-2026-09-03` | Dropped when auto mode is off for the key, else passed through | All three | `auto_mode_server` on the key, else the pool |
 | `per-turn-control-2026-07-01` | Read for the cache lane key, passed through | All three | None |
 | `auto-mode-classifier-2026-07-16` | Read with the `auxiliary` class as the marker of a Claude Code client's own classifier call, passed through | All three | None |
@@ -381,8 +382,10 @@ is a `rate_limit_error`, so an organization's standing never reads as the key ho
 so the client's continue arms on the reset the upstream named. The router decodes every coded body (gzip, deflate,
 brotli and zstd), forwards it as identity and drops `content-encoding`, whatever the client's `Accept-Encoding`, and
 answers any other coding with a `502` `upstream_undecodable` before any byte reaches the client. Everything else in the
-head reaches the client as the upstream wrote it. A refusal the router answers itself is in Anthropic's error shape
-with the header `x-phoebis-error-code` naming the code ([refusal codes](client.md#refusal-codes)).
+head reaches the client as the upstream wrote it. The answer's body reaches the client as the upstream wrote it too, the
+`input_transformations` member with it, which the router reads for its ledger and to settle a pair's binding, and never
+edits. A refusal the router answers itself is in Anthropic's error shape with the header `x-phoebis-error-code` naming
+the code ([refusal codes](client.md#refusal-codes)).
 
 ## Headers and transport
 
