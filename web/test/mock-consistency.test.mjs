@@ -295,6 +295,21 @@ test("the refusal categories answer counts a refusal from the hour that holds th
   assert.deepEqual(answer.rows, [{ category: 'cyber', model: 'claude-sonnet-5-5', requests: 2 }], 'the refusals of 21:10 and 23:45');
 });
 
+test("a billed probe's dollars count with probes off", async () => {
+  const d = await import('./dist/api.js');
+  // Two probe rows of one hour: a usage-based seat's, billed $0.40 for two probes, and a plan's of $0.30 for three.
+  const template = d.ALL_ROLLUPS.find((r) => r.kind === 'probe');
+  const outcomes = (ok) => ({ client_gone: 0, incomplete: 0, ok, overloaded: 0, rate_limited: 0, router_shutdown: 0, undecodable: 0, upstream_error: 0 });
+  const probes = (ok) => ({ failed: 0, held: 0, ok, skipped: 0 });
+  const seat = { ...template, cost: { cacheRead: 0.38, cacheWrite: 0, input: 0, output: 0.02 }, costUsd: 0.4, funding: 'usage_based', probes: probes(2), requests: outcomes(2) };
+  const plan = { ...template, cost: { cacheRead: 0.28, cacheWrite: 0, input: 0, output: 0.02 }, costUsd: 0.3, funding: 'plan', probes: probes(3), requests: outcomes(3) };
+  const [all] = d.breakdownOf([seat, plan], { from: template.hour, groupBy: 'all', includeProbes: false, to: iso(Date.parse(template.hour) + HOUR) });
+  // The seat's dollars and their split under both sums, as the route adds a billed probe whatever the flag, and no
+  // request of either row.
+  const split = { cacheRead: 0.38, cacheWrite: 0, input: 0, output: 0.02 };
+  assert.deepEqual(all && [all.costUsd, all.cost, all.billedUsd, all.billed, all.requests], [0.4, split, 0.4, split, 0]);
+});
+
 // One load at a time, since each pins the clock its bundle reads while it loads.
 let loading = Promise.resolve();
 
@@ -651,9 +666,11 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     for (const k of s.keys) {
       const mine = s.rollups.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
       const week = mine.filter((r) => Date.parse(r.hour) >= s.weekFrom);
+      // The week's dollars take a billed probe's too, a probe no plan funded, as the keys route sums them.
+      const priced = s.allRollups.filter((r) => (r.kind !== 'probe' || r.funding !== 'plan') && r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt) && Date.parse(r.hour) >= s.weekFrom);
       assert.equal(k.usage7d.requests, sum(week, requestsOf), `${k.id}'s week`);
       assert.equal(k.usage7d.tokens, sum(week, tokensOf), `${k.id}'s week's tokens`);
-      assert.ok(near(k.usage7d.cost, sum(week, (r) => r.costUsd)), `${k.id}'s week's cost`);
+      assert.ok(near(k.usage7d.cost, sum(priced, (r) => r.costUsd)), `${k.id}'s week's cost`);
       assert.ok(k.lifetime.requests >= sum(mine, requestsOf) && k.lifetime.cost >= sum(mine, (r) => r.costUsd) - 1e-6, `${k.id}'s lifetime under its rollups`);
       // A key created inside the month the rollups hold has every request of its life among them.
       if (Date.parse(k.createdAt) >= monthFrom) assert.equal(k.lifetime.requests, sum(mine, requestsOf), `${k.id}'s lifetime`);
@@ -664,8 +681,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     for (const p of s.pools) {
       const mine = s.asked(s.totalled).filter((r) => r.poolId === p.id);
+      // The day's dollars take a billed probe's too, as the pools route sums them.
+      const priced = s.asked(s.requests.filter((r) => (r.kind !== 'probe' || !planPaid(s, r)) && Date.parse(r.at) >= s.totalledFrom && r.poolId === p.id));
       assert.equal(p.requests24h, mine.length, `${p.id}'s day`);
-      assert.ok(near(p.day24h.cost, sum(mine, (r) => r.costUsd)), `${p.id}'s cost`);
+      assert.ok(near(p.day24h.cost, sum(priced, (r) => r.costUsd)), `${p.id}'s cost`);
       assert.equal(p.traffic24h.length, 25, `${p.id}'s buckets`);
       assert.equal(Date.parse(p.traffic24h[0].at), s.totalledFrom, `${p.id}'s first bucket`);
       assert.equal(sum(p.traffic24h, (b) => b.requests), mine.length, `${p.id}'s buckets`);
@@ -3518,7 +3537,9 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
       return plan.some((r) => requestTokens(r) > 0 && r.costEquivalent === null) ? null : sum(plan, (r) => r.costEquivalent ?? 0);
     };
     assert.equal(s.overview.day24h.equivalent, figureOf(s.counted), `the day reads ${s.overview.day24h.equivalent}`);
-    assert.ok(near(s.overview.day24h.billedUsd, sum(s.counted.filter((r) => !planPaid(s, r)), (r) => r.costUsd)), 'the billed rows alone');
+    // The billed rows alone, a billed probe's among them, as the dashboard's route sums its day.
+    const billed = s.requests.filter((r) => Date.parse(r.at) >= s.dayFrom && !planPaid(s, r));
+    assert.ok(near(s.overview.day24h.billedUsd, sum(billed, (r) => r.costUsd)), 'the billed rows alone');
     for (const h of s.overview.hourly) {
       const rows = s.counted.filter((r) => startOfHour(Date.parse(r.at)) === Date.parse(h.at));
       const want = figureOf(rows);

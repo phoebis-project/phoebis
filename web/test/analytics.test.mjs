@@ -905,29 +905,29 @@ test("the Cost section's head reads each position off one group of plan and bill
   assert.ok(g.planRequests > 0 && g.requests > g.planRequests && g.billedUsd > 0 && g.costEquivalent === 0.004, 'the group holds rows of both fundings');
   const billed = d.fmtUsd(g.billedUsd);
   const dollars = d.fmtUsd(g.costUsd);
-  const native = d.costHeadOf('native', g, 'ultra', 0.1);
+  const native = d.costHeadOf('native', g, 'ultra', 0.1, false);
   assert.deepEqual(native.tile, { figures: [{ text: '0.04% of an Ultra week', word: 'subscription' }, { text: billed, word: 'billed' }], label: 'Cost', note: d.NATIVE_SUBSET }, 'native stacks the figure in the chosen week over the billed dollars');
   assert.equal(native.subset, d.NATIVE_SUBSET);
   assert.equal(native.meta, `0.04% of an Ultra week and ${billed} in range`);
-  assert.equal(d.costHeadOf('native', g, 'ultra', null), null, 'native waits on the scale, so no Pro-week figure reads under the chosen week');
+  assert.equal(d.costHeadOf('native', g, 'ultra', null, false), null, 'native waits on the scale, so no Pro-week figure reads under the chosen week');
   // A dollar position reads the totals its funded read answered, so the head prints their dollars under its words.
-  const all = d.costHeadOf('all', g, 'ultra', null);
+  const all = d.costHeadOf('all', g, 'ultra', null, false);
   assert.deepEqual([all.tile, all.subset, all.meta], [{ figures: [{ text: dollars }], label: 'Estimated cost', note: 'at the effective price list' }, 'all requests', `${dollars} in range, all requests`]);
-  const usd = d.costHeadOf('usd', g, 'ultra', null);
+  const usd = d.costHeadOf('usd', g, 'ultra', null, false);
   assert.deepEqual([usd.tile, usd.subset, usd.meta], [{ figures: [{ text: dollars }], label: 'Billed dollars', note: d.UNIT_SUBSET.usd }, d.UNIT_SUBSET.usd, `${dollars} in range, billed`]);
-  const plan = d.costHeadOf('equivalent', g, 'ultra', null);
+  const plan = d.costHeadOf('equivalent', g, 'ultra', null, false);
   assert.deepEqual([plan.tile, plan.subset, plan.meta], [{ figures: [{ text: dollars }], label: 'Dollar equivalent', note: d.UNIT_SUBSET.equivalent }, d.UNIT_SUBSET.equivalent, `${dollars} in range, equivalent`]);
 });
 
 test('native leaves out a side with no rows', () => {
   const g = accountGroup();
   const billed = d.fmtUsd(g.billedUsd);
-  const plan = d.costHeadOf('native', accountGroup({ billedUsd: 0, requests: g.planRequests }), 'ultra', 0.1);
+  const plan = d.costHeadOf('native', accountGroup({ billedUsd: 0, requests: g.planRequests }), 'ultra', 0.1, false);
   assert.deepEqual([plan.tile.figures, plan.meta], [[{ text: '0.04% of an Ultra week', word: 'subscription' }], '0.04% of an Ultra week in range'], 'a sum of plan rows alone reads the figure alone');
-  const billedOnly = d.costHeadOf('native', accountGroup({ costEquivalent: 0, planRequests: 0 }), 'ultra', 0.1);
+  const billedOnly = d.costHeadOf('native', accountGroup({ costEquivalent: 0, planRequests: 0 }), 'ultra', 0.1, false);
   assert.deepEqual([billedOnly.tile.figures, billedOnly.meta], [[{ text: billed, word: 'billed' }], `${billed} in range`], 'a sum of billed rows alone reads the dollars alone');
   // A fold of request rows counts no plan request outside the account grouping, so its figures tell the sides apart.
-  const folded = d.costHeadOf('native', accountGroup({ planRequests: null }), 'ultra', 0.1);
+  const folded = d.costHeadOf('native', accountGroup({ planRequests: null }), 'ultra', 0.1, false);
   assert.equal(folded.meta, `0.04% of an Ultra week and ${billed} in range`);
 });
 
@@ -937,7 +937,7 @@ test('native reads a dash under its title on the subscription side where the rou
   const billed = d.fmtUsd(g.billedUsd);
   assert.deepEqual(d.sidesOf(g), { billed: g.billedUsd, equivalent: null }, 'plan rows priced nothing read null');
   assert.deepEqual(d.sidesOf(accountGroup({ costEquivalent: 0, planRequests: 0 })), { billed: g.billedUsd, equivalent: undefined }, 'a sum with no plan row leaves the side out');
-  const unpriced = d.costHeadOf('native', g, 'ultra', 0.1);
+  const unpriced = d.costHeadOf('native', g, 'ultra', 0.1, false);
   assert.deepEqual([unpriced.tile.figures, unpriced.meta, unpriced.unpriced], [[{ text: '-', word: 'subscription' }, { text: billed, word: 'billed' }], `- and ${billed} in range`, true], 'the dash takes the unpriced title whatever the other rows priced');
 });
 

@@ -2872,12 +2872,16 @@ function idleWarming(rows: RequestLog[]): HourlyRollup[] {
 // The idle warming sits before the logged hours, so the rows' last entry stays the current hour's.
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...idleWarming(REQUESTS), ...ROLLUPS];
 
-const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
-/** The rows the dashboard counts. A probe is the router's own traffic, which the routes leave out. */
-export const DAY_ROWS: RequestLog[] = counted(DAY_FROM);
-/** The rows an account's or a pool's day total counts, and a pool's hourly buckets. */
-const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
+// A probe is the router's own traffic, which the routes count nowhere, but a billed probe draws real dollars, so the
+// day's and the totals' rows hold its row for the cost and billed sums alone, and every count over them skips it.
+const priced = (from: number) => REQUESTS.filter((r) => (r.kind !== 'probe' || !planPaid(r)) && Date.parse(r.at) >= from);
+/** The rows the dashboard reads. */
+export const DAY_ROWS: RequestLog[] = priced(DAY_FROM);
+/** The rows an account's or a pool's day total reads, and a pool's hourly buckets. */
+const TOTAL_ROWS: RequestLog[] = priced(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
+/** The rollups a key's totals read, every row but a plan probe's. */
+const PRICED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe' || r.funding !== 'plan');
 
 /** A sum over a list in its order. A declaration, since the rollups fold reads it while the module loads, above this
  *  line. */
@@ -2930,25 +2934,28 @@ function deriveFigures() {
     const mine = COUNTED_ROLLUPS.filter((r) => r.accountId === a.id);
     Object.assign(a, {
       requests: {
-        last24h: TOTAL_ROWS.filter((r) => r.accountId === a.id).length,
+        last24h: TOTAL_ROWS.filter((r) => r.accountId === a.id && r.kind !== 'probe').length,
         last7d: sumOf(mine.filter(inWeek), requestsIn),
         lifetime: Math.max(a.requests.lifetime, sumOf(mine, requestsIn)),
       },
     });
   }
   for (const k of keyById.values()) {
-    // A bare id totals its live key alone, so an earlier holder's rows count for neither figure.
-    const mine = COUNTED_ROLLUPS.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
+    // A bare id totals its live key alone, so an earlier holder's rows count for neither figure. A billed probe's
+    // dollars join both dollar sums, and neither its requests nor its tokens count.
+    const mine = PRICED_ROLLUPS.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
+    const counted = mine.filter((r) => r.kind !== 'probe');
     const week = mine.filter(inWeek);
+    const countedWeek = counted.filter(inWeek);
     const life = sidesOf(mine);
     Object.assign(k, {
       lifetime: {
         billedUsd: Math.max(k.lifetime.billedUsd, life.billedUsd),
         cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)),
         equivalent: k.lifetime.equivalent === null || life.equivalent === null ? null : Math.max(k.lifetime.equivalent, life.equivalent),
-        requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)),
+        requests: Math.max(k.lifetime.requests, sumOf(counted, requestsIn)),
       },
-      usage7d: { ...sidesOf(week), cost: sumOf(week, (r) => r.costUsd), requests: sumOf(week, requestsIn), tokens: sumOf(week, tokensIn) },
+      usage7d: { ...sidesOf(week), cost: sumOf(week, (r) => r.costUsd), requests: sumOf(countedWeek, requestsIn), tokens: sumOf(countedWeek, tokensIn) },
     });
   }
   for (const p of poolById.values()) {
@@ -2962,12 +2969,13 @@ function deriveFigures() {
     for (const r of mine) {
       const bucket = traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
       bucket.costUsd += r.costUsd;
+      if (r.kind === 'probe') continue;
       bucket.failed += r.outcome === 'succeeded' ? 0 : 1;
       bucket.requests += 1;
       bucket.tokens += tokensTotal(r.usage);
     }
     const day = requestSidesOf(mine);
-    Object.assign(p, { day24h: { billedUsd: day.billedUsd, cost: sumOf(mine, (r) => r.costUsd), equivalent: day.equivalent }, requests24h: mine.length, traffic24h });
+    Object.assign(p, { day24h: { billedUsd: day.billedUsd, cost: sumOf(mine, (r) => r.costUsd), equivalent: day.equivalent }, requests24h: mine.filter((r) => r.kind !== 'probe').length, traffic24h });
   }
 }
 

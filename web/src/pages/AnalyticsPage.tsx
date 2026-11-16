@@ -430,11 +430,12 @@ export function AnalyticsPage() {
   const fundedTab = tab === 'cache' || tab === 'cache-warming' || tab === 'cost';
   const funded = sessionId === null && (unit === 'usd' || unit === 'equivalent');
   const costSeries = useGatedRead(funded && fundedTab, () => stamped(api.getAnalyticsSeries({ ...query, funding }), clock.now()), [query, funding, funded, fundedTab, generation], reload);
-  // The Cache warming card's Probe cost tile is the one reader of this breakdown on its tab, and it reads the probe
-  // rows counted under every position, the whole included: a breakdown that does not count probes drops a group left
-  // with probe rows alone, whether a dollar side dropped the group's real rows or the group is probe-only in the whole
-  // (the probe kind, an idle account over a short range), and the three positions add up only when all three keep it.
-  // Under the whole the read carries no funding.
+  // The Cache warming card's Probe cost tile and the Probes by outcome legend read this breakdown on its tab, and they
+  // read the probe rows counted under every position, the whole included: a breakdown that does not count probes drops
+  // a group of plan probes alone and keeps a billed probe's dollars, even in a group with no request, whether a dollar
+  // side dropped the group's real rows or the group is probe-only in the whole (the probe kind, an idle account over a
+  // short range), and the three positions add up only when all three keep it. Under the whole the read carries no
+  // funding.
   const warming = sessionId === null && tab === 'cache-warming';
   const costBreakdown = useGatedRead(
     (funded && fundedTab) || warming,
@@ -580,7 +581,9 @@ export function AnalyticsPage() {
   }, [sessionId, funding, funded, warming, groups, stale, fundedTab, kept, groupBy, agentGroups, latest, costBreakdownAnswer]);
   const costBuckets = useMemo(() => (costPoints === points ? buckets : bucketsOf(costPoints)), [costPoints, points, buckets]);
   const costTotals = useMemo(() => totalsOf(costGroups), [costGroups]);
-  const costHead = costHeadOf(unit, costTotals, week, scale);
+  // A session view folds the request log, which the page reads with the toggle, so its figure holds no probe while the
+  // toggle is off.
+  const costHead = costHeadOf(unit, costTotals, week, scale, !includeProbes && sessionId === null);
   const nativeRatios = scale === null ? null : nativeRatiosOf(costTotals, week, scale);
   // A session fold has no cost split either, so the donut and the cache cost card read unavailable in a session view.
   const costSplit = knownSplit(costTotals.cost);

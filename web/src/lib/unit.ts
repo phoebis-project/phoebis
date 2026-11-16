@@ -20,7 +20,7 @@ export const UNIT_LEGEND: Record<UnitPosition, string> = {
   all: 'Every request in dollars at the API price list, a subscription request at its dollar equivalent.',
   equivalent: 'The subscription requests alone at the API price list.',
   native: 'Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
-  usd: 'The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
+  usd: "The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged, a billed keepalive probe's among them.",
 };
 /**
  * The legend's closing paragraph. The figure is a share of the Pro week whatever the account tier, and the week

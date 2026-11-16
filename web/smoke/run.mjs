@@ -20491,7 +20491,9 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: JSON.stringify(headSelects) === JSON.stringify([['cost', true, 0], ['cache', true, 0], ['cache-warming', true, 0]]) && shellUnit(m) !== null,
       missing: [JSON.stringify(headSelects), shellUnit(m) === null ? 'no Unit select in the top bar' : ''],
     });
-    const META = { all: /^\$[\d,.]+ in range, all requests$/, equivalent: /^\$[\d,.]+ in range, equivalent$/, usd: /^\$[\d,.]+ in range, billed$/ };
+    // Include probes is off, so a dollar position's line closes on the sentence that a billed probe's dollars count.
+    const NOTE = "A billed probe's dollars count whatever the Include probes toggle says";
+    const META = { all: new RegExp(`^\\$[\\d,.]+ in range, all requests\\. ${NOTE}$`), equivalent: new RegExp(`^\\$[\\d,.]+ in range, equivalent\\. ${NOTE}$`), usd: new RegExp(`^\\$[\\d,.]+ in range, billed\\. ${NOTE}$`) };
     const written = [];
     for (const value of ['usd', 'equivalent', 'all']) {
       await chooseUnit(m, value);
@@ -20542,7 +20544,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     metas.all = costMeta();
     results.push({
       name: '/analytics the meta line names the position',
-      ok: /^\$[\d,.]+ in range, all requests$/.test(metas.all) && /^\$[\d,.]+ in range, billed$/.test(metas.usd) && /^\$[\d,.]+ in range, equivalent$/.test(metas.equivalent),
+      ok: META.all.test(metas.all) && META.usd.test(metas.usd) && META.equivalent.test(metas.equivalent),
       missing: Object.entries(metas).map(([k, v]) => `${k}: ${v}`),
     });
     // The two dollar positions partition the rows by who paid, so their figures add up to the whole within a cent.
@@ -20553,6 +20555,22 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: billedUsd > 0 && equivalentUsd > 0 && billedUsd < wholeUsd && equivalentUsd < wholeUsd && Math.abs(billedUsd + equivalentUsd - wholeUsd) < 0.015,
       missing: [`all ${wholeUsd}`, `billed ${billedUsd}`, `equivalent ${equivalentUsd}`],
     });
+    {
+      // A session view's head folds the request log, which the page reads with the toggle, so with Include probes off
+      // its figure holds no probe and the line ends at the position's word.
+      const row = requests.find((r) => r.kind !== 'probe' && r.sessionId !== null && !r.refused);
+      localStorage.removeItem('phoebis.unit');
+      const session = await mount(`/analytics?session=${encodeURIComponent(row.sessionId)}&key=${encodeURIComponent(`${row.keyId}@${row.keyGeneration}`)}&unit=usd#cost`);
+      await session.settle(900);
+      const meta = session.container.querySelector('#cost .analytics-section__meta')?.textContent ?? '';
+      session.unmount();
+      localStorage.removeItem('phoebis.unit');
+      results.push({
+        name: "/analytics a session view under Billed dollars with Include probes off ends the Cost head's line at the position's word",
+        ok: /^\$[\d,.]+ in range, billed$/.test(meta),
+        missing: [`${row.sessionId} on ${row.keyId}: ${meta}`],
+      });
+    }
     await tab(m, 'Traffic');
     {
       // A shared link lands on its position: the parameter is read into the setting once and dropped, every other key
@@ -21334,14 +21352,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         missing: [`template ${template?.key}`, JSON.stringify(tiles), JSON.stringify(legend)],
       });
     }
-    // A read that does not count probes drops a group left with probe rows alone, which the route does and the mock
-    // does not, so the two cases below drop it from the mock's groups.
-    const probesCounted = (q, groups) => (q.includeProbes ? groups : groups.filter((g) => g.requests > 0 || g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed === 0));
     {
-      // Grouped by kind with Include probes off, the probe kind is such a group, and the tile keeps its figures only
-      // while the Cache warming reads count probes.
-      const breakdownOf = api.getAnalyticsBreakdown;
-      api.getAnalyticsBreakdown = async (q) => probesCounted(q, await breakdownOf.call(api, q));
+      // Grouped by kind with Include probes off, the probe kind holds the day's billed probes, so a read that does not
+      // count probes keeps it for their dollars and counts no request of it, and the tile reads the probe kind's
+      // figures off the Cache warming reads, which count probes.
       localStorage.removeItem('phoebis.unit');
       const asked = countCalls('getAnalyticsBreakdown');
       const kinds = await mount('/analytics?by=kind#cache-warming', { now: CLOCK_ORIGIN });
@@ -21351,7 +21365,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const counted = await answer({ includeProbes: true });
       const plan = counted.find((g) => g.key === 'probe');
       const billed = (await answer({ funding: 'billed', includeProbes: true })).find((g) => g.key === 'probe');
-      const dropped = !(await answer({ includeProbes: false })).some((g) => g.key === 'probe');
+      // The billed side's probe dollars are the billed probes' own, which the whole read keeps with probes off.
+      const kept = (await answer({ includeProbes: false })).find((g) => g.key === 'probe');
+      const near = (x) => billed !== undefined && billed.costUsd > 0 && Math.abs(x - billed.costUsd) < 1e-9;
+      const keptRight = kept !== undefined && kept.requests === 0 && near(kept.costUsd) && near(kept.billedUsd);
       const t = [...kinds.container.querySelectorAll('#cache-warming > .tiles-row .stat')].find((x) => x.querySelector('.stat__label')?.textContent?.trim() === 'Probe cost');
       const lines = [...(t?.querySelectorAll('.stat__pair-line') ?? [])].map((l) => {
         const figure = l.cloneNode(true);
@@ -21360,24 +21377,19 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       });
       const want = plan === undefined || billed === undefined ? null : [[plan.probeEquivalent === null ? '-' : weekFull(plan.probeEquivalent.cost), 'subscription'], [fmtUsd(billed.probeCostUsd), 'billed']];
       kinds.unmount();
-      delete api.getAnalyticsBreakdown;
       results.push({
-        name: "/analytics under native grouped by kind with Include probes off the Probe cost tile reads the probe kind's plan figure and billed dollars, a group a read that does not count probes drops",
-        ok: q?.includeProbes === false && dropped && want !== null && JSON.stringify(lines) === JSON.stringify(want),
-        missing: [`query ${JSON.stringify(q)}`, `dropped ${dropped}`, JSON.stringify(lines), JSON.stringify(want)],
+        name: "/analytics under native grouped by kind with Include probes off the Probe cost tile reads the probe kind's plan figure and billed dollars, a group a read that does not count probes keeps for its billed probes' dollars with no request",
+        ok: q?.includeProbes === false && keptRight && want !== null && JSON.stringify(lines) === JSON.stringify(want),
+        missing: [`query ${JSON.stringify(q)}`, `kept ${JSON.stringify(kept && [kept.requests, kept.costUsd, kept.billedUsd])} against ${billed?.costUsd}`, JSON.stringify(lines), JSON.stringify(want)],
       });
     }
     {
-      // Grouped by kind with Include probes off, the probe kind is such a group in each bucket that holds a probe, so
-      // the series drops it point by point as the breakdown does, and Probes by outcome draws its bars and its legend
-      // only while its own reads count probes. The figures are the probe rows of the story's rollups (`ALL_ROLLUPS`,
-      // mock/requests.ts) over the day to 14:30: 30 ok of which 11 migrated, 1 held, 32 skipped and 4 failed, in 18
-      // hourly buckets that stack 37 nonzero bars. jsdom lays nothing out, so the chart's container reads a browser's
-      // size here.
-      const breakdownOf = api.getAnalyticsBreakdown;
-      const seriesOf = api.getAnalyticsSeries;
-      api.getAnalyticsBreakdown = async (q) => probesCounted(q, await breakdownOf.call(api, q));
-      api.getAnalyticsSeries = async (q) => (await seriesOf.call(api, q)).map((p) => ({ ...p, groups: probesCounted(q, p.groups) }));
+      // Grouped by kind with Include probes off, the probe kind leaves each bucket whose probes the plan paid for alone
+      // and stays, for its dollars, in the five hours a billed probe ran, as the breakdown answers it, so Probes by
+      // outcome draws its bars and its legend only while its own reads count probes. The figures are the probe rows of
+      // the story's rollups (`ALL_ROLLUPS`, mock/requests.ts) over the day to 14:30: 30 ok of which 11 migrated,
+      // 1 held, 32 skipped and 4 failed, in 18 hourly buckets that stack 37 nonzero bars. jsdom lays nothing out, so
+      // the chart's container reads a browser's size here.
       const measure = window.HTMLElement.prototype.getBoundingClientRect;
       window.HTMLElement.prototype.getBoundingClientRect = function () {
         return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -21390,8 +21402,6 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       const bars = chart?.querySelectorAll('path.recharts-rectangle').length ?? 0;
       window.HTMLElement.prototype.getBoundingClientRect = measure;
       kinds.unmount();
-      delete api.getAnalyticsBreakdown;
-      delete api.getAnalyticsSeries;
       results.push({
         name: '/analytics Probes by outcome counts probes with the toggle off',
         ok: JSON.stringify(legend) === JSON.stringify([['OK', '19'], ['Migrated', '11'], ['Held', '1'], ['Skipped', '32'], ['Failed', '4']]) && bars === 37,

@@ -294,19 +294,22 @@ const ZERO_TOKENS: HourlyRollup['tokens'] = { cacheRead: 0, cacheWrite1h: 0, cac
 
 /**
  * Two sums per group, the way the route splits them: the request side, which a probe row joins only when probes
- * count as requests, and the probe rows alone, which the probe counts, the probe cost and the wasted probes read.
- * The shares are a subscription account's with a tier, under the account grouping or where the query names that one
- * account, and null otherwise. The equivalents, the billed side and the plan counts read under every grouping.
+ * count as requests, and the probe rows alone, which the probe counts, the probe cost and the wasted probes read. A
+ * billed probe draws real dollars, so they join the cost and billed sums whatever the flag says, while its request and
+ * its tokens follow the flag. The shares are a subscription account's with a tier, under the account grouping or where
+ * the query names that one account, and null otherwise. The equivalents, the billed side and the plan counts read
+ * under every grouping.
  */
 function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes: boolean, groupBy: AnalyticsGroupBy, accountIds: string[] | undefined): AnalyticsGroup {
   const counted = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe');
+  const priced = includeProbes ? rows : rows.filter((r) => r.kind !== 'probe' || r.funding !== 'plan');
   const probeRows = rows.filter((r) => r.kind === 'probe');
   const account = shareAccountOf(key, groupBy, accountIds);
   const tier = account === null ? undefined : accountById.get(account)?.subscription?.rateLimitTier;
   const countedPlan = planRows(counted);
   const probePlan = planRows(probeRows);
   const costShares = account !== null && accountById.get(account)?.kind === 'oauth' && tier !== undefined ? costSharesOf(countedPlan) : null;
-  const billed = counted.filter((r) => r.funding !== 'plan');
+  const billed = priced.filter((r) => r.funding !== 'plan');
 
   const cacheMissReasons = emptyCacheMissReasons();
   // Every name a row carries, as the ledger rolls up whatever the beta sent, not only the ones the console knows.
@@ -346,9 +349,9 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     cacheHits: sumOf(counted, (r) => r.cacheHits),
     cacheMisses: sumOf(counted, (r) => r.cacheMisses),
     cacheMissReasons,
-    cost: sumSplit(counted.map((r) => r.cost)),
+    cost: sumSplit(priced.map((r) => r.cost)),
     costShares,
-    costUsd: sumOf(counted, (r) => r.costUsd),
+    costUsd: sumOf(priced, (r) => r.costUsd),
     errors,
     // The fixture ledger records no exhausted pool, and its refused requests file under the refusals map and never
     // under Rejected.
@@ -423,10 +426,21 @@ const holderOf = (key: string, groupBy: AnalyticsGroupBy): Pick<AnalyticsGroup, 
 const groupKeyOf = (groupBy: AnalyticsGroupBy, named: string[]): ((r: HourlyRollup) => string) =>
   groupBy === 'user_agent' && named.length ? (r) => named.find((p) => matchesPattern(p, r.userAgent)) ?? 'other' : GROUP_KEY[groupBy];
 
+/**
+ * A group stays where probes count, where a row that is no probe joined it, or where its billed probes drew dollars,
+ * as the route keeps one: a read that does not count probes drops a group of plan probes alone, and answers a group of
+ * billed probes alone with its dollars and no request.
+ */
 function groupsOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {
   const of = groupKeyOf(q.groupBy, q.userAgentGroups ?? []);
   const buckets = groupInto(rows, of);
-  return [...buckets.entries()].map(([key, list]) => ({ ...groupOf(key, labelOf(key, q.groupBy), list, q.includeProbes ?? false, q.groupBy, q.accountIds), ...holderOf(key, q.groupBy) })).sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0) || a.key.localeCompare(b.key));
+  const includeProbes = q.includeProbes ?? false;
+  return [...buckets.entries()]
+    .flatMap(([key, list]) => {
+      const group = groupOf(key, labelOf(key, q.groupBy), list, includeProbes, q.groupBy, q.accountIds);
+      return includeProbes || list.some((r) => r.kind !== 'probe') || group.billedUsd > 0 ? [{ ...group, ...holderOf(key, q.groupBy) }] : [];
+    })
+    .sort((a, b) => a.label.localeCompare(b.label) || (a.keyCreatedAt ?? 0) - (b.keyCreatedAt ?? 0) || a.key.localeCompare(b.key));
 }
 
 export function breakdownOf(rows: HourlyRollup[], q: AnalyticsQuery): AnalyticsGroup[] {

@@ -8249,7 +8249,7 @@ async function unitLegendLines(theme) {
   const LEGEND = 'What the units mean';
   const LABELS = ['Native', 'All in dollars', 'Billed dollars', 'Dollar equivalent'];
   const WANT = {
-    'Billed dollars': 'Billed dollars The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged.',
+    'Billed dollars': "Billed dollars The API key, fast-mode, overage and usage-based requests alone, the dollars the account holder is charged, a billed keepalive probe's among them.",
     Native: 'Native Each request in the unit its funding pays in: a subscription request as a share of the week the week control names, an API key, fast-mode, overage or usage-based request in dollars.',
   };
   const NOTE = "A subscription figure is the share of a Pro 7-day window the same tokens would spend, the cost model's units over the Pro capacity, so figures of different account tiers compare and add. The week control reads it as a share of a Max week, five Pro weeks, or an Ultra week, ten Pro weeks. On a request or one account's row the figure's hover names the account's plan and its share of each window the account has.";

@@ -484,6 +484,9 @@ export function unpricedNote(labels: readonly string[], buckets: number): string
   const named = labels.length > 3 ? `${fmtInt(labels.length)} groups` : labels.join(' · ');
   return `${named} unpriced in ${plural(buckets, 'bucket, drawn as a gap', 'buckets, drawn as gaps')}`;
 }
+/** The Cost head's sentence above a figure of the routes' sums while the Include probes toggle is off: the routes add a
+ *  billed probe's dollars to the cost and billed sums whatever the flag says. */
+export const BILLED_PROBE_NOTE = "A billed probe's dollars count whatever the Include probes toggle says";
 /** The Cost section's head under a position, as `costHeadOf` reads it. */
 export interface CostHead {
   meta: string;
@@ -499,9 +502,10 @@ export interface CostHead {
  * The Cost section's meta line, its first tile and the requests its table reads, from the position's totals. Native
  * pairs the plan rows' figure in the chosen week with the billed dollars, a side with no rows left out and a dash
  * where the route priced none. It waits on `scale`, so null answers native while the scale is out, which the section
- * draws as its skeleton. A dollar position reads its dollars under its own words, and reads no scale.
+ * draws as its skeleton. A dollar position reads its dollars under its own words, and reads no scale. `billedProbeNote`
+ * says the figure is the routes' sums read with probes off, so a dollar position's meta closes on `BILLED_PROBE_NOTE`.
  */
-export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: WeekPosition, scale: number | null): CostHead | null {
+export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: WeekPosition, scale: number | null, billedProbeNote: boolean): CostHead | null {
   if (unit === 'native') {
     if (scale === null) return null;
     const { figures, unpriced } = nativeFiguresOf(sidesOf(totals), week, scale);
@@ -509,7 +513,7 @@ export function costHeadOf(unit: UnitPosition, totals: AnalyticsGroup, week: Wee
   }
   const dollars = dollarsOf(unit);
   const figure = fmtUsd(totals.costUsd);
-  return { meta: `${figure} in range, ${UNIT_META[dollars]}`, subset: UNIT_SUBSET[dollars], tile: { figures: [{ text: figure }], label: UNIT_TILE_LABEL[dollars], note: dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars] }, unpriced: false };
+  return { meta: `${figure} in range, ${UNIT_META[dollars]}${billedProbeNote ? `. ${BILLED_PROBE_NOTE}` : ''}`, subset: UNIT_SUBSET[dollars], tile: { figures: [{ text: figure }], label: UNIT_TILE_LABEL[dollars], note: dollars === 'all' ? 'at the effective price list' : UNIT_SUBSET[dollars] }, unpriced: false };
 }
 
 /**
