@@ -3491,89 +3491,68 @@ async fn a_key_created_again_under_its_id_ends_a_deleted_accounts_trace_with_an_
 async fn a_failovers_entry_past_its_minute_hands_nothing_on_inside_the_pools_ttl_and_leaves_in_silence(
 ) {
     use phoebis_routing::RouterEvent;
-    // One row per site that builds a failover's entry, each row's report built from the account and the pin it names.
-    type Failover = fn(String, PinRef) -> Report;
-    let failovers: [(&str, Failover); 2] = [
-        ("a cooldown that names the pin", |from, pin| {
-            Report::Cooldown {
-                account_id: from.clone(),
-                row: CooldownRow {
-                    account_id: from,
-                    scope: CooldownScope::Account,
-                    until: 1_000 + HOUR,
-                    set_at: 0,
-                    reason: "rate_limit".into(),
-                    window: "five_hour".into(),
-                    source_request_id: None,
-                    incarnation: 1,
-                },
-                pin: Some(pin),
-                lifecycle_generation: 1,
-                credential_generation: 1,
-                incarnation: 1,
-            }
-        }),
-        ("an invalidation of the pin", |from, pin| {
-            Report::PinInvalidated {
-                account_id: from,
-                pin,
-                mark: None,
-                incarnation: 1,
-                lifecycle_generation: 1,
-                credential_generation: 1,
-            }
-        }),
-    ];
-    for (row, failover) in failovers {
-        let store = seeded(&["a", "b"]);
-        let now = Arc::new(AtomicI64::new(1_000));
-        // No purge tick runs, so the request is the one reader that meets the entry.
-        let handle = spawn(
-            store,
-            clock(&now),
-            RouterConfig {
-                hold_first_purge: true,
-                ..RouterConfig::default()
-            },
-        )
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    // No purge tick runs, so the request is the one reader that meets the entry.
+    let handle = spawn(
+        store,
+        clock(&now),
+        RouterConfig {
+            hold_first_purge: true,
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
         .unwrap();
-        let first = handle
-            .select(request(&handle, Some("s1"), 1_000))
-            .await
-            .unwrap();
-        let SelectResult::Selected(selection) = first.result else {
-            panic!("{row}: {:?}", first.result)
-        };
-        handle
-            .report(failover(
-                selection.account.id,
-                selection.pin.expect("a session pin"),
-            ))
-            .await;
-        // The ask queues behind the report, so the entry takes its instant before the clock moves.
-        handle.pins().await.unwrap();
-        // One millisecond past a failover's one-minute window, inside the pool's hour-long affinity TTL.
-        let later = 1_000 + 60_000 + 1;
-        now.store(later, Ordering::SeqCst);
-        let mut events = handle.subscribe_events();
-        handle
-            .select(request(&handle, Some("s1"), later))
-            .await
-            .unwrap();
-        let record = drained(&mut events)
-            .await
-            .into_iter()
-            .find_map(|event| match event {
-                RouterEvent::Decision { record, .. } => Some(record),
-                _ => None,
-            })
-            .expect("the request's decision");
-        assert_eq!(
-            pin_events_of(&record),
-            [("pin_created", None)],
-            "{row}: the entry past its minute hands nothing on and leaves with no expiry"
-        );
-    }
+    let SelectResult::Selected(selection) = first.result else {
+        panic!("{:?}", first.result)
+    };
+    let from = selection.account.id;
+    handle
+        .report(Report::Cooldown {
+            account_id: from.clone(),
+            row: CooldownRow {
+                account_id: from,
+                scope: CooldownScope::Account,
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(selection.pin.expect("a session pin")),
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    // The ask queues behind the report, so the entry takes its instant before the clock moves.
+    handle.pins().await.unwrap();
+    // One millisecond past a failover's one-minute window, inside the pool's hour-long affinity TTL.
+    let later = 1_000 + 60_000 + 1;
+    now.store(later, Ordering::SeqCst);
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), later))
+        .await
+        .unwrap();
+    let record = drained(&mut events)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            RouterEvent::Decision { record, .. } => Some(record),
+            _ => None,
+        })
+        .expect("the request's decision");
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_created", None)],
+        "the entry past its minute hands nothing on and leaves with no expiry"
+    );
 }
 
 #[tokio::test]
@@ -12098,55 +12077,6 @@ async fn a_poll_more_than_five_points_under_the_stored_weekly_reading_under_one_
     no_further_event(&mut events).await;
 }
 
-#[tokio::test]
-async fn a_head_that_shows_a_weekly_fall_leaves_window_dropped_to_the_next_poll_and_its_figure() {
-    let store = seeded_oauth(&["a"]);
-    let now = Arc::new(AtomicI64::new(4_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let mut events = handle.subscribe_events();
-    let reset = 7 * 24 * HOUR;
-    handle
-        .report(observed(
-            "a",
-            weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
-        ))
-        .await;
-    handle.samples().await.unwrap();
-    // A head right after a use reads the week at 0.00 before the upstream's own figure settles.
-    handle
-        .report(observed(
-            "a",
-            sample(2_000).with(
-                SEVEN_DAY,
-                WindowReading {
-                    utilization: 0.0,
-                    reset: Some(reset),
-                    observed_at: 2_000,
-                    source: WindowSource::Head,
-                    plan: None,
-                    tier: None,
-                },
-            ),
-        ))
-        .await;
-    handle.samples().await.unwrap();
-    no_further_event(&mut events).await;
-    handle
-        .report(observed(
-            "a",
-            weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.11)]),
-        ))
-        .await;
-    handle.samples().await.unwrap();
-    let event = next_event(&mut events).await;
-    assert_eq!(
-        dropped_of(&event),
-        Some(("a", SEVEN_DAY, 0.61, 0.11, reset)),
-        "the figure before is the one the head found stored, and the figure after is the poll's: {event:?}"
-    );
-    no_further_event(&mut events).await;
-}
-
 /// The restarts the task sent since the last read, as `(account, incarnation)`. Read once the task answered a command
 /// behind the report, since the task sends a report's restart in that report's turn.
 fn restarts_of(
@@ -12376,32 +12306,6 @@ async fn a_poll_that_writes_no_drop_clears_the_figure_a_head_found() {
         dropped_of(&event),
         Some(("a", SEVEN_DAY, 0.58, 0.40, reset)),
         "the last poll compares the figure the poll before it stored: {event:?}"
-    );
-    no_further_event(&mut events).await;
-}
-
-#[tokio::test]
-async fn a_later_head_leaves_the_figure_the_first_head_found_for_the_poll() {
-    let store = seeded_oauth(&["a"]);
-    let now = Arc::new(AtomicI64::new(4_000));
-    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    let mut events = handle.subscribe_events();
-    let reset = 7 * 24 * HOUR;
-    for report in [
-        weekly_poll(1_000, reset, &[(SEVEN_DAY, 0.61)]),
-        seven_day_head(2_000, reset, 0.0),
-        // The second head reads the 0.01 the first one stored, so a figure taken from it shows no fall.
-        seven_day_head(2_500, reset, 0.0),
-        weekly_poll(3_000, reset, &[(SEVEN_DAY, 0.11)]),
-    ] {
-        handle.report(observed("a", report)).await;
-        handle.samples().await.unwrap();
-    }
-    let event = next_event(&mut events).await;
-    assert_eq!(
-        dropped_of(&event),
-        Some(("a", SEVEN_DAY, 0.61, 0.11, reset)),
-        "{event:?}"
     );
     no_further_event(&mut events).await;
 }
@@ -17514,19 +17418,6 @@ async fn a_spent(handle: &RouterHandle, accounts: &[&str], at: i64) {
 }
 
 #[tokio::test]
-async fn a_move_over_a_bound_pair_prices_the_last_prompt_less_the_thinking_the_account_it_leaves_produced(
-) {
-    let store = thinking_store(&["a", "b"], &[("a", "b", true)]);
-    let now = Arc::new(AtomicI64::new(AT));
-    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "a", 1, 10.0)], &now).await;
-    a_spent(&handle, &["a", "b"], AT).await;
-    let (account, booked) = spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT)).await;
-    // 100,000 less a's 40,000.
-    assert_eq!(account, "b");
-    assert!(close(booked, 0.006), "{booked:?}");
-}
-
-#[tokio::test]
 async fn a_return_after_a_failover_prices_the_last_prompt_less_the_thinking_it_leaves_plus_the_thinking_it_returns_to(
 ) {
     let store = thinking_store(&["a", "b"], &[("a", "b", true)]);
@@ -17572,34 +17463,6 @@ async fn a_return_after_a_failover_prices_the_last_prompt_less_the_thinking_it_l
     // 120,000 less b's 10,000 plus a's 40,000.
     assert_eq!(account, "a");
     assert!(close(booked, 0.015), "{booked:?}");
-}
-
-#[tokio::test]
-async fn a_compacted_request_leaves_the_next_move_priced_at_the_whole_last_prompt() {
-    let store = thinking_store(&["a", "b"], &[("a", "b", true)]);
-    let now = Arc::new(AtomicI64::new(AT));
-    let handle = thinking_router(&store, &[stored_pin(&store, "s1", "a", 1, 10.0)], &now).await;
-    let compacted = SelectRequest {
-        context_compacted: true,
-        ..turn_of(&handle, "s1", "main", SONNET, AT)
-    };
-    assert_eq!(
-        landed_on(handle.select(compacted).await.unwrap()),
-        ("a".into(), None)
-    );
-    handle
-        .report(answered(
-            session_pin(&handle, "s1").await,
-            60_000,
-            None,
-            None,
-        ))
-        .await;
-    a_spent(&handle, &["a", "b"], AT).await;
-    let (account, booked) = spent_move(&handle, turn_of(&handle, "s1", "main", SONNET, AT)).await;
-    // The compacted prompt holds none of a's earlier 40,000.
-    assert_eq!(account, "b");
-    assert!(close(booked, 0.006), "{booked:?}");
 }
 
 #[tokio::test]

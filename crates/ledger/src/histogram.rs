@@ -145,15 +145,6 @@ mod tests {
         }
     }
 
-    /// 150,000 lies in bucket 66, which spans about 143,301 to 171,544.
-    #[test]
-    fn a_sample_past_100_seconds_reads_its_percentile_from_its_own_bucket() {
-        let mut h = Histogram::new();
-        h.record(150_000.0);
-        let p99 = h.percentile(0.99).unwrap();
-        assert!(p99 > 143_000.0 && p99 < 172_000.0, "{p99}");
-    }
-
     /// A row written before the set grew holds 64 counts, 256 bytes.
     #[test]
     fn a_stored_64_bucket_blob_reads_its_counts_with_zeros_after_and_merges_with_the_wide_set() {

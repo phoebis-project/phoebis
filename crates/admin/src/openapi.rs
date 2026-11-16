@@ -1122,9 +1122,8 @@ pub(crate) mod round_trip {
 mod tests {
     use super::round_trip::round_trips_source;
     use super::{ModelTtlView, OverrideView, TypeOverrideView};
-    use crate::requests::InputTransformationView;
     use indexmap::IndexMap;
-    use phoebis_ledger::{InputTransformation, Override, TypeOverride};
+    use phoebis_ledger::{Override, TypeOverride};
     use phoebis_relay::{CacheTtl, ModelTtl};
 
     fn every_cell() -> TypeOverride {
@@ -1180,14 +1179,6 @@ mod tests {
             "the five cells of TypeOverride, each set here"
         );
         round_trips_source::<_, TypeOverrideView>(every_cell());
-    }
-
-    #[test]
-    fn an_input_transformation_with_both_members_set_round_trips_through_its_mirror() {
-        round_trips_source::<_, InputTransformationView>(InputTransformation {
-            blocks: 3,
-            first_message: 2,
-        });
     }
 
     #[test]

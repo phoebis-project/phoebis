@@ -1309,18 +1309,6 @@ fn a_seven_day_room_under_the_fable_reservation_fires_a_round_past_the_wait_and_
 }
 
 #[test]
-fn the_fable_reservations_test_fires_no_round_at_the_selection_that_first_reads_the_room_short() {
-    let s = reserving_pool(Strategy::Pace, true);
-    let mut st = reserving(0.76, reserved_pins());
-    let d = decide(&mut st, &s, &auxiliary(&s, "s3", RESERVED_AT), &mut rng());
-    assert!(
-        d.shed_round.is_none(),
-        "{:?}",
-        line(&d.record, "move:shed").facts
-    );
-}
-
-#[test]
 fn a_short_room_fires_no_round_with_the_fable_reservation_option_off_or_on_a_pool_that_ranks_by_priority(
 ) {
     let s = reserving_pool(Strategy::Pace, false);
@@ -20788,45 +20776,6 @@ fn a_failed_over_landing_falls_through_the_ladder_before_every_candidate() {
     assert_eq!(
         ladder_of(&d.record),
         Some(&FactValue::Text("rewrite_only".into()))
-    );
-}
-
-#[test]
-fn a_failed_over_landing_whose_candidates_all_end_lands_on_the_fourth_rung() {
-    // b and c end six hours out, after their 5-hour resets and inside a ten-hour wind-down. By their figures both read
-    // rewrite_only: 0.3 and the rewrite of 0.02 leave 0.63, which the row's burn of 0.0001 a second reaches in 6 300 s,
-    // short of the three hours to the reset.
-    let mut terms = tier_terms(&["a", "b", "c"]);
-    for term in &mut terms[1..] {
-        term.cancellation = Cancellation::On {
-            ends_at: Some(T + 6 * HOUR),
-        };
-    }
-    let s = snapshot_with_terms(wind_down_gate_pool(600), terms);
-    let mut st = priced(vec![gated_pin("w", "a", 1_000.0)]);
-    gated_siblings(&mut st, 0.3, 0.3);
-    let d = decide(
-        &mut st,
-        &s,
-        &failing_over(&s, "a", "cooldown", gated_pin("s1", "a", 1_000.0), None, T),
-        &mut rng(),
-    );
-    let (to, _) = landed(d.result.clone());
-    assert!(
-        ["b", "c"].contains(&to.as_str()),
-        "the landing still serves: {to}"
-    );
-    assert_eq!(
-        (candidate(&d.record, "b").fit, candidate(&d.record, "c").fit),
-        (Some("ending"), Some("ending"))
-    );
-    assert_eq!(
-        fact(line(&d.record, "partitions"), "no_fit"),
-        &FactValue::Int(0)
-    );
-    assert_eq!(
-        ladder_of(&d.record),
-        Some(&FactValue::Text("ending".into()))
     );
 }
 

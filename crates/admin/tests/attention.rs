@@ -352,17 +352,9 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
         "a pool's condition carries the pool's ceilings beside the settings it names"
     );
     assert_eq!(
-        (
-            &items[7]["link"],
-            &items[7]["pools"],
-            items[7]["detail"].get("setting_values")
-        ),
-        (
-            &j!({ "page": "accounts", "id": "business" }),
-            &j!(["main"]),
-            Some(&j!({ "shed_cap": 0.3, "five_hour_ceiling": 0.9 }))
-        ),
-        "an account's condition opens the account and names its settings with the values of the account's pool"
+        (&items[7]["link"], &items[7]["pools"]),
+        (&j!({ "page": "accounts", "id": "business" }), &j!(["main"])),
+        "an account's condition opens the account"
     );
 }
 

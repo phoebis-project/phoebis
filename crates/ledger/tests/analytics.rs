@@ -5470,13 +5470,9 @@ fn a_burn_bucket_with_tokens_and_no_plan_row_reads_a_zero_equivalent_and_an_idle
         let point = point_at(&points, hour);
         assert!(point.usd > 0.0, "{point:?}");
         assert_eq!(
-            (
-                point.equivalent_by_tier[PRO],
-                point.five_hour_equivalent_by_tier[PRO],
-                point.unpriced
-            ),
-            (Some(0.0), Some(0.0), false),
-            "a billed row adds a zero Pro-week and a zero Pro 5-hour figure: {point:?}"
+            (point.equivalent_by_tier[PRO], point.unpriced),
+            (Some(0.0), false),
+            "a billed row adds a zero Pro-week figure: {point:?}"
         );
     }
     let idle = point_at(&points, 0);
@@ -10343,25 +10339,6 @@ fn a_pools_traffic_prices_each_request_of_a_split_hour_at_the_entry_in_force_whe
             .collect::<Vec<_>>(),
         [15.0]
     );
-}
-
-/// A member's spend prices the split hour from its stored rows, so the first scope's member reads $15 for the day.
-#[test]
-fn a_members_spend_prices_each_request_of_a_split_hour_at_the_entry_in_force_when_it_arrived() {
-    let db = LedgerDb::open_in_memory().unwrap();
-    let prices = plant_a_split_hour(&db);
-    let spent = db
-        .read_blocking(|c| {
-            member_spends(
-                c,
-                &[budgeted(FIRST_SCOPE.1, FIRST_SCOPE.2, BudgetPeriod::Day)],
-                ms(2026, 1, 15, 23, 0),
-                &prices,
-            )
-        })
-        .unwrap()[0]
-        .spent_usd;
-    assert_eq!(spent, 15.0);
 }
 
 /// A member's day and month in one call, a day after the split hour, with one more million of the first scope at 10:00

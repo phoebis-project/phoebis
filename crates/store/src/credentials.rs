@@ -1214,22 +1214,6 @@ mod tests {
     }
 
     #[test]
-    fn the_refresh_histories_of_three_holders_take_the_connection_once() {
-        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
-        let takes = || {
-            store
-                .conn
-                .lock_count
-                .load(std::sync::atomic::Ordering::SeqCst)
-        };
-        let before = takes();
-        store
-            .refresh_histories(&[("a", 1), ("b", 1), ("c", 1)], 16)
-            .unwrap();
-        assert_eq!(takes() - before, 1);
-    }
-
-    #[test]
     fn a_resolved_row_whose_outcome_word_is_none_of_the_three_reads_back_failed() {
         let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
         store

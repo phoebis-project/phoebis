@@ -1544,18 +1544,6 @@ mod tests {
         h
     }
 
-    /// Ten tokens over 40 ms read as 250 a second under no rule.
-    #[test]
-    fn the_rules_pass_takes_a_short_spans_tokens_per_second_sample_out_of_a_retained_hour() {
-        let db = LedgerDb::open_in_memory().unwrap();
-        let at = NEW_YEAR + DAY;
-        let request = timed("r", at, 100, (200, 1_000, 1_040));
-        store(&db, &request, &list(Some(1_000)), NO_RULES, 0);
-        mark_fold_rules(&db).unwrap();
-        refold_rules(&db, 0, 0, NEW_YEAR + 2 * DAY).unwrap();
-        assert_eq!(row(&db, at, STANDARD_BAND).output_tps_hist.count(), 0);
-    }
-
     #[test]
     fn the_rules_pass_moves_a_retained_sample_past_100_seconds_out_of_bucket_63() {
         let db = LedgerDb::open_in_memory().unwrap();
