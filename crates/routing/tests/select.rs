@@ -28391,21 +28391,22 @@ fn learned_pair(model: &str, account_a: &str, account_b: &str, bound: bool) -> T
 
 #[test]
 fn a_purge_under_a_registry_that_no_longer_holds_an_account_drops_its_learned_pairs() {
-    // Sonnet's one fact is the bound pair of a and c, and no move between a and b was observed, so the pair of a and c
-    // reaches a move from a to b until c leaves.
+    // Sonnet's one fact is the bound pair of b and c, and no move between a and c was observed, so the pair of b and c
+    // reaches a move from a to c until b leaves. b is the pair's first account, so the drop reads the pair's first
+    // holder.
     let s = snapshot(Pool::default());
     let mut st = RoutingState::from_load(RoutingLoad {
-        thinking_bindings: vec![learned_pair("claude-sonnet-5", "a", "c", true)],
+        thinking_bindings: vec![learned_pair("claude-sonnet-5", "b", "c", true)],
         ..RoutingLoad::default()
     });
     assert!(
-        st.bound("claude-sonnet-5", "a", "b"),
-        "the bound pair of a and c reaches the pair of a and b"
+        st.bound("claude-sonnet-5", "a", "c"),
+        "the bound pair of b and c reaches the pair of a and c"
     );
-    st.purge(&without_account(&s, "c"), T);
+    st.purge(&without_account(&s, "b"), T);
     assert!(
-        !st.bound("claude-sonnet-5", "a", "b"),
-        "the pair of a and c left with c"
+        !st.bound("claude-sonnet-5", "a", "c"),
+        "the pair of b and c left with b"
     );
 }
 
