@@ -365,13 +365,13 @@ test('a round fired by the stretch groups fired by, over for, over since, stretc
   const round = await recordOf('req_9f2e7c5a-c49/2');
   const at = Date.parse(round.request.at);
   const time = (key) => d.formatFact(round.walk.find((s) => s.step === 'move:shed').facts.find((f) => f.key === key).value, 'time', at);
-  assert.deepEqual(groupsOf(round).find(([label]) => label === 'Windows')[1].slice(4), ['demand 12.86 %/h', 'speed 0.5x', 'ramp 100%', 'slow-down on', 'realized 0.5x', 'ceiling 95%']);
+  assert.deepEqual(groupsOf(round).find(([label]) => label === 'Windows')[1].slice(4), ['demand 12.86 %/h', 'speed 0.5x', 'ramp 100%', 'slow-down on', 'realized 0.5x', 'ceiling 5h 95%', 'ceiling weekly 100%']);
   assert.deepEqual(groupsOf(round).find(([label]) => label === 'Round')[1].slice(0, 6), ['trigger 5h', 'excess 2.86 %/h', 'fired by slow-down', `over since ${time('over_since')}`, 'stretch 42 min', 'threshold 30 min']);
   assert.deepEqual(labelsOf(round).map(([label]) => label), ['Windows', 'Round'], 'no fact of the line falls to an unlabeled group');
   // The hold before it read the stretch inside the safety wait, which the round names as the time it has read over.
   const waiting = await recordOf('req_9f2e7c5a-c49/1');
   assert.deepEqual(labelsOf(waiting), [
-    ['Windows', ['projection 5h', 'horizon 5h', 'projection 7d', 'horizon 7d', 'demand', 'speed', 'ramp', 'slow-down', 'realized', 'ceiling']],
+    ['Windows', ['projection 5h', 'horizon 5h', 'projection 7d', 'horizon 7d', 'demand', 'speed', 'ramp', 'slow-down', 'realized', 'ceiling 5h', 'ceiling weekly']],
     ['Round', ['over for', 'over since', 'stretch', 'threshold', 'wall 5h', 'marked']],
   ]);
   assert.deepEqual(groupsOf(waiting)[1][1][0], 'over for 1 min 48 s');
