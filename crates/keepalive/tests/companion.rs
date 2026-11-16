@@ -4,7 +4,7 @@ mod common;
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
-use phoebis_keepalive::companion_router;
+use phoebis_keepalive::{companion_router, KeepalivePolicy};
 use phoebis_ledger::{AttemptRecord, PriceRevisions, Record, RequestRecord};
 use phoebis_routing::{
     Report, RouterConfig, SharePricer, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR,
@@ -713,14 +713,20 @@ async fn a_budget_the_ledger_has_not_reported_reads_no_spend_row_beside_one_it_h
 }
 
 #[tokio::test]
-async fn pinning_reads_off_at_a_zero_affinity_ttl_and_the_pools_mode_at_one_second() {
-    let r = rig(RigSpec::default()).await;
+async fn pinning_reads_off_at_a_zero_affinity_ttl_and_the_pools_mode_at_sixty_seconds() {
+    // The pools route takes a TTL of 0 or at least 60, and an enabled keepalive policy only beside a TTL of at least
+    // 300, so the pool runs with keepalive off and the least TTL past zero.
+    let r = rig(RigSpec {
+        policy: KeepalivePolicy::default(),
+        ..RigSpec::default()
+    })
+    .await;
     let app = companion_router(r.engine.clone());
     // The default mode is `always`, so `when_cached` shows the second read takes the pool's own mode.
     set_affinity(&r, 0, AffinityMode::WhenCached).await;
     let off = get(&app, Some(SESSION), Some(KEY)).await;
     assert_eq!(off.body["pool"]["pinning"], json!("off"), "{}", off.text);
-    set_affinity(&r, 1, AffinityMode::WhenCached).await;
+    set_affinity(&r, 60, AffinityMode::WhenCached).await;
     let on = get(&app, Some(SESSION), Some(KEY)).await;
     assert_eq!(
         on.body["pool"]["pinning"],
