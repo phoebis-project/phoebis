@@ -6680,7 +6680,7 @@ mod tests {
             utilization,
             reset: Some(reset),
             observed_at: T,
-            source: WindowSource::Poll,
+            source: WindowSource::Head,
             plan: None,
             tier: None,
         };
