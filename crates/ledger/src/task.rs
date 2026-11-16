@@ -140,8 +140,8 @@ pub struct Admission {
 pub struct LedgerGone;
 
 /// A model the cost model in force gave no weight on the 7-day window when a plan-funded account's catalog listing
-/// added it or a plan-funded request on it landed, so its figure is null. The run ends at a read whose instant a
-/// revision that weighs the model governs, or at a landing that finds the model weighted. Kept once seen, so its gauge
+/// added it or a plan-funded request on it landed, so its figure is null. The run ends at a read at or after its
+/// opening whose instant a revision that weighs the model governs, or at a landing that finds the model weighted. Kept once seen, so its gauge
 /// series reads 0 rather than vanishing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct UnpricedModel {
@@ -157,8 +157,8 @@ pub struct UnpricedModel {
 }
 
 /// The unpriced models by undated id, written by the landing after its commit, by a plan-funded account's catalog
-/// listing that adds a model and by `unpriced_served`, which clears an entry the revision in force at its instant
-/// weighs, and read by the attention reader. A `std` mutex, since the reader asks synchronously from inside the
+/// listing that adds a model and by `unpriced_served`, which clears an entry whose run opened at or before its instant
+/// where the revision in force then weighs the model, and read by the attention reader. A `std` mutex, since the reader asks synchronously from inside the
 /// runtime, where a tokio lock would have to block.
 type Unpriced = Arc<std::sync::Mutex<BTreeMap<String, UnpricedModel>>>;
 
@@ -229,15 +229,18 @@ impl Ledger {
     }
 
     /// Every model the cost model does not weigh that a plan-funded listing added or a plan-funded landing served since
-    /// the start, by undated model id. An entry whose model the revision in force at `at` weighs, or that a later
-    /// landing found weighted, reads with no `since` and no requests. Empty at each start.
+    /// the start, by undated model id. An entry whose run opened at or before `at` and whose model the revision in
+    /// force at `at` weighs, or that a later landing found weighted, reads with no `since` and no requests. Empty at
+    /// each start.
     pub fn unpriced_served(&self, at: i64) -> Vec<UnpricedModel> {
         let costs = self.tables.revisions.in_force(at);
         let mut served = self.unpriced.lock().expect(UNPRICED_POISONED);
         // Written into the set rather than answered on a copy, so the model's next run starts at its own listing or
-        // landing instead of taking up the date and the count of the run this read ended.
+        // landing instead of taking up the date and the count of the run this read ended. A caller takes its clock
+        // ahead of an awaited read, so the instant can be older than a run a landing opened meanwhile, and the revision
+        // in force at that older instant says nothing about such a run.
         for entry in served.values_mut() {
-            if !unweighted(costs, &entry.model) {
+            if entry.since.is_some_and(|since| since <= at) && !unweighted(costs, &entry.model) {
                 close_run(entry);
             }
         }

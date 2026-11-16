@@ -6001,6 +6001,52 @@ async fn a_listed_model_reads_cleared_once_a_revision_weighs_it_and_a_later_list
     up.shutdown().await;
 }
 
+/// A read whose instant lies ahead of an unpriced run's opening leaves the run standing: a plan-funded landing at 02:00
+/// opens the run under the third entry, which weighs `claude-opus-9` no longer, a read at 01:00, where the second entry
+/// weighs it, clears nothing, and a read at the run's instant still answers its date and its count.
+#[tokio::test]
+async fn a_read_older_than_an_unpriced_run_leaves_the_run_its_date_and_its_count() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_cost_model(&up, dir.path(), REVISED_LISTING_COSTS, &[oauth("a", A, 0)]).await;
+    // The second entry's and the third entry's instants.
+    let (weighted_from, unweighted_from) = (3_600_000, 7_200_000);
+    let landed = phoebis_ledger::UnpricedModel {
+        model: "claude-opus-9".into(),
+        since: Some(unweighted_from),
+        requests: 1,
+    };
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                received_at: unweighted_from,
+                finished_at: Some(unweighted_from + 500),
+                model: "claude-opus-9-20260101".into(),
+                canonical_model: "claude-opus-9-20260101".into(),
+                ..finished_row("r1")
+            },
+            attempts: vec![AttemptRecord {
+                account_kind: AccountKind::Oauth,
+                started_at: unweighted_from,
+                ..serving_attempt("r1", true)
+            }],
+            bodies: None,
+        })
+        .await;
+    // The landing enters its run after its commit.
+    wait_for(Duration::from_secs(5), || {
+        (h.ledger.unpriced_served(unweighted_from) == [landed.clone()]).then_some(())
+    })
+    .await;
+    h.ledger.unpriced_served(weighted_from);
+    assert_eq!(
+        h.ledger.unpriced_served(unweighted_from),
+        [landed],
+        "the read at 01:00 lies ahead of the run, so the run keeps its date and its count"
+    );
+    up.shutdown().await;
+}
+
 /// A listing enters its models only where its account's requests are plan-funded: an API-key account's and a
 /// usage-based seat's enter nothing, and a plan account's and the listing of an account the routing snapshot does not
 /// hold yet enter theirs.
