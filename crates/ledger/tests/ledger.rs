@@ -2111,8 +2111,8 @@ fn the_purge_keeps_a_sessions_totals_to_the_requests_after_the_cutoff_in_the_hou
 }
 
 /// The purge reads an agent's probe again where it lies before the cutoff: agent `g`'s one probe, two and a half hours
-/// before the cutoff, leaves with the pass, and its client request ten minutes after the cutoff keeps the agent's row,
-/// which then names no probe.
+/// before the cutoff, leaves with the pass, and its client request ten minutes after the cutoff, which the router
+/// refused, keeps the agent's row. With no served request left, the session's figures list no line for `g`.
 #[test]
 fn the_purge_leaves_an_agent_no_probe_where_its_one_probe_lay_before_the_cutoff() {
     const MINUTE: i64 = 60_000;
@@ -2135,32 +2135,35 @@ fn the_purge_leaves_an_agent_no_probe_where_its_one_probe_lay_before_the_cutoff(
     .unwrap();
     let kept_at = cutoff + 10 * MINUTE;
     db.insert_request_at(
-        &session_request("kept", "s", kept_at),
-        &[answered("kept", 1, "a", kept_at, 100)],
+        &RequestRecord {
+            outcome: "rejected".into(),
+            refused: true,
+            attempts: 0,
+            ..session_request("kept", "s", kept_at)
+        },
+        &[],
         None,
         &prices,
     )
     .unwrap();
+    let now = cutoff + 86_400_000;
     phoebis_ledger::run_retention_blocking(
         &db,
         &LedgerConfig {
             retention_days: 1,
             ..LedgerConfig::default()
         },
-        cutoff + 86_400_000,
+        now,
         &[],
         &prices,
     )
     .unwrap();
-    let probe: Option<String> = rusqlite::Connection::open(&path)
-        .unwrap()
-        .query_row(
-            "SELECT probe_id FROM session_facts WHERE session_id = 's' AND agent_id = 'g'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(probe, None);
+    let figures = figures_of(&db, &prices, &PlanTables::shipped(), now);
+    assert!(
+        figures.agents.is_empty(),
+        "g holds no served request: {:?}",
+        figures.agents
+    );
 }
 
 /// Session `s` under the key `desktop`, as the sessions route names it.
