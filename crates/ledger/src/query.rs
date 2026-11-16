@@ -6697,6 +6697,37 @@ mod tests {
         assert_eq!(receipts, [(1_000, false), (2_000, true)]);
     }
 
+    /// A historical session row counts its own holder's placements alone: main's pin events from the row's key
+    /// generation on, and before the generation a live key now holds the id under, so an earlier holder's pin and the
+    /// live holder's both stay out.
+    #[test]
+    fn a_historical_sessions_placements_count_main_s_pins_from_its_generation_to_the_live_one() {
+        let db = LedgerDb::open_in_memory().unwrap();
+        for at in [9_999, 10_001, 20_001] {
+            db.insert_event(&EventRecord {
+                at,
+                kind: PIN_CREATED.into(),
+                key_id: Some("k".into()),
+                session_id: Some("s".into()),
+                agent_id: Some(MAIN_AGENT.into()),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        let session = SessionSpendKey {
+            key_id: "k".to_string(),
+            key_generation: 10_000,
+            session_id: "s".to_string(),
+        };
+        let live = LiveKeys(BTreeMap::from([("k".to_string(), 20_000)]));
+        assert_eq!(
+            db.read_blocking(|c| session_placements(c, std::slice::from_ref(&session), &live))
+                .unwrap(),
+            BTreeMap::from([(session.clone(), 1)]),
+            "the pin at 10_001 alone, between the row's generation and the live one"
+        );
+    }
+
     #[test]
     fn the_newest_events_of_a_kind_are_read_by_seeking_to_the_kind() {
         let plan = plan_of(
