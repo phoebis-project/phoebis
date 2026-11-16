@@ -16,7 +16,7 @@ use serde_json::{json, Map, Value};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{query_refusal, ErrorBody, LedgerFailure};
+use crate::openapi::{ErrorBody, LedgerFailure};
 use crate::requests::{list_param, text_param, word_param};
 use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
@@ -519,8 +519,7 @@ pub(crate) struct RoutingLogQuery {
             "- `{name} is not a time`, for `from` or `to`\n",
             "- `limit is 1 to 200`\n",
             "- `dir is desc or asc`\n",
-            "- `cursor is <at>:<rank>:<id>`\n\n",
-            query_refusal!(),
+            "- `cursor is <at>:<rank>:<id>`",
         ), body = ErrorBody, example = json!({"error": "limit is 1 to 200"})),
         (status = 500, response = LedgerFailure),
     ),

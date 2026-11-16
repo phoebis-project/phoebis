@@ -2742,6 +2742,27 @@ pub fn read_account_rollups(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// The account rollups of the hours `read_account_rollups` reads, as they stand at `now`, an instant in Unix
+/// milliseconds: the current hour's rows keep the cooldown seconds that have passed and no more.
+pub fn read_account_rollups_at(
+    conn: &Connection,
+    from_hour: i64,
+    to_hour: i64,
+    now: i64,
+) -> Result<Vec<AccountRollupRow>, LedgerError> {
+    let mut rows = read_account_rollups(conn, from_hour, to_hour)?;
+    let unelapsed = open_cooldown_remainders(conn, now)?;
+    let current_hour = hour_of(now);
+    for row in rows.iter_mut().filter(|row| row.hour == current_hour) {
+        // An open cooldown booked the current hour past the read's instant, a part that has not passed yet. The cut
+        // lands on the row before a reader sums the account's hours, so only a read that lists the current hour loses
+        // the part.
+        let ahead = unelapsed.get(&row.account_id).copied().unwrap_or(0);
+        row.cooldown_seconds = row.cooldown_seconds.saturating_sub(ahead.max(0) as u64);
+    }
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use phoebis_store::AccountKind;

@@ -18,7 +18,7 @@ use serde_json::Value;
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{query_refusal, ErrorBody, LedgerFailure};
+use crate::openapi::{ErrorBody, LedgerFailure};
 use crate::routes::{failure, reported_samples, windows_lacked, AdminQuery};
 use crate::AdminState;
 
@@ -357,7 +357,8 @@ pub(crate) struct AttemptResponse {
     /// The blocks the answer dropped, per key: `<type>.<reason>` in the upstream's two words, `other` for a word past
     /// 64 bytes. An empty object for an answer that listed nothing, null for an answer without the member and for an
     /// attempt recorded before the router kept it.
-    pub input_transformations: Option<BTreeMap<String, InputTransformationView>>,
+    #[schema(value_type = Option<BTreeMap<String, InputTransformationView>>)]
+    pub input_transformations: Option<BTreeMap<String, phoebis_ledger::InputTransformation>>,
     pub refusal_category: Option<String>,
     pub refusal_recommended_model: Option<String>,
     pub served_model: Option<String>,
@@ -819,20 +820,7 @@ fn attempt_json(a: &AttemptRecord, estimated_usd: Option<f64>) -> Attempt {
         response: AttemptResponse {
             cleared_input_tokens: a.cleared_input_tokens,
             inference_geo: a.inference_geo.clone(),
-            input_transformations: a.input_transformations.as_ref().map(|dropped| {
-                dropped
-                    .iter()
-                    .map(|(key, entry)| {
-                        (
-                            key.clone(),
-                            InputTransformationView {
-                                blocks: entry.blocks,
-                                first_message: entry.first_message,
-                            },
-                        )
-                    })
-                    .collect()
-            }),
+            input_transformations: a.input_transformations.clone(),
             refusal_category: a.refusal_category.clone(),
             refusal_recommended_model: a.refusal_recommended_model.clone(),
             served_model: a.served_model.clone(),
@@ -991,7 +979,7 @@ pub(crate) struct RequestsQuery {
     params(RequestsQuery),
     responses(
         (status = 200, description = "The page.", body = RequestList),
-        (status = 400, description = concat!("- `statuses are numbers`\n- `order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens`\n- `dir is desc or asc`\n- `cursor is <value>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
+        (status = 400, description = "- `statuses are numbers`\n- `order is received_at, attempts, duration_ms, ttfb_ms, input_tokens or output_tokens`\n- `dir is desc or asc`\n- `cursor is <value>:<id>`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent` or `client`", body = ErrorBody, example = json!({"error": "limit: invalid digit found in string"})),
         (status = 500, response = LedgerFailure),
     ),
 )]

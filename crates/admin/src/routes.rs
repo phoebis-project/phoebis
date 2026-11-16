@@ -134,6 +134,7 @@ pub(crate) fn parts() -> (Router<Arc<AdminState>>, utoipa::openapi::OpenApi) {
         .route("/admin/{*rest}", any(unknown_admin_route))
         .split_for_parts();
     openapi::Examples.modify(&mut api);
+    openapi::QueryRefusals.modify(&mut api);
     (router, api)
 }
 
@@ -843,19 +844,20 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
+    let poll = state.quota_poll();
     // An account whose plan ended sends no usage request until a profile read finds a plan, so the button reads the
     // profile first and, with no plan back, answers the standing as the `GET` does.
     if QuotaPoll::plan_paused(&state.store, &id) {
-        state.quota_poll().refresh_profile(&row).await;
+        poll.refresh_profile(&row).await;
         if QuotaPoll::plan_paused(&state.store, &id) {
             return usage_latest(State(state), Path(id)).await;
         }
     }
-    match state.quota_poll().poll_account(&row).await {
+    match poll.poll_account(&row).await {
         Ok(snapshot) => {
             // After the usage reading and under its hold, so the list the console loads next carries the block. The
             // service logs a failed read, and this answer is the usage reading's either way.
-            let _ = state.quota_poll().read_limit_resets(&row).await;
+            let _ = poll.read_limit_resets(&row).await;
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
         }
@@ -1074,8 +1076,9 @@ async fn claim_and_record(
         .usage
         .claim_limit_reset(&row, &grant, expected_revision)
         .await;
+    let poll = state.quota_poll();
     // Before the match, since a landed mark comes with a refusal, whose arm returns at once.
-    state.quota_poll().report_landed_mark(&row.id).await;
+    poll.report_landed_mark(&row.id).await;
     let claim = match claimed {
         Ok(claim) => claim,
         Err(refusal) => {
@@ -1097,7 +1100,6 @@ async fn claim_and_record(
     drop(first_stage);
     // A slot or a refresh can flag the plan ended while the claim is out, and such an account gets no usage request.
     if claim.outcome != ClaimOutcome::Refused && !QuotaPoll::plan_paused(&state.store, &row.id) {
-        let poll = state.quota_poll();
         // A joined fetch can carry a reading from before the claim, so one sent before the answer is read again. A
         // reading with an error keeps the instant of the clean one before it, so it is not asked again, and the next
         // poll slot reads the account.
@@ -1111,7 +1113,7 @@ async fn claim_and_record(
     // Only this read shows whether an open claim spent the reset, so one that failed, or that the plan's pause kept
     // back, stays due for the next slot that reads the account.
     if claim.outcome == ClaimOutcome::Unsettled
-        && !read_limit_resets_after_claim(&state, &row, claim.at).await
+        && !read_limit_resets_after_claim(&state, &poll, &row, claim.at).await
     {
         state.usage.mark_limit_resets_due(&row);
     }
@@ -1121,10 +1123,10 @@ async fn claim_and_record(
 /// Reads the account's limit resets after a claim answered at `claimed_at`, and answers whether a read landed.
 async fn read_limit_resets_after_claim(
     state: &AdminState,
+    poll: &QuotaPoll,
     row: &AccountRow,
     claimed_at: i64,
 ) -> bool {
-    let poll = state.quota_poll();
     if poll.read_limit_resets(row).await.is_err() {
         return false;
     }

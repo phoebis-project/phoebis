@@ -1,6 +1,7 @@
 //! Pool routes: the record every field of which the spec's pool table names, and its membership.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -21,7 +22,9 @@ use utoipa::ToSchema;
 
 use crate::accounts::{check_slug, ACTOR};
 use crate::guardrails::{attachment_refusal, distinct_ids, AttachmentIndex, GuardrailRef};
-use crate::openapi::{query_refusal, ErrorBody, RegistryUnavailable, StorageFailure};
+use crate::openapi::{
+    chart_refusal, range_refusal, ErrorBody, RegistryUnavailable, StorageFailure,
+};
 use crate::routes::{
     double_option, failure, fence_token, parse_object, pool, present, reload_or_no_content,
     reload_or_refuse, stale_edit, store_failure, AdminQuery, CreatedId,
@@ -379,22 +382,14 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         })?;
     }
     if let Some(ceiling) = input.five_hour_ceiling {
-        if !(0.5..=1.0).contains(&ceiling) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "five_hour_ceiling is between 0.5 and 1.0",
-            ));
-        }
-        row.five_hour_ceiling = ceiling;
+        row.five_hour_ceiling = within(
+            ceiling,
+            0.5..=1.0,
+            "five_hour_ceiling is between 0.5 and 1.0",
+        )?;
     }
     if let Some(ceiling) = input.weekly_ceiling {
-        if !(0.5..=1.0).contains(&ceiling) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "weekly_ceiling is between 0.5 and 1.0",
-            ));
-        }
-        row.weekly_ceiling = ceiling;
+        row.weekly_ceiling = within(ceiling, 0.5..=1.0, "weekly_ceiling is between 0.5 and 1.0")?;
     }
     if let Some(list) = &input.model_rules {
         row.model_rules = parse_rules(list)?;
@@ -437,22 +432,11 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             .map_err(|error| failure(StatusCode::BAD_REQUEST, &error.to_string()))?;
         row.cache_ttl_json = serde_json::to_string(&policy).unwrap_or_else(|_| "{}".into());
     }
-    if let Some(switch) = input.cache_diagnostics {
-        // A null names neither state of the switch, so it is refused rather than read as one of them.
-        row.cache_diagnostics = switch.ok_or_else(|| {
-            failure(
-                StatusCode::BAD_REQUEST,
-                "cache_diagnostics must be true or false",
-            )
-        })?;
+    if let Some(value) = input.cache_diagnostics {
+        row.cache_diagnostics = switch(value, "cache_diagnostics must be true or false")?;
     }
-    if let Some(switch) = input.thinking_diagnostics {
-        row.thinking_diagnostics = switch.ok_or_else(|| {
-            failure(
-                StatusCode::BAD_REQUEST,
-                "thinking_diagnostics must be true or false",
-            )
-        })?;
+    if let Some(value) = input.thinking_diagnostics {
+        row.thinking_diagnostics = switch(value, "thinking_diagnostics must be true or false")?;
     }
     if let Some(value) = &input.auto_mode_server {
         row.auto_mode_server = value.as_ref().and_then(Value::as_bool).ok_or_else(|| {
@@ -463,13 +447,11 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         })?;
     }
     if let Some(hours) = input.body_capture_hours {
-        if hours > state.body_capture_max_hours {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "body_capture_hours exceeds stats.body_capture_max_hours",
-            ));
-        }
-        row.body_capture_hours = hours;
+        row.body_capture_hours = within(
+            hours,
+            0..=state.body_capture_max_hours,
+            "body_capture_hours exceeds stats.body_capture_max_hours",
+        )?;
     }
     if let Some(on) = input.load_shedding {
         row.shedding.load_shedding = on;
@@ -478,31 +460,21 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         row.shedding.fable_reservation_shedding = on;
     }
     if let Some(cap) = input.shed_cap {
-        if !(0.1..=1.0).contains(&cap) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "shed_cap is between 0.1 and 1.0",
-            ));
-        }
-        row.shedding.shed_cap = cap;
+        row.shedding.shed_cap = within(cap, 0.1..=1.0, "shed_cap is between 0.1 and 1.0")?;
     }
     if let Some(seconds) = input.burn_average_seconds {
-        if !(600..=7_200).contains(&seconds) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "burn_average_seconds is between 600 and 7200",
-            ));
-        }
-        row.shedding.burn_average_seconds = seconds;
+        row.shedding.burn_average_seconds = within(
+            seconds,
+            600..=7_200,
+            "burn_average_seconds is between 600 and 7200",
+        )?;
     }
     if let Some(seconds) = input.shed_dwell_seconds {
-        if !(300..=7_200).contains(&seconds) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "shed_dwell_seconds is between 300 and 7200",
-            ));
-        }
-        row.shedding.shed_dwell_seconds = seconds;
+        row.shedding.shed_dwell_seconds = within(
+            seconds,
+            300..=7_200,
+            "shed_dwell_seconds is between 300 and 7200",
+        )?;
     }
     if let Some(spent) = input.migrate_when_spent {
         row.shedding.migrate_when_spent = spent;
@@ -516,61 +488,39 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         })?;
     }
     if let Some(seconds) = input.retry_in_place_seconds {
-        if seconds > 300 {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "retry_in_place_seconds is 0 to 300",
-            ));
-        }
-        row.failover.retry_in_place_seconds = seconds;
+        row.failover.retry_in_place_seconds =
+            within(seconds, 0..=300, "retry_in_place_seconds is 0 to 300")?;
     }
     if let Some(cap) = input.in_flight_cap {
-        if cap < 1 {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "in_flight_cap is at least 1",
-            ));
-        }
-        row.failover.in_flight_cap = cap;
+        row.failover.in_flight_cap = within(cap, 1..=u32::MAX, "in_flight_cap is at least 1")?;
     }
     if let Some(minutes) = input.overage_move_grace_minutes {
-        if minutes > 300 {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "overage_move_grace_minutes is 0 to 300",
-            ));
-        }
-        row.failover.overage_move_grace_minutes = minutes;
+        row.failover.overage_move_grace_minutes =
+            within(minutes, 0..=300, "overage_move_grace_minutes is 0 to 300")?;
     }
     if let Some(minutes) = input.wind_down_minutes {
-        if minutes > 10_080 {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "wind_down_minutes is at most 10080 (one week)",
-            ));
-        }
-        row.failover.wind_down_minutes = minutes;
+        row.failover.wind_down_minutes = within(
+            minutes,
+            0..=10_080,
+            "wind_down_minutes is at most 10080 (one week)",
+        )?;
     }
     if let Some(on) = input.slow_down {
         row.slow_down.slow_down = on;
     }
     if let Some(seconds) = input.slow_down_stretch_seconds {
-        if !(60..=18_000).contains(&seconds) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "slow_down_stretch_seconds is between 60 and 18000",
-            ));
-        }
-        row.slow_down.slow_down_stretch_seconds = seconds;
+        row.slow_down.slow_down_stretch_seconds = within(
+            seconds,
+            60..=18_000,
+            "slow_down_stretch_seconds is between 60 and 18000",
+        )?;
     }
     if let Some(seconds) = input.slow_down_hold_seconds {
-        if !(1..=300).contains(&seconds) {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "slow_down_hold_seconds is between 1 and 300",
-            ));
-        }
-        row.slow_down.slow_down_hold_seconds = seconds;
+        row.slow_down.slow_down_hold_seconds = within(
+            seconds,
+            1..=300,
+            "slow_down_hold_seconds is between 1 and 300",
+        )?;
     }
     if let Some(mode) = &input.return_to_plan {
         row.failover.return_to_plan = ReturnToPlan::parse(mode).ok_or_else(|| {
@@ -581,13 +531,11 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
         })?;
     }
     if let Some(seconds) = input.return_to_plan_dwell_seconds {
-        if seconds > 86_400 {
-            return Err(failure(
-                StatusCode::BAD_REQUEST,
-                "return_to_plan_dwell_seconds is between 0 and 86400",
-            ));
-        }
-        row.failover.return_to_plan_dwell_seconds = seconds;
+        row.failover.return_to_plan_dwell_seconds = within(
+            seconds,
+            0..=86_400,
+            "return_to_plan_dwell_seconds is between 0 and 86400",
+        )?;
     }
     if let Some(mode) = &input.affinity_mode {
         row.affinity.mode = AffinityMode::parse(mode).ok_or_else(|| {
@@ -624,6 +572,29 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
     Ok(())
 }
 
+/// `value` where `bounds` holds it, else the 400 with `refusal`.
+// The error is the rendered 400, as `apply`'s is.
+#[allow(clippy::result_large_err)]
+fn within<T: PartialOrd>(
+    value: T,
+    bounds: RangeInclusive<T>,
+    refusal: &str,
+) -> Result<T, Response> {
+    if bounds.contains(&value) {
+        Ok(value)
+    } else {
+        Err(failure(StatusCode::BAD_REQUEST, refusal))
+    }
+}
+
+/// The switch's state, else the 400 with `refusal`. A null names neither state of the switch, so it is refused rather
+/// than read as one of them.
+// The error is the rendered 400, as `apply`'s is.
+#[allow(clippy::result_large_err)]
+fn switch(value: Option<bool>, refusal: &str) -> Result<bool, Response> {
+    value.ok_or_else(|| failure(StatusCode::BAD_REQUEST, refusal))
+}
+
 /// List the pools.
 #[utoipa::path(
     get,
@@ -648,6 +619,14 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     Json(PoolList { pools }).into_response()
 }
 
+/// The field refusals the create's and the edit's `400`s list alike.
+// A macro, since each `400`'s description joins it through `concat!`, which takes literals and no `const`.
+macro_rules! pool_field_refusals {
+    () => {
+        "- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `thinking_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `five_hour_ceiling is between 0.5 and 1.0`\n- `weekly_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`"
+    };
+}
+
 /// Create a pool.
 #[utoipa::path(
     post,
@@ -657,7 +636,7 @@ pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
     request_body(content = PoolInput, content_type = "application/json"),
     responses(
         (status = 201, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `thinking_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `five_hour_ceiling is between 0.5 and 1.0`\n- `weekly_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`\n- `guardrails applies on edit`: a new pool starts with no guardrail", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = concat!("- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `id and label are required`\n- `id must match [a-z0-9][a-z0-9-]{0,63}`\n", pool_field_refusals!(), "\n- `guardrails applies on edit`: a new pool starts with no guardrail"), body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "`account {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "account {id} not found"})),
         (status = 409, description = "- `a pool with this id exists`\n- `account {id} is a member of pool {pool}`, with nothing written\n- `members name account {id} twice`, with nothing written", body = ErrorBody, example = json!({"error": "a pool with this id exists"})),
         (status = 500, response = StorageFailure),
@@ -749,7 +728,7 @@ async fn publish(state: &AdminState, row: &PoolRow, status: StatusCode) -> Respo
     request_body(content = PoolInput, content_type = "application/json"),
     responses(
         (status = 200, description = "The pool, the same shape as a row of `GET /admin/pools`.", body = Pool),
-        (status = 400, description = "- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n- `strategy must be pace, priority, or round_robin`\n- `affinity_ttl_seconds is 0 or at least 60`\n- `overage_policy must be prefer_plan, allow, or never`\n- `model_rules holds at most 256 entries`\n- `model_rules[{i}]: {reason}`: the entry's index and the grammar's own text\n- `keepalive is not a policy object: {detail}`: the keepalive policy's own sentence for a bad shape, or for a field the policy does not hold (`keepalive is not a policy object: unknown field ...`)\n- `keepalive.{field} must be between {min} and {max}, not {value}`: an out-of-range field (`keepalive.max_parked_seconds must be between 60 and 604800, not 59`)\n- `cache_ttl is not a policy object: {detail}`: the cache TTL policy's own sentence for a bad shape or an unknown field\n- `{set}[].model must be a model id`: an empty model id, `{set}` naming the rule set's list (`cache_ttl.plan.models` or `cache_ttl.metered.models`)\n- `{set} lists {model} twice`: a model listed twice\n- `cache_diagnostics must be true or false`\n- `thinking_diagnostics must be true or false`\n- `auto_mode_server must be true or false`\n- `body_capture_hours exceeds stats.body_capture_max_hours`\n- `keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed`\n- `burn_average_seconds is between 600 and 7200`\n- `shed_cap is between 0.1 and 1.0`\n- `shed_dwell_seconds is between 300 and 7200`\n- `five_hour_ceiling is between 0.5 and 1.0`\n- `weekly_ceiling is between 0.5 and 1.0`\n- `warm_sessions must be always, never, or when_needed`\n- `retry_in_place_seconds is 0 to 300`\n- `in_flight_cap is at least 1`\n- `overage_move_grace_minutes is 0 to 300`\n- `wind_down_minutes is at most 10080 (one week)`\n- `return_to_plan must be always, when_cold, or never`\n- `return_to_plan_dwell_seconds is between 0 and 86400`\n- `slow_down_hold_seconds is between 1 and 300`\n- `slow_down_stretch_seconds is between 60 and 18000`\n- `affinity_mode must be always or when_cached`\n- `subagent_placement must be by_cohort, by_strategy, or with_main`\n- `session_placement must be by_strategy or by_warm_prefix`\n- `budget_daily_usd is above 0`\n- `budget_monthly_usd is above 0`\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `pool {id} would hold more than 64 guardrails`, with nothing written", body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
+        (status = 400, description = concat!("- `body must be a JSON object`, also the answer to an unknown field in the body, or a value past its field's type\n- `expected_revision is the revision the row was read at`: a `null`, or a value that is not a non-negative integer\n", pool_field_refusals!(), "\n- `guardrails lists {id} twice`\n- `key {id} would hold more than 64 guardrails`, with nothing written\n- `pool {id} would hold more than 64 guardrails`, with nothing written"), body = ErrorBody, example = json!({"error": "body must be a JSON object"})),
         (status = 404, description = "- `pool not found`\n- `account {id} not found`, with nothing written\n- `guardrail {id} not found`, with nothing written", body = ErrorBody, example = json!({"error": "pool not found"})),
         // The header goes ahead of `example`: utoipa-gen 6 takes the comma after an example as its own, so an
         // attribute after it fails to parse.
@@ -1632,7 +1611,7 @@ pub(crate) struct TrafficQuery {
     params(("id" = String, Path, description = "The pool's id"), TrafficQuery),
     responses(
         (status = 200, description = "The buckets over the range.", body = PoolTraffic),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", chart_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 404, description = "`pool not found`", body = ErrorBody, example = json!({"error": "pool not found"})),
         (status = 500, description = "- `storage failure`\n- `ledger failure`", body = ErrorBody, example = json!({"error": "storage failure"})),
     ),
@@ -1646,9 +1625,9 @@ pub(crate) async fn traffic(
         return refusal;
     }
     let now = (state.clock)();
-    let (from, to) = match phoebis_ledger::parse_range(q.range.as_deref(), now) {
+    let (from, to) = match crate::analytics::range_of(q.range.as_deref(), now) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     let bucket = phoebis_ledger::bucket_seconds(from, to);
     match phoebis_ledger::pool_traffic(

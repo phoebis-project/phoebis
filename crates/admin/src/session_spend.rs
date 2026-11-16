@@ -60,7 +60,7 @@ impl Default for SessionDay {
     /// The day of a row the ledger holds no figures for, which reads as a session with no request in its day reads: no
     /// plan request priced, which reads the Pro-week figure 0.
     fn default() -> SessionDay {
-        day_of(&DayFigures::default())
+        day_of(DayFigures::default())
     }
 }
 
@@ -98,22 +98,27 @@ fn billed_of(money: &SpendMoney) -> BTreeMap<String, f64> {
     billed
 }
 
-fn part_of(figures: &SpendFigures) -> SessionSpendPart {
+fn part_of(figures: SpendFigures) -> SessionSpendPart {
+    let SpendFigures {
+        requests,
+        money,
+        billed_usd_by_account,
+        shares,
+    } = figures;
     SessionSpendPart {
-        requests: figures.requests,
-        usd: figures.money.usd,
-        billed_usd: billed_of(&figures.money),
-        billed_usd_by_account: figures.billed_usd_by_account.clone(),
-        equivalent: figures.money.equivalent,
-        shares: figures
-            .shares
-            .iter()
+        requests,
+        usd: money.usd,
+        billed_usd: billed_of(&money),
+        billed_usd_by_account,
+        equivalent: money.equivalent,
+        shares: shares
+            .into_iter()
             .map(|(account_id, windows)| {
                 (
-                    account_id.clone(),
+                    account_id,
                     windows
-                        .iter()
-                        .map(|(window, share)| (window.to_string(), *share))
+                        .into_iter()
+                        .map(|(window, share)| (window.to_string(), share))
                         .collect(),
                 )
             })
@@ -121,7 +126,7 @@ fn part_of(figures: &SpendFigures) -> SessionSpendPart {
     }
 }
 
-pub(crate) fn spend_of(spend: &SpendFigures, probes: &SpendFigures) -> SessionSpend {
+pub(crate) fn spend_of(spend: SpendFigures, probes: SpendFigures) -> SessionSpend {
     let SessionSpendPart {
         requests,
         usd,
@@ -142,32 +147,30 @@ pub(crate) fn spend_of(spend: &SpendFigures, probes: &SpendFigures) -> SessionSp
 }
 
 /// The day by class, a request with no class under `other`.
-pub(crate) fn day_of(day: &DayFigures) -> SessionDay {
-    let mut requests: BTreeMap<String, u64> = BTreeMap::new();
-    for (class, count) in &day.requests {
-        let class = if class == NO_CLASS {
-            UNCLASSED
-        } else {
-            class.as_str()
-        };
-        *requests.entry(class.to_string()).or_default() += count;
+pub(crate) fn day_of(day: DayFigures) -> SessionDay {
+    let DayFigures {
+        mut requests,
+        money,
+    } = day;
+    if let Some(count) = requests.remove(NO_CLASS) {
+        *requests.entry(UNCLASSED.to_string()).or_default() += count;
     }
     SessionDay {
         requests,
-        usd: day.money.usd,
-        billed_usd: billed_of(&day.money),
-        equivalent: day.money.equivalent,
+        usd: money.usd,
+        billed_usd: billed_of(&money),
+        equivalent: money.equivalent,
     }
 }
 
-pub(crate) fn agent_of(agent: &AgentFigures) -> AgentRequests {
+pub(crate) fn agent_of(agent: AgentFigures) -> AgentRequests {
     AgentRequests {
-        agent_id: agent.agent_id.clone(),
-        model: agent.model.clone(),
-        agent_type: agent.agent_type.clone(),
-        account_id: agent.account_id.clone(),
+        agent_id: agent.agent_id,
+        model: agent.model,
+        agent_type: agent.agent_type,
+        account_id: agent.account_id,
         last_request_at: agent.last_request_at,
         first_request_at: agent.first_request_at,
-        spend: spend_of(&agent.spend, &agent.probes),
+        spend: spend_of(agent.spend, agent.probes),
     }
 }

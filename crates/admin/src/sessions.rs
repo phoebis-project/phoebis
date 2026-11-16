@@ -349,11 +349,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     let live = phoebis_ledger::LiveKeys::from_snapshot(&snapshot).0;
     // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
     let pin_key = |p: &phoebis_store::PinRow| {
-        Some(SessionSpendKey {
-            key_id: p.key_id.clone(),
-            key_generation: *live.get(&p.key_id)?,
-            session_id: p.session_id.clone(),
-        })
+        Some(session_key(&p.key_id, *live.get(&p.key_id)?, &p.session_id))
     };
     let now = (state.clock)();
     let cutoff = now - state.session_expiry.as_millis() as i64;
@@ -366,16 +362,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         .keepalive
         .sessions()
         .into_iter()
-        .map(|s| {
-            (
-                SessionSpendKey {
-                    key_id: s.key_id.clone(),
-                    key_generation: s.key_generation,
-                    session_id: s.session_id.clone(),
-                },
-                s,
-            )
-        })
+        .map(|s| (session_key(&s.key_id, s.key_generation, &s.session_id), s))
         .collect();
     let mut candidates: std::collections::BTreeSet<SessionSpendKey> = pins
         .iter()
@@ -400,7 +387,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             activity
                 .iter()
                 .filter(|a| a.last_request_at >= idle_bound)
-                .map(activity_key),
+                .map(|a| session_key(&a.key_id, a.key_generation, &a.session_id)),
         );
         let keys: Vec<SessionSpendKey> = candidates.into_iter().collect();
         let figures = phoebis_ledger::session_figures(&tx, &keys, &prices, &tables, now)?;
@@ -413,7 +400,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
     });
     // Each read is a snapshot of its own, so they wait together and their order carries no meaning.
     let (reported, read) = tokio::join!(crate::routes::reported_samples(state), read);
-    let (activity, identities, placements, figures) = match read {
+    let (activity, identities, placements, mut figures) = match read {
         Ok(read) => read,
         Err(e) => return Err(crate::analytics::ledger_failure(e)),
     };
@@ -526,21 +513,16 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 move_drop_size: standing.move_read.drop_size,
                 move_drop_cost: standing.move_read.drop_cost,
                 pinned_at: Some(p.created_at),
-                ..unpinned_row(
-                    &key.key_id,
-                    key.key_generation,
-                    &key.session_id,
-                    Some(&p.model),
-                )
+                ..unpinned_row(key, Some(&p.model))
             },
         );
     }
     // Every row is keyed by its own session, as the pins are, so a session's requests land on the row of its pin.
     for a in activity {
-        let key = activity_key(&a);
-        let entry = rows.entry(key).or_insert_with(|| {
-            unpinned_row(&a.key_id, a.key_generation, &a.session_id, Some(&a.model))
-        });
+        let key = session_key(&a.key_id, a.key_generation, &a.session_id);
+        let entry = rows
+            .entry(key)
+            .or_insert_with_key(|key| unpinned_row(key, Some(&a.model)));
         entry.last_request_at = Some(a.last_request_at);
         entry.last_inference_at = a.last_inference_at;
         if entry.account_id.is_none() {
@@ -552,9 +534,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
         entry.user_agent = a.user_agent;
     }
     for (key, view) in &engine {
-        let entry = rows.entry(key.clone()).or_insert_with(|| {
-            unpinned_row(&key.key_id, key.key_generation, &key.session_id, None)
-        });
+        let entry = rows
+            .entry(key.clone())
+            .or_insert_with_key(|key| unpinned_row(key, None));
         // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
         // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
         // deleted key's session outlives the key in the engine until the engine's next tick ends it, so a session
@@ -592,25 +574,32 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
                 .max(entry.companion_since)
                 .is_none_or(|latest| latest >= idle_bound)
     });
-    // The agent lines: on a companion row one per conversation pin of every agent the companion carries a recipe for
-    // and has not released, main's included, and on any other row one per conversation pin used within the timeout.
-    let line_cutoff = now - state.non_companion_idle.as_millis() as i64;
-    let recipes = state.keepalive.recipes();
-    let mut unreleased: std::collections::BTreeSet<(String, i64, String, String)> =
-        std::collections::BTreeSet::new();
-    for recipe in &recipes {
+    // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
+    // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
+    // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.
+    let mut recipe_by_session: std::collections::BTreeMap<
+        SessionSpendKey,
+        phoebis_keepalive::RecipeView,
+    > = std::collections::BTreeMap::new();
+    let mut unreleased: std::collections::BTreeMap<
+        SessionSpendKey,
+        std::collections::BTreeSet<String>,
+    > = std::collections::BTreeMap::new();
+    for recipe in state.keepalive.recipes() {
         let Some(&generation) = live.get(&recipe.key_id) else {
             continue;
         };
+        let key = session_key(&recipe.key_id, generation, &recipe.session_id);
         if recipe.agent_state != phoebis_keepalive::Lifecycle::Released {
-            unreleased.insert((
-                recipe.key_id.clone(),
-                generation,
-                recipe.session_id.clone(),
-                recipe.agent_id.clone(),
-            ));
+            unreleased
+                .entry(key.clone())
+                .or_default()
+                .insert(recipe.agent_id.clone());
         }
+        recipe_by_session.entry(key).or_insert(recipe);
     }
+    // The agent lines: on a companion row one per conversation pin of every agent the companion carries a recipe for
+    // and has not released, main's included, and on any other row one per conversation pin used within the timeout.
     for (key, entry) in rows.iter_mut() {
         let companion = entry.companion != NO_COMPANION;
         let mut lines: Vec<&PinStanding> = agent_pins
@@ -619,14 +608,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             .flatten()
             .filter(|standing| {
                 if companion {
-                    unreleased.contains(&(
-                        key.key_id.clone(),
-                        key.key_generation,
-                        key.session_id.clone(),
-                        standing.pin.agent_id.clone(),
-                    ))
+                    unreleased
+                        .get(key)
+                        .is_some_and(|agents| agents.contains(&standing.pin.agent_id))
                 } else {
-                    standing.pin.last_used_at >= line_cutoff
+                    standing.pin.last_used_at >= idle_bound
                 }
             })
             .collect();
@@ -674,25 +660,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             })
             .collect();
     }
-    // A session the engine knows only from a registration carries no pin and no ledger row, so its model and
-    // serving account come from its main agent's recipe instead, the first the session's agents sort to. A
-    // recipe belongs to the live key alone, so it joins under that generation and never reaches a historical row.
-    let mut recipe_by_session: std::collections::BTreeMap<
-        SessionSpendKey,
-        phoebis_keepalive::RecipeView,
-    > = std::collections::BTreeMap::new();
-    for recipe in recipes {
-        let Some(&generation) = live.get(&recipe.key_id) else {
-            continue;
-        };
-        recipe_by_session
-            .entry(SessionSpendKey {
-                key_id: recipe.key_id.clone(),
-                key_generation: generation,
-                session_id: recipe.session_id.clone(),
-            })
-            .or_insert(recipe);
-    }
     for (key, entry) in rows.iter_mut() {
         let Some(recipe) = recipe_by_session.get(key) else {
             continue;
@@ -704,45 +671,44 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<Session>, Response> {
             entry.account_id = recipe.account_id.clone();
         }
     }
-    let identity_by_key: std::collections::BTreeMap<
+    let mut identity_by_key: std::collections::BTreeMap<
         SessionSpendKey,
         phoebis_ledger::SessionIdentity,
     > = identities
         .into_iter()
-        .map(|i| {
-            (
-                SessionSpendKey {
-                    key_id: i.key_id.clone(),
-                    key_generation: i.key_generation,
-                    session_id: i.session_id.clone(),
-                },
-                i,
-            )
-        })
+        .map(|i| (session_key(&i.key_id, i.key_generation, &i.session_id), i))
         .collect();
     for (key, entry) in rows.iter_mut() {
-        let identity = identity_by_key.get(key);
-        entry.forked_from = identity.and_then(|i| i.forked_from.clone());
-        entry.fork_depth = identity.and_then(|i| i.fork_depth);
-        entry.first_request_at = identity.and_then(|i| i.first_request_at);
+        let identity = identity_by_key.remove(key);
+        entry.fork_depth = identity.as_ref().and_then(|i| i.fork_depth);
+        entry.first_request_at = identity.as_ref().and_then(|i| i.first_request_at);
+        entry.forked_from = identity.and_then(|i| i.forked_from);
         entry.placements = placements.get(key).copied().unwrap_or(0);
     }
     // The spend reads the session's totals and carries the count Requests reads, so Requests and Cost read the same
     // requests. The two newest instants take the later of the activity's and the totals', after the retention above
     // read the activity's alone, so the rows it keeps do not move.
     for (key, entry) in rows.iter_mut() {
-        let Some(figures) = figures.get(key) else {
+        let Some(phoebis_ledger::SessionFigures {
+            last_request_at,
+            last_inference_at,
+            user_agent,
+            spend,
+            probes,
+            day,
+            agents,
+        }) = figures.remove(key)
+        else {
             continue;
         };
-        entry.last_request_at = entry.last_request_at.max(figures.last_request_at);
-        entry.last_inference_at = entry.last_inference_at.max(figures.last_inference_at);
-        if let Some(user_agent) = &figures.user_agent {
-            entry.user_agent = user_agent.clone();
+        entry.last_request_at = entry.last_request_at.max(last_request_at);
+        entry.last_inference_at = entry.last_inference_at.max(last_inference_at);
+        if let Some(user_agent) = user_agent {
+            entry.user_agent = user_agent;
         }
-        entry.spend = (figures.spend.requests > 0 || figures.probes.requests > 0)
-            .then(|| spend_of(&figures.spend, &figures.probes));
-        entry.day = day_of(&figures.day);
-        entry.agent_requests = figures.agents.iter().map(agent_of).collect();
+        entry.spend = (spend.requests > 0 || probes.requests > 0).then(|| spend_of(spend, probes));
+        entry.day = day_of(day);
+        entry.agent_requests = agents.into_iter().map(agent_of).collect();
         // The totals price by the tier a row recorded, so a share of a window the account's set lacks today is dropped
         // at the answer, as the request list drops it. The account's key stays, since it marks that a plan paid.
         if let Some(spend) = entry.spend.as_mut() {
@@ -855,27 +821,22 @@ fn strip_lacked(spend: &mut SessionSpend, lacked: &[(&str, Vec<&'static str>)]) 
     }
 }
 
-/// The row a session's ledger activity lands on, spelled once so the fork-facts read names the row the activity pass
-/// files it under.
-fn activity_key(a: &phoebis_ledger::SessionActivity) -> SessionSpendKey {
+/// The row a session lands on, spelled once so the fork-facts read names the row the activity pass files the session's
+/// ledger activity under.
+fn session_key(key_id: &str, key_generation: i64, session_id: &str) -> SessionSpendKey {
     SessionSpendKey {
-        key_id: a.key_id.clone(),
-        key_generation: a.key_generation,
-        session_id: a.session_id.clone(),
+        key_id: key_id.to_string(),
+        key_generation,
+        session_id: session_id.to_string(),
     }
 }
 
 /// The row of a session no pin stands for, the model the ledger's activity names where it names one.
-fn unpinned_row(
-    key_id: &str,
-    key_generation: i64,
-    session_id: &str,
-    model: Option<&str>,
-) -> Session {
+fn unpinned_row(key: &SessionSpendKey, model: Option<&str>) -> Session {
     Session {
-        key_id: key_id.into(),
-        key_generation,
-        session_id: session_id.into(),
+        key_id: key.key_id.clone(),
+        key_generation: key.key_generation,
+        session_id: key.session_id.clone(),
         model: model.map(String::from),
         companion: NO_COMPANION.into(),
         ..Session::default()

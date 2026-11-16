@@ -15,7 +15,7 @@ use phoebis_ledger::{read_overview_rollups, trailing_day_hours, UNATTRIBUTED};
 use utoipa::ToSchema;
 
 use crate::analytics::ledger_failure;
-use crate::openapi::{query_refusal, ErrorBody, LedgerFailure};
+use crate::openapi::{ErrorBody, LedgerFailure};
 use crate::routes::{failure, AdminQuery};
 use crate::AdminState;
 
@@ -176,7 +176,7 @@ struct PoolDay {
     params(OverviewQuery),
     responses(
         (status = 200, description = "The overview.", body = KeepaliveOverview),
-        (status = 400, description = concat!("`range is 7d or 30d`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 7d or 30d"})),
+        (status = 400, description = "`range is 7d or 30d`", body = ErrorBody, example = json!({"error": "range is 7d or 30d"})),
         (status = 500, response = LedgerFailure),
     ),
 )]

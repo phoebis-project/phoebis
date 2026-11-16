@@ -11,10 +11,10 @@ use indexmap::IndexMap;
 use phoebis_ledger::{
     breakdown_paged, bucket_seconds, burn_groups_paged, guardrail_counts, held_series, hour_ceil,
     hour_end, hour_of, hourly_window_samples, lead_over_pace, moves_by_reason_and_fit,
-    names_one_account, open_cooldown_remainders, parse_range, read_account_rollups,
-    read_reconciliations, rewrite_series, series_paged, session_burn_series, term_end_of,
-    AccountRollupRow, FundingFilter, GroupBy, GroupRow, HourlyWindowSample, LedgerError, LiveKeys,
-    Patterns, RequestFilter, RollupFilter, SeriesFilter, TermEnd,
+    names_one_account, parse_range, read_account_rollups_at, read_reconciliations, rewrite_series,
+    series_paged, session_burn_series, term_end_of, AccountRollupRow, FundingFilter, GroupBy,
+    GroupRow, HourlyWindowSample, LedgerError, LiveKeys, Patterns, RequestFilter, RollupFilter,
+    SeriesFilter, TermEnd,
 };
 use phoebis_routing::{
     account_window_id, term, window_deadline, BurnUnit, UtilizationSample, FIVE_HOUR, SEVEN_DAY,
@@ -23,7 +23,9 @@ use phoebis_routing::{
 use phoebis_store::{AccountKind, SubscriptionTerm};
 use utoipa::ToSchema;
 
-use crate::openapi::{query_refusal, ErrorBody, LedgerFailure, RouterUnavailable};
+use crate::openapi::{
+    chart_refusal, patterns_refusal, range_refusal, ErrorBody, LedgerFailure, RouterUnavailable,
+};
 use crate::requests::list_param as list;
 use crate::routes::{failure, reported_samples, router_unavailable, windows_lacked, AdminQuery};
 use crate::AdminState;
@@ -63,6 +65,23 @@ struct FilterParams<'a> {
     include_probes: Option<bool>,
 }
 
+/// The `FilterParams` of a query that declares the nine members under their own names.
+macro_rules! filter_params {
+    ($q:expr) => {
+        FilterParams {
+            keys: $q.keys.as_deref(),
+            pools: $q.pools.as_deref(),
+            accounts: $q.accounts.as_deref(),
+            models: $q.models.as_deref(),
+            kinds: $q.kinds.as_deref(),
+            user_agents: $q.user_agents.as_deref(),
+            user_agent_groups: $q.user_agent_groups.as_deref(),
+            clients: $q.clients.as_deref(),
+            include_probes: $q.include_probes,
+        }
+    };
+}
+
 /// The filter both rollup reads take, or the 400 a pattern list past the bounds answers.
 // The error is the rendered 400, as `selection`'s is.
 #[allow(clippy::result_large_err)]
@@ -83,6 +102,13 @@ fn filter_of(q: FilterParams<'_>) -> Result<RollupFilter, Response> {
     })
 }
 
+/// The range `parse_range` reads, or the 400 its message answers.
+// The error is the rendered 400, as `selection`'s is.
+#[allow(clippy::result_large_err)]
+pub(crate) fn range_of(range: Option<&str>, now: i64) -> Result<(i64, i64), Response> {
+    parse_range(range, now).map_err(|m| failure(StatusCode::BAD_REQUEST, &m))
+}
+
 /// The range in Unix milliseconds, the group-by, the filter, the live keys' generations the key dimension is read
 /// against, and the clock the range was read at, whose anchor row divides the Pro-week figure.
 type Selection = ((i64, i64), GroupBy, RollupFilter, LiveKeys, i64);
@@ -93,8 +119,7 @@ type Selection = ((i64, i64), GroupBy, RollupFilter, LiveKeys, i64);
 #[allow(clippy::result_large_err)]
 fn selection(state: &AdminState, q: &RollupQuery) -> Result<Selection, Response> {
     let now = (state.clock)();
-    let (from, to) =
-        parse_range(q.range.as_deref(), now).map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
+    let (from, to) = range_of(q.range.as_deref(), now)?;
     let group_by = GroupBy::parse(q.group_by.as_deref().unwrap_or("all")).ok_or_else(|| {
         let (last, rest) = GroupBy::WORDS
             .split_last()
@@ -104,17 +129,7 @@ fn selection(state: &AdminState, q: &RollupQuery) -> Result<Selection, Response>
             &format!("group_by is {}, or {last}", rest.join(", ")),
         )
     })?;
-    let mut filter = filter_of(FilterParams {
-        keys: q.keys.as_deref(),
-        pools: q.pools.as_deref(),
-        accounts: q.accounts.as_deref(),
-        models: q.models.as_deref(),
-        kinds: q.kinds.as_deref(),
-        user_agents: q.user_agents.as_deref(),
-        user_agent_groups: q.user_agent_groups.as_deref(),
-        clients: q.clients.as_deref(),
-        include_probes: q.include_probes,
-    })?;
+    let mut filter = filter_of(filter_params!(q))?;
     filter.funding = match q.funding.as_deref() {
         None => None,
         Some("billed") => Some(FundingFilter::Billed),
@@ -314,7 +329,7 @@ pub(crate) struct Series {
     params(RollupQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Series),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", chart_refusal!(), "\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- ", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -328,6 +343,9 @@ pub(crate) async fn series(
     };
     let bucket = bucket_seconds(from, to);
     let prices = state.pricing.revisions();
+    // The ask clones every account's sample on the routing task's command channel, and only a group that holds one
+    // account's rows reads it.
+    let bounded = group_by == GroupBy::Account || names_one_account(&filter.accounts);
     let read = series_paged(
         state.ledger.db(),
         &filter,
@@ -340,7 +358,14 @@ pub(crate) async fn series(
         &state.tables,
         now,
     );
-    let (reported, read) = tokio::join!(reported_samples(&state), read);
+    let samples = async {
+        if bounded {
+            reported_samples(&state).await
+        } else {
+            BTreeMap::new()
+        }
+    };
+    let (reported, read) = tokio::join!(samples, read);
     let mut points = match read {
         Ok(p) => p,
         Err(e) => return ledger_failure(e),
@@ -381,7 +406,7 @@ pub(crate) struct Breakdown {
     params(RollupQuery),
     responses(
         (status = 200, description = "The rows over the range.", body = Breakdown),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\nFor the other parameters:\n- `funding is billed or plan`\n- `group_by is account, all, classifier, client, effort, key, kind, model, pool, request_class, speed, or user_agent`\n- ", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -394,6 +419,9 @@ pub(crate) async fn breakdown(
         Err(r) => return r,
     };
     let prices = state.pricing.revisions();
+    // The ask clones every account's sample on the routing task's command channel, and only a group that holds one
+    // account's rows reads it.
+    let bounded = group_by == GroupBy::Account || names_one_account(&filter.accounts);
     let read = breakdown_paged(
         state.ledger.db(),
         &filter,
@@ -405,7 +433,14 @@ pub(crate) async fn breakdown(
         &state.tables,
         now,
     );
-    let (reported, read) = tokio::join!(reported_samples(&state), read);
+    let samples = async {
+        if bounded {
+            reported_samples(&state).await
+        } else {
+            BTreeMap::new()
+        }
+    };
+    let (reported, read) = tokio::join!(samples, read);
     let mut rows = match read {
         Ok(rows) => rows,
         Err(e) => return ledger_failure(e),
@@ -549,7 +584,7 @@ pub(crate) struct PlacementRow {
     params(PlacementsQuery),
     responses(
         (status = 200, description = "The rows over the range.", body = Placements),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n`patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -557,21 +592,11 @@ pub(crate) async fn placements(
     State(state): State<Arc<AdminState>>,
     AdminQuery(q): AdminQuery<PlacementsQuery>,
 ) -> Response {
-    let (from, to) = match parse_range(q.range.as_deref(), (state.clock)()) {
+    let (from, to) = match range_of(q.range.as_deref(), (state.clock)()) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
-    let filter = match filter_of(FilterParams {
-        keys: q.keys.as_deref(),
-        pools: q.pools.as_deref(),
-        accounts: q.accounts.as_deref(),
-        models: q.models.as_deref(),
-        kinds: q.kinds.as_deref(),
-        user_agents: q.user_agents.as_deref(),
-        user_agent_groups: q.user_agent_groups.as_deref(),
-        clients: q.clients.as_deref(),
-        include_probes: q.include_probes,
-    }) {
+    let filter = match filter_of(filter_params!(q)) {
         Ok(filter) => filter,
         Err(refusal) => return refusal,
     };
@@ -751,7 +776,7 @@ pub(crate) struct WindowSample {
     params(RangeQuery),
     responses(
         (status = 200, description = "The rollups over the range.", body = AnalyticsAccounts),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = range_refusal!(), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -760,22 +785,20 @@ pub(crate) async fn accounts(
     AdminQuery(q): AdminQuery<RangeQuery>,
 ) -> Response {
     let now = (state.clock)();
-    let (from, to) = match parse_range(q.range.as_deref(), now) {
+    let (from, to) = match range_of(q.range.as_deref(), now) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     // The same hour bounds in seconds as the rollups read, so a sample never falls outside the hours answered. They
     // end with the current hour, since a cooldown books the hours ahead of the clock when it is set.
-    let current_hour = hour_of(now);
-    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to).min(hour_end(current_hour)));
-    let (rows, samples, unelapsed) = match state
+    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to).min(hour_end(hour_of(now))));
+    let (rows, samples) = match state
         .ledger
         .db()
         .read(move |c| {
             Ok((
-                read_account_rollups(c, from_hour, to_hour)?,
+                read_account_rollups_at(c, from_hour, to_hour, now)?,
                 hourly_window_samples(c, from_hour, to_hour)?,
-                open_cooldown_remainders(c, now)?,
             ))
         })
         .await
@@ -795,13 +818,7 @@ pub(crate) async fn accounts(
             BTreeMap::new(),
         )
     };
-    for mut row in rows {
-        // An open cooldown booked the current hour past the read's instant, a part that has not passed yet. The cut
-        // lands on the row before the account sums it, so only an answer that lists the current hour loses the part.
-        if row.hour == current_hour {
-            let ahead = unelapsed.get(&row.account_id).copied().unwrap_or(0);
-            row.cooldown_seconds = row.cooldown_seconds.saturating_sub(ahead.max(0) as u64);
-        }
+    for row in rows {
         let entry = by_account
             .entry(row.account_id.clone())
             .or_insert_with(|| empty(&row.account_id));
@@ -958,7 +975,7 @@ pub(crate) struct BurnPoint {
     params(BurnQuery),
     responses(
         (status = 200, description = "The points over the range.", body = Burn),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\nFor the other parameters:\n- `group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent_groups`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", chart_refusal!(), "\n\nFor the other parameters:\n- `group_by is account, classifier, client, effort, key, kind, model, pool, request_class, session, speed, or user_agent`\n- `patterns are at most 256 characters, at most 32 of them`, for `user_agent_groups`"), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -974,9 +991,9 @@ pub(crate) async fn burn(
     AdminQuery(q): AdminQuery<BurnQuery>,
 ) -> Response {
     let now = (state.clock)();
-    let (from, to) = match parse_range(q.range.as_deref(), now) {
+    let (from, to) = match range_of(q.range.as_deref(), now) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     let group_by = q.group_by.unwrap_or_else(|| "account".into());
     // `session` beside the page's group-by dimensions: only the burn answers it, from the attempts, since the hourly
@@ -1041,7 +1058,17 @@ pub(crate) async fn burn(
             }
         }
     };
-    let (reported, read) = tokio::join!(reported_samples(&state), read);
+    // The ask clones every account's sample on the routing task's command channel, and only a group that holds one
+    // account's rows reads it.
+    let bounded = by == Some(GroupBy::Account) || one_account.is_some();
+    let samples = async {
+        if bounded {
+            reported_samples(&state).await
+        } else {
+            BTreeMap::new()
+        }
+    };
+    let (reported, read) = tokio::join!(samples, read);
     let series = match read {
         Ok(s) => s,
         Err(e) => return ledger_failure(e),
@@ -1149,7 +1176,6 @@ pub(crate) struct Reconciliation {
     params(ReconciliationsQuery),
     responses(
         (status = 200, description = "The windows that ended in the trailing 30 days, newest first.", body = Reconciliations),
-        (status = 400, description = query_refusal!(), body = ErrorBody, example = json!({"error": "duplicate field `accounts`"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1231,7 +1257,7 @@ pub(crate) struct RefusalCategoryRow {
     params(RefusalCategoriesQuery),
     responses(
         (status = 200, description = "The rows over the range.", body = RefusalCategories),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n`patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", patterns_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1239,23 +1265,13 @@ pub(crate) async fn refusal_categories(
     State(state): State<Arc<AdminState>>,
     AdminQuery(q): AdminQuery<RefusalCategoriesQuery>,
 ) -> Response {
-    let (from, to) = match parse_range(q.range.as_deref(), (state.clock)()) {
+    let (from, to) = match range_of(q.range.as_deref(), (state.clock)()) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     // The groups partition the series' rows, a row no pattern matches falling under `other`, so they narrow no count:
     // the route holds them to the bound and reads nothing more of them, as `placements` does.
-    let rollup = match filter_of(FilterParams {
-        keys: q.keys.as_deref(),
-        pools: q.pools.as_deref(),
-        accounts: q.accounts.as_deref(),
-        models: q.models.as_deref(),
-        kinds: q.kinds.as_deref(),
-        user_agents: q.user_agents.as_deref(),
-        user_agent_groups: q.user_agent_groups.as_deref(),
-        clients: q.clients.as_deref(),
-        include_probes: q.include_probes,
-    }) {
+    let rollup = match filter_of(filter_params!(q)) {
         Ok(filter) => filter,
         Err(refusal) => return refusal,
     };
@@ -1382,7 +1398,7 @@ pub(crate) struct UnusedAllowanceReset {
     params(UnusedAllowanceQuery),
     responses(
         (status = 200, description = "The weekly resets over the range, per account and window.", body = UnusedAllowance),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = range_refusal!(), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1391,9 +1407,9 @@ pub(crate) async fn unused_allowance(
     AdminQuery(q): AdminQuery<UnusedAllowanceQuery>,
 ) -> Response {
     let now = (state.clock)();
-    let (from, to) = match parse_range(Some(q.range.as_deref().unwrap_or("30d")), now) {
+    let (from, to) = match range_of(Some(q.range.as_deref().unwrap_or("30d")), now) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     let listed = list(q.accounts.as_deref());
     let snapshot = state.router.snapshot();
@@ -1524,7 +1540,7 @@ pub(crate) struct RewritePoint {
     params(RewritesQuery),
     responses(
         (status = 200, description = "The points, the moves and the slow-down's held time over the range.", body = Rewrites),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\nFor a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`.\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = concat!(range_refusal!(), "\n\n", chart_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1532,9 +1548,9 @@ pub(crate) async fn rewrites(
     State(state): State<Arc<AdminState>>,
     AdminQuery(q): AdminQuery<RewritesQuery>,
 ) -> Response {
-    let (from, to) = match parse_range(q.range.as_deref(), (state.clock)()) {
+    let (from, to) = match range_of(q.range.as_deref(), (state.clock)()) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     let bucket = bucket_seconds(from, to);
     let filter = SeriesFilter {
@@ -1624,7 +1640,7 @@ pub(crate) struct GuardrailCount {
     params(RangeQuery),
     responses(
         (status = 200, description = "The observed and blocked matches and the blocked requests' bytes per guardrail over the range.", body = GuardrailCounts),
-        (status = 400, description = concat!("For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`\n\n", query_refusal!()), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
+        (status = 400, description = range_refusal!(), body = ErrorBody, example = json!({"error": "range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds"})),
         (status = 500, response = LedgerFailure),
     ),
 )]
@@ -1632,9 +1648,9 @@ pub(crate) async fn guardrails(
     State(state): State<Arc<AdminState>>,
     AdminQuery(q): AdminQuery<RangeQuery>,
 ) -> Response {
-    let (from, to) = match parse_range(q.range.as_deref(), (state.clock)()) {
+    let (from, to) = match range_of(q.range.as_deref(), (state.clock)()) {
         Ok(r) => r,
-        Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
+        Err(refusal) => return refusal,
     };
     let rows = match state
         .ledger

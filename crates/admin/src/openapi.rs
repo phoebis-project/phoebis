@@ -11,8 +11,9 @@ use phoebis_guardrails::{Condition, ConditionWords};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use utoipa::openapi::example::ExampleBuilder;
+use utoipa::openapi::path::ParameterIn;
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
-use utoipa::openapi::{Components, RefOr};
+use utoipa::openapi::{Components, ContentBuilder, Ref, RefOr, ResponseBuilder};
 use utoipa::{Modify, OpenApi, ToResponse, ToSchema};
 
 /// Where the document is served on the admin listener, outside `/admin/` so the page loads it before a token is
@@ -135,14 +136,90 @@ pub(crate) struct ErrorBody {
 
 /// The line each operation that reads a query names under its `400`: the query extractor's refusals, answered before
 /// the handler reads a value.
-// A macro, since a `400`'s description joins it through `concat!`, which takes literals and no `const`.
-macro_rules! query_refusal {
+const QUERY_REFUSAL: &str = "A value its parameter's type does not read answers `{name}: {message}`, the parser's \
+     message behind the parameter's name, and a parameter sent twice answers the parser's message, which names it.";
+
+/// `QUERY_REFUSAL` under the `400` of every operation that reads a query, since each reads it through `AdminQuery`: a
+/// blank line and the line after the `400` the operation declares, or a `400` of the line alone where it declares none,
+/// its example the `duplicate field` refusal of its first query parameter.
+pub(crate) struct QueryRefusals;
+
+impl Modify for QueryRefusals {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        for item in openapi.paths.paths.values_mut() {
+            let operations = [
+                &mut item.get,
+                &mut item.put,
+                &mut item.post,
+                &mut item.delete,
+                &mut item.options,
+                &mut item.head,
+                &mut item.patch,
+                &mut item.trace,
+            ];
+            for operation in operations.into_iter().flatten() {
+                let Some(first) = operation.parameters.iter().flatten().find_map(|p| match p {
+                    RefOr::T(p) if p.parameter_in == ParameterIn::Query => Some(p.name.clone()),
+                    _ => None,
+                }) else {
+                    continue;
+                };
+                match operation.responses.responses.get_mut("400") {
+                    Some(RefOr::T(response)) => {
+                        response.description =
+                            format!("{}\n\n{QUERY_REFUSAL}", response.description);
+                    }
+                    Some(RefOr::Ref(_)) => {
+                        panic!("an operation that reads a query declares its 400 by reference")
+                    }
+                    None => {
+                        let example =
+                            serde_json::json!({"error": format!("duplicate field `{first}`")});
+                        let content = ContentBuilder::new()
+                            .schema(Some(Ref::from_schema_name("ErrorBody")))
+                            .example(Some(example))
+                            .build();
+                        operation.responses.responses.insert(
+                            "400".to_string(),
+                            RefOr::T(
+                                ResponseBuilder::new()
+                                    .description(QUERY_REFUSAL)
+                                    .content("application/json", content)
+                                    .build(),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Macros, since a `400`'s description joins them through `concat!`, which takes literals and no `const`.
+
+/// The lead of each `400` of an operation that reads a `range`: `phoebis_ledger::parse_range`'s refusals.
+macro_rules! range_refusal {
     () => {
-        "A value its parameter's type does not read answers `{name}: {message}`, the parser's message behind the \
-         parameter's name, and a parameter sent twice answers the parser's message, which names it."
+        "For a bad `range`:\n- `range is 1h, 24h, 7d, 30d, or <from>,<to> in Unix milliseconds`\n- `from is not a number`\n- `to is not a number`\n- `from must be before to`\n- `to is past the ledger's lifetime`\n- `a custom range spans at most 400 days`"
     };
 }
-pub(crate) use query_refusal;
+pub(crate) use range_refusal;
+
+/// The ledger's refusal of a range whose buckets a chart cannot carry, named by each bucketed read's `400`.
+macro_rules! chart_refusal {
+    () => {
+        "For a range the chart cannot carry, the ledger's own message: `the range needs {count} points, and the most a chart carries is 10000`."
+    };
+}
+pub(crate) use chart_refusal;
+
+/// The bound of the three pattern lists, named by each `400` of an operation that reads all three.
+macro_rules! patterns_refusal {
+    () => {
+        "`patterns are at most 256 characters, at most 32 of them`, for `user_agents`, `user_agent_groups` or `clients`"
+    };
+}
+pub(crate) use patterns_refusal;
 
 /// `500 storage failure`: the store failed the read or the write, or a create lost the race for its id.
 // Declared for the document alone, since the handler builds the answer by hand.
@@ -1045,8 +1122,9 @@ pub(crate) mod round_trip {
 mod tests {
     use super::round_trip::round_trips_source;
     use super::{ModelTtlView, OverrideView, TypeOverrideView};
+    use crate::requests::InputTransformationView;
     use indexmap::IndexMap;
-    use phoebis_ledger::{Override, TypeOverride};
+    use phoebis_ledger::{InputTransformation, Override, TypeOverride};
     use phoebis_relay::{CacheTtl, ModelTtl};
 
     fn every_cell() -> TypeOverride {
@@ -1102,6 +1180,14 @@ mod tests {
             "the five cells of TypeOverride, each set here"
         );
         round_trips_source::<_, TypeOverrideView>(every_cell());
+    }
+
+    #[test]
+    fn an_input_transformation_with_both_members_set_round_trips_through_its_mirror() {
+        round_trips_source::<_, InputTransformationView>(InputTransformation {
+            blocks: 3,
+            first_message: 2,
+        });
     }
 
     #[test]
