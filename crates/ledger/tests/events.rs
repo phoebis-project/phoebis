@@ -1175,6 +1175,14 @@ fn a_no_runway_round_stops_counting_once_a_later_event_on_its_account_refunds_it
             vec![],
         ),
         (
+            "a used limit reset whose cleared list names the Fable week alone",
+            vec![
+                round(t, "a"),
+                used_claim("a", &["seven_day_fable"], t + HOUR),
+            ],
+            kept(t, 1, serde_json::json!(["a"])),
+        ),
+        (
             "a drop of the round's window after it",
             vec![
                 round(t, "a"),
