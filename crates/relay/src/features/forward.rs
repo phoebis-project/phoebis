@@ -267,7 +267,8 @@ pub(crate) async fn keyless(
             return Ok(answered(head, body, None, Some(deadline), ending))
         }
         Ok(Err(failure)) => case_of(&failure),
-        // No head came in the call's time.
+        // No head came in the call's time: the connect and the head bounds are each capped at the time left, so
+        // together they could run to about twice it, and this timer holds the call's one limit over both.
         Err(_) => "stalled",
     };
     ending.unanswered();

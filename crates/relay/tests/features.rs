@@ -1600,7 +1600,8 @@ async fn a_domain_check_whose_answer_stalls_behind_its_head_ends_at_its_limit_an
     let check = keyless("GET /api/web/domain_info?domain=example.com", "", b"");
     let (status, headers, mut body) = listener.open(API, &check).await;
     assert_eq!(status, 200, "{headers:?}");
-    // Well inside the harness's head bound of ten seconds, and the control plane sets no bound between two pieces.
+    // The head has arrived, so its bound plays no part, and the control plane sets no bound between two pieces of a
+    // body: the check's limit alone ends the stalled answer, and one with no deadline runs past these five seconds.
     tokio::time::timeout(Duration::from_secs(5), async {
         while body.next().await.is_some() {}
     })
