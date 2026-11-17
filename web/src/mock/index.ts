@@ -707,8 +707,9 @@ export class MockApi implements Api {
   }
 
   /**
-   * Restamps the pools and keys a guardrail write moved, so a pool or key dialog opened before the write presents a
-   * stamp the row no longer carries, as the routes refuse it.
+   * Restamps the pools and keys another write changed: those a guardrail's create, edit or delete attaches or detaches,
+   * and those whose feature selection an account's deletion clears. A pool or key dialog opened before that write then
+   * presents a stamp the row no longer carries, as the routes refuse it.
    */
   private restampSubjects(pools: ReadonlySet<string>, keys: ReadonlySet<string>) {
     this.pools = this.pools.map((p) => (pools.has(p.id) ? { ...p, ...restamp(p) } : p));
