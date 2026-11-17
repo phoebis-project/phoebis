@@ -110,7 +110,7 @@ pub(crate) async fn read_body(
 /// account's pooled connections toward the row's host. `body` is `None` for a head that framed none, which then leaves
 /// with no length line, and a framed body, an empty one among them, keeps its line. A 401 that `wants_refresh` names
 /// gets the account's one forced refresh and the call once more under the new token, and that answer goes back
-/// whatever it is.
+/// whatever it is, while a refresh that gives no newer token sends the first 401 back as it came.
 pub(crate) async fn forward(
     relay: &Relay,
     account: &AccountRow,
@@ -305,7 +305,8 @@ async fn send(
 /// connect and head bounds `attempt` holds. A reused connection that died before the request was in it whole is tried
 /// once more on a fresh one. A connection that could not be opened answers the 502 at once, with no wait and no second
 /// try as the model path makes, since a feature call has one account and no failover to go on with, and the client can
-/// send the call again. Nothing else is sent twice: the upstream may have acted on a request that was written.
+/// send the call again. This function sends nothing else twice, since the upstream may have acted on a request that was
+/// written. The resend after a 401 is `forward`'s.
 async fn pooled(
     relay: &Relay,
     account: &AccountRow,
