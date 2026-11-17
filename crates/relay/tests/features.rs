@@ -1,6 +1,7 @@
 //! The feature module as the feature listener serves it, over TLS under a pair of the test's own making: the key is
-//! checked as on a keyed route of the proxy listener, no model route answers there, and no feature path answers on the
-//! proxy listener.
+//! checked as on a keyed route of the proxy listener, no model route answers there, no feature path answers on the
+//! proxy listener, and a call on the table leaves under the feature account's token toward the harness's one fake,
+//! which plays `api.anthropic.com`.
 
 mod common;
 
@@ -9,10 +10,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule};
-use phoebis_relay::Relay;
+use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use phoebis_relay::{Limits, Relay};
+use phoebis_store::{Cancellation, FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tower::ServiceExt;
+
+const API: &str = "api.anthropic.com";
+/// The access token of the account `a`, which each feature call leaves under.
+const SECRET_A: &str = "sk-ant-oat01-PLACEHOLDER-A";
 
 /// The fake of `api.anthropic.com`, answering a model request with 200, so a model route that served on the feature
 /// listener would reach it and answer that 200.
@@ -155,5 +162,475 @@ async fn a_request_without_a_key_names_auth_missing_in_the_code_header() {
         0,
         "a request without a key reached the upstream"
     );
+    up.shutdown().await;
+}
+
+/// The fake of `api.anthropic.com` answering each path prefix of `rules` as the rule says.
+async fn fake(rules: Vec<(&str, Respond)>) -> FakeUpstream {
+    FakeUpstream::start(
+        rules
+            .into_iter()
+            .map(|(path_prefix, respond)| Rule {
+                path_prefix: path_prefix.into(),
+                respond,
+            })
+            .collect(),
+    )
+    .await
+}
+
+/// The pool `main` with the OAuth account `a` as its account for both features.
+fn both_features_at_a() -> PoolSpec {
+    PoolSpec {
+        feature_accounts: PoolFeatureAccounts {
+            artifacts: Some("a".into()),
+            connectors: Some("a".into()),
+        },
+        ..PoolSpec::default()
+    }
+}
+
+async fn features_harness(up: &FakeUpstream, pool: PoolSpec) -> Harness {
+    harness(up, &[oauth("a", SECRET_A, 0)], pool).await
+}
+
+/// A request under the router key: `request_line` without its version, the head's `Host` line `host`, then `lines`,
+/// each ending in CRLF, and `body`.
+fn keyed(request_line: &str, host: &str, lines: &str, body: &[u8]) -> Vec<u8> {
+    let mut request = format!(
+        "{request_line} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {KEY}\r\n{lines}\
+         Connection: close\r\n\r\n"
+    )
+    .into_bytes();
+    request.extend_from_slice(body);
+    request
+}
+
+/// The request lines the fake recorded, the model route's left out.
+fn feature_lines(up: &FakeUpstream) -> Vec<String> {
+    up.requests()
+        .into_iter()
+        .map(|request| request.line)
+        .filter(|line| !line.starts_with("POST /v1/messages"))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_sibling_of_an_allowed_prefix_is_refused() {
+    let up = fake(vec![("/api/frame", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/framework/x", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&up), ["GET /api/frame/x HTTP/1.1"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_dot_segment_under_an_allowed_prefix_is_refused() {
+    let up = fake(vec![("/api", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/../oauth/profile", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_path_that_ends_in_a_slash_is_refused() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("POST /api/frame/track/", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(API, &keyed("POST /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&up), ["POST /api/frame/x HTTP/1.1"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_call_without_a_key_reaches_no_upstream() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(
+            API,
+            b"GET /api/frame/x HTTP/1.1\r\nHost: api.anthropic.com\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+    assert_eq!(status, 401, "{headers:?}");
+    assert_eq!(feature_lines(&up), Vec::<String>::new());
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_keys_none_wins_over_the_pools_account() {
+    let none = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(
+        &none,
+        PoolSpec {
+            key_feature_accounts: KeyFeatureAccounts {
+                artifacts: FeatureOverride::NoAccount,
+                connectors: FeatureOverride::Inherit,
+            },
+            ..both_features_at_a()
+        },
+    )
+    .await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    assert_eq!(feature_lines(&none), Vec::<String>::new());
+    let inherit = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&inherit, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&inherit), ["GET /api/frame/x HTTP/1.1"]);
+    none.shutdown().await;
+    inherit.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_paused_or_cooling_account_serves_and_one_past_its_subscription_refuses() {
+    let up = fake(vec![
+        ("/api/frame/", json_200()),
+        ("/v1/messages", json_429_unified(4_600, "five_hour")),
+    ])
+    .await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    // The model request the fake answers 429 cools `a` and spends its five-hour window.
+    h.app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", &fresh_session()))
+        .await
+        .unwrap();
+    wait_for_async(Duration::from_secs(5), || async {
+        let cooldowns = h.router.cooldowns().await.unwrap();
+        cooldowns
+            .iter()
+            .any(|row| row.account_id == "a")
+            .then_some(())
+    })
+    .await;
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/cooled", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    h.store.set_enabled("a", false, "test").unwrap();
+    h.router.reload().await.unwrap();
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/paused", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    h.store
+        .set_canceled("a", Cancellation::On { ends_at: Some(NOW) })
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let (status, headers, _) = listener
+        .send(API, &keyed("GET /api/frame/ended", API, "", b""))
+        .await;
+    assert_eq!(status, 403, "{headers:?}");
+    assert!(
+        headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("x-phoebis-error-code")
+                && value == "feature_account_unavailable"
+        }),
+        "{headers:?}"
+    );
+    assert_eq!(
+        feature_lines(&up),
+        [
+            "GET /api/frame/cooled HTTP/1.1",
+            "GET /api/frame/paused HTTP/1.1"
+        ]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_bearer_is_the_accounts() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = up.requests();
+    let [arrived] = requests.as_slice() else {
+        panic!("{} requests arrived", requests.len())
+    };
+    assert_eq!(arrived.credential(), Some(SECRET_A));
+    assert!(
+        !arrived.headers.iter().any(|(_, value)| value.contains(KEY)),
+        "a line carried the router key: {:?}",
+        arrived.headers
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_beta_line_arrives_as_sent() {
+    let up = fake(vec![("/v1/mcp_servers", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            API,
+            &keyed(
+                "GET /v1/mcp_servers",
+                API,
+                "Anthropic-Beta: mcp-servers-2025-12-04\r\n",
+                b"",
+            ),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = up.requests();
+    let [arrived] = requests.as_slice() else {
+        panic!("{} requests arrived", requests.len())
+    };
+    let betas: Vec<(&str, &str)> = arrived
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .collect();
+    assert_eq!(betas, [("Anthropic-Beta", "mcp-servers-2025-12-04")]);
+    assert!(
+        !arrived
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("x-client-request-id")),
+        "{:?}",
+        arrived.headers
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_callers_method_arrives() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            API,
+            &keyed("DELETE /api/frame/artifacts/art_example", API, "", b""),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(
+        feature_lines(&up),
+        ["DELETE /api/frame/artifacts/art_example HTTP/1.1"]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_answer_streams() {
+    let up = fake(vec![(
+        "/api/frame/",
+        Respond::SseGated {
+            status: 200,
+            headers: vec![],
+            events: vec![
+                SseEvent {
+                    event: "message".into(),
+                    data: "first".into(),
+                },
+                SseEvent {
+                    event: "message".into(),
+                    data: "second".into(),
+                },
+            ],
+        },
+    )])
+    .await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, mut body) = listener
+        .open(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let mut read = Vec::new();
+    while !String::from_utf8_lossy(&read).contains("data: first") {
+        let piece = body
+            .next()
+            .await
+            .expect("the body ended before its first event");
+        read.extend_from_slice(&piece);
+    }
+    up.release_one().await;
+    while let Some(piece) = body.next().await {
+        read.extend_from_slice(&piece);
+    }
+    assert!(
+        String::from_utf8_lossy(&read).contains("data: second"),
+        "{}",
+        String::from_utf8_lossy(&read)
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_answer_filter_holds() {
+    let up = fake(vec![(
+        "/api/frame/",
+        json_200_with_headers(&[
+            ("set-cookie", "s=1"),
+            ("anthropic-organization-id", "org_example"),
+            ("x-frame-publish-remaining", "7"),
+        ]),
+    )])
+    .await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let named = |wanted: &str| -> Vec<&str> {
+        headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(wanted))
+            .map(|(_, value)| value.as_str())
+            .collect()
+    };
+    assert_eq!(named("set-cookie"), Vec::<&str>::new());
+    assert_eq!(named("anthropic-organization-id"), Vec::<&str>::new());
+    assert_eq!(named("x-frame-publish-remaining"), ["7"]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_429_changes_nothing_on_the_account() {
+    let up = fake(vec![
+        (
+            "/api/frame/",
+            json_with_headers(
+                429,
+                &[
+                    ("retry-after", "60"),
+                    ("anthropic-ratelimit-unified-status", "rejected"),
+                    ("anthropic-ratelimit-unified-5h-status", "rejected"),
+                    ("anthropic-ratelimit-unified-5h-reset", "4600"),
+                    ("anthropic-ratelimit-unified-reset", "4600"),
+                    (
+                        "anthropic-ratelimit-unified-representative-claim",
+                        "five_hour",
+                    ),
+                ],
+            ),
+        ),
+        ("/v1/messages", json_200()),
+    ])
+    .await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(API, &keyed("GET /api/frame/x", API, "", b""))
+        .await;
+    assert_eq!(status, 429, "{headers:?}");
+    assert!(
+        headers
+            .iter()
+            .any(|(name, value)| name.eq_ignore_ascii_case("retry-after") && value == "60"),
+        "{headers:?}"
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", &fresh_session()))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(credentials_seen(&up), [SECRET_A]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_body_one_byte_past_the_bound_is_refused_before_the_upstream() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        both_features_at_a(),
+        Limits {
+            max_request_bytes: 1_024,
+            ..default_limits()
+        },
+    )
+    .await;
+    let listener = feature_listener(&h).await;
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed(
+                "POST /api/frame/artifacts",
+                API,
+                "Content-Length: 1025\r\n",
+                &[b'x'; 1_025],
+            ),
+        )
+        .await;
+    assert_eq!(status, 413, "{headers:?}");
+    let (status, headers, _) = listener
+        .send(
+            API,
+            &keyed(
+                "POST /api/frame/artifacts",
+                API,
+                "Content-Length: 1024\r\n",
+                &[b'x'; 1_024],
+            ),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    let requests = up.requests();
+    let [arrived] = requests.as_slice() else {
+        panic!("{} requests arrived", requests.len())
+    };
+    assert_eq!(
+        (arrived.line.as_str(), arrived.body.len()),
+        ("POST /api/frame/artifacts HTTP/1.1", 1_024)
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_host_line_in_capitals_with_a_trailing_dot_and_a_port_names_its_host() {
+    let up = fake(vec![("/api/frame/", json_200())]).await;
+    let h = features_harness(&up, both_features_at_a()).await;
+    let (status, headers, _) = feature_listener(&h)
+        .await
+        .send(
+            API,
+            &keyed("GET /api/frame/x", "API.Anthropic.com.:8443", "", b""),
+        )
+        .await;
+    assert_eq!(status, 200, "{headers:?}");
+    assert_eq!(feature_lines(&up), ["GET /api/frame/x HTTP/1.1"]);
     up.shutdown().await;
 }

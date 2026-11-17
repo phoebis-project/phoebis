@@ -38,7 +38,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, CooldownScope, MemoryStore,
     Secret, StateCause, Store,
 };
-use phoebis_transport::control::Resolver;
+use phoebis_transport::control::{ControlClient, Resolver};
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
 use phoebis_transport::pool::{Conn, Pool, PoolKey};
 use phoebis_transport::request::RawRequest;
@@ -120,7 +120,7 @@ enum Waited {
 /// Upstream response headers the relay keeps to itself: the connection and framing ones describe the upstream
 /// hop, and the framing no longer matches the body the caller is sent; the upstream's own identity and cookies
 /// name the account behind the key, never the key holder.
-const NOT_FORWARDED: &[&str] = &[
+pub(crate) const NOT_FORWARDED: &[&str] = &[
     "anthropic-organization-id",
     "connection",
     "content-length",
@@ -299,11 +299,14 @@ pub struct Relay {
     /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
     /// task publishes after its connection was cut.
     bodies: TaskTracker,
-    body_budget: Arc<BodyBudget>,
-    body_reads: BodyReads,
+    pub(crate) body_budget: Arc<BodyBudget>,
+    pub(crate) body_reads: BodyReads,
     bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
+    /// The client the feature calls of the control plane leave through. Without one each of them answers that the
+    /// upstream did not answer.
+    pub(crate) control: Option<Arc<ControlClient>>,
     /// The connections the pool opened for this relay's checkouts, as against the idle ones it reused.
     #[cfg(feature = "debug-hooks")]
     connections_opened: std::sync::atomic::AtomicUsize,
@@ -318,7 +321,7 @@ pub struct Relay {
     feature_ca: Option<Bytes>,
     heads: Arc<Heads>,
     pub(crate) limits: Limits,
-    manager: Arc<CredentialManager>,
+    pub(crate) manager: Arc<CredentialManager>,
     memory: Arc<SessionMemory>,
     /// The sequence of the affinity report each conversation's last answer enqueued, which the next turn's
     /// climb waits on.
@@ -401,6 +404,7 @@ impl Relay {
             bus: None,
             catalog,
             clock,
+            control: None,
             #[cfg(feature = "debug-hooks")]
             connections_opened: std::sync::atomic::AtomicUsize::new(0),
             credits: Arc::new(CreditStore::new()),
@@ -466,6 +470,14 @@ impl Relay {
     pub fn with_bus(self, bus: Bus) -> Relay {
         Relay {
             bus: Some(bus),
+            ..self
+        }
+    }
+
+    /// The control client the feature forward sends its control-plane rows through.
+    pub fn with_control(self, control: Arc<ControlClient>) -> Relay {
+        Relay {
+            control: Some(control),
             ..self
         }
     }
@@ -1093,7 +1105,7 @@ impl HeaderLookup for HeaderMapLookup<'_> {
 }
 
 /// The declared body length, when the caller sent one the relay can read; a chunked body has none.
-fn content_length(headers: &HeaderMap) -> Option<usize> {
+pub(crate) fn content_length(headers: &HeaderMap) -> Option<usize> {
     headers
         .get(header::CONTENT_LENGTH)?
         .to_str()

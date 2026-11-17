@@ -46,6 +46,30 @@ pub struct FeatureScopes {
     pub connectors: &'static str,
 }
 
+/// How a row's path matches: each path under a prefix that ends in a slash, or one whole path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathRule {
+    Under(&'static str),
+    Whole(&'static str),
+}
+
+/// One call of a claude.ai feature as this client build sends it.
+#[derive(Clone, Copy, Debug)]
+pub struct FeatureRow {
+    /// A method and a whole path the row leaves out.
+    pub except: &'static [(&'static str, &'static str)],
+    pub host: &'static str,
+    pub methods: &'static [&'static str],
+    pub path: PathRule,
+    pub plane: Plane,
+}
+
+/// The calls of each claude.ai feature the router forwards, as this client build sends them.
+pub struct FeatureTable {
+    pub artifacts: &'static [FeatureRow],
+    pub connectors: &'static [FeatureRow],
+}
+
 pub struct TlsProfiles {
     pub curves: &'static str,
     pub control_cipher_list: &'static str,
@@ -58,6 +82,7 @@ pub struct Profile {
     pub user_agent_cli: &'static str,
     pub control: Control,
     pub feature_scopes: FeatureScopes,
+    pub features: FeatureTable,
     pub tls: TlsProfiles,
 }
 
@@ -99,6 +124,24 @@ static PROFILE_2_1_310: Profile = Profile {
     feature_scopes: FeatureScopes {
         artifacts: "user:inference",
         connectors: "user:mcp_servers",
+    },
+    // The methods are the ones this build sends on each row. `POST /api/frame/track` is the client's event report,
+    // which the router forwards under no account.
+    features: FeatureTable {
+        artifacts: &[FeatureRow {
+            except: &[("POST", "/api/frame/track")],
+            host: "api.anthropic.com",
+            methods: &["DELETE", "GET", "PATCH", "POST"],
+            path: PathRule::Under("/api/frame/"),
+            plane: Plane::Control,
+        }],
+        connectors: &[FeatureRow {
+            except: &[],
+            host: "api.anthropic.com",
+            methods: &["GET"],
+            path: PathRule::Whole("/v1/mcp_servers"),
+            plane: Plane::Control,
+        }],
     },
     tls: TlsProfiles {
         curves: "X25519MLKEM768:X25519:P-256:P-384",

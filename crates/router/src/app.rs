@@ -338,6 +338,7 @@ pub async fn run_until(
         catalog.clone(),
     )
     .with_bus(bus.clone())
+    .with_control(control.clone())
     .with_readiness({
         let readiness = readiness.clone();
         Arc::new(move || readiness.dead())

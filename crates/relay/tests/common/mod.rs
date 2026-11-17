@@ -28,8 +28,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Failover, Identity,
-    KeyFeatureAccounts, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode,
-    Secret, StorageKey, Store, StoreError, Strategy,
+    KeyFeatureAccounts, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolFeatureAccounts,
+    PoolRow, RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tokio::sync::broadcast;
@@ -178,8 +178,12 @@ pub struct PoolSpec {
     pub cache_diagnostics: bool,
     pub cache_ttl: &'static str,
     pub failover: Failover,
+    /// The pool's account for each claude.ai feature, none for both by default.
+    pub feature_accounts: PoolFeatureAccounts,
     /// The harness key's own override of `auto_mode_server`; `None` inherits the pool's.
     pub key_auto_mode_server: Option<bool>,
+    /// The harness key's own value for each feature, inherit for both by default.
+    pub key_feature_accounts: KeyFeatureAccounts,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
     pub strategy: Strategy,
@@ -194,7 +198,9 @@ impl Default for PoolSpec {
             cache_diagnostics: false,
             cache_ttl: "{}",
             failover: Failover::default(),
+            feature_accounts: PoolFeatureAccounts::default(),
             key_auto_mode_server: None,
+            key_feature_accounts: KeyFeatureAccounts::default(),
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
             strategy: Strategy::Priority,
@@ -839,6 +845,7 @@ async fn build(
                     cache_diagnostics: pool.cache_diagnostics,
                     thinking_diagnostics: pool.thinking_diagnostics,
                     auto_mode_server: pool.auto_mode_server,
+                    feature_accounts: pool.feature_accounts,
                     created_at: NOW,
                     updated_at: NOW,
                     ..PoolRow::for_tests("main")
@@ -885,7 +892,7 @@ async fn build(
                     last_used_at: None,
                     retired_secret_last_used_at: None,
                     auto_mode_server: pool.key_auto_mode_server,
-                    feature_accounts: KeyFeatureAccounts::default(),
+                    feature_accounts: pool.key_feature_accounts,
                 },
                 "test",
             )
@@ -920,7 +927,7 @@ async fn build(
     ));
     let manager = Arc::new(phoebis_oauth::CredentialManager::new(
         store.clone(),
-        control,
+        control.clone(),
         p,
         clock.clone(),
     ));
@@ -975,7 +982,9 @@ async fn build(
     // A tick fast enough for a test to step the clock and wait on it in real time, rather than the production
     // default's six-hour interval.
     let refresh = catalog.spawn_refresh(Duration::from_secs(21_600), Duration::from_millis(20));
-    let relay = relay.with_signed_placeholder(sign_placeholder);
+    let relay = relay
+        .with_control(control)
+        .with_signed_placeholder(sign_placeholder);
     // Before the store is attached, which rebuilds the memory around whatever cap it finds.
     let relay = match memory_cap {
         // The idle bound the relay's own default carries, so the cap is the only thing that differs.
@@ -1135,6 +1144,77 @@ impl FeatureListener {
             .map(|(name, value)| (name.to_owned(), value.trim().to_owned()))
             .collect();
         (status, headers, answer[split + 4..].to_vec())
+    }
+
+    /// Sends `request` as `send` does and answers once the head arrived: the status, the head's lines as sent, and
+    /// the body still on the connection.
+    pub async fn open(&self, host: &str, request: &[u8]) -> (u16, Vec<(String, String)>, OpenBody) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let socket = tokio::net::TcpStream::connect(self.addr).await.unwrap();
+        let mut tls =
+            tokio_boring::connect(fake_upstream::connector_trusting(&self.pair), host, socket)
+                .await
+                .unwrap();
+        tls.write_all(request).await.unwrap();
+        let mut read = Vec::new();
+        let split = loop {
+            if let Some(split) = read.windows(4).position(|window| window == b"\r\n\r\n") {
+                break split;
+            }
+            let mut piece = [0u8; 4096];
+            let n = tokio::time::timeout(Duration::from_secs(30), tls.read(&mut piece))
+                .await
+                .expect("the answer's head stalled")
+                .unwrap_or(0);
+            assert!(
+                n > 0,
+                "the connection ended before the answer's head: {:?}",
+                String::from_utf8_lossy(&read)
+            );
+            read.extend_from_slice(&piece[..n]);
+        };
+        let head = String::from_utf8_lossy(&read[..split]).into_owned();
+        let mut lines = head.split("\r\n");
+        let status = lines
+            .next()
+            .and_then(|line| line.split(' ').nth(1))
+            .and_then(|code| code.parse().ok())
+            .unwrap_or_else(|| panic!("no status line in {head:?}"));
+        let headers = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.to_owned(), value.trim().to_owned()))
+            .collect();
+        let body = OpenBody {
+            tls,
+            left: read[split + 4..].to_vec(),
+        };
+        (status, headers, body)
+    }
+}
+
+/// The body of an answer whose head was read. Dropping it closes the caller's connection.
+pub struct OpenBody {
+    tls: tokio_boring::SslStream<tokio::net::TcpStream>,
+    /// What the head's read took of the body, handed out first.
+    left: Vec<u8>,
+}
+
+impl OpenBody {
+    /// The next piece of the body as it arrives, in its framing, `None` at its end.
+    pub async fn next(&mut self) -> Option<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+
+        if !self.left.is_empty() {
+            return Some(std::mem::take(&mut self.left));
+        }
+        let mut piece = [0u8; 4096];
+        // A peer that closes without a TLS close_notify ends the read with an error, which is the body's end too.
+        let n = tokio::time::timeout(Duration::from_secs(30), self.tls.read(&mut piece))
+            .await
+            .expect("the next piece of the body stalled")
+            .unwrap_or(0);
+        (n > 0).then(|| piece[..n].to_vec())
     }
 }
 

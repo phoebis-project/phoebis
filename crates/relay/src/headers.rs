@@ -58,19 +58,7 @@ pub fn outbound_headers(
     inject_betas: &[Injected],
     drop_betas: &[&str],
 ) -> OutboundHead {
-    let sent: Vec<(&str, &str)> = match original {
-        Some(head) => head
-            .headers
-            .iter()
-            .map(|(name, value)| (name.as_str(), value.as_str()))
-            .collect(),
-        // No head was recorded: an in-process caller, or a connection the recorder gave up on. The map's
-        // lowercase names in its own iteration order are then the only record of what the caller sent.
-        None => caller
-            .iter()
-            .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
-            .collect(),
-    };
+    let sent = sent_lines(caller, original);
     let caller_has_request_id = sent
         .iter()
         .any(|(n, _)| n.eq_ignore_ascii_case("x-client-request-id"));
@@ -224,6 +212,96 @@ pub fn outbound_headers(
     OutboundHead {
         headers: out,
         injected,
+    }
+}
+
+/// The head a feature call leaves with: each caller line as sent and in its place, except the never-copied set
+/// and a second credential line. `bearer` takes the first credential line's place, and `None` drops each. `host`
+/// and `connection` take their lines' places, and `content_length` is `None` for a request without a body. Each of
+/// the three is appended where the caller sent no line of its own.
+pub(crate) fn feature_headers(
+    caller: &HeaderMap,
+    original: Option<&OriginalHead>,
+    bearer: Option<&Secret>,
+    host: &str,
+    connection: &'static str,
+    content_length: Option<usize>,
+) -> Vec<(String, String)> {
+    let sent = sent_lines(caller, original);
+    let mut out: Vec<(String, String)> = Vec::with_capacity(sent.len() + 2);
+    let (mut saw_connection, mut saw_credential, mut saw_host, mut saw_length) =
+        (false, false, false, false);
+    for (name, value) in sent {
+        let lower = name.to_ascii_lowercase();
+        match lower.as_str() {
+            // The caller presented the router's key here. A caller that spelled an `Authorization` line keeps its
+            // spelling of the name.
+            "authorization" | "x-api-key" => {
+                if !saw_credential {
+                    saw_credential = true;
+                    if let Some(secret) = bearer {
+                        let name = if lower == "authorization" {
+                            name
+                        } else {
+                            "Authorization"
+                        };
+                        out.push((name.into(), format!("Bearer {}", secret.expose())));
+                    }
+                }
+            }
+            "connection" => {
+                if !saw_connection {
+                    saw_connection = true;
+                    out.push((name.into(), connection.into()));
+                }
+            }
+            "content-length" => {
+                if !saw_length {
+                    saw_length = true;
+                    if let Some(length) = content_length {
+                        out.push((name.into(), length.to_string()));
+                    }
+                }
+            }
+            "host" => {
+                if !saw_host {
+                    saw_host = true;
+                    out.push((name.into(), host.into()));
+                }
+            }
+            _ if NEVER_COPIED.contains(&lower.as_str()) => {}
+            _ => out.push((name.into(), value.into())),
+        }
+    }
+    if !saw_host {
+        out.push(("Host".into(), host.into()));
+    }
+    if !saw_connection {
+        out.push(("Connection".into(), connection.into()));
+    }
+    if let (false, Some(length)) = (saw_length, content_length) {
+        out.push(("Content-Length".into(), length.to_string()));
+    }
+    out
+}
+
+/// The caller's lines in the order and the spelling they were sent, from the recorded head.
+fn sent_lines<'a>(
+    caller: &'a HeaderMap,
+    original: Option<&'a OriginalHead>,
+) -> Vec<(&'a str, &'a str)> {
+    match original {
+        Some(head) => head
+            .headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect(),
+        // No head was recorded: an in-process caller, or a connection the recorder gave up on. The map's
+        // lowercase names in its own iteration order are then the only record of what the caller sent.
+        None => caller
+            .iter()
+            .filter_map(|(name, value)| Some((name.as_str(), value.to_str().ok()?)))
+            .collect(),
     }
 }
 

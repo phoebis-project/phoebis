@@ -8,6 +8,7 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use phoebis_bus::Outcome;
 use phoebis_routing::{exhaustion_status, Exhaustion, KeyRefusal};
+use phoebis_store::Feature;
 
 use crate::auth::AuthError;
 use crate::{BodyMember, DriftKind, RelayError};
@@ -579,6 +580,39 @@ pub(crate) const FEATURE_NOT_ALLOWED: Failure = Failure {
     no_retry: true,
     class: FailureClass::Rejected,
 };
+
+/// A call on the table whose feature account cannot serve it. `obstacle` is the routing crate's word for the account's
+/// state, so a key holder can tell the operator what to cure. Its 403 is `FEATURE_NOT_ALLOWED`'s, for the same reason.
+pub(crate) fn feature_account_unavailable(obstacle: &'static str) -> Failure {
+    Failure {
+        status: StatusCode::FORBIDDEN,
+        error_type: "permission_error",
+        code: "feature_account_unavailable",
+        message: Cow::Owned(format!(
+            "the selected account cannot serve this feature ({obstacle})"
+        )),
+        retry_after: None,
+        no_retry: true,
+        class: FailureClass::Rejected,
+    }
+}
+
+/// A call on the table whose key resolves to no account for `feature`. Its 403 is `FEATURE_NOT_ALLOWED`'s, for the same
+/// reason.
+pub(crate) fn feature_account_unset(feature: Feature) -> Failure {
+    Failure {
+        status: StatusCode::FORBIDDEN,
+        error_type: "permission_error",
+        code: "feature_account_unset",
+        message: Cow::Owned(format!(
+            "no account is selected for {} on this key, ask the router's operator",
+            feature.as_str()
+        )),
+        retry_after: None,
+        no_retry: true,
+        class: FailureClass::Rejected,
+    }
+}
 
 pub(crate) const METHOD_NOT_ALLOWED: Failure = Failure {
     status: StatusCode::METHOD_NOT_ALLOWED,
