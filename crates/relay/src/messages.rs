@@ -3927,14 +3927,19 @@ impl Relay {
     /// stopped draining fills the bus queue behind its channel, and a refusal that waited there would hold its
     /// connection. A request admitted past the reading publishes durably, so a priced record never takes that path.
     fn ledger_standing(&self, trace: &Trace, counts: bool) -> bool {
-        let behind = self
-            .accounting
-            .as_ref()
-            .is_some_and(|source| source(counts).behind);
+        let behind = self.ledger_behind(counts);
         if behind {
             trace.facts_best_effort();
         }
         behind
+    }
+
+    /// Whether the accounting source reads the ledger behind, `counts` as `ledger_standing` says. Without a source the
+    /// ledger never stands behind.
+    pub(crate) fn ledger_behind(&self, counts: bool) -> bool {
+        self.accounting
+            .as_ref()
+            .is_some_and(|source| source(counts).behind)
     }
 
     /// A refusal with no body to observe: decided on the head before the read, on a read that ended without a

@@ -159,13 +159,20 @@ async fn feature_call(
 
 /// A refusal of the key, the table, the selection or the account's state: its DEBUG line, its end, which the ledger
 /// counts and writes no row for, and its answer. `key` is the key's label, `-` where none resolved. The end is a fact
-/// published ahead of the answer, so it reaches the ledger ahead of any later call of the same caller.
+/// published ahead of the answer, so it reaches the ledger ahead of any later call of the same caller. While the ledger
+/// stands behind, the end goes out best-effort and the bus counts it where it drops it: a writer that stopped draining
+/// fills the bus queue, and a refusal that waited there would hold its connection, a caller's without a key among them.
 async fn refusal(relay: &Relay, call: Call, failure: &Failure, key: &str) -> Response {
     refused_line(failure, &call, key);
     let answer = failure.response(&call.id);
     if let Some(bus) = &relay.bus {
-        let end = FeatureEnd::Refused { code: failure.code };
-        bus.publish_fact(call.ended(end, (relay.clock)())).await;
+        let event = call.ended(FeatureEnd::Refused { code: failure.code }, (relay.clock)());
+        // Read without counting, since the feature listener answers no `ledger_behind`.
+        if relay.ledger_behind(false) {
+            bus.publish(event);
+        } else {
+            bus.publish_fact(event).await;
+        }
     }
     answer
 }

@@ -14,8 +14,8 @@ use axum::http::Request;
 use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
-use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome};
-use phoebis_relay::{Limits, Relay};
+use phoebis_bus::{Bus, Delivery, Event, FeatureEnd, FeatureOutcome, ResponseChunk, QUEUE_DEPTH};
+use phoebis_relay::{Accounting, AccountingSource, Limits, Relay};
 use phoebis_store::{
     AccountState, Cancellation, FeatureOverride, KeyFeatureAccounts, PoolFeatureAccounts,
     StateCause,
@@ -961,6 +961,48 @@ async fn a_call_on_each_plane_publishes_its_end() {
             ("/api/frame/x".to_owned(), sent)
         ]
     );
+    up.shutdown().await;
+}
+
+/// A writer that stopped draining fills the bus queue behind its channel, and a refusal that waited there would hold its
+/// connection, the launch script's request without a key among them.
+#[tokio::test]
+async fn a_refused_feature_call_answers_while_the_ledger_is_behind_and_the_bus_queue_is_full() {
+    let up = upstream().await;
+    let bus = Bus::new();
+    let _ledger = bus.subscribe("ledger", Delivery::Durable);
+    for index in 0..QUEUE_DEPTH {
+        bus.publish_fact(Event::ResponseChunk(ResponseChunk {
+            request_id: "filler".into(),
+            attempt: 1,
+            index: index as u32,
+            body: Bytes::from_static(b"x"),
+            phase: None,
+        }))
+        .await;
+    }
+    let behind: AccountingSource = Arc::new(|_| Accounting { behind: true });
+    let h = harness_with_bus_and_accounting(
+        &up,
+        &[oauth("a", SECRET_A, 0)],
+        bus,
+        default_limits(),
+        behind,
+    )
+    .await;
+    let request = Request::get("/")
+        .header("host", API)
+        .body(Body::empty())
+        .unwrap();
+    let answer = tokio::time::timeout(
+        Duration::from_secs(1),
+        phoebis_relay::features::router(h.relay.clone()).oneshot(request),
+    )
+    .await
+    .expect("the refusal waited on the full queue")
+    .unwrap();
+    assert_eq!(answer.status(), 401);
+    assert_eq!(answer.headers()["x-phoebis-error-code"], "auth_missing");
     up.shutdown().await;
 }
 
