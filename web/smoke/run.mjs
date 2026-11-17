@@ -7189,11 +7189,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools keys section is not a multi-select', ok: keysGroup !== undefined && keysMulti.length === 0, missing: keysGroup === undefined ? ['no Keys group'] : keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'claude.ai features', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the eighteen groups in order',
+    name: '/pools dialog rail lists the five parents and the nineteen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -7215,7 +7215,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 17 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 18 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -9553,6 +9553,103 @@ await forView('/pools', async () => {
   p.unmount();
 });
 
+// The pool dialog's claude.ai features group: its place on the rail, a choice of an account outside the pool that a
+// reopen reads back, a choice that a change of the members leaves in place, and an account whose stored sign-in lacks
+// the connectors' scope.
+await forView('/pools', async () => {
+  localStorage.setItem('phoebis.expertView', 'on');
+  const p = await mount('/pools');
+  const open = async (name) => {
+    [...p.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === `Edit pool ${name}`)?.click();
+    await p.settle(300);
+    return [...p.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const footButton = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const selectOf = (dlg, label) => group(dlg, 'claude.ai features')?.querySelector(`select[aria-label="${label}"]`) ?? null;
+  const optionOf = (select, id) => [...(select?.options ?? [])].find((o) => o.value === `account:${id}`);
+  const shownOf = (select) => select?.selectedOptions[0]?.textContent ?? null;
+  const story = (await api.listPools()).find((x) => x.id === 'all');
+  let dlg = await open('all');
+  const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
+  results.push({
+    name: '/pools with the expert groups shown the claude.ai features group stands behind Auto mode on the rail',
+    ok: railGroups.includes('Auto mode') && railGroups.indexOf('claude.ai features') === railGroups.indexOf('Auto mode') + 1,
+    missing: railGroups,
+  });
+  // The mock's zenith stores a sign-in that never asked for the connectors' scope and holds the artifacts' one.
+  const zenith = [optionOf(selectOf(dlg, 'Connectors'), 'zenith'), optionOf(selectOf(dlg, 'Artifacts'), 'zenith')];
+  results.push({
+    name: "/pools the option of an account whose sign-in lacks the connectors' scope is disabled under Connectors alone (the mock's zenith)",
+    ok: zenith[0]?.disabled === true && zenith[1]?.disabled === false,
+    missing: zenith.map((o) => (o ? `${o.textContent} disabled ${o.disabled}` : 'no option')),
+  });
+  await changeSelect(p, selectOf(dlg, 'Artifacts'), 'account:nightly');
+  const chosen = [selectOf(dlg, 'Artifacts')?.value, shownOf(selectOf(dlg, 'Artifacts'))];
+  [...(group(dlg, 'Members')?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('.members-table__name')?.textContent === 'nightly')?.querySelector('input[type="checkbox"]')?.click();
+  await p.settle(150);
+  const taken = [selectOf(dlg, 'Artifacts')?.value, shownOf(selectOf(dlg, 'Artifacts'))];
+  footButton(dlg, 'Cancel')?.click();
+  await p.settle(200);
+  const stored = (await api.listPools()).find((x) => x.id === 'all')?.featureAccounts;
+  results.push({
+    name: "/pools a member chosen for Artifacts and taken out of the pool in the same dialog stays chosen and reads no pool (the mock's nightly in all)",
+    ok:
+      JSON.stringify(chosen) === JSON.stringify(['account:nightly', 'nightly (all)']) &&
+      JSON.stringify(taken) === JSON.stringify(['account:nightly', 'nightly (no pool)']) &&
+      p.container.querySelector('dialog[open]') === null &&
+      JSON.stringify(stored) === JSON.stringify(story.featureAccounts),
+    missing: [JSON.stringify(chosen), JSON.stringify(taken), JSON.stringify(stored)],
+  });
+  // An account of another pool saved for Artifacts, then the story's row written back for the blocks behind this one.
+  const jobs = (await api.listPools()).find((x) => x.id === 'jobs');
+  dlg = await open('jobs');
+  await changeSelect(p, selectOf(dlg, 'Artifacts'), 'account:contract');
+  footButton(dlg, 'Save pool')?.click();
+  await p.settle(700);
+  dlg = await open('jobs');
+  const reopened = [selectOf(dlg, 'Artifacts')?.value, shownOf(selectOf(dlg, 'Artifacts'))];
+  footButton(dlg, 'Cancel')?.click();
+  await p.settle(200);
+  results.push({
+    name: "/pools an account of another pool saved for Artifacts is there after a reopen (the mock's contract on jobs)",
+    ok: JSON.stringify(reopened) === JSON.stringify(['account:contract', 'contract (contract)']),
+    missing: [JSON.stringify(reopened)],
+  });
+  const written = { ...poolInput(jobs), members: jobs.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  await api.updatePool('jobs', written);
+  p.unmount();
+  localStorage.removeItem('phoebis.expertView');
+});
+
+// A paused account keeps serving the features, which the line under its choice says: the mock's reserve, paused from
+// the Accounts view, under the connectors of work.
+await forView(['/accounts', '/pools'], async () => {
+  const story = (await api.listAccounts()).find((a) => a.id === 'reserve');
+  const a = await mount('/accounts/reserve');
+  const headButton = (name) => [...(a.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name);
+  headButton('Pause')?.click();
+  await a.settle(250);
+  buttonIn([...a.container.querySelectorAll('dialog[open]')].pop(), 'Pause')?.click();
+  await a.settle(600);
+  const paused = headButton('Resume') !== undefined;
+  a.unmount();
+  const p = await mount('/pools');
+  [...p.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await p.settle(300);
+  const dlg = [...p.container.querySelectorAll('dialog[open]')].pop();
+  const field = [...(group(dlg, 'claude.ai features')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Connectors');
+  const line = field?.querySelector('.field__hint')?.textContent ?? null;
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await p.settle(200);
+  p.unmount();
+  api.putAccount(story);
+  results.push({
+    name: "/pools the line under a choice of a paused account says its features keep working (the mock's reserve under work's Connectors)",
+    ok: paused && line === 'reserve is paused. The pause stops its model requests, and its claude.ai features keep working.',
+    missing: [paused ? 'paused' : 'no Resume after the pause', String(line)],
+  });
+});
+
 // The address opens a dialog on a named group: a link, a reload or a typed address lands on the group, and the
 // entry is replaced by the bare route.
 await forView(['/keys', '/pools'], async () => {
@@ -9770,7 +9867,7 @@ await forView('/pools', async () => {
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 17 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 18 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -9780,7 +9877,7 @@ await forView('/pools', async () => {
   });
   x.unmount();
   localStorage.removeItem('phoebis.expertView');
-  x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,guardrails,autoMode');
+  x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,guardrails,autoMode,features');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
   results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
@@ -9848,8 +9945,8 @@ await forView(['/keys', '/pools'], async () => {
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'claude.ai features', 'Selection', 'Pinning', 'Windows', 'Load shedding', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'claude.ai features', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
   const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
@@ -9858,6 +9955,7 @@ await forView(['/keys', '/pools'], async () => {
     Keys: [[], null],
     Models: [['Model rules'], null],
     Guardrails: [['Guardrails'], null],
+    'claude.ai features': [['Artifacts', 'Connectors'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
     Windows: [['5-hour ceiling (%)', 'Weekly ceiling (%)', 'Member utilization'], '1 more setting in the '],
@@ -9894,8 +9992,8 @@ await forView(['/keys', '/pools'], async () => {
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold thirteen groups under the five parents, the five expert-only groups gone',
-    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 18,
+    name: '/pools with the mode off the rail and the body hold fourteen groups under the five parents, the five expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 19,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
   const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
@@ -9929,11 +10027,11 @@ await forView(['/keys', '/pools'], async () => {
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
   results.push({
-    name: '/pools the line turns the mode on: the rail holds all 23 entries, every group draws its expert fields, and no line is left',
+    name: '/pools the line turns the mode on: the rail holds all 24 entries, every group draws its expert fields, and no line is left',
     ok:
       localStorage.getItem('phoebis.expertView') === 'on' &&
       JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
-      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 23 &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 24 &&
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],

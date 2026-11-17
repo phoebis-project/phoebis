@@ -152,6 +152,16 @@ test("a stored member's row waits disabled for the account list, then the list's
   assert.deepEqual(read(missing), { badge: 'not listed', checked: true, disabled: false, title: null }, 'the member the list lacks keeps its ticked row, enabled and marked');
 });
 
+test('a stored feature account the list lacks stays shown and marked', async () => {
+  const pool = { ...pools[0], featureAccounts: { artifacts: 'retired', connectors: null } };
+  const { container, draw } = mount();
+  await draw(poolDialog({ accounts: accountsRead(accounts), pool }));
+  const select = fieldIn(container, 'Artifacts')?.querySelector('select');
+  assert.equal(select?.value, 'account:retired', 'the stored choice, never None (refused)');
+  const option = [...(select?.options ?? [])].find((o) => o.value === 'account:retired');
+  assert.ok(option?.textContent?.includes('not listed'), `the option reads ${JSON.stringify(option?.textContent ?? null)}`);
+});
+
 test('a pool dialog whose account list failed draws the failure with its retry, and no member row waits', async () => {
   const pool = pools.find((p) => p.members.length > 0);
   assert.ok(pool, 'the mock holds a pool with members');

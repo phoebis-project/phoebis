@@ -6,9 +6,10 @@ import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type CreatePoolInput, typ
 import { oneOf } from '@/api/decode';
 import { isStaleEdit, slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, FeatureAccountIds, FeatureWord, KeepaliveOverview, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, PoolWarning, Range, ReturnToPlan,
   SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
+import { FEATURE_WORD_VALUES } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
 import { useAddressEdit } from '@/app/useAddressEdit';
@@ -34,7 +35,7 @@ import { accountHref, EDIT_PARAMS, editHref, POOL_SORT_KEYS, poolKeysHref, POOLS
 import { CAUSE_MOVE_REASONS, FAILOVER_MOVE_REASONS, fundedRankOf, RULE_MOVE_REASONS, moveLabel, namedCostLabel, nativeSidesOf, sidesLine, sumFunded, type WeekReading } from '@/lib/analytics';
 import { groupInto } from '@/lib/counts';
 import { fmtCompact, fmtDuration, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtShortTime, fmtUsd, messageOf, noun, plural, shortModel } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, SHARE_FIELD_LABELS, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, FEATURE_LABEL, FEATURE_NONE, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, featureAccountOf, featureAccountOptions, featureAccountValue, featureStandingLine, guardrailIdsOf, guardrailsChange, keyFormOf, keyInputOf, memberField, poolRefusals, refusalsView, sameValues, saveStatus, SHARE_FIELD_LABELS, unlistedFeatureOption, type PoolGroup, type WholeEngineKey } from '@/lib/forms';
 import { failedFirst, refreshAttention, useAsync, useAttention, useLatest, useNow, useQueryFilters, useWeekReading, type Loaded } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, slowDownPreview, slowDownPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -1094,6 +1095,7 @@ interface PoolForm {
   engine: EngineForm;
   /** The Custom pill is held apart from the values, so its inputs stay open while an edit passes through a preset. */
   failoverCustom: boolean;
+  featureAccounts: FeatureAccountIds;
   /** The pool's guardrail ids in the order they run, which the save sends apart from the input. */
   guardrails: string[];
   /** Off sends the scheduled horizon as null, the recipe's break-even, and keeps the number for the switch coming back. */
@@ -1126,6 +1128,9 @@ const BUDGET_FIELDS = [
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
 
+/** Each feature word with the account `of` names for it, the shape the form and the input hold. */
+const byFeature = (of: (feature: FeatureWord) => string | null): FeatureAccountIds => Object.fromEntries(FEATURE_WORD_VALUES.map((f) => [f, of(f)])) as FeatureAccountIds;
+
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
   affinityMode: POOL_AFFINITY_DEFAULTS.affinityMode,
@@ -1138,6 +1143,7 @@ const blankForm = (): PoolForm => ({
   customAffinity: false,
   engine: { ...POOL_ENGINE_DEFAULTS },
   failoverCustom: false,
+  featureAccounts: byFeature(() => null),
   guardrails: [],
   horizonOn: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds !== null,
   horizonSeconds: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds ?? 3_600,
@@ -1194,6 +1200,7 @@ const formFrom = (pool: Pool): PoolForm => ({
     windDownMinutes: pool.windDownMinutes,
   },
   failoverCustom: failoverPresetOf(pool) === 'custom',
+  featureAccounts: byFeature((f) => pool.featureAccounts[f]),
   guardrails: guardrailIdsOf(pool.guardrails),
   horizonOn: pool.keepalive.scheduledHorizonSeconds !== null,
   horizonSeconds: pool.keepalive.scheduledHorizonSeconds ?? 3_600,
@@ -1390,6 +1397,7 @@ export function PoolDialog({
     bodyCaptureHours: form.capture ? held(form.captureHours) : 0,
     cacheDiagnostics: form.cacheDiagnostics,
     cacheTtl: form.cacheTtl,
+    featureAccounts: byFeature((f) => form.featureAccounts[f]),
     // With warming off the block is disabled, so what it holds goes back as stored: an edit left in it can
     // neither reach the policy nor hold up the save.
     keepalive: warming
@@ -1555,6 +1563,9 @@ export function PoolDialog({
     );
     // A handle takes a number, so an emptied or unparsable field puts it at 0.
     const ceilingHandle = (key: CeilingKey) => ({ onChange: (v: number) => setEngine(key, v / 100), value: percentOf(form.engine[key] || 0) });
+    // The open dialog's members stand in for this pool's stored ones, so an account taken out reads its pool at once.
+    const ownName = pool?.name ?? draftName;
+    const poolNameOf = (accountId: string) => (accountId in form.members ? ownName : (otherPools.find((p) => p.members.some((m) => m.accountId === accountId))?.name ?? null));
     return {
       identity: (
         <div className="cells">
@@ -1822,6 +1833,42 @@ export function PoolDialog({
               <Toggle checked={form.autoModeServer} onChange={(v) => set('autoModeServer', v)} label="Support server-side auto mode" />
             </Field>
           </Expert>
+        </div>
+      ),
+      features: (
+        <div className="cells">
+          <p className="field__hint">
+            Select the account under whose claude.ai each key of this pool publishes artifacts or uses connectors. Any OAuth account of the router can be selected, a member of this pool or not. A feature call runs under the selected account whatever its windows read and while it is paused. It is refused while the account is signed out or past its plan&apos;s end.
+          </p>
+          {accountsFailed !== null && <ErrorState title="The account list did not load" body={accountsFailed} retry={onRetryAccounts} />}
+          {FEATURE_WORD_VALUES.map((feature) => {
+            const chosen = form.featureAccounts[feature];
+            const listedOptions = featureAccountOptions(accounts, feature, poolNameOf);
+            // A select whose value matches no option draws its first, which would read None (refused) for a stored
+            // choice the list does not hold yet or at all.
+            const options = chosen === null || listedOptions.some((o) => o.accountId === chosen) ? listedOptions : [...listedOptions, unlistedFeatureOption(chosen)];
+            const account = chosen === null ? undefined : accounts.find((a) => a.id === chosen);
+            return (
+              <Field key={feature} label={FEATURE_LABEL[feature]} hint={account && featureStandingLine(account, now)}>
+                <Select
+                  value={chosen === null ? 'none' : featureAccountValue(chosen)}
+                  disabled={accountsRead.data === null}
+                  onChange={(e) => {
+                    const next = featureAccountOf(e.target.value);
+                    setForm((f) => ({ ...f, featureAccounts: { ...f.featureAccounts, [feature]: next } }));
+                  }}
+                  aria-label={FEATURE_LABEL[feature]}
+                >
+                  <option value="none">{FEATURE_NONE}</option>
+                  {options.map((o) => (
+                    <option key={o.accountId} value={featureAccountValue(o.accountId)} disabled={o.disabled}>
+                      {o.label}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+            );
+          })}
         </div>
       ),
       selection: (

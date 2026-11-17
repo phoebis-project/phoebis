@@ -612,7 +612,7 @@ warm" switch starts off. The groups by rail parent, with what the expert view ad
 
 | Rail parent | Groups | In the expert view alone |
 | --- | --- | --- |
-| Pool | Identity, Members, Keys, Models, Guardrails, Auto mode | Auto mode |
+| Pool | Identity, Members, Keys, Models, Guardrails, Auto mode, claude.ai features | Auto mode |
 | Routing | Selection, Placement, Pinning | Placement, and Pin sessions under Pinning |
 | Load | Windows, Load shedding, Slow-down, Failover, Overage and plan end | Slow-down, Failover, Burn average (s) under Windows, Preset, Shed cap (%), Shed dwell (s), Warm sessions, Fable reservation shedding and Preview under Load shedding, and Overage grace (min), Return to plan, Return dwell (s) and Wind down (min) under Overage and plan end |
 | Caching | Cache TTL, Keepalive | Add a cache marker to a request without one and the per-model overrides, both under Cache TTL |
@@ -768,6 +768,25 @@ with the windows that returned out of those that reached it and a bar of the rat
 failed read draws `Could not load the return rate: {error}` above the buckets an earlier read of the same range drew, or
 on its own when there are none. The ceilings are explained under [The four fields](keepalive.md#the-four-fields) and the
 buckets under [The return rate by idle age](keepalive.md#the-return-rate-by-idle-age).
+
+claude.ai features shows in every view. It opens on "Select the account under whose claude.ai each key of this pool
+publishes artifacts or uses connectors. Any OAuth account of the router can be selected, a member of this pool or not. A
+feature call runs under the selected account whatever its windows read and while it is paused. It is refused while the
+account is signed out or past its plan's end." and holds two selects, Artifacts and Connectors. Each lists
+"None (refused)", a new pool's choice, which refuses the feature's calls, then every OAuth account of the router in the
+order of the labels, as `{label} ({pool})` or `{label} (no pool)`. An API-key account is not listed,
+and an account whose stored sign-in lacks the feature's scope is listed disabled as
+`{label} ({pool}), holds no sign-in with this feature's scope. A new pairing adds it.`
+[Pairing an account](pairing.md#two-kinds-of-account) names the scope each feature needs. The selects wait for the
+account list, a failed read of it draws "The account list did not load" with "Try again", and a stored choice the list
+does not hold reads `{id} (not listed)`. A change in Members leaves both choices as they are, so an account taken out of
+the pool stays selected and reads `(no pool)` at once. Under a choice whose account cannot serve, a line says why in the
+Accounts view's words for its state: `{label} needs re-auth. Feature calls are refused until it is paired again.`,
+`{label} is not paired. Feature calls are refused until it is paired.`,
+`{label}'s organization needs funding. Feature calls are refused until then.` or
+`{label} is past its plan's end. Feature calls are refused.` Under a paused account the line reads
+`{label} is paused. The pause stops its model requests, and its claude.ai features keep working.` Each save sends both
+choices.
 
 ## Keys
 

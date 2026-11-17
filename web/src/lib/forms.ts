@@ -1,7 +1,7 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
 import { iso } from '@/api/decode';
 import { slug } from '@/api/http';
-import type { Account, ApiKey, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
+import type { Account, ApiKey, FeatureWord, GuardrailRef, ModelRule, ModelRulesMode, Pool, PoolKeepalive, PoolWarning } from '@/api/types';
 import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { byteOrder, fmtInt, toLocalInput, viewingZone } from './format';
 import { checkPattern } from './patterns';
@@ -78,7 +78,7 @@ function prefixThresholdRefusal(value: number): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'features', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 /** A member row's refused control. */
@@ -312,6 +312,78 @@ export function poolWarnings(pool: WarnedSettings, cohort: number): PoolWarning[
     warn('warm_never', ['warm_sessions'], 'With warm sessions never a round stops after the cold sessions, so the excess is covered only while cold sessions carry it.');
   }
   return out.sort((a, b) => byteOrder(a.code, b.code));
+}
+
+export const FEATURE_LABEL: Record<FeatureWord, string> = { artifacts: 'Artifacts', connectors: 'Connectors' };
+export const FEATURE_NONE = 'None (refused)';
+
+export interface FeatureAccountOption {
+  accountId: string;
+  disabled: boolean;
+  label: string;
+}
+
+/** The accounts a feature's selection can name: each OAuth account in the order of the labels, with its pool
+ * behind the label, disabled where its grants lack the feature. An API-key account is left out. */
+export function featureAccountOptions(accounts: readonly Account[], feature: FeatureWord, poolNameOf: (accountId: string) => string | null): FeatureAccountOption[] {
+  return accounts
+    .filter((a) => a.kind === 'oauth')
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((a) => {
+      const named = `${a.label} (${poolNameOf(a.id) ?? 'no pool'})`;
+      const granted = a.featureGrants?.includes(feature) ?? false;
+      return { accountId: a.id, disabled: !granted, label: granted ? named : `${named}, holds no sign-in with this feature's scope. A new pairing adds it.` };
+    });
+}
+
+/** The option for a selected account the options lack, the list not there yet or without the id, so the stored
+ * choice still shows. */
+export function unlistedFeatureOption(accountId: string): FeatureAccountOption {
+  return { accountId, disabled: false, label: `${accountId} (not listed)` };
+}
+
+const ACCOUNT_VALUE = 'account:';
+
+/** The select value of an account option, `account:<id>`. An account's id can be `inherit` or `none`, the words
+ * of the control options, so the accounts stand in a namespace of their own. */
+export function featureAccountValue(accountId: string): string {
+  return `${ACCOUNT_VALUE}${accountId}`;
+}
+
+/** The account a select value names, null for a control option's value. */
+export function featureAccountOf(value: string): string | null {
+  return value.startsWith(ACCOUNT_VALUE) ? value.slice(ACCOUNT_VALUE.length) : null;
+}
+
+type FeatureStanding = 'ended' | 'paused' | 'serving' | 'signed_out' | 'unfunded';
+
+// In the order the router admits a feature call: it refuses an account that is not ready, then one past its end, and
+// the pause stops model requests alone.
+function featureStanding(account: Account, now: number): FeatureStanding {
+  if (account.status === 'reauth_required' || account.status === 'unpaired') return 'signed_out';
+  if (account.status === 'funding_required') return 'unfunded';
+  // As the routing crate's `term::ended` reads it, an end at the instant of now has passed.
+  const passed = (at: string | null) => at !== null && Date.parse(at) <= now;
+  if (passed(canceledEndOf(account)) || passed(account.planEndedAt)) return 'ended';
+  return account.routingEnabled ? 'serving' : 'paused';
+}
+
+/** The line under a choice at `now` (Unix milliseconds), null for an account that serves. A state that refuses
+ * reads ahead of a pause. */
+export function featureStandingLine(account: Account, now: number): string | null {
+  const { label } = account;
+  switch (featureStanding(account, now)) {
+    case 'ended':
+      return `${label} is past its plan's end. Feature calls are refused.`;
+    case 'paused':
+      return `${label} is paused. The pause stops its model requests, and its claude.ai features keep working.`;
+    case 'serving':
+      return null;
+    case 'signed_out':
+      return account.status === 'unpaired' ? `${label} is not paired. Feature calls are refused until it is paired.` : `${label} needs re-auth. Feature calls are refused until it is paired again.`;
+    case 'unfunded':
+      return `${label}'s organization needs funding. Feature calls are refused until then.`;
+  }
 }
 
 export type AutoModeOverride = 'inherit' | 'off' | 'on';

@@ -5,12 +5,12 @@ import { decodeStreamCut } from '@/api/decode';
 import { clientLeft } from '@/api/fold';
 import { ApiError, catalogUnion, noteBuild, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureCall, FeatureCallPage, FeatureCallQuery, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, FeatureAccountIds, FeatureCall, FeatureCallPage, FeatureCallQuery, KeepaliveOverview, KeyModels, LimitResetsRead, MemberEligibility,
   ModelRule, Overview, PairingConfirmed, PairingInput, PairingPreview, PairingSession, PairingStart, Pool, PoolMember, RateLimitWindow, RequestDetail, RequestEvent, RequestLog, RequestOrder, RequestPage, RequestQuery, ResetUse, RoutingEvent, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
 import type { Guardrail, GuardrailAttachment, GuardrailCounts, GuardrailRef, GuardrailTestResult } from '@/api/types';
-import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
+import { AFFINITY_MODE_VALUES, COMPANION_PERMISSION_VALUES, FEATURE_WORD_VALUES, GUARDRAIL_MODE_VALUES, REQUEST_ORDER_VALUES, RETURN_TO_PLAN_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/types';
 import { type Clock, wallClock } from '@/lib/clock';
 import { has, lookup } from '@/lib/counts';
 import { foldClassifier, foldEffort, foldRequestClass, foldSpeed, servedMissReason, servingResponse } from '@/lib/dimensions';
@@ -182,6 +182,8 @@ const subjectsTwice = (input: Pick<Partial<GuardrailInput>, 'keys' | 'pools'>): 
   const key = repeatedId(input.keys);
   return key === null ? null : `keys lists ${key} twice`;
 };
+
+const NO_FEATURE_ACCOUNTS: FeatureAccountIds = { artifacts: null, connectors: null };
 
 /** The route's 409 for a member another pool holds, since an account belongs to one pool. */
 const heldElsewhere = (members: PoolInput['members'], pools: { id: string; members: { accountId: string }[] }[], poolId: string): string | null => {
@@ -631,6 +633,21 @@ export class MockApi implements Api {
     return members ? new ApiError(400, members, null) : null;
   }
 
+  /**
+   * The route's refusal of a feature account it cannot hold: an id no account holds, which a later account of that id
+   * would take over, or an API-key account, which holds no claude.ai token. A word the body leaves out is not read.
+   */
+  private featureAccountRefusal(words: Partial<FeatureAccountIds> | undefined): ApiError | null {
+    for (const feature of FEATURE_WORD_VALUES) {
+      const id = words?.[feature];
+      if (id == null) continue;
+      const account = this.accounts.find((a) => a.id === id);
+      if (!account) return new ApiError(400, `feature_accounts names account ${id}, which does not exist`, null);
+      if (account.kind === 'api_key') return new ApiError(400, `feature_accounts names account ${id}, which is an API-key account`, null);
+    }
+    return null;
+  }
+
   /** The keepalive figures a saved body resolves to, composed from its members' kinds as the router composes them. */
   private resolvedOf(input: PoolInput): Pool['keepaliveResolved'] {
     return resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive);
@@ -1006,12 +1023,16 @@ export class MockApi implements Api {
     if (this.pools.some((p) => p.id === id)) throw new ApiError(409, POOL_TAKEN, null);
     const refused = this.poolBodyRefusal(input);
     if (refused) throw refused;
+    const unselectable = this.featureAccountRefusal(input.featureAccounts);
+    if (unselectable) throw unselectable;
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) throw new ApiError(409, held, null);
     const pool: StoredPool = {
       ...POOL_SAMPLE,
       ...input,
       ...UNTIL_DRAWN,
+      // The route's member is optional per word, and a new pool starts at none for each word the body leaves out.
+      featureAccounts: { ...NO_FEATURE_ACCOUNTS, ...input.featureAccounts },
       id,
       // From the members' kinds, as the router composes them, and nothing for a pool with no member.
       keepaliveResolved: this.resolvedOf(input),
@@ -1652,6 +1673,9 @@ export class MockApi implements Api {
     // names an unknown or a held member answers `stale_edit`.
     const current = this.pools[idx];
     if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, POOL_STALE, 'stale_edit'));
+    // Behind the stamp, so a save from before an account's deletion answers stale_edit, never this refusal.
+    const unselectable = this.featureAccountRefusal(input.featureAccounts);
+    if (unselectable) return Promise.reject(unselectable);
     // The store counts the guardrail list against every key of the pool first in its transaction, then writes the
     // members and looks each guardrail up last.
     if (guardrailIds !== undefined) {
@@ -1672,6 +1696,8 @@ export class MockApi implements Api {
     const next: StoredPool = {
       ...current,
       ...fields,
+      // A word the body leaves out keeps its stored account, as the route keeps it, and a member change moves none.
+      featureAccounts: { ...current.featureAccounts, ...fields.featureAccounts },
       // From the saved members' kinds, as the router composes them on every save.
       keepaliveResolved: this.resolvedOf(input),
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save

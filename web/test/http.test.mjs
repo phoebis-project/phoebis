@@ -621,6 +621,7 @@ const poolSave = (name) => ({
   bodyCaptureHours: 0,
   cacheDiagnostics: false,
   cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
+  featureAccounts: { artifacts: null, connectors: null },
   keepalive: { enabled: false, maxIdleSeconds: 3_600, maxParkedSeconds: null, scheduledHorizonSeconds: null },
   affinityMode: 'when_cached',
   members: [{ accountId: 'business', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }, { accountId: 'direct', budgetDailyUsd: 12.5, budgetMonthlyUsd: 50, priority: 1 }],

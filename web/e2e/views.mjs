@@ -338,8 +338,8 @@ function railScrolls(read) {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's eighteen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 23 entries without
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's nineteen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 24 entries without
  * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
@@ -372,7 +372,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 18 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 18 under 5`);
+    if (read.groups !== 19 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 19 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(railScrolls(read));
@@ -3095,7 +3095,7 @@ async function poolCardAges(theme, say, where) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Guardrails', 'Auto mode', 'claude.ai features', 'Selection', 'Placement', 'Pinning', 'Windows', 'Load shedding', 'Slow-down', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
 const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Slow-down', 'Failover', 'Diagnostics'];
 /**
@@ -3232,8 +3232,8 @@ async function chevronWeight(label, svg, size, stroke) {
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds thirteen groups under the five
- * parents, the five expert-only groups left out, and the expert rail all eighteen. Every group on the rail is chosen
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds fourteen groups under the five
+ * parents, the five expert-only groups left out, and the expert rail all nineteen. Every group on the rail is chosen
  * and read while it shows: its height against the body's window, every cell against the two columns, every label beside
  * its switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled
  * while its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select,
@@ -3646,8 +3646,56 @@ async function poolReturnRange(theme) {
 }
 
 /**
+ * The story's pool `all` opened on its claude.ai features group in the plain view: the Artifacts and the Connectors
+ * select against the Strategy select of the Selection group in height and font size, each reading the story's choice,
+ * `studio (work)` and `reserve (no pool)`, every figure recorded. The dialog's own capture at rest is the group's
+ * picture, `<theme>/pools-features.png`. The dialog closes with nothing saved, and the page is left at its top with
+ * the pointer and the focus at rest for the view's shot.
+ */
+async function poolFeatures(theme) {
+  const say = (what) => failures.push(`${theme} /pools dialog, claude.ai features: ${what}`);
+  const dialog = page.locator('dialog[open]');
+  const read = {};
+  const selectIn = (group, label) =>
+    dialog.evaluate(
+      (el, [group, label]) => {
+        const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === group);
+        const select = section?.querySelector(`select[aria-label="${label}"]`);
+        if (!select) return null;
+        return { fontSize: getComputedStyle(select).fontSize, height: Math.round(select.getBoundingClientRect().height * 10) / 10, shown: select.selectedOptions[0]?.textContent ?? null };
+      },
+      [group, label],
+    );
+  try {
+    await page.locator('.pool button[aria-label="Edit pool all"]').click();
+    await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+    await settle();
+    await railEntry(dialog, 'Selection').click();
+    await settle();
+    read.strategy = await selectIn('Selection', 'Strategy');
+    await railEntry(dialog, 'claude.ai features').click();
+    await settle();
+    read.artifacts = await selectIn('claude.ai features', 'Artifacts');
+    read.connectors = await selectIn('claude.ai features', 'Connectors');
+    await atRest();
+    await dialog.screenshot({ path: join(shots, theme, 'pools-features.png') });
+    await closeByEscape(dialog, `${theme} /pools claude.ai features dialog`, say);
+  } catch (error) {
+    say(`never measured (${error instanceof Error ? error.message : String(error)})`);
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  measurements.push(`${theme} /pools claude.ai features group ${JSON.stringify(read)}`);
+  failures.push(...compare(read.artifacts, read.strategy, ['fontSize', 'height'], `${theme} /pools dialog: the Artifacts select against the Strategy select`));
+  failures.push(...compare(read.connectors, read.strategy, ['fontSize', 'height'], `${theme} /pools dialog: the Connectors select against the Strategy select`));
+  const shown = [read.artifacts?.shown ?? null, read.connectors?.shown ?? null];
+  if (JSON.stringify(shown) !== JSON.stringify(['studio (work)', 'reserve (no pool)'])) say(`the selects read ${JSON.stringify(shown)}, not the story's studio (work) and reserve (no pool)`);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await atRest();
+}
+
+/**
  * The grouped-dialog fixture's rail read on the real pool dialog of the first pool of the pass, opened on Identity in
- * the expert view, where the rail draws all eighteen groups: its headroom goes to the measurements beside the
+ * the expert view, where the rail draws all nineteen groups: its headroom goes to the measurements beside the
  * fixture's, and a rail that scrolls names its first group below the fold.
  */
 async function poolRailFit(theme) {
@@ -14002,6 +14050,7 @@ try {
         await tableColumns(theme, 'pools', '.serving', ['Account']);
         await poolDialogGeometry(theme);
         if (mock) await poolReturnRange(theme);
+        if (mock) await poolFeatures(theme);
         await poolRailFit(theme);
         await poolKeyMenus(theme);
       }

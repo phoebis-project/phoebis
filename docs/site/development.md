@@ -113,8 +113,9 @@ PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 `e2e:mock` builds the console with the fixture-backed mock into `dist-mock/` (`npm run build:mock`), serves that bundle
 from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`. The mock's random draws are seeded, so two runs write the
-same screenshots byte for byte, which `diff -r` over the two directories shows. Beside the views' shots it writes nine
-more per theme: the open catalog popup as `<theme>/accounts-catalog.png`, the open cost reference's three tabs as
+same screenshots byte for byte, which `diff -r` over the two directories shows. Beside the views' shots it writes ten
+more per theme: the open catalog popup as `<theme>/accounts-catalog.png`, the pool dialog open on its claude.ai features
+group as `<theme>/pools-features.png`, the open cost reference's three tabs as
 `<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`, the Analytics
 page's Burn tab as `<theme>/analytics-burn.png`, the written session's open row on the Sessions view as
 `<theme>/sessions-open.png` and at 375 by 800 as `<theme>/sessions-phone.png`, and the Quota view's reset dialog on its
@@ -128,7 +129,7 @@ PHOEBIS_E2E_BASE=http://127.0.0.1:8081 PHOEBIS_E2E_SECRET=... PHOEBIS_SCREENSHOT
 
 `PHOEBIS_E2E_BASE` is the admin listener's URL (`http://127.0.0.1:8081` when unset) and `PHOEBIS_E2E_SECRET` the admin
 secret, without which the script stops with `set PHOEBIS_E2E_SECRET`. The router seeds its registry at real time, so
-the clock origin there is the launch instant, and the pass skips the three mock-only views and writes none of the nine
+the clock origin there is the launch instant, and the pass skips the three mock-only views and writes none of the ten
 extra shots. `cargo test -p phoebis-router --test end_to_end the_ui_passes` runs the same script against a router the
 test starts and seeds itself when `PHOEBIS_E2E_BROWSER=1` is set, and prints `skipped: set PHOEBIS_E2E_BROWSER=1 to run
 the browser pass` otherwise, so a build host without Chromium still runs the rest of that suite.
@@ -145,7 +146,7 @@ The site's screenshots are the mock pass's. The committed names are `docs/site/a
 `dark/<view>.png` to `docs/site/assets/<view>-dark.png` for the eighteen pairs the pages embed: `accounts`, `analytics`,
 `analytics-burn`, `analytics-cache-warming`, `cost-reference-plan-rates`, `dashboard`, `guardrails`, `keys`, `meter`,
 `pools`, `quota`, `quota-reset-confirm`, `quota-reset-pick`, `quota-windows`, `requests`, `routing-log`, `sessions` and
-`settings`. The five other shots the pass writes take no page.
+`settings`. The six other shots the pass writes take no page.
 
 ## The fixtures
 

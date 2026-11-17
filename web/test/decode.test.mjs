@@ -1120,6 +1120,12 @@ test('a pool decodes its server-side auto mode switch, on when the row carries n
   assert.equal(d.encodePool({ ...p, autoModeServer: false, name: p.name, status: 'active' }).auto_mode_server, false);
 });
 
+test('encodePool sends the feature accounts with a null kept', () => {
+  const p = d.decodePool(fixture('pools').pools[0]);
+  const body = d.encodePool({ ...p, featureAccounts: { artifacts: 'studio', connectors: null }, name: p.name, status: 'active' });
+  assert.deepEqual(body.feature_accounts, { artifacts: 'studio', connectors: null });
+});
+
 test('a pool decodes the engine fields and encodes them back', () => {
   const row = fixture('pools').pools[0];
   const p = d.decodePool(row);

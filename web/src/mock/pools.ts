@@ -258,6 +258,9 @@ const POOL_ROWS: PoolSeed[] = [
     // `overflow` on the metered five minutes, which brings the low end: 46 minutes to 44.1 hours.
     keepaliveResolved: merged(FIGURES.plan['1h'], FIGURES.dollars['5m']),
     autoModeServer: true,
+    // Both features under accounts outside the pool, since a selection is bound to none: studio, a member of work,
+    // and reserve, in no pool.
+    featureAccounts: { artifacts: 'studio', connectors: 'reserve' },
     cacheDiagnostics: true,
     thinkingDiagnostics: true,
     cacheTtl: {
@@ -389,6 +392,8 @@ const POOL_ROWS: PoolSeed[] = [
     keepaliveResolved: merged(FIGURES.plan['1h'], FIGURES.dollars['5m']),
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
+    // The connectors alone, under the account all selects too, so two pools name one account.
+    featureAccounts: { artifacts: null, connectors: 'reserve' },
     cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS, enabled: true },
     bodyCaptureHours: 0,

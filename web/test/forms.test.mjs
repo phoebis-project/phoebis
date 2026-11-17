@@ -412,7 +412,7 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'guardrails', 'autoMode', 'features', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'slowDown', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {
@@ -528,4 +528,40 @@ test("the warnings mirror reads the pool routes' eleven checks on a pool's setti
     'sorted by code',
   );
   assert.equal(every.find((w) => w.code === 'cap_under_cohort').text, 'The in-flight cap is under the largest live cohort of 17 agents, so subagents of one session wait for a slot they share.');
+});
+
+/** An account with the members the feature options and the standing read, ready, routing and granted both. */
+const featureAccount = (over) => ({ canceled: false, featureGrants: ['artifacts', 'connectors'], id: 'alpha', kind: 'oauth', label: 'Alpha', planEndedAt: null, routingEnabled: true, status: 'ready', subscription: null, ...over });
+
+test('the options reach beyond the pool and leave out what cannot be selected', () => {
+  // Out of order, and alpha's label sorts apart from its id, so the order read is the labels'.
+  const listed = [
+    featureAccount({ id: 'charlie', label: 'Charlie' }),
+    featureAccount({ featureGrants: null, id: 'delta', kind: 'api_key', label: 'Delta' }),
+    featureAccount({ id: 'alpha', label: 'Zulu' }),
+    featureAccount({ featureGrants: ['artifacts'], id: 'bravo', label: 'Bravo' }),
+  ];
+  const poolOf = { alpha: 'Main', bravo: 'Spare', delta: 'Main' };
+  const options = d.featureAccountOptions(listed, 'connectors', (id) => poolOf[id] ?? null);
+  assert.deepEqual(options.map((o) => [o.accountId, o.disabled]), [['bravo', true], ['charlie', false], ['alpha', false]]);
+});
+
+test('an account that is paused and signed out stands as signed out', () => {
+  const line = (over) => d.featureStandingLine(featureAccount(over), NOW);
+  const signedOut = line({ status: 'reauth_required' });
+  assert.notEqual(signedOut, null, 'an account signed out alone draws a line');
+  assert.equal(line({ routingEnabled: false, status: 'reauth_required' }), signedOut);
+  assert.notEqual(line({ routingEnabled: false, status: 'reauth_required' }), line({ routingEnabled: false }), 'the line of an account paused alone');
+});
+
+test('a canceled account past its saved end stands as ended', () => {
+  const now = Date.parse('2026-03-01T00:00:00Z');
+  const line = (over) => d.featureStandingLine(featureAccount(over), now);
+  const planEnded = line({ planEndedAt: '2026-02-01T00:00:00Z' });
+  const paused = line({ routingEnabled: false });
+  assert.notEqual(planEnded, null, 'an account whose plan ended draws a line');
+  assert.notEqual(planEnded, paused);
+  const canceled = (endsAt) => line({ canceled: true, routingEnabled: false, subscription: { endsAt } });
+  assert.equal(canceled('2026-03-01T00:00:00Z'), planEnded, 'a saved end at the instant of now has passed');
+  assert.equal(canceled('2026-03-01T00:00:01Z'), paused, 'a saved end a second ahead has not');
 });

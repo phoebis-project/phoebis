@@ -15,6 +15,7 @@ import type {
   CompanionPermission,
   CreatedApiKey,
   DecisionRecord,
+  FeatureAccountIds,
   FeatureCallPage,
   FeatureCallQuery,
   KeepaliveOverview,
@@ -156,6 +157,8 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   bodyCaptureHours: number;
   cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
+  /** Both words on each save, so None (refused) reaches the stored selection as null. */
+  featureAccounts: FeatureAccountIds;
   /** The pool's list in order, replacing it whole. Undefined leaves it alone, and the create route refuses it. */
   guardrails?: string[];
   keepalive: PoolKeepalive;

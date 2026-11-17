@@ -29,6 +29,9 @@ An id matches `[a-z0-9][a-z0-9-]{0,63}`, a label is at most 256 bytes, and an id
 makes the account ahead of its pairing: the account reads `unpaired` until a pairing confirms, and an `oauth` create
 that carries a secret answers `400 an oauth account is paired, not keyed`.
 
+Each claude.ai feature needs one scope in an OAuth account's stored sign-in: `user:inference` for Artifacts and
+`user:mcp_servers` for the connectors. A new pairing asks for both, so it adds a scope the stored sign-in lacks.
+
 ## Through the console
 
 Open Accounts ([The console](console.md#accounts)) and choose Add account. Pick "OAuth login" or "API key" and give the

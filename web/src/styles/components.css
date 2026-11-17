@@ -1359,8 +1359,8 @@ textarea.input {
   border-top: 1px solid var(--hairline);
 }
 
-/* Sized so the pool dialog's 23 entries fit the rail's 623 px at 1280 by 800 with room: 18 group rows of 22.25 px,
-   5 parent rows of 19.75 px, 2 px inside a run, 14 px between runs and 8 px of padding sum to 607.25 px. Past that,
+/* Sized so the pool dialog's 24 entries fit the rail's 625 px at 1280 by 800 with room: 19 group rows of 22.25 px,
+   5 parent rows of 19.75 px, 1 px inside a run, 14 px between runs and 8 px of padding sum to 612.5 px. Past that,
    or on a shorter viewport, the rail scrolls and each run's parent heading holds the top until the next run's heading
    pushes it off. */
 .dialog-rail {
@@ -1377,7 +1377,7 @@ textarea.input {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 /* A hairline centered in the gap above every run after the first, so the parents read as headings; absolute, so it

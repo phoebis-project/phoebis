@@ -1175,7 +1175,7 @@ export const encodePool = (i: PoolInput) => ({
   affinity_mode: i.affinityMode, affinity_ttl_seconds: i.affinityTtlSeconds, auto_mode_server: i.autoModeServer, body_capture_hours: i.bodyCaptureHours,
   cache_diagnostics: i.cacheDiagnostics,
   cache_ttl: { enabled: i.cacheTtl.enabled, inject_when_absent: i.cacheTtl.injectWhenAbsent, metered: encodeTtlRules(i.cacheTtl.metered), plan: encodeTtlRules(i.cacheTtl.plan) },
-  enabled: i.status === 'active', model_rules: encodeModelRules(i.modelRules),
+  enabled: i.status === 'active', feature_accounts: { artifacts: i.featureAccounts.artifacts, connectors: i.featureAccounts.connectors }, model_rules: encodeModelRules(i.modelRules),
   keepalive: { enabled: i.keepalive.enabled, max_idle_seconds: i.keepalive.maxIdleSeconds, max_parked_seconds: i.keepalive.maxParkedSeconds, scheduled_horizon_seconds: i.keepalive.scheduledHorizonSeconds },
   label: i.name, members: encodeMembers(i.members),
   min_shared_prefix_tokens: i.minSharedPrefixTokens, overage_policy: i.overagePolicy, prefer_subscription: i.preferSubscription,

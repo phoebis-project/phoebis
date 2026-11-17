@@ -7,6 +7,7 @@ export const POOL_RAIL: Record<PoolGroup, { label: string; parent: string }> = {
   cacheDiagnostics: { label: 'Diagnostics', parent: 'Visibility' },
   cacheTtl: { label: 'Cache TTL', parent: 'Caching' },
   failover: { label: 'Failover', parent: 'Load' },
+  features: { label: 'claude.ai features', parent: 'Pool' },
   guardrails: { label: 'Guardrails', parent: 'Pool' },
   identity: { label: 'Identity', parent: 'Pool' },
   keepalive: { label: 'Keepalive', parent: 'Caching' },

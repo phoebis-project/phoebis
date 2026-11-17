@@ -104,8 +104,11 @@ the track and taller than it, the first track's lowest mark above the second tra
 ring counted on both, and an arrow key on the weekly handle moving the weekly field by one point and leaving the 5-hour
 one as it was), the pool dialog's return rate range (mock pass: its select against the Strategy select in height and
 font size, beside the "Return rate by idle age" label, their vertical centers within 1 px, opening on "7 days", the
-hint's text recorded), the Active pins tile's line under its figure (in the mock pass on the work card alone, "1 on a
-former member" inside its tile below the figure, in the labels' ink and the type of the serving table's sub line at a
+hint's text recorded), the pool dialog's claude.ai features group (mock pass: on the story's `all`, the Artifacts and
+Connectors selects against the Strategy select in height and font size, reading `studio (work)` and
+`reserve (no pool)`, and the dialog's shot at rest), the Active pins tile's line under its figure (in the mock pass on
+the work card alone, "1 on a former member" inside its tile below the figure, in the labels' ink and the type of the
+serving table's sub line at a
 normal weight), the contract member's Tier cell (mock pass: `metered P1` in the text, face, size, weight and ink of the
 all pool's API-key member's), the pool card's serving table and its seven tiles, its attention rows ending with their
 age (the row's last cell, on the detail's line in the detail's ink and size, uncut and inside the card, at the pass's
@@ -493,8 +496,9 @@ the directory the router's pass under `cargo test` defaults to as well.
 from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afternoon the smoke run pins. The mock's random
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
-Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the open cost reference's
-three tabs as `<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
+Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the pool dialog open on
+its claude.ai features group as `<theme>/pools-features.png`, the open cost reference's three tabs as
+`<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
 the Analytics page's Burn tab, its plan card drawing its lines, as `<theme>/analytics-burn.png`, the Quota view's reset
 dialog on its two pages as `<theme>/quota-reset-pick.png` and `<theme>/quota-reset-confirm.png`, and the written
 session's open row on the Sessions view as `<theme>/sessions-open.png` and again at 375 by 800 as

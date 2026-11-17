@@ -1,5 +1,5 @@
 import { decodeLimitResets, planName } from '@/api/decode';
-import type { Account, BurnUnit, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
+import type { Account, BurnUnit, FeatureWord, PlanWord, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, Subscription, WindowId } from '@/api/types';
 import { FEATURE_WORD_VALUES } from '@/api/types';
 import { lookup } from '@/lib/counts';
 import { endOf, isPaidSource, readWindows } from '@/lib/quota';
@@ -122,19 +122,27 @@ const SNAPSHOT_OF: Readonly<Record<string, (a: Pick<Account, 'id'>) => QuotaSnap
 /** The reset the router estimates while no head has named the spend window's: 00:00 UTC on the first of next month. */
 const SPEND_RESET_ESTIMATE = endOfMonth(NOW);
 
-/** A story account as written: the account view's shape, its subscription's plan word left to the final map. */
-type Seed = Omit<Account, 'subscription'> & { subscription: Omit<Subscription, 'plan'> | null };
+/**
+ * A story account as written: the account view's shape, its subscription's plan word left to the final map, and the
+ * scopes of its stored sign-in where they are not the login's, which no route answers and the grants read.
+ */
+type Seed = Omit<Account, 'subscription'> & { scopes?: readonly string[]; subscription: Omit<Subscription, 'plan'> | null };
 
 /** The credential of a row that holds no token. */
 export const NO_CREDENTIAL: Account['credential'] = { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null };
 
+/** The scope each feature's calls need, as the router's table holds it. */
+const FEATURE_SCOPE: Record<FeatureWord, string> = { artifacts: 'user:inference', connectors: 'user:mcp_servers' };
+/** The scopes a pairing asks for, which cover both features. */
+const LOGIN_SCOPES: readonly string[] = ['org:create_api_key', 'user:profile', 'user:inference', 'user:sessions:claude_code', 'user:mcp_servers', 'user:file_upload', 'user:plugins'];
+
 /**
  * The features an account's stored scopes cover, by the route's rule: none for an OAuth account that stores no
- * credential, whose access expiry the route then answers null, and null for an API-key account. A credential the
- * story stores holds the login's scopes, which cover both features.
+ * credential, whose access expiry the route then answers null, and null for an API-key account. A stored credential
+ * holds the login's scopes unless its seed names an older sign-in's, so a new pairing stores the login's again.
  */
-export const featureGrantsOf = (a: Pick<Account, 'credential' | 'kind'>): Account['featureGrants'] =>
-  a.kind === 'api_key' ? null : a.credential.accessTokenExpiresAt === null ? [] : [...FEATURE_WORD_VALUES];
+export const featureGrantsOf = (a: Pick<Account, 'credential' | 'kind'> & Pick<Seed, 'scopes'>): Account['featureGrants'] =>
+  a.kind === 'api_key' ? null : a.credential.accessTokenExpiresAt === null ? [] : FEATURE_WORD_VALUES.filter((f) => (a.scopes ?? LOGIN_SCOPES).includes(FEATURE_SCOPE[f]));
 
 /** A row the router holds nothing for yet: no token, no plan, no window, no pool and no request. */
 export const blankAccountRow = (input: Pick<Account, 'id' | 'kind' | 'label'>, status: Account['status'], email: string | null): Account => ({
@@ -602,6 +610,8 @@ const SEEDS = [
       quarantined: false,
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
+    // Paired under a sign-in that never asked for the connectors' scope, so the dialogs list it disabled there.
+    scopes: ['user:profile', 'user:inference', 'user:sessions:claude_code', 'user:file_upload'],
     subscription: CONTRACT_SUBSCRIPTION,
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
@@ -673,7 +683,7 @@ export const withholdsWindows = (a: Pick<Account, 'status'>): boolean => a.statu
 /** Each row's last reading as the final map builds it, ahead of the state's withholding. */
 const READINGS = new Map<string, Pick<Account, 'fableWindow' | 'windows'>>();
 
-export const ACCOUNTS: Account[] = SEEDS.map((a) => {
+export const ACCOUNTS: Account[] = SEEDS.map(({ scopes, ...a }: Seed) => {
   const subscription: Subscription | null = a.subscription && { ...a.subscription, plan: resolvedPlan(a) };
   // Standing in for the router, which answers each window's lead toward the earlier of its reset and the account's end.
   const end = endOf({ ...a, subscription }, NOW);
@@ -683,7 +693,7 @@ export const ACCOUNTS: Account[] = SEEDS.map((a) => {
   const reading = { fableWindow: a.planEndedAt === null && a.fableWindow !== null ? led(a.fableWindow) : null, windows: a.planEndedAt === null ? a.windows.map(led) : [] };
   READINGS.set(a.id, reading);
   const answered = withholdsWindows(a) ? { fableWindow: null, windows: [] } : reading;
-  return { ...a, fableWindow: answered.fableWindow, featureGrants: featureGrantsOf(a), limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: answered.windows };
+  return { ...a, fableWindow: answered.fableWindow, featureGrants: featureGrantsOf({ ...a, scopes }), limitResets, plan: planName(subscription), pool: null, subscription, usage: usageOf(a), windows: answered.windows };
 });
 
 /**
