@@ -507,6 +507,7 @@ impl Store {
             &format!("DELETE FROM refresh_attempts WHERE account_id = ?1 AND ({PENDING_WHERE})"),
             params![id],
         )?;
+        crate::registry::clear_feature_accounts(&tx, id, now)?;
         crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())

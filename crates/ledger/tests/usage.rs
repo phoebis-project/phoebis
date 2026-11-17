@@ -15,7 +15,9 @@ use phoebis_ledger::{
     key_usage_windows, AttemptRecord, LedgerConfig, LedgerDb, PriceRevisions, RequestRecord,
     KEY_RANGE_PREDICATE,
 };
-use phoebis_store::{AccountKind, ApiKeyRow, CompanionPermissions, RulesMode, Store};
+use phoebis_store::{
+    AccountKind, ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode, Store,
+};
 use tower::ServiceExt;
 
 fn used(id: &str) -> AttemptRecord {
@@ -489,6 +491,7 @@ async fn a_second_key_sees_its_own_usage_and_not_the_firsts() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )
@@ -544,6 +547,7 @@ fn desktop_row(store: &Store) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     }
 }
 
@@ -668,6 +672,7 @@ async fn a_deleted_keys_usage_stays_with_it() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )

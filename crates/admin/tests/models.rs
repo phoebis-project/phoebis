@@ -4,8 +4,8 @@ mod common;
 use common::{get, json, login, NOW};
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    ApiKeyRow, CompanionPermissions, CooldownRow, CooldownScope, MemberWrite, ModelRule,
-    OveragePolicy, PoolRow, RulesMode, Strategy,
+    ApiKeyRow, CompanionPermissions, CooldownRow, CooldownScope, KeyFeatureAccounts, MemberWrite,
+    ModelRule, OveragePolicy, PoolRow, RulesMode, Strategy,
 };
 use serde_json::json as j;
 
@@ -111,6 +111,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )

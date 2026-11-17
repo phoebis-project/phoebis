@@ -1,9 +1,9 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AffinityChain, AffinityRow, ApiKeyRow, CompanionPermissions,
-    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, OverageRow, PinBurn, PinKey, PinMark,
-    PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow, ShedStamp, StorageKey,
-    Store, ThinkingBindingRow, WindowRow, WindowSetRow,
+    CooldownRow, CooldownScope, CreditsRow, EvidenceSource, KeyFeatureAccounts, OverageRow,
+    PinBurn, PinKey, PinMark, PinRow, PoolRow, RekeyWrite, ResolutionRow, RulesMode, ShedRoundRow,
+    ShedStamp, StorageKey, Store, ThinkingBindingRow, WindowRow, WindowSetRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -465,6 +465,7 @@ fn seed_key(store: &Store, id: &str) {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )
@@ -815,7 +816,9 @@ fn a_registry_at_version_two_gains_the_window_set_table_on_open() {
     // The file as a version-2 build left it.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(
-        "ALTER TABLE accounts DROP COLUMN state_changed_at;
+        "ALTER TABLE pools DROP COLUMN feature_accounts_json;
+         ALTER TABLE api_keys DROP COLUMN feature_accounts_json;
+         ALTER TABLE accounts DROP COLUMN state_changed_at;
          ALTER TABLE pools DROP COLUMN fable_reservation_shedding;
          CREATE TABLE session_first_seen (
            key_id TEXT NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL, first_seen_at INTEGER NOT NULL,

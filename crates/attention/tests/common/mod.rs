@@ -23,8 +23,8 @@ use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_310_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, Identity, MemberWrite, NewBundle,
-    PoolRow, RulesMode, Secret, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, Identity, KeyFeatureAccounts,
+    MemberWrite, NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy,
 };
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
@@ -282,6 +282,7 @@ fn seed(store: &Store) {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )

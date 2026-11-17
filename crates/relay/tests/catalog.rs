@@ -12,7 +12,7 @@ use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::{DiscoveryError, Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CompanionPermissions, CooldownScope,
-    NewBundle, RekeyWrite, ResolutionRow, RulesMode, Secret, StorageKey, Store,
+    KeyFeatureAccounts, NewBundle, RekeyWrite, ResolutionRow, RulesMode, Secret, StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -799,6 +799,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )

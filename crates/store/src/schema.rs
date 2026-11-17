@@ -369,6 +369,14 @@ ALTER TABLE accounts ADD COLUMN state_changed_at INTEGER NOT NULL DEFAULT 0;
 UPDATE accounts SET state_changed_at = updated_at;
 "#;
 
+/// A pool's feature accounts and a key's overrides of them, each one JSON object keyed by the feature word, so a
+/// further feature joins as one more member. A missing word is none on a pool and inherit on a key, where a null
+/// is none.
+const V9: &str = r#"
+ALTER TABLE pools ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE api_keys ADD COLUMN feature_accounts_json TEXT NOT NULL DEFAULT '{}';
+"#;
+
 /// Applied in order above the stored `schema_version`, each inside one transaction. A migration may drop or
 /// rebuild a table, so an older build refuses a newer registry rather than misreading it.
 pub const MIGRATIONS: &[(u32, &str)] = &[
@@ -379,6 +387,7 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (6, V6),
     (7, V7),
     (8, V8),
+    (9, V9),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it

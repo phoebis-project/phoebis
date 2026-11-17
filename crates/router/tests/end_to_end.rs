@@ -3414,6 +3414,7 @@ async fn a_changed_listing_lands_a_catalog_row_and_the_released_first_purge_expi
                     last_used_at: None,
                     retired_secret_last_used_at: None,
                     auto_mode_server: None,
+                    feature_accounts: phoebis_store::KeyFeatureAccounts::default(),
                 },
                 "test",
             )
@@ -3978,6 +3979,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     last_used_at: None,
                     retired_secret_last_used_at: None,
                     auto_mode_server: None,
+                    feature_accounts: phoebis_store::KeyFeatureAccounts::default(),
                 },
                 "test",
             )

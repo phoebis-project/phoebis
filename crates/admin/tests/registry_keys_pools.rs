@@ -978,6 +978,7 @@ async fn sessions_list_live_pins_and_leave_out_a_pin_older_than_the_expiry() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: phoebis_store::KeyFeatureAccounts::default(),
             },
             "test",
         )

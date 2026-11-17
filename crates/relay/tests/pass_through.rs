@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use phoebis_relay::{LiveAcceptor, Relay};
-use phoebis_store::{AccountKind, ApiKeyRow, CompanionPermissions, RulesMode};
+use phoebis_store::{AccountKind, ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
@@ -528,6 +528,7 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )

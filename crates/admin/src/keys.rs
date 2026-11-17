@@ -12,7 +12,7 @@ use axum::Json;
 use phoebis_routing::RegistrySnapshot;
 use phoebis_store::{
     stamp_token, ApiKeyRow, AttachmentSubject, CompanionPermission, CompanionPermissions,
-    StoreError, ROTATION_GRACE_MS,
+    KeyFeatureAccounts, StoreError, ROTATION_GRACE_MS,
 };
 use serde_json::{json, Value};
 use utoipa::ToSchema;
@@ -507,6 +507,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;

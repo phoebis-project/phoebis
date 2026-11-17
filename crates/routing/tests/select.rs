@@ -16,10 +16,11 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
-    Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, ModelWeekHourRow,
-    OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow, RegistryLoad,
-    ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding, SlowDown,
-    Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow, ThinkingSum, WarmSessions,
+    Cancellation, CompanionPermissions, CooldownRow, CooldownScope, Failover, KeyFeatureAccounts,
+    ModelWeekHourRow, OveragePolicy, PinBurn, PinKey, PinMark, PinRow, PoolMember, PoolRow,
+    RegistryLoad, ReturnToPlan, RoutingLoad, RulesMode, SessionPlacement, ShedRoundRow, Shedding,
+    SlowDown, Strategy, SubagentPlacement, SubscriptionTerm, ThinkingBindingRow, ThinkingSum,
+    WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -191,6 +192,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             last_used_at: None,
             retired_secret_last_used_at: None,
             auto_mode_server: None,
+            feature_accounts: KeyFeatureAccounts::default(),
         }],
         members: pool
             .members
@@ -6308,6 +6310,7 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     };
     let pool = |id: &str| PoolRow {
         strategy: Strategy::Priority,

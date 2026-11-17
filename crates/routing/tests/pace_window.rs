@@ -8,8 +8,8 @@ use phoebis_routing::{
     SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, PoolMember, PoolRow, RegistryLoad,
-    RoutingLoad, RulesMode, Strategy,
+    AccountKind, AccountRow, ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, PoolMember,
+    PoolRow, RegistryLoad, RoutingLoad, RulesMode, Strategy,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -50,6 +50,7 @@ fn snapshot() -> RegistrySnapshot {
             last_used_at: None,
             retired_secret_last_used_at: None,
             auto_mode_server: None,
+            feature_accounts: KeyFeatureAccounts::default(),
         }],
         members: ["a", "b", "c"]
             .map(|id| PoolMember {

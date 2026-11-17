@@ -28,8 +28,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountUpdate, ApiKeyRow, CompanionPermissions, Failover, Identity,
-    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
-    Store, StoreError, Strategy,
+    KeyFeatureAccounts, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode,
+    Secret, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tokio::sync::broadcast;
@@ -885,6 +885,7 @@ async fn build(
                     last_used_at: None,
                     retired_secret_last_used_at: None,
                     auto_mode_server: pool.key_auto_mode_server,
+                    feature_accounts: KeyFeatureAccounts::default(),
                 },
                 "test",
             )

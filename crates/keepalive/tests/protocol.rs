@@ -14,7 +14,7 @@ use phoebis_keepalive::{
     Reason, EVENTS_PATH,
 };
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
-use phoebis_store::{ApiKeyRow, CompanionPermissions, RulesMode};
+use phoebis_store::{ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, RulesMode};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -120,6 +120,7 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     }
 }
 

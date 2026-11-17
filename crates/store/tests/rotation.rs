@@ -1,6 +1,6 @@
 use phoebis_store::{
-    ApiKeyRow, CompanionPermissions, PoolRow, RetiredSecret, RulesMode, StorageKey, Store,
-    Strategy, ROTATION_GRACE_MS,
+    ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, PoolRow, RetiredSecret, RulesMode,
+    StorageKey, Store, Strategy, ROTATION_GRACE_MS,
 };
 
 fn pool(id: &str) -> PoolRow {
@@ -36,6 +36,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     }
 }
 

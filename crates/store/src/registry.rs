@@ -1,7 +1,7 @@
 //! Registry rows: pools, their members, the router's own API keys, the served models of each account, and the
 //! change log every write appends to.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use phoebis_guardrails::{Condition, GuardrailAction, GuardrailMode};
@@ -248,6 +248,147 @@ pub const DEFAULT_FIVE_HOUR_CEILING: f64 = 0.95;
 /// drawn.
 pub const DEFAULT_WEEKLY_CEILING: f64 = 1.0;
 
+/// A claude.ai feature whose calls a key sends under a selected account. The word is the one the registry, the
+/// admin API, the records and the metrics use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Feature {
+    Artifacts,
+    Connectors,
+}
+
+impl Feature {
+    /// Each feature, in the alphabetical order of the words.
+    pub const ALL: [Feature; 2] = [Feature::Artifacts, Feature::Connectors];
+
+    /// `artifacts` or `connectors`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Feature::Artifacts => "artifacts",
+            Feature::Connectors => "connectors",
+        }
+    }
+
+    pub fn parse(word: &str) -> Option<Feature> {
+        Feature::ALL
+            .into_iter()
+            .find(|feature| feature.as_str() == word)
+    }
+}
+
+/// A pool's selection: for each feature the account whose claude.ai the pool's keys act under, `None` for none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PoolFeatureAccounts {
+    pub artifacts: Option<String>,
+    pub connectors: Option<String>,
+}
+
+impl PoolFeatureAccounts {
+    pub fn get(&self, feature: Feature) -> Option<&str> {
+        match feature {
+            Feature::Artifacts => self.artifacts.as_deref(),
+            Feature::Connectors => self.connectors.as_deref(),
+        }
+    }
+
+    pub fn set(&mut self, feature: Feature, account: Option<String>) {
+        match feature {
+            Feature::Artifacts => self.artifacts = account,
+            Feature::Connectors => self.connectors = account,
+        }
+    }
+}
+
+impl FromSql for PoolFeatureAccounts {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let words: BTreeMap<String, String> =
+            serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+        let mut accounts = PoolFeatureAccounts::default();
+        for (word, account) in words {
+            accounts.set(stored_feature(&word)?, Some(account));
+        }
+        Ok(accounts)
+    }
+}
+
+impl ToSql for PoolFeatureAccounts {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let words: BTreeMap<&str, &str> = Feature::ALL
+            .into_iter()
+            .filter_map(|feature| Some((feature.as_str(), self.get(feature)?)))
+            .collect();
+        serde_json::to_string(&words)
+            .map(ToSqlOutput::from)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    }
+}
+
+/// A key's value for one feature: the pool's selection, none, or an account of its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum FeatureOverride {
+    Account(String),
+    #[default]
+    Inherit,
+    NoAccount,
+}
+
+/// A key's overrides, one per feature.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyFeatureAccounts {
+    pub artifacts: FeatureOverride,
+    pub connectors: FeatureOverride,
+}
+
+impl KeyFeatureAccounts {
+    pub fn get(&self, feature: Feature) -> &FeatureOverride {
+        match feature {
+            Feature::Artifacts => &self.artifacts,
+            Feature::Connectors => &self.connectors,
+        }
+    }
+
+    pub fn set(&mut self, feature: Feature, value: FeatureOverride) {
+        match feature {
+            Feature::Artifacts => self.artifacts = value,
+            Feature::Connectors => self.connectors = value,
+        }
+    }
+}
+
+impl FromSql for KeyFeatureAccounts {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        let words: BTreeMap<String, Option<String>> =
+            serde_json::from_str(value.as_str()?).map_err(|e| FromSqlError::Other(Box::new(e)))?;
+        let mut overrides = KeyFeatureAccounts::default();
+        for (word, account) in words {
+            let value = account.map_or(FeatureOverride::NoAccount, FeatureOverride::Account);
+            overrides.set(stored_feature(&word)?, value);
+        }
+        Ok(overrides)
+    }
+}
+
+impl ToSql for KeyFeatureAccounts {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        let words: BTreeMap<&str, Option<&str>> = Feature::ALL
+            .into_iter()
+            .filter_map(|feature| match self.get(feature) {
+                FeatureOverride::Account(id) => Some((feature.as_str(), Some(id.as_str()))),
+                FeatureOverride::Inherit => None,
+                FeatureOverride::NoAccount => Some((feature.as_str(), None)),
+            })
+            .collect();
+        serde_json::to_string(&words)
+            .map(ToSqlOutput::from)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    }
+}
+
+/// A stored feature word this build does not spell fails the read of its row, as `unknown_word` does for a word
+/// column, rather than drop a selection the build cannot read.
+fn stored_feature(word: &str) -> Result<Feature, FromSqlError> {
+    Feature::parse(word).ok_or_else(|| FromSqlError::Other(format!("unknown word {word:?}").into()))
+}
+
 #[derive(Clone, Debug)]
 pub struct PoolRow {
     pub id: String,
@@ -275,6 +416,7 @@ pub struct PoolRow {
     /// Whether the client's server-side auto mode checks travel; off, the relay drops them so the client
     /// falls back to its own classifier requests.
     pub auto_mode_server: bool,
+    pub feature_accounts: PoolFeatureAccounts,
     pub affinity: Affinity,
     /// How many times this id has held a pool. A deletion leaves the count behind in a tombstone and a pool created
     /// again under the id starts one above it, so an edit read from the deleted pool cannot land on its replacement.
@@ -308,6 +450,7 @@ impl PoolRow {
             cache_diagnostics: false,
             thinking_diagnostics: false,
             auto_mode_server: true,
+            feature_accounts: PoolFeatureAccounts::default(),
             affinity: Affinity::default(),
             incarnation: 1,
             created_at: 0,
@@ -470,6 +613,7 @@ pub struct ApiKeyRow {
     pub retired_secret_last_used_at: Option<i64>,
     /// `None` inherits the pool's `auto_mode_server`; `Some` overrides it for this key.
     pub auto_mode_server: Option<bool>,
+    pub feature_accounts: KeyFeatureAccounts,
 }
 
 /// A named list of conditions a request is checked against before any account is selected, defined once and
@@ -817,6 +961,63 @@ fn stamp_subject(tx: &Transaction<'_>, table: &str, id: &str, at: i64) -> Result
     Ok(())
 }
 
+/// Sets each pool selection and each key override that names the deleted `account_id` to none, on the deletion's
+/// transaction. A key's override becomes none and never inherit, which would act under an account the operator did
+/// not choose for the key. Each row it writes takes a stamp past its own, so a dialog read before the deletion cannot
+/// save the old selection onto an account created again under the id.
+pub(crate) fn clear_feature_accounts(
+    tx: &Transaction<'_>,
+    account_id: &str,
+    at: i64,
+) -> Result<(), StoreError> {
+    let pools = tx
+        .prepare("SELECT id, feature_accounts_json FROM pools WHERE feature_accounts_json != '{}'")?
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, PoolFeatureAccounts>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (id, stored) in pools {
+        let mut cleared = stored.clone();
+        for feature in Feature::ALL {
+            if cleared.get(feature) == Some(account_id) {
+                cleared.set(feature, None);
+            }
+        }
+        if cleared != stored {
+            tx.execute(
+                "UPDATE pools SET feature_accounts_json = ?2 WHERE id = ?1",
+                params![id, cleared],
+            )?;
+            stamp_subject(tx, "pools", &id, at)?;
+        }
+    }
+    let keys = tx
+        .prepare(
+            "SELECT id, feature_accounts_json FROM api_keys WHERE feature_accounts_json != '{}'",
+        )?
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, KeyFeatureAccounts>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let deleted = FeatureOverride::Account(account_id.to_string());
+    for (id, stored) in keys {
+        let mut cleared = stored.clone();
+        for feature in Feature::ALL {
+            if cleared.get(feature) == &deleted {
+                cleared.set(feature, FeatureOverride::NoAccount);
+            }
+        }
+        if cleared != stored {
+            tx.execute(
+                "UPDATE api_keys SET feature_accounts_json = ?2 WHERE id = ?1",
+                params![id, cleared],
+            )?;
+            stamp_subject(tx, "api_keys", &id, at)?;
+        }
+    }
+    Ok(())
+}
+
 /// A JSON text column decoded as its row is read: a malformed value fails the read of its row, as an unknown word does.
 pub(crate) fn json_column<T: serde::de::DeserializeOwned>(
     r: &rusqlite::Row<'_>,
@@ -851,7 +1052,7 @@ macro_rules! pool_columns {
          overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, \
          subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, slow_down, \
          slow_down_stretch_seconds, slow_down_hold_seconds, return_to_plan, return_to_plan_dwell_seconds, \
-         thinking_diagnostics, weekly_ceiling, fable_reservation_shedding"
+         thinking_diagnostics, weekly_ceiling, fable_reservation_shedding, feature_accounts_json"
     };
 }
 
@@ -914,6 +1115,7 @@ macro_rules! pool_params {
             $row.thinking_diagnostics,
             $row.weekly_ceiling,
             $row.shedding.fable_reservation_shedding,
+            $row.feature_accounts,
             $($tail),+
         ]
     };
@@ -1252,8 +1454,8 @@ impl Store {
         let now = previous.map_or(now, |p| stamp_past(now, p));
         let incarnation = crate::accounts::next_incarnation_in(&tx, Tombstones::ApiKey, &row.id)?;
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, companion_permissions_json, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, NULL, NULL, NULL, ?17)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, companion_permissions_json, body_capture_hours, secret_digest, prefix, auto_mode_server, feature_accounts_json, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17, NULL, NULL, NULL, ?18)",
             params![
                 row.id,
                 row.label,
@@ -1270,6 +1472,7 @@ impl Store {
                 row.secret_digest,
                 row.prefix,
                 row.auto_mode_server,
+                row.feature_accounts,
                 now,
                 incarnation as i64
             ],
@@ -1329,7 +1532,7 @@ impl Store {
             .ok_or_else(|| StoreError::KeyNotFound(row.id.clone()))?;
         let at = stamp_past(self.now_ms(), expected_updated_at);
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, companion_permissions_json = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, companion_permissions_json = ?10, body_capture_hours = ?11, auto_mode_server = ?12, feature_accounts_json = ?13, updated_at = ?14 WHERE id = ?1 AND updated_at = ?15 AND incarnation = ?16",
             params![
                 row.id,
                 row.label,
@@ -1343,6 +1546,7 @@ impl Store {
                 row.companion_permissions,
                 row.body_capture_hours,
                 row.auto_mode_server,
+                row.feature_accounts,
                 at,
                 expected_updated_at,
                 row.incarnation as i64
@@ -2094,7 +2298,7 @@ static POOL_UPDATE: LazyLock<String> = LazyLock::new(|| {
 const MEMBER_SELECT: &str =
     "SELECT pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd FROM pool_members";
 const GUARDRAIL_SELECT: &str = "SELECT id, name, description, enabled, mode, action, conditions_json, preset_id, preset_version, incarnation, created_at, updated_at FROM guardrails";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, companion_permissions_json, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation FROM api_keys";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, companion_permissions_json, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation, feature_accounts_json FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -2191,6 +2395,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(26)? as u64,
         },
         auto_mode_server: r.get(27)?,
+        feature_accounts: r.get(36)?,
         incarnation: r.get::<_, i64>("incarnation")? as u64,
     })
 }
@@ -2228,6 +2433,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         last_used_at: r.get(13)?,
         retired_secret_last_used_at: r.get(14)?,
         auto_mode_server: r.get::<_, Option<bool>>(18)?,
+        feature_accounts: r.get(21)?,
     })
 }
 
@@ -2308,6 +2514,10 @@ fn pool_fields(row: &PoolRow) -> serde_json::Value {
         "session_placement": row.affinity.session_placement.as_str(),
         "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
         "auto_mode_server": row.auto_mode_server,
+        "feature_accounts": Feature::ALL
+            .into_iter()
+            .map(|feature| (feature.as_str().to_string(), row.feature_accounts.get(feature).into()))
+            .collect::<serde_json::Map<String, serde_json::Value>>(),
     });
     if let (serde_json::Value::Object(named), Some(serde_json::Value::Object(policy))) =
         (&mut fields, parsed(&row.keepalive_json))
@@ -2337,6 +2547,18 @@ fn key_fields(row: &ApiKeyRow) -> serde_json::Value {
         "body_capture_hours": row.body_capture_hours,
         "prefix": row.prefix,
         "auto_mode_server": row.auto_mode_server,
+        "feature_accounts": Feature::ALL
+            .into_iter()
+            .map(|feature| {
+                let (mode, account_id) = match row.feature_accounts.get(feature) {
+                    FeatureOverride::Account(id) => ("account", Some(id.as_str())),
+                    FeatureOverride::Inherit => ("inherit", None),
+                    FeatureOverride::NoAccount => ("none", None),
+                };
+                let value = serde_json::json!({ "mode": mode, "account_id": account_id });
+                (feature.as_str().to_string(), value)
+            })
+            .collect::<serde_json::Map<String, serde_json::Value>>(),
     })
 }
 

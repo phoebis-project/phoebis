@@ -12,7 +12,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountState, AccountUpdate, AffinityMode, ApiKeyRow, Cancellation,
-    CompanionPermissions, CooldownRow, CooldownScope, Identity, MemberWrite, RulesMode, StateCause,
+    CompanionPermissions, CooldownRow, CooldownScope, Identity, KeyFeatureAccounts, MemberWrite,
+    RulesMode, StateCause,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -114,6 +115,7 @@ fn laptop_key(r: &Rig, permissions: CompanionPermissions) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     }
 }
 

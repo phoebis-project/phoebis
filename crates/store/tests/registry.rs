@@ -3,11 +3,12 @@ use phoebis_store::keepalive::BodyWrite;
 use phoebis_store::{
     answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, AccountUpdate,
     Affinity, AffinityChain, AffinityMode, ApiKeyRow, AttachmentSubject, BudgetPeriod, CanaryRead,
-    Cancellation, CompanionPermissions, Failover, GuardrailAttachment, GuardrailRow, Identity,
-    KeepaliveAgentRow, KeepaliveBatch, MemberWrite, MemoryKey, MemoryRecord, MemoryStore,
-    ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark, PinRow, PoolRow, PresetStamp,
-    ReturnToPlan, RulesMode, Secret, SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey,
-    Store, StoreError, Strategy, SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
+    Cancellation, CompanionPermissions, Failover, FeatureOverride, GuardrailAttachment,
+    GuardrailRow, Identity, KeepaliveAgentRow, KeepaliveBatch, KeyFeatureAccounts, MemberWrite,
+    MemoryKey, MemoryRecord, MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PinMark,
+    PinRow, PoolFeatureAccounts, PoolRow, PresetStamp, ReturnToPlan, RulesMode, Secret,
+    SessionPlacement, ShedStamp, SlowDown, StateCause, StorageKey, Store, StoreError, Strategy,
+    SubagentPlacement, SubscriptionRow, WarmSessions, WindowRow,
 };
 
 fn account(id: &str, kind: AccountKind) -> AccountRow {
@@ -47,6 +48,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         last_used_at: None,
         retired_secret_last_used_at: None,
         auto_mode_server: None,
+        feature_accounts: KeyFeatureAccounts::default(),
     }
 }
 
@@ -84,6 +86,16 @@ fn rename(
         enabled: None,
         cancellation: None,
     })
+}
+
+/// The ninth step taken back on a file this build wrote, which every case that takes a file back past version 9
+/// runs first, since the step refuses its columns as duplicates on reopen.
+fn ninth_step_taken_back(conn: &rusqlite::Connection) {
+    conn.execute_batch(
+        "ALTER TABLE pools DROP COLUMN feature_accounts_json;
+         ALTER TABLE api_keys DROP COLUMN feature_accounts_json;",
+    )
+    .unwrap();
 }
 
 /// The eighth step taken back on a file this build wrote, which every case that takes a file back past version 8
@@ -130,12 +142,14 @@ fn sixth_step_taken_back(conn: &rusqlite::Connection) {
     .unwrap();
 }
 
-/// A registry as a version-5 build left it: the build's own file with the eighth, seventh and sixth steps taken back
-/// through `eighth_step_taken_back`, `seventh_step_taken_back` and `sixth_step_taken_back`, the version row set to 5,
-/// then `seed`, the rows a case stands at version 5 before its reopen. Each of the sixth step's column changes keeps
-/// its take-back. Its delete needs none, since a row it removed is seeded here, after the take-back.
+/// A registry as a version-5 build left it: the build's own file with the ninth, eighth, seventh and sixth steps taken
+/// back through `ninth_step_taken_back`, `eighth_step_taken_back`, `seventh_step_taken_back` and
+/// `sixth_step_taken_back`, the version row set to 5, then `seed`, the rows a case stands at version 5 before its
+/// reopen. Each of the sixth step's column changes keeps its take-back. Its delete needs none, since a row it removed
+/// is seeded here, after the take-back.
 fn at_version_five(path: &std::path::Path, seed: &str) {
     let conn = rusqlite::Connection::open(path).unwrap();
+    ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
     seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
@@ -205,6 +219,7 @@ fn a_version_one_registry_opens_at_the_build_s_version_with_the_new_columns_at_t
     // The file as a version-1 build left it: the steps' columns and tables taken back, the counters' table in the
     // baseline's shape with an all-time row, and the marker at 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
     seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
@@ -271,9 +286,11 @@ fn a_key_with_the_old_opt_out_migrates_to_a_set_without_keepalive_and_every_key_
             .insert_api_key(&key(&store, "quiet", "main", "phoebis-quiet"), "test")
             .unwrap();
     }
-    // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column and the
-    // limit reset columns gone and the marker at 4, as the file's other migration test takes a file back to version 1.
+    // The file as a version-4 build left it: the opt-out column back, `quiet` opted out, the set's column, the limit
+    // reset columns and the feature account columns gone and the marker at 4, as the file's other migration test takes
+    // a file back to version 1.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
     seventh_step_taken_back(&conn);
     sixth_step_taken_back(&conn);
@@ -461,9 +478,10 @@ fn a_registry_before_the_eighth_step_reads_its_pools_with_the_thinking_switch_of
             })
             .unwrap();
     }
-    // The file as a version-7 build left it: the pools and the account stored, the eighth step taken back, which
-    // leaves each pool's one ceiling in `window_ceiling`, and the marker at 7.
+    // The file as a version-7 build left it: the pools and the account stored, the ninth and the eighth steps taken
+    // back, which leaves each pool's one ceiling in `window_ceiling`, and the marker at 7.
     let conn = rusqlite::Connection::open(&path).unwrap();
+    ninth_step_taken_back(&conn);
     eighth_step_taken_back(&conn);
     conn.execute_batch("UPDATE meta SET value = '7' WHERE key = 'schema_version';")
         .unwrap();
@@ -2970,6 +2988,108 @@ fn a_recreated_account_never_answers_an_edit_token_its_predecessor_answered() {
         );
         rename(&store, "a", row.revision, label, "admin").unwrap();
     }
+}
+
+#[test]
+fn deleting_an_account_sets_each_selection_that_names_it_to_none() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    for id in ["a", "b"] {
+        store
+            .insert_account(&account(id, AccountKind::Oauth))
+            .unwrap();
+    }
+    store
+        .insert_pool_with_members(&pool("home"), Some(&[member("a", 0)]), "admin")
+        .unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                feature_accounts: PoolFeatureAccounts {
+                    artifacts: Some("b".into()),
+                    connectors: Some("a".into()),
+                },
+                ..pool("other")
+            },
+            "admin",
+        )
+        .unwrap();
+    store.insert_pool(&pool("third"), "admin").unwrap();
+    store
+        .insert_api_key(
+            &ApiKeyRow {
+                feature_accounts: KeyFeatureAccounts {
+                    artifacts: FeatureOverride::Account("a".into()),
+                    connectors: FeatureOverride::Account("b".into()),
+                },
+                ..key(&store, "k", "third", "phoebis-k")
+            },
+            "admin",
+        )
+        .unwrap();
+    store.delete_account("a", "admin").unwrap();
+    assert_eq!(
+        store.pool("other").unwrap().unwrap().feature_accounts,
+        PoolFeatureAccounts {
+            artifacts: Some("b".into()),
+            connectors: None,
+        },
+        "a pool the deleted account is no member of loses its selection, and the other account's stands"
+    );
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().feature_accounts,
+        KeyFeatureAccounts {
+            artifacts: FeatureOverride::NoAccount,
+            connectors: FeatureOverride::Account("b".into()),
+        },
+        "the key's override of the deleted account is none and never inherit, and the other account's stands"
+    );
+}
+
+#[test]
+fn a_write_from_before_the_deletion_is_refused_as_stale() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    store
+        .insert_pool(
+            &PoolRow {
+                feature_accounts: PoolFeatureAccounts {
+                    connectors: Some("a".into()),
+                    ..PoolFeatureAccounts::default()
+                },
+                ..pool("other")
+            },
+            "admin",
+        )
+        .unwrap();
+    store.insert_pool(&pool("plain"), "admin").unwrap();
+    store
+        .insert_api_key(
+            &ApiKeyRow {
+                feature_accounts: KeyFeatureAccounts {
+                    artifacts: FeatureOverride::Account("a".into()),
+                    ..KeyFeatureAccounts::default()
+                },
+                ..key(&store, "k", "other", "phoebis-k")
+            },
+            "admin",
+        )
+        .unwrap();
+    let other = store.pool("other").unwrap().unwrap();
+    let plain = store.pool("plain").unwrap().unwrap();
+    let k = store.api_key("k").unwrap().unwrap();
+    store.delete_account("a", "admin").unwrap();
+    let other_save = store.update_pool(&other, other.updated_at, "admin");
+    let k_save = store.update_api_key(&k, k.updated_at, "admin");
+    let plain_save = store.update_pool(&plain, plain.updated_at, "admin");
+    assert!(
+        matches!(other_save, Err(StoreError::Stale))
+            && matches!(k_save, Err(StoreError::Stale))
+            && plain_save.is_ok(),
+        "a save read before the deletion is refused on the pool and the key it cleared, and the pool it left alone \
+         saves: other {other_save:?}, k {k_save:?}, plain {plain_save:?}"
+    );
 }
 
 /// The bundle a pairing's confirm hands the store, with tokens that are obviously not real.

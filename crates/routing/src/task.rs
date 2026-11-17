@@ -6579,7 +6579,9 @@ mod tests {
 
     #[test]
     fn the_projections_answer_each_windows_projection_and_demand_as_two_projection_of_reads_do() {
-        use phoebis_store::{ApiKeyRow, CompanionPermissions, PoolMember, SubscriptionTerm};
+        use phoebis_store::{
+            ApiKeyRow, CompanionPermissions, KeyFeatureAccounts, PoolMember, SubscriptionTerm,
+        };
 
         use crate::select::{Banded, SlowDownRead};
         use crate::state::BandSegment;
@@ -6614,6 +6616,7 @@ mod tests {
                     last_used_at: None,
                     retired_secret_last_used_at: None,
                     auto_mode_server: None,
+                    feature_accounts: KeyFeatureAccounts::default(),
                 }],
                 members: vec![PoolMember {
                     pool_id: "p".into(),

@@ -4636,6 +4636,7 @@ mod tests {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: phoebis_store::KeyFeatureAccounts::default(),
             }],
             members: vec![member("a"), member("o")],
             pools: vec![phoebis_store::PoolRow {

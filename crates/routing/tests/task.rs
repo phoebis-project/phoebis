@@ -18,9 +18,10 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, Cancellation,
-    CompanionPermissions, CooldownRow, CooldownScope, MemberWrite, ModelRule, OveragePolicy,
-    OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode, Shedding,
-    StateCause, StorageKey, Store, Strategy, SubscriptionRow, ThinkingSum, WindowRow, WindowSetRow,
+    CompanionPermissions, CooldownRow, CooldownScope, KeyFeatureAccounts, MemberWrite, ModelRule,
+    OveragePolicy, OverageRow, PinBurn, PinKey, PinMark, PinRow, PoolRow, RoutingLoad, RulesMode,
+    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, ThinkingSum, WindowRow,
+    WindowSetRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -106,6 +107,7 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )
@@ -2275,6 +2277,7 @@ fn insert_key_k(store: &Store) {
                 last_used_at: None,
                 retired_secret_last_used_at: None,
                 auto_mode_server: None,
+                feature_accounts: KeyFeatureAccounts::default(),
             },
             "test",
         )

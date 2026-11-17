@@ -24743,6 +24743,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "session_placement": "by_strategy",
               "min_shared_prefix_tokens": 20000,
               "auto_mode_server": true,
+              "feature_accounts": {
+                "artifacts": null,
+                "connectors": null
+              },
               "keepalive.enabled": false,
               "keepalive.max_idle_seconds": 3600,
               "keepalive.max_parked_seconds": null,
@@ -24785,7 +24789,17 @@ export const FIXTURES: Record<string, Fixture> = {
               ],
               "body_capture_hours": null,
               "prefix": "KxtrG2cq",
-              "auto_mode_server": null
+              "auto_mode_server": null,
+              "feature_accounts": {
+                "artifacts": {
+                  "mode": "inherit",
+                  "account_id": null
+                },
+                "connectors": {
+                  "mode": "inherit",
+                  "account_id": null
+                }
+              }
             }
           }
         },
@@ -24885,6 +24899,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "session_placement": "by_strategy",
               "min_shared_prefix_tokens": 20000,
               "auto_mode_server": true,
+              "feature_accounts": {
+                "artifacts": null,
+                "connectors": null
+              },
               "keepalive.enabled": true,
               "keepalive.max_idle_seconds": 3600,
               "keepalive.max_parked_seconds": null,
